@@ -274,7 +274,9 @@ class FVGP:
             bounds_input (2d list)
             bounds_output(2d list)
         optional inputs:
-            training_mode : default = "global",
+            init_input_hyper_parameters (list):  default = None
+            init_output_hyper_parameters (list): default = None
+            optimization_method : default = "global",
             likelihood_pop_size: default = 20,
             likelihood_optimization_tolerance: default = 0.1,
             likelihood_optimization_max_iter: default = 120
