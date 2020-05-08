@@ -6,20 +6,21 @@ def stationary_kernel(x1,x2,hps, obj = None):
     d = abs(np.subtract.outer(x1[:,0],x2[:,0])/hps[1])**2
     d = np.sqrt(d)
     s = abs(np.add.outer(x1[:,0],x2[:,0]))
-    return hps[0] *(s/2.0)* np.exp(-d)
+    return hps[0] * np.exp(-d)
 
 def non_stationary_kernel(x1,x2,hps, obj = None):
     d = abs(np.subtract.outer(x1[:,0],x2[:,0])/hps[1])**2
     d = np.sqrt(d)
     s = abs(np.add.outer(x1[:,0],x2[:,0]))
-    return hps[0] *(s/2.0)* np.exp(-d)
+    #return hps[0] *(s/2.0)* np.exp(-d)
+    return hps[0] * np.outer(x1[:,0],x2[:,0]) * np.exp(-d)
 
 points = np.sort(np.random.uniform(low = 0.0, high = 2.0, size = (500,1)), axis = 0)
-values = 3.0*points + 0.3*np.sin(10.0*points)
-#values = 0.3*np.sin((points)*10.0*points)    #example to test non-stationary kernels
+#values = 3.0*points + 0.3*np.sin(10.0*points)
+values = 0.3*np.sin((points)*10.0*points)    #example to test non-stationary kernels
 plt.plot(points,values)
 plt.show()
-my_gp = FVGP(1,1,1,points,values,gp_kernel_function = kernel)
+my_gp = FVGP(1,1,1,points,values,gp_kernel_function = non_stationary_kernel)
 #help(my_gp.train)
 #exit()
 my_gp.train([[0.001,10.1],[0.001,10.0]],[[.99,1.0]],
