@@ -107,7 +107,8 @@ class FVGP:
         values,
         value_positions = None,
         variances = None,
-        gp_system_solve_method="inv",
+        compute_device = "cpu",
+        gp_system_solve_method="solve",
         gp_kernel_function = None,
         gp_mean_function = None,
         init_input_hyper_parameters = None,
@@ -115,8 +116,8 @@ class FVGP:
         ):
 
         """
-        The constructor for the gp class.
-        type help(gp) for more information about attributes, methods and their parameters
+        The constructor for the fvgp class.
+        type help(FVGP) for more information about attributes, methods and their parameters
         """
         ##########################################
         #######check if dimensions match##########
@@ -133,6 +134,7 @@ class FVGP:
         self.points = points
         self.point_number = len(self.points)
         self.values = values
+        self.compute_device = compute_device
         ##########################################
         #######prepare value positions############
         ##########################################
@@ -471,7 +473,7 @@ class FVGP:
         
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y=values
-        sign, logdet = self.slogdet(K)
+        sign, logdet = self.slogdet(K,compute_device = self.compute_device)
         if sign == 0.0:
             return 0.5 * ((y - mean).T @ x)
         return (0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet)
@@ -532,6 +534,7 @@ class FVGP:
         self.covariance_value_prod = cov_y
 #        self.K_inv = K_inv
         return self.prior_mean,K,cov_y
+    ##################################################################################
     def K_inv(self):
         return self.safe_invert(self.prior_covariance)
 
@@ -540,22 +543,22 @@ class FVGP:
         K = self.compute_covariance(hyper_parameters, variances)
         y = values - mean
         y = y.reshape(-1,1)
-        if self.gp_system_solve_method == "inv":
-            x = self.solve(K, y)
-        elif self.gp_system_solve_method == "minres":
-            x, info = minres(K, y - mean)
-            if info != 0:
-                print("MINRES solve failed, going back to inversion")
-                x = self.solve(K, y)
-        elif self.gp_system_solve_method == "cg":
-            x, info = cg(K, y)
-            if info != 0:
-                print("CG solve failed, going back to inversion")
-#                K_inv = self.safe_invert(K)
-                x = self.solve(K, y)
-        elif self.gp_system_solve_method == "rank-n update":
-            K_inv = self.covariance_update(K)
-            x = K_inv @ (y)
+        if self.gp_system_solve_method == "solve":
+            x = self.solve(K, y, compute_device = self.compute_device)
+        #elif self.gp_system_solve_method == "minres":
+        #    x, info = minres(K, y - mean)
+        #    if info != 0:
+        #        print("MINRES solve failed, going back to inversion")
+        #        x = self.solve(K, y)
+        #elif self.gp_system_solve_method == "cg":
+        #    x, info = cg(K, y)
+        #    if info != 0:
+        #        print("CG solve failed, going back to inversion")
+#       #         K_inv = self.safe_invert(K)
+        #        x = self.solve(K, y)
+        #elif self.gp_system_solve_method == "rank-n update":
+        #    K_inv = self.covariance_update(K)
+        #    x = K_inv @ (y)
         else:
             print("No solve method specified in _compute_covariance_value_product(). That might indicate a wrong input"); exit()
         return x,K
@@ -600,30 +603,30 @@ class FVGP:
             sign, logdet = torch.slogdet(A)
             return sign.numpy(), logdet.numpy()
         if compute_device == "gpu":
-            A = torch.Tensor(A)
-            sign, logdet = torch.slogdet(A).cuda()
-            return sign.numpy(), logdet.numpy()
+            A = torch.Tensor(A).cuda()
+            sign, logdet = torch.slogdet(A)
+            return sign.cpu().numpy(), logdet.cpu().numpy()
 
 
-    def solve(self, A, b, device = "gpu"):
+    def solve(self, A, b, compute_device = "cpu"):
         """
         check out here
         """
-        if device == "cpu":
+        if compute_device == "cpu":
             A = torch.Tensor(A)
             b = torch.Tensor(b)
             try:
                 x, lu = torch.solve(b,A)
-            except np.linalg.LinAlgError:
-                x, qr = np.linalg.lstsq(b,a)
+            except np.linalg.LinAlgError: ###that is not going to work
+                x, qr = torch.lstsq(b,A)
             return x.numpy()
-        if device == "gpu":
+        if compute_device == "gpu":
             A = torch.Tensor(A).cuda()
             b = torch.Tensor(b).cuda()
             try:
                 x, lu = torch.solve(b,A)
             except np.linalg.LinAlgError:
-                x, qr = np.linalg.lstsq(b,a)
+                x, qr = torch.lstsq(b,A)
             return x.cpu().numpy()
 
 
@@ -696,7 +699,7 @@ class FVGP:
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
-                sgn, logdet = self.slogdet(np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]))
+                sgn, logdet = self.slogdet(np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]), compute_device = self.compute_device)
                 entropies.append(sgn*logdet)
             entropies = np.asarray(entropies)
         else: entropies = None
@@ -708,23 +711,25 @@ class FVGP:
         else:
             mean = None
         if compute_posterior_covariances == True:
-            covariance_k_prod = np.zeros(k.shape)
-            info = np.zeros((len(k[0])))
-            if self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
-                covariance_k_prod = self.K_inv() @ k
-            elif self.gp_system_solve_method == "minres":
-                for i in range(len(k[0])):
-                    covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
-            elif self.gp_system_solve_method == "cg":
-                for i in range(len(k[0])):
-                    covariance_k_prod[:, i], info[i] = cg(self.prior_covariance, k[:, i])
-                if any(info) != 0:
-                    for i in range(len(k[0])):
-                        covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
-            else:
-                print(
-                    "no valid solve method defined in fvGP; defined as: ", self.gp_system_solve_method
-                )
+            #covariance_k_prod = np.zeros(k.shape)
+            #info = np.zeros((len(k[0])))
+            covariance_k_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
+            #if self.gp_system_solve_method == "solve":
+            #elif self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
+            #    covariance_k_prod = self.K_inv() @ k
+            #elif self.gp_system_solve_method == "minres":
+            #    for i in range(len(k[0])):
+            #        covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
+            #elif self.gp_system_solve_method == "cg":
+            #    for i in range(len(k[0])):
+            #        covariance_k_prod[:, i], info[i] = cg(self.prior_covariance, k[:, i])
+            #    if any(info) != 0:
+            #        for i in range(len(k[0])):
+            #            covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
+            #else:
+            #    print(
+            #        "no valid solve method defined in fvGP; defined as: ", self.gp_system_solve_method
+            #    )
             a = kk - (k.T @ covariance_k_prod)
             diag = np.diag(a)
             diag = np.where(diag<0.0,0.0,diag)
@@ -811,25 +816,27 @@ class FVGP:
         else:
             mean = None
         if compute_posterior_covariance == True:
-            if self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
-                covariance_k_prod = self.K_inv() @ k
-                covariance_k_g_prod = self.K_inv() @ k_g
-            elif self.gp_system_solve_method == "minres":
-                for i in range(len(k[0])):
-                    covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
-                    covariance_k_g_prod[:, i], info[i] = minres(self.prior_covariance, k_g[:, i])
-            elif self.gp_system_solve_method == "cg":
-                for i in range(len(k[0])):
-                    covariance_k_prod[:, i], info[i] = cg(self.prior_covariance, k[:, i])
-                    covariance_k_g_prod[:, i], info[i] = cg(self.prior_covariance, k_g[:, i])
-                if any(info) != 0:
-                    for i in range(len(k[0])):
-                        covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
-                        covariance_k_g_prod[:, i], info[i] = minres(self.prior_covariance, k_g[:, i])
-            else:
-                print(
-                    "no valid solve method defined in fvGP; defined as: ", self.gp_system_solve_method
-                )
+            covariance_k_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
+            covariance_k_g_prod = self.solve(self.prior_covariance,k_g,compute_device = self.compute_device)
+            #if self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
+            #    covariance_k_prod = self.K_inv() @ k
+            #    covariance_k_g_prod = self.K_inv() @ k_g
+            #elif self.gp_system_solve_method == "minres":
+            #    for i in range(len(k[0])):
+            #        covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
+            #        covariance_k_g_prod[:, i], info[i] = minres(self.prior_covariance, k_g[:, i])
+            #elif self.gp_system_solve_method == "cg":
+            #    for i in range(len(k[0])):
+            #        covariance_k_prod[:, i], info[i] = cg(self.prior_covariance, k[:, i])
+            #        covariance_k_g_prod[:, i], info[i] = cg(self.prior_covariance, k_g[:, i])
+            #    if any(info) != 0:
+            #        for i in range(len(k[0])):
+            #            covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
+            #            covariance_k_g_prod[:, i], info[i] = minres(self.prior_covariance, k_g[:, i])
+            #else:
+            #    print(
+            #        "no valid solve method defined in fvGP; defined as: ", self.gp_system_solve_method
+            #    )
             a = kk_g - ((k_g.T @ covariance_k_prod) + (k.T @ covariance_k_g_prod))
             M = len(x_output)
             covariance = [
