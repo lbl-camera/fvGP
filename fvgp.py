@@ -40,6 +40,7 @@ from scipy.sparse.linalg import cg
 from scipy.sparse.linalg import minres
 import itertools
 import time
+import torch
 
 class FVGP:
     """
@@ -537,28 +538,24 @@ class FVGP:
     ##################################################################################
     def _compute_covariance_value_product(self, hyper_parameters,values, variances, mean):
         K = self.compute_covariance(hyper_parameters, variances)
-        y = values
+        y = values - mean
+        y = y.reshape(-1,1)
         if self.gp_system_solve_method == "inv":
-#            K_inv = self.safe_invert(K)
-#            x = K_inv @ (y - mean)
-            x = self.solve(K, y-mean)
+            x = self.solve(K, y)
         elif self.gp_system_solve_method == "minres":
             x, info = minres(K, y - mean)
             if info != 0:
                 print("MINRES solve failed, going back to inversion")
-#                K_inv = self.safe_invert(self.prior_covariance)
-#                x = K_inv @ (y - mean)
-                x = self.solve(K, y-mean)
+                x = self.solve(K, y)
         elif self.gp_system_solve_method == "cg":
-            x, info = cg(K, y - mean)
+            x, info = cg(K, y)
             if info != 0:
                 print("CG solve failed, going back to inversion")
 #                K_inv = self.safe_invert(K)
-#                x = K_inv @ (y - mean)
-                x = self.solve(K, y-mean)
+                x = self.solve(K, y)
         elif self.gp_system_solve_method == "rank-n update":
             K_inv = self.covariance_update(K)
-            x = K_inv @ (y - mean)
+            x = K_inv @ (y)
         else:
             print("No solve method specified in _compute_covariance_value_product(). That might indicate a wrong input"); exit()
         return x,K
@@ -593,15 +590,43 @@ class FVGP:
         )
         return CoVarianceInverse
 
-    def slogdet(self, A):
-        return np.linalg.slogdet(A)
+    def slogdet(self, A, compute_device = "cpu"):
+        """
+        check this out
+        """
 
-    def solve(self, A, b):
-        try:
-            x = np.linalg.solve(A,b)
-        except np.linalg.LinAlgError:
-            x = np.linalg.lstsq(A,b)
-        return x
+        if compute_device == "cpu":
+            A = torch.Tensor(A)
+            sign, logdet = torch.slogdet(A)
+            return sign.numpy(), logdet.numpy()
+        if compute_device == "gpu":
+            A = torch.Tensor(A)
+            sign, logdet = torch.slogdet(A).cuda()
+            return sign.numpy(), logdet.numpy()
+
+
+    def solve(self, A, b, device = "cpu"):
+        """
+        check out here
+        """
+        if device == "cpu":
+            A = torch.Tensor(A)
+            b = torch.Tensor(b)
+            try:
+                x, lu = torch.solve(b,A)
+            except np.linalg.LinAlgError:
+                x, qr = np.linalg.lstsq(b,a)
+            return x.numpy()
+        if device == "gpu":
+            A = torch.Tensor(A).cuda()
+            b = torch.Tensor(b).cuda()
+            try:
+                x, lu = torch.solve(b,A)
+            except np.linalg.LinAlgError:
+                x, qr = np.linalg.lstsq(b,a)
+            return x.numpy()
+
+
 
     def safe_invert(self, Matrix):
         """computes in inverse or pseudo-inverse of a matrix"""

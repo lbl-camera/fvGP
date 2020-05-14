@@ -25,7 +25,7 @@ my_gp = FVGP(1,1,1,points,values,gp_kernel_function = non_stationary_kernel)
 #help(my_gp.train)
 #exit()
 my_gp.train([[0.001,10.1],[0.001,10.0]],[[.99,1.0]],
-        optimization_method = "local",
+        optimization_method = "global",
         likelihood_pop_size = 10,
         likelihood_optimization_tolerance = 0.01,
         likelihood_optimization_max_iter = 20)
