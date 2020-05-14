@@ -40,7 +40,6 @@ from scipy.sparse.linalg import cg
 from scipy.sparse.linalg import minres
 import itertools
 import time
-import torch
 
 class FVGP:
     """
@@ -275,9 +274,7 @@ class FVGP:
             bounds_input (2d list)
             bounds_output(2d list)
         optional inputs:
-            init_input_hyper_parameters (list):  default = None
-            init_output_hyper_parameters (list): default = None
-            optimization_method : default = "global",
+            training_mode : default = "global",
             likelihood_pop_size: default = 20,
             likelihood_optimization_tolerance: default = 0.1,
             likelihood_optimization_max_iter: default = 120
@@ -469,16 +466,15 @@ class FVGP:
             log likelihood(scalar)
         """
         
-        x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
+        x,K,K_inv = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y=values
-        sign, logdet = self.slogdet(K)
+        sign, logdet = np.linalg.slogdet(K)
         if sign == 0.0:
             return 0.5 * ((y - mean).T @ x)
         return (0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet)
     ##################################################################################
     def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
-        x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
-        K_inv = self.safe_invert(K)
+        x,K,K_inv = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y = values
         dL_dH = np.empty((len(hyper_parameters)))
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
@@ -489,8 +485,7 @@ class FVGP:
         return -dL_dH
 
     def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
-        x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
-        K_inv = self.safe_invert(K_inv)
+        x,K,K_inv = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y = values
         d2L_dH2 = np.empty((len(hyper_parameters),len(hyper_parameters)))
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
@@ -523,42 +518,41 @@ class FVGP:
             prior covariance
             covariance value product
         """
-        cov_y,K = self._compute_covariance_value_product(
+        cov_y,K,K_inv = self._compute_covariance_value_product(
                 self.hyper_parameters,
                 self.values,
                 self.variances,
                 self.prior_mean)
         self.prior_covariance = K
         self.covariance_value_prod = cov_y
-#        self.K_inv = K_inv
+        self.K_inv = K_inv
         return self.prior_mean,K,cov_y
-    def K_inv(self):
-        return self.safe_invert(self.prior_covariance)
-
     ##################################################################################
     def _compute_covariance_value_product(self, hyper_parameters,values, variances, mean):
         K = self.compute_covariance(hyper_parameters, variances)
-        y = values - mean
-        y = y.reshape(-1,1)
+        y = values
+        K_inv = None
         if self.gp_system_solve_method == "inv":
-            x = self.solve(K, y)
+            K_inv = self.safe_invert(K)
+            x = K_inv @ (y - mean)
         elif self.gp_system_solve_method == "minres":
             x, info = minres(K, y - mean)
             if info != 0:
                 print("MINRES solve failed, going back to inversion")
-                x = self.solve(K, y)
+                K_inv = self.safe_invert(self.prior_covariance)
+                x = K_inv @ (y - mean)
         elif self.gp_system_solve_method == "cg":
-            x, info = cg(K, y)
+            x, info = cg(K, y - mean)
             if info != 0:
                 print("CG solve failed, going back to inversion")
-#                K_inv = self.safe_invert(K)
-                x = self.solve(K, y)
+                K_inv = self.safe_invert(K)
+                x = K_inv @ (y - mean)
         elif self.gp_system_solve_method == "rank-n update":
             K_inv = self.covariance_update(K)
-            x = K_inv @ (y)
+            x = K_inv @ (y - mean)
         else:
             print("No solve method specified in _compute_covariance_value_product(). That might indicate a wrong input"); exit()
-        return x,K
+        return x,K,K_inv
     ##################################################################################
     def compute_covariance(self, hyper_parameters, variances):
         """computes the covariance matrix from the kernel"""
@@ -572,7 +566,7 @@ class FVGP:
     ##################################################################################
     def covariance_update(self, CoVariance):
         """performs a rank-n-update of the covariance matrix"""
-        OldInverse = np.array(self.K_inv())
+        OldInverse = np.array(self.K_inv)
         r = len(OldInverse)
         c = len(OldInverse[0])
         F = CoVariance[0:r, c:]
@@ -589,44 +583,6 @@ class FVGP:
             ]
         )
         return CoVarianceInverse
-
-    def slogdet(self, A, compute_device = "cpu"):
-        """
-        check this out
-        """
-
-        if compute_device == "cpu":
-            A = torch.Tensor(A)
-            sign, logdet = torch.slogdet(A)
-            return sign.numpy(), logdet.numpy()
-        if compute_device == "gpu":
-            A = torch.Tensor(A)
-            sign, logdet = torch.slogdet(A).cuda()
-            return sign.numpy(), logdet.numpy()
-
-
-    def solve(self, A, b, device = "gpu"):
-        """
-        check out here
-        """
-        if device == "cpu":
-            A = torch.Tensor(A)
-            b = torch.Tensor(b)
-            try:
-                x, lu = torch.solve(b,A)
-            except np.linalg.LinAlgError:
-                x, qr = np.linalg.lstsq(b,a)
-            return x.numpy()
-        if device == "gpu":
-            A = torch.Tensor(A).cuda()
-            b = torch.Tensor(b).cuda()
-            try:
-                x, lu = torch.solve(b,A)
-            except np.linalg.LinAlgError:
-                x, qr = np.linalg.lstsq(b,a)
-            return x.cpu().numpy()
-
-
 
     def safe_invert(self, Matrix):
         """computes in inverse or pseudo-inverse of a matrix"""
@@ -696,7 +652,7 @@ class FVGP:
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
-                sgn, logdet = self.slogdet(np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]))
+                sgn, logdet = np.linalg.slogdet(np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]))
                 entropies.append(sgn*logdet)
             entropies = np.asarray(entropies)
         else: entropies = None
@@ -711,7 +667,7 @@ class FVGP:
             covariance_k_prod = np.zeros(k.shape)
             info = np.zeros((len(k[0])))
             if self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
-                covariance_k_prod = self.K_inv() @ k
+                covariance_k_prod = self.K_inv @ k
             elif self.gp_system_solve_method == "minres":
                 for i in range(len(k[0])):
                     covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
@@ -812,8 +768,8 @@ class FVGP:
             mean = None
         if compute_posterior_covariance == True:
             if self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
-                covariance_k_prod = self.K_inv() @ k
-                covariance_k_g_prod = self.K_inv() @ k_g
+                covariance_k_prod = self.K_inv @ k
+                covariance_k_g_prod = self.K_inv @ k_g
             elif self.gp_system_solve_method == "minres":
                 for i in range(len(k[0])):
                     covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
