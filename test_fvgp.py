@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from fvgp import FVGP
+import sys
 
 def stationary_kernel(x1,x2,hps, obj = None):
     d = abs(np.subtract.outer(x1[:,0],x2[:,0])/hps[1])**2
@@ -21,11 +22,11 @@ values = 0.3*np.sin((points)*10.0*points)    #example to test non-stationary ker
 plt.plot(points,values)
 plt.savefig('plot_1.png')
 #plt.show()
-my_gp = FVGP(1,1,1,points,values,gp_kernel_function = non_stationary_kernel)
+my_gp = FVGP(1,1,1,points,values)
 #help(my_gp.train)
 #exit()
 my_gp.train([[0.001,10.1],[0.001,10.0]],[[.99,1.0]],
-        optimization_method = "global",
+        optimization_method = 'hgdl',
         likelihood_pop_size = 10,
         likelihood_optimization_tolerance = 0.01,
         likelihood_optimization_max_iter = 20)
