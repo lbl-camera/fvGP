@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from fvgp import FVGP
+import sys
 
 def stationary_kernel(x1,x2,hps, obj = None):
     d = abs(np.subtract.outer(x1[:,0],x2[:,0])/hps[1])**2
@@ -21,11 +22,15 @@ values = 3.0*points + 0.3*np.sin(10.0*points)
 plt.plot(points,values)
 plt.savefig('plot_1.png')
 #plt.show()
+<<<<<<< HEAD
 my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute_device = "cpu")
+=======
+my_gp = FVGP(1,1,1,points,values)
+>>>>>>> e49a486eafe3f50fc51ff4faddc05116139d6fe3
 #help(my_gp.train)
 #exit()
 my_gp.train([[0.001,10.1],[0.001,10.0]],[[.99,1.0]],
-        optimization_method = "global",
+        optimization_method = 'hgdl',
         likelihood_pop_size = 10,
         likelihood_optimization_tolerance = 0.01,
         likelihood_optimization_max_iter = 20)

@@ -41,6 +41,7 @@ from scipy.sparse.linalg import minres
 import itertools
 import time
 import torch
+from sys import exit
 
 class FVGP:
     """
@@ -381,6 +382,7 @@ class FVGP:
                 popsize = likelihood_pop_size,
                 tol = likelihood_optimization_tolerance,
             )
+            print(res) 
             hyper_parameters1 = np.array(res["x"])
             Eval1 = self.log_likelihood(
                 hyper_parameters1,
@@ -420,14 +422,14 @@ class FVGP:
                 hyper_parameters = OptimumEvaluation["x"]
             else:
                 print("Optimization not successful.")
-        elif hyper_parameter_optimization_mode == "hxdy":
-            exit("hxdy not included yet")
+        elif hyper_parameter_optimization_mode == "hgdl":
             try:
-                from .HXDY import HXDY as hgdl
-            except:
-                exit("Package HXDY not available, exit.")
+                from hxdy.hgdl import HGDL
+            except:# ModuleNotFoundError:
+                print('could not locate hgdl for import')
+            import numba as nb
             from functools import partial
-            func = partial(self.log_likelihood,values = values, 
+            func = partial(self.log_likelihood,values = values,
                     variances = variances, mean = mean)
             grad = partial(self.log_likelihood_gradient_wrt_hyper_parameters,
                     values = values,
@@ -436,14 +438,12 @@ class FVGP:
                     values = values,
                     variances = variances, mean = mean)
 
-            res = hgdl(func, np.asarray(hp_bounds),
-                  jac = grad,
-                  method='SLSQP',
-                  hess= hess, x0=None,
-                  extraStoppingCriterion=\
-                  lambda res: True if res.shape[0]>5 else False)
+            res = HGDL(func, grad, hess, np.asarray(hp_bounds))
             print(res)
-            input()
+            if not res["success"]:
+                print("didn't find anything!!")
+                raise Exception("ya done goofed, my guy")
+            hyper_parameters = res['x'][0] #input()
         else:
             print("no optimization mode specified")
         print("New hyper-parameters: ",
@@ -454,6 +454,7 @@ class FVGP:
 
         return hyper_parameters
     ##################################################################################
+    ### note to me - this is main function 
     def log_likelihood(
         self,
         hyper_parameters,
@@ -470,13 +471,13 @@ class FVGP:
         output:
             log likelihood(scalar)
         """
-        
+
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y=values
         sign, logdet = self.slogdet(K,compute_device = self.compute_device)
         if sign == 0.0:
             return 0.5 * ((y - mean).T @ x)
-        return (0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet)
+        return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0]
     ##################################################################################
     def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
@@ -492,7 +493,7 @@ class FVGP:
 
     def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
-        K_inv = self.safe_invert(K_inv)
+        K_inv = self.safe_invert(K)
         y = values
         d2L_dH2 = np.empty((len(hyper_parameters),len(hyper_parameters)))
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
