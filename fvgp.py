@@ -427,6 +427,18 @@ class FVGP:
                 from hxdy.hgdl import HGDL
             except:# ModuleNotFoundError:
                 print('could not locate hgdl for import')
+                exit()
+            a = time.time()
+            self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean)
+            print(time.time() - a)
+            a = time.time()
+            self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean)
+            print(time.time() - a)
+            exit()
             import numba as nb
             from functools import partial
             func = partial(self.log_likelihood,values = values,
@@ -480,32 +492,67 @@ class FVGP:
         return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0]
     ##################################################################################
     def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
+        solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
-        K_inv = self.safe_invert(K)
         y = values
         dL_dH = np.empty((len(hyper_parameters)))
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
-        for i in range(len(hyper_parameters)):
-            dL_dH[i] = 0.5 * (
-                ((y - mean).T @ K_inv @ dK_dH[i,:, :] @ K_inv @ (y - mean))
-                - (np.trace(K_inv @ dK_dH[i,:, :])))
-        return -dL_dH
+        if solve_method == 'solve':
+            #####################################
+            ####alternative to avoid inversion###
+            #####################################
+            #for i in range(len(hyper_parameters)):
+            #    x1 = self.solve(K ,dK_dH[i,:, :])
+            #    dL_dH[i] = 0.5 * (
+            #        ((y - mean).T @ x1 @ x)-(np.trace(x1)))
+            #####################################
+            #####################################
+            #####################################
+            #print("first   ",dL_dH)
+            return -dL_dH
+        if solve_method == 'inv':
+            K_inv = self.safe_invert(K)
+            for i in range(len(hyper_parameters)):
+                dL_dH[i] = 0.5 * (
+                    ((y - mean).T @ K_inv @ dK_dH[i,:, :] @ K_inv @ (y - mean))
+                    - (np.trace(K_inv @ dK_dH[i,:, :])))
+            #print("second: ",dL_dH)
+            #exit()
+            return -dL_dH
 
     def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
+        solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
-        K_inv = self.safe_invert(K)
-        y = values
+        y = values - mean
         d2L_dH2 = np.empty((len(hyper_parameters),len(hyper_parameters)))
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
         d2K_dH2 = self.hessian_gp_kernel(self.points,self.points, hyper_parameters)
-        for i in range(len(hyper_parameters)):
-            for j in range(len(hyper_parameters)):
-                A = -(K_inv @ dK_dH[j,:,:] @ K_inv @ dK_dH[i,:,:] @ K_inv)\
-                    -(K_inv @ dK_dH[i,:,:] @ K_inv @ dK_dH[j,:,:] @ K_inv)\
-                    +(K_inv @ d2K_dH2[i,j,:,:] @ K_inv)
-                B = np.trace((-K_inv @ dK_dH[j,:,:] @ K_inv @ dK_dH[i,:,:]) + (K_inv @ d2K_dH2[i,j,:,:]))
-                d2L_dH2[i,j] = 0.5 * (((y-mean).T @ A @ (y-mean)) - B)
-        return -d2L_dH2
+        if solve_method == 'solve':
+            #####################################
+            ####alternative to avoid inversion###
+            #####################################
+            #for i in range(len(hyper_parameters)):
+            #    x1 = self.solve(K,dK_dH[i,:,:])
+            #    for j in range(len(hyper_parameters)):
+            #        x2 = self.solve(K,dK_dH[j,:,:])
+            #        x3 = self.solve(K,d2K_dH2[i,j,:,:])
+            #        d2L_dH2[i,j] = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
+            #####################################
+            #####################################
+            #####################################
+            #print("first:",d2L_dH2)
+            return -d2L_dH2
+        if solve_method == 'inv':
+            K_inv = self.safe_invert(K)
+            for i in range(len(hyper_parameters)):
+                for j in range(len(hyper_parameters)):
+                    A = -(K_inv @ dK_dH[j,:,:] @ K_inv @ dK_dH[i,:,:] @ K_inv)\
+                        -(K_inv @ dK_dH[i,:,:] @ K_inv @ dK_dH[j,:,:] @ K_inv)\
+                        +(K_inv @ d2K_dH2[i,j,:,:] @ K_inv)
+                    B = np.trace((-K_inv @ dK_dH[j,:,:] @ K_inv @ dK_dH[i,:,:]) + (K_inv @ d2K_dH2[i,j,:,:]))
+                    d2L_dH2[i,j] = 0.5 * (((y).T @ A @ (y)) - B)
+            #print("second:",d2L_dH2)
+            return -d2L_dH2
 
 
     ##################################################################################
