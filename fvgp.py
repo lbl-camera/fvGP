@@ -531,12 +531,12 @@ class FVGP:
             #####################################
             ####alternative to avoid inversion###
             #####################################
-            #for i in range(len(hyper_parameters)):
-            #    x1 = self.solve(K,dK_dH[i,:,:])
-            #    for j in range(len(hyper_parameters)):
-            #        x2 = self.solve(K,dK_dH[j,:,:])
-            #        x3 = self.solve(K,d2K_dH2[i,j,:,:])
-            #        d2L_dH2[i,j] = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
+            for i in range(len(hyper_parameters)):
+                x1 = self.solve(K,dK_dH[i,:,:])
+                for j in range(len(hyper_parameters)):
+                    x2 = self.solve(K,dK_dH[j,:,:])
+                    x3 = self.solve(K,d2K_dH2[i,j,:,:])
+                    d2L_dH2[i,j] = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
             #####################################
             #####################################
             #####################################
