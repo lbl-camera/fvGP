@@ -16,7 +16,7 @@ def non_stationary_kernel(x1,x2,hps, obj = None):
     #return hps[0] *(s/2.0)* np.exp(-d)
     return hps[0] * np.outer(x1[:,0],x2[:,0]) * np.exp(-d)
 
-points = np.sort(np.random.uniform(low = 0.0, high = 2.0, size = (200,1)), axis = 0)
+points = np.sort(np.random.uniform(low = 0.0, high = 2.0, size = (1000,1)), axis = 0)
 values = 3.0*points + 0.3*np.sin(10.0*points)
 #values = 0.3*np.sin((points)*10.0*points)    #example to test non-stationary kernels
 plt.plot(points,values)
