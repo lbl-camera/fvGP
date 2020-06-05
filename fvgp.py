@@ -449,7 +449,7 @@ class FVGP:
                     values = values,
                     variances = variances, mean = mean)
 
-            res = HGDL(func, grad, hess, np.asarray(hp_bounds))
+            res = HGDL(func, grad, hess, np.asarray(hp_bounds), numWorkers=3)
             print(res)
             if not res["success"]:
                 print("didn't find anything!!")
@@ -653,7 +653,6 @@ class FVGP:
             A = torch.Tensor(A).cuda()
             sign, logdet = torch.slogdet(A)
             return sign.cpu().numpy(), logdet.cpu().numpy()
-
 
     def solve(self, A, b, compute_device = "cpu"):
         """
