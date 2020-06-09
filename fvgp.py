@@ -492,7 +492,7 @@ class FVGP:
             return 0.5 * ((y - mean).T @ x)
         return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0]
     ##################################################################################
-    @profile
+#    @profile
     def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
@@ -521,7 +521,7 @@ class FVGP:
             #print("second: ",dL_dH)
             #exit()
             return -dL_dH
-    @profile
+#    @profile
     def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
@@ -1104,7 +1104,7 @@ class FVGP:
         np.subtract.outer(points2, points1)
         ))
         return distance_matrix
-    @profile
+#    @profile
     def d_gp_kernel_dx(self, points1, points2, direction, hyper_parameters):
         new_points = np.array(points1)
         epsilon = 1e-6
@@ -1113,7 +1113,7 @@ class FVGP:
         b = self.kernel(points1,    points2, hyper_parameters,self)
         derivative = ( a - b )/epsilon
         return derivative
-    @profile
+#    @profile
     def d_gp_kernel_dh(self, points1, points2, direction, hyper_parameters):
         new_hyper_parameters1 = np.array(hyper_parameters)
         new_hyper_parameters2 = np.array(hyper_parameters)
@@ -1124,13 +1124,13 @@ class FVGP:
         b = self.kernel(points1, points2, new_hyper_parameters2,self)
         derivative = ( a - b )/(2.0*epsilon)
         return derivative
-    @profile
+#    @profile
     def gradient_gp_kernel(self, points1, points2, hyper_parameters):
         gradient = np.empty((len(hyper_parameters), len(points1),len(points2)))
         for direction in range(len(hyper_parameters)):
             gradient[direction] = self.d_gp_kernel_dh(points1, points2, direction, hyper_parameters)
         return gradient
-    @profile
+#    @profile
     def d2_gp_kernel_dh2(self, points1, points2, direction1, direction2, hyper_parameters):
         epsilon = 1e-6
         new_hyper_parameters1 = np.array(hyper_parameters)
@@ -1155,11 +1155,11 @@ class FVGP:
               - self.kernel(points1,points2,new_hyper_parameters3,self) \
               + self.kernel(points1,points2,new_hyper_parameters4,self))\
               / (4.0*(epsilon**2))
-    @profile
+#    @profile
     def hessian_gp_kernel(self, points1, points2, hyper_parameters):
         hessian = np.zeros((len(hyper_parameters),len(hyper_parameters), len(points1),len(points2)))
         for i in range(len(hyper_parameters)):
-            for j in range(i+1)):
+            for j in range(i+1):
                 hessian[i,j] = hessian[j,i] = self.d2_gp_kernel_dh2(points1, points2, i,j, hyper_parameters)
         return hessian
 
