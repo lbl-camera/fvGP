@@ -502,10 +502,10 @@ class FVGP:
             #####################################
             ####alternative to avoid inversion###
             #####################################
-            #for i in range(len(hyper_parameters)):
-            #    x1 = self.solve(K ,dK_dH[i,:, :])
-            #    dL_dH[i] = 0.5 * (
-            #        ((y - mean).T @ x1 @ x)-(np.trace(x1)))
+            for i in range(len(hyper_parameters)):
+                x1 = self.solve(K ,dK_dH[i,:, :])
+                dL_dH[i] = 0.5 * (
+                    ((y - mean).T @ x1 @ x)-(np.trace(x1)))
             #####################################
             #####################################
             #####################################
