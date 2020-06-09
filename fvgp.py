@@ -439,7 +439,6 @@ class FVGP:
                     values = values,
                     variances = variances, mean = mean)
             print(time.time() - a)
-            exit()
             import numba as nb
             from functools import partial
             func = partial(self.log_likelihood,values = values,
