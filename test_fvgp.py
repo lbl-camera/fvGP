@@ -4,6 +4,13 @@ from fvgp import FVGP
 import sys
 
 
+
+################
+###change from stat to non-stat kenrnel and create plots
+################
+
+
+
 def stationary_kernel(x1,x2,hps, obj = None):
     d = abs(np.subtract.outer(x1[:,0],x2[:,0])/hps[1])**2
     d = np.sqrt(d)
@@ -21,9 +28,9 @@ def func(points):
     return 3.0*points + 0.3*np.sin(10.0*points)
     #return 0.3*np.sin((points)*10.0*points)
 
-points = np.sort(np.random.uniform(low = 0.0, high = 2.0, size = (50,1)), axis = 0)
+#points = np.sort(np.random.uniform(low = 0.0, high = 2.0, size = (50,1)), axis = 0)
 #np.save("points",points)
-#points = np.load("points.npy")
+points = np.load("points.npy")
 values = func(points)      #example to test non-stationary kernels
 
 my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute_device = "cpu")

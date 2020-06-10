@@ -450,12 +450,9 @@ class FVGP:
                     values = values,
                     variances = variances, mean = mean)
 
-            res = HGDL(func, grad, hess, np.asarray(hp_bounds), numIndividuals=15, numWorkers=3)
+            res = HGDL(func, grad, hess, np.asarray(hp_bounds), numIndividuals=20)
             print(res)
-            if not res["success"]:
-                print("didn't find anything!!")
-                raise Exception("ya done goofed, my guy")
-            hyper_parameters = res['x'][0] #input()
+            hyper_parameters = res["best"] #input()
         else:
             print("no optimization mode specified")
         print("New hyper-parameters: ",
