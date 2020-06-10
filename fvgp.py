@@ -424,7 +424,7 @@ class FVGP:
                 print("Optimization not successful.")
         elif hyper_parameter_optimization_mode == "hgdl":
             try:
-                from hxdy.hgdl import HGDL
+                from hgdl.hgdl import HGDL
             except:# ModuleNotFoundError:
                 print('could not locate hgdl for import')
                 exit()
