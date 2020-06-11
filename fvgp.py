@@ -42,6 +42,7 @@ import itertools
 import time
 import torch
 from sys import exit
+import numba as nb
 
 class FVGP:
     """
@@ -434,10 +435,13 @@ class FVGP:
                     values = values,
                     variances = variances, mean = mean)
             print(time.time() - a)
-            a = time.time()
             self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean)
+            a = time.time()
+            print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean))
             print(time.time() - a)
             import numba as nb
             from functools import partial
@@ -534,12 +538,23 @@ class FVGP:
                     - (np.trace(K_inv @ dK_dH[i,:, :])))
             #print("inv: ",dL_dH, time.time() - t1)
             return -dL_dH
-
+    @staticmethod
+    @nb.njit 
+    def numba_d2L_dH2(x, y, s, ss):
+        len_hyper_parameters = s.shape[0]
+        d2L_dH2 = np.empty((len_hyper_parameters,len_hyper_parameters))
+        for i in range(len_hyper_parameters):
+            x1 = s[i]
+            for j in range(i+1):
+                x2 = s[j]
+                x3 = ss[i,j]
+                f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
+                d2L_dH2[i,j] = d2L_dH2[j,i] = f[0]
+        return d2L_dH2
     def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y = values - mean
-        d2L_dH2 = np.empty((len(hyper_parameters),len(hyper_parameters)))
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
         d2K_dH2 = self.hessian_gp_kernel(self.points,self.points, hyper_parameters)
         if solve_method == 'solve':
@@ -549,14 +564,13 @@ class FVGP:
             t = time.time()
             K = np.array([K,] * len(hyper_parameters))
             s = self.solve(K,dK_dH)
-            K = np.array([K,] * len(hyper_parameters))
             ss = self.solve(K,d2K_dH2)
-            for i in range(len(hyper_parameters)):
-                x1 = s[i]
-                for j in range(len(hyper_parameters)):
-                    x2 = s[j]
-                    x3 = ss[i,j]
-                    d2L_dH2[i,j] = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
+            # make contiguous 
+            K = np.ascontiguousarray(K, dtype=np.float32)
+            y = np.ascontiguousarray(y, dtype=np.float32)
+            s = np.ascontiguousarray(s, dtype=np.float32)
+            ss = np.ascontiguousarray(ss, dtype=np.float32)
+            d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
             #####################################
             #####################################
             #####################################
