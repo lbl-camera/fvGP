@@ -455,7 +455,7 @@ class FVGP:
                     variances = variances, mean = mean)
 
             res = HGDL(func, grad, hess, np.asarray(hp_bounds), numIndividuals=20)
-            print(res)
+            print(res['minima'])
             if len(res['minima'])!=0:
                 hyper_parameters = res['minima'][0]
             elif len(res['edge'])!=0:
