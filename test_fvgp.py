@@ -3,14 +3,6 @@ import numpy as np
 from fvgp import FVGP
 import sys
 
-
-
-################
-###change from stat to non-stat kenrnel and create plots
-################
-
-
-
 def stationary_kernel(x1,x2,hps, obj = None):
     d = abs(np.subtract.outer(x1[:,0],x2[:,0])/hps[1])**2
     d = np.sqrt(d)
