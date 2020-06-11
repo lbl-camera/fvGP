@@ -430,20 +430,25 @@ class FVGP:
                 print('could not locate hgdl for import')
                 exit()
             print('bounds are',hp_bounds) 
+            print('compiling...')
+            self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean)
+            self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean)
+            print('done.')
+
             a = time.time()
             self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean)
             print(time.time() - a)
-            self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean)
             a = time.time()
             print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean))
             print(time.time() - a)
-            import numba as nb
             from functools import partial
             func = partial(self.log_likelihood,values = values,
                     variances = variances, mean = mean)
@@ -500,32 +505,31 @@ class FVGP:
         if sign == 0.0:
             return 0.5 * ((y - mean).T @ x)
         return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0]
+    @staticmethod
+    @nb.njit
+    def numba_dL_dH(y, mean, x1, x, length):
+        dL_dH = np.empty((length))
+        for i in range(length):
+                dL_dH[i] = 0.5 * (((y - mean).T @ x1[i] @ x)-(np.trace(x1[i])))[0]
+        return dL_dH
+
     ##################################################################################
     def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y = values
-        dL_dH = np.empty((len(hyper_parameters)))
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
         if solve_method == 'solve':
-            t1 = time.time()
             #####################################
             ####alternative to avoid inversion###
             #####################################
-            for i in range(len(hyper_parameters)):
-                x1 = self.solve(K ,dK_dH[i,:, :])
-                dL_dH[i] = 0.5 * (
-                    ((y - mean).T @ x1 @ x)-(np.trace(x1)))
-            #####################################
-            #####################################
-            #####################################
-            #print("first   ",dL_dH, time.time() - t1)
-            t1 = time.time()
-            #####################################
             K = np.array([K,] * len(hyper_parameters))
             x1 = self.solve(K,dK_dH)
-            for i in range(len(hyper_parameters)):
-                dL_dH[i] = 0.5 * (((y - mean).T @ x1[i] @ x)-(np.trace(x1[i])))
+            y = np.ascontiguousarray(y, dtype=np.float32)
+            mean = np.ascontiguousarray(mean, dtype=np.float32)
+            x = np.ascontiguousarray(x, dtype=np.float32)
+            x1 = np.ascontiguousarray(x1, dtype=np.float32)
+            dL_dH = self.numba_dL_dH(y, mean, x1, x, len(hyper_parameters))
 
             #print("second   ",dL_dH,time.time() - t1)
             return -dL_dH
@@ -698,10 +702,7 @@ class FVGP:
         if compute_device == "cpu":
             A = torch.Tensor(A)
             b = torch.Tensor(b)
-            try:
-                x, lu = torch.solve(b,A)
-            except np.linalg.LinAlgError: ###that is not going to work
-                x, qr = torch.lstsq(b,A)
+            x, lu = torch.solve(b,A)
             return x.numpy()
         if compute_device == "gpu":
             A = torch.Tensor(A).cuda()
