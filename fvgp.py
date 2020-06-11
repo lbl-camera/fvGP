@@ -488,7 +488,6 @@ class FVGP:
             return 0.5 * ((y - mean).T @ x)
         return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0]
     ##################################################################################
-#    @profile
     def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
@@ -496,6 +495,7 @@ class FVGP:
         dL_dH = np.empty((len(hyper_parameters)))
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
         if solve_method == 'solve':
+            t1 = time.time()
             #####################################
             ####alternative to avoid inversion###
             #####################################
@@ -506,18 +506,26 @@ class FVGP:
             #####################################
             #####################################
             #####################################
-            #print("first   ",dL_dH)
+            #print("first   ",dL_dH, time.time() - t1)
+            t1 = time.time()
+            #####################################
+            K = np.array([K,] * len(hyper_parameters))
+            x1 = self.solve(K,dK_dH)
+            for i in range(len(hyper_parameters)):
+                dL_dH[i] = 0.5 * (((y - mean).T @ x1[i] @ x)-(np.trace(x1[i])))
+
+            #print("second   ",dL_dH,time.time() - t1)
             return -dL_dH
         if solve_method == 'inv':
+            t1 = time.time()
             K_inv = self.safe_invert(K)
             for i in range(len(hyper_parameters)):
                 dL_dH[i] = 0.5 * (
                     ((y - mean).T @ K_inv @ dK_dH[i,:, :] @ K_inv @ (y - mean))
                     - (np.trace(K_inv @ dK_dH[i,:, :])))
-            #print("second: ",dL_dH)
-            #exit()
+            #print("inv: ",dL_dH, time.time() - t1)
             return -dL_dH
-#    @profile
+
     def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
@@ -529,18 +537,25 @@ class FVGP:
             #####################################
             ####alternative to avoid inversion###
             #####################################
+            t = time.time()
+            K = np.array([K,] * len(hyper_parameters))
+            s = self.solve(K,dK_dH)
+            K = np.array([K,] * len(hyper_parameters))
+            ss = self.solve(K,d2K_dH2)
             for i in range(len(hyper_parameters)):
-                x1 = self.solve(K,dK_dH[i,:,:])
+                x1 = s[i]
                 for j in range(len(hyper_parameters)):
-                    x2 = self.solve(K,dK_dH[j,:,:])
-                    x3 = self.solve(K,d2K_dH2[i,j,:,:])
+                    x2 = s[j]
+                    x3 = ss[i,j]
                     d2L_dH2[i,j] = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
             #####################################
             #####################################
             #####################################
-            #print("first:",d2L_dH2)
+            #print("vectorized solve:",d2L_dH2, time.time() - t)
+
             return -d2L_dH2
         if solve_method == 'inv':
+            t = time.time()
             K_inv = self.safe_invert(K)
             for i in range(len(hyper_parameters)):
                 for j in range(len(hyper_parameters)):
@@ -549,7 +564,7 @@ class FVGP:
                         +(K_inv @ d2K_dH2[i,j,:,:] @ K_inv)
                     B = np.trace((-K_inv @ dK_dH[j,:,:] @ K_inv @ dK_dH[i,:,:]) + (K_inv @ d2K_dH2[i,j,:,:]))
                     d2L_dH2[i,j] = 0.5 * (((y).T @ A @ (y)) - B)
-            #print("second:",d2L_dH2)
+            #print("inv solve:",d2L_dH2, time.time() - t)
             return -d2L_dH2
 
 
