@@ -505,6 +505,7 @@ class FVGP:
         if sign == 0.0:
             return 0.5 * ((y - mean).T @ x)
         return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0]
+    ##################################################################################
     @staticmethod
     @nb.njit
     def numba_dL_dH(y, mean, x1, x, length):
@@ -512,7 +513,6 @@ class FVGP:
         for i in range(length):
                 dL_dH[i] = 0.5 * (((y - mean).T @ x1[i] @ x)-(np.trace(x1[i])))[0]
         return dL_dH
-
     ##################################################################################
     def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         solve_method = "solve"
@@ -520,6 +520,7 @@ class FVGP:
         y = values
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
         if solve_method == 'solve':
+            #t = time.time()
             #####################################
             ####alternative to avoid inversion###
             #####################################
@@ -531,7 +532,8 @@ class FVGP:
             x1 = np.ascontiguousarray(x1, dtype=np.float32)
             dL_dH = self.numba_dL_dH(y, mean, x1, x, len(hyper_parameters))
 
-            #print("second   ",dL_dH,time.time() - t1)
+            #print("second   ",dL_dH,time.time() - t)
+            #exit()
             return -dL_dH
         if solve_method == 'inv':
             t1 = time.time()
@@ -542,6 +544,7 @@ class FVGP:
                     - (np.trace(K_inv @ dK_dH[i,:, :])))
             #print("inv: ",dL_dH, time.time() - t1)
             return -dL_dH
+    ##################################################################################
     @staticmethod
     @nb.njit 
     def numba_d2L_dH2(x, y, s, ss):
@@ -555,6 +558,7 @@ class FVGP:
                 f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
                 d2L_dH2[i,j] = d2L_dH2[j,i] = f[0]
         return d2L_dH2
+    ##################################################################################
     def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
@@ -562,6 +566,7 @@ class FVGP:
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
         d2K_dH2 = self.hessian_gp_kernel(self.points,self.points, hyper_parameters)
         if solve_method == 'solve':
+            #t = time.time()
             #####################################
             ####alternative to avoid inversion###
             #####################################
@@ -579,7 +584,6 @@ class FVGP:
             #####################################
             #####################################
             #print("vectorized solve:",d2L_dH2, time.time() - t)
-
             return -d2L_dH2
         if solve_method == 'inv':
             t = time.time()
