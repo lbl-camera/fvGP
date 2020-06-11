@@ -452,7 +452,16 @@ class FVGP:
 
             res = HGDL(func, grad, hess, np.asarray(hp_bounds), numIndividuals=20)
             print(res)
-            hyper_parameters = res["best"] #input()
+            if len(res['minima'])!=0:
+                hyper_parameters = res['minima'][0]
+            elif len(res['edge'])!=0:
+                if res['edge_y'][0]<res['genetic_y'][0]:
+                    hyper_parameters = res['edge'][0]
+                else:
+                    hyper_parameters = res['genetic'][0]
+            else:
+                hyper_parameters = res['genetic'][0]
+
         else:
             print("no optimization mode specified")
         print("New hyper-parameters: ",
