@@ -25,7 +25,7 @@ values = func(points)      #example to test non-stationary kernels
 my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute_device = "cpu")
 #my_gp = FVGP(1,1,1,points,values,gp_kernel_function = non_stationary_kernel, compute_device = "cpu")
 
-my_gp.train([[0.1,10.1],[0.1,10.0]],[[.99,1.0]],
+my_gp.train([[5.0,50.0],[1.0,4.0]],[[.99,1.0]],
         optimization_method = 'hgdl',
         likelihood_pop_size = 20,
         likelihood_optimization_tolerance = 0.0001,
