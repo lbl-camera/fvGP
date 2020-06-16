@@ -449,6 +449,22 @@ class FVGP:
                     values = values,
                     variances = variances, mean = mean))
             print(time.time() - a)
+            print(hp_bounds)
+            x = np.arange(hp_bounds[0][0]+10,hp_bounds[0][1],1.)
+            y = np.arange(hp_bounds[1][0],hp_bounds[1][1],1e-3)
+            X, Y = np.meshgrid(x,y)
+            Z = np.empty((X.shape))
+            for i in range(Z.shape[0]):
+                for j in range(Z.shape[1]):
+                    hyper_parameters = [X[i,j],Y[i,j],0.995]
+                    Z[i,j] = self.log_likelihood(hyper_parameters,values,variances,mean)
+            Z *= -1
+            from matplotlib.colors import LogNorm
+            plt.contourf(X, Y, Z, norm=LogNorm())
+            plt.colorbar()
+            plt.show()
+            print(np.amin(Z))
+            exit()
             from functools import partial
             func = partial(self.log_likelihood,values = values,
                     variances = variances, mean = mean)
