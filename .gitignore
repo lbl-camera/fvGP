@@ -1,2 +1,4 @@
 __pycache__
 *.png
+*.py.un*
+*.un~*

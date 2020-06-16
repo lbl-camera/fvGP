@@ -431,39 +431,44 @@ class FVGP:
                 exit()
             print('bounds are',hp_bounds) 
             print('compiling...')
-            self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean)
-            self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean)
+            #self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
+            #        values = values,
+            #        variances = variances, mean = mean)
+            #self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+            #        values = values,
+            #        variances = variances, mean = mean)
             print('done.')
 
-            a = time.time()
-            self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean)
-            print(time.time() - a)
-            a = time.time()
-            print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean))
-            print(time.time() - a)
-            print(hp_bounds)
-            x = np.arange(hp_bounds[0][0]+10,hp_bounds[0][1],1.)
-            y = np.arange(hp_bounds[1][0],hp_bounds[1][1],1e-3)
+            #a = time.time()
+            #self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
+            #        values = values,
+            #        variances = variances, mean = mean)
+            #print(time.time() - a)
+            #a = time.time()
+            #print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+            #        values = values,
+            #        variances = variances, mean = mean))
+            #print(time.time() - a)
+            #print(hp_bounds)
+            #x = np.linspace(hp_bounds[0][0]+10,hp_bounds[0][1],50)
+            x = np.linspace(5.0,50,100)
+            y = np.linspace(1.0,4,100)
             X, Y = np.meshgrid(x,y)
             Z = np.empty((X.shape))
             for i in range(Z.shape[0]):
                 for j in range(Z.shape[1]):
-                    hyper_parameters = [X[i,j],Y[i,j],0.995]
+                    hyper_parameters = [X[i,j],Y[i,j],1.0]
                     Z[i,j] = self.log_likelihood(hyper_parameters,values,variances,mean)
-            Z *= -1
-            from matplotlib.colors import LogNorm
-            plt.contourf(X, Y, Z, norm=LogNorm())
+                    #print(hyper_parameters)
+                    #print(Z[i,j])
+                    #print("=============")
+            #Z *= -1
+            #from matplotlib.colors import LogNorm
+            plt.pcolormesh(X, Y, Z)
             plt.colorbar()
+            plt.contour(X,Y,Z,50, colors = 'k')
             plt.show()
-            print(np.amin(Z))
+            #print(np.amin(Z))
             exit()
             from functools import partial
             func = partial(self.log_likelihood,values = values,
@@ -722,14 +727,17 @@ class FVGP:
         if compute_device == "cpu":
             A = torch.Tensor(A)
             b = torch.Tensor(b)
-            x, lu = torch.solve(b,A)
+            try:
+                x, lu = torch.solve(b,A)
+            except:
+                x, qr = torch.lstsq(b,A)
             return x.numpy()
         if compute_device == "gpu":
             A = torch.Tensor(A).cuda()
             b = torch.Tensor(b).cuda()
             try:
                 x, lu = torch.solve(b,A)
-            except np.linalg.LinAlgError:
+            except:
                 x, qr = torch.lstsq(b,A)
             return x.cpu().numpy()
 
