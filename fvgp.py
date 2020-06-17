@@ -715,7 +715,9 @@ class FVGP:
             diag = np.where(diag<0.0,0.0,diag)
             if any([x < -0.0001 for x in np.diag(a)]):
                 print("CAUTION, negative variances encountered. That normally means that the model is unstable.")
-                print("Reduce the differentiability of the model, add more noise to the data, or double check the hyper-parameter optimization bounds")
+                print("Rethink the kernel definitions, add more noise to the data, \
+                      or double check the hyper-parameter optimization bounds. This will not terminate the \
+                      algorithm, but expect anomalies.")
                 print("diagonal of the posterior covariance: ",np.diag(a))
             np.fill_diagonal(a,diag)
             M = len(x_output)
