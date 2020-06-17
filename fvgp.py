@@ -407,23 +407,23 @@ class FVGP:
                 exit()
             print('bounds are',hp_bounds) 
             print('compiling...')
-            #self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
-            #        values = values,
-            #        variances = variances, mean = mean)
-            #self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
-            #        values = values,
-            #        variances = variances, mean = mean)
+            self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean)
+            self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean)
             print('done.')
 
-            #a = time.time()
-            #self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
-            #        values = values,
-            #        variances = variances, mean = mean)
+            a = time.time()
+            self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean)
             #print(time.time() - a)
             #a = time.time()
-            #print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
-            #        values = values,
-            #        variances = variances, mean = mean))
+            print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean))
             #print(time.time() - a)
             #print(hp_bounds)
             #x = np.linspace(hp_bounds[0][0]+10,hp_bounds[0][1],50)
@@ -445,7 +445,7 @@ class FVGP:
             plt.contour(X,Y,Z,50, colors = 'k')
             plt.show()
             #print(np.amin(Z))
-            exit()
+            #exit()
             from functools import partial
             func = partial(self.log_likelihood,values = values,
                     variances = variances, mean = mean)
@@ -458,7 +458,8 @@ class FVGP:
 
             res = HGDL(func, grad, hess, np.asarray(hp_bounds), numIndividuals=20)
             print(res['minima'])
-            if len(res['minima'])!=0:
+            exit()
+            if len(res['minima']) != 0:
                 hyper_parameters = res['minima'][0]
             elif len(res['edge'])!=0:
                 if res['edge_y'][0]<res['genetic_y'][0]:
@@ -1218,262 +1219,5 @@ class FVGP:
         return hessian
 
 ###########################################################################
-###################################Obsolete################################
+###################################END#####################################
 ###########################################################################
-
-    ##################################################
-    #########Kernels##################################
-    ##################################################
-
-    ##################################################
-    #########Derivatives with respect to x ###########
-    ##################################################
-    """
-    def d_squared_exponential_kernel_dx(self, distance, length):
-        dkernel_dx = -(distance / length ** 2) * np.exp(
-            -(distance ** 2) / (2.0 * (length ** 2))
-        )
-        return dkernel_dx
-
-    def d_exponential_kernel_dx(self, distance, length):
-        dkernel_dx = -(1.0 / length) * np.exp(-(distance) / (length))
-        return dkernel_dx
-
-    def d_matern_kernel_diff1_dx(self, distance, length):
-        ee = np.exp(-(np.sqrt(3.0) * distance) / length)
-        a = np.sqrt(3.0) / length
-        b = a * distance
-        dkernel_dx = a * (ee - (ee * (1.0 + b)))
-        return dkernel_dx
-
-    def d_matern_kernel_diff2_dx(self, distance, length):
-        ee = np.exp(-(np.sqrt(5.0) * distance) / length)
-        a = np.sqrt(5.0) / length
-        b = a * distance
-        c = (10.0 * distance) / (3.0 * length ** 2)
-        d = (5.0 * distance ** 2) / (3.0 * length ** 2)
-        dkernel_dx = ((a + c) * ee) - ((1.0 + b + d) * a * ee)
-        return dkernel_dx
-
-    def d_sparse_kernel_dx(self,distance, radius):
-        d = np.array(distance)
-        d[d == 0.0] = 10e-6
-        d[d>radius] = radius - 10e-6
-        dkernel_dx = 2.0**(3.0/2.0)*d*((3.0*radius**2*np.sqrt(1-d**2/radius**2)-3.0*d**2+3.0*radius**2)*\
-                np.log(d/(radius*(np.sqrt(1-d**2/radius**2)+1.0)))+2.0*radius**2*(1.0-d**2/radius**2)**(3.0/2.0)+\
-                (radius**2-d**2)*np.sqrt(1.0-d**2/radius**2)-3.0*d**2+3.0*radius**2)/\
-                (3.0*np.sqrt(np.pi)*radius**4*np.sqrt(1.0-d**2/radius**2)*(np.sqrt(1.0-d**2/radius**2)+1))
-        dkernel_dx[d > radius] = 0.0
-        return dkernel_dx
-    def dd_sparse_kernel_dxx(self,distance, radius):
-        d = np.array(distance)
-        d[d == 0.0] = 10e-6
-        d[d>radius] = radius - 10e-6
-        r = radius
-        ddkernel_dxx = -(2**(3/2)*((np.sqrt(1-d**2/r**2)*(3*r**2*d**4-3*r**4*d**2)\
-                -6*r**2*d**4+(1-d**2/r**2)**(3/2)*(6*r**4*d**2-6*r**6)+12*r**4*d**2-6*r**6)\
-                *np.log(d/(r*(np.sqrt(1-d**2/r**2)+1)))-2*r**6*(1-d**2/r**2)**(5/2)+6*d**6+\
-                np.sqrt(1-d**2/r**2)*(6*r**2*d**4-6*r**4*d**2)-24*r**2*d**4+(1-d**2/r**2)**\
-                (3/2)*(16*r**4*d**2-10*r**6)+30*r**4*d**2-12*r**6))/(3*np.sqrt(np.pi)*r**8*\
-                (1-d**2/r**2)**(3/2)*(np.sqrt(1-d**2/r**2)+1)**2)
-        ddkernel_dxx[d > radius] = 0.0
-        return ddkernel_dxx
-
-    ##################################################
-    #########Derivatives with respect to length scale#
-    ##################################################
-    def d_squared_exponential_kernel_dl(self, distance, length):
-        # returns the derivative of the 1d squared exponential kernel
-        # with respect to length scale
-        return self.squared_exponential_kernel(distance, length) * (
-            (distance ** 2) / (length ** 3)
-        )
-
-    def d_exponential_kernel_dl(self, distance, length):
-        # returns the derivative of the 1d exponential kernel
-        # with respect to length scale
-        return np.exp(-(distance) / (length)) * (distance / (length ** 2))
-
-    def d_matern_kernel_diff1_dl(self, distance, length):
-        # returns the derivative of the 1d matern kernel (P1)
-        # with respect to length scale
-        return np.exp(-((np.sqrt(3.0) * distance) / (length))) * (
-            (3.0 * distance ** 2) / (length ** 3)
-        )
-
-    def d_matern_kernel_diff2_dl(self, distance, length):
-        # returns the derivative of the 1d Matern kernel (P1)
-        # with respect to length scale
-        a = np.exp(-(np.sqrt(5.0) * distance) / (length))
-        return a * (
-            (distance ** 2 * ((5.0 * length) + (5.0 ** (3.0 / 2.0) * distance)))
-            / (3.0 * length ** 4)
-        )
-
-    def d_sparse_kernel_dl(self, distance, radius):
-        d = np.array(distance)
-        d[d == 0.0] = 10e-6
-        d[d>radius] = radius - 10e-6
-        r = radius
-
-        dsk_dl = (np.sqrt(2)*((3*d*(np.sqrt(1-d**2/r**2)+1)*(-d/((np.sqrt(1-d**2/r**2)+1)*r**2)-d**3/\
-                ((np.sqrt(1-d**2/r**2)+1)**2*np.sqrt(1-d**2/r**2)*r**4)))/r+(d**2*((2*d**2)/r**2+1))/\
-                (np.sqrt(1-d**2/r**2)*r**3)-(4*d**2*np.sqrt(1-d**2/r**2))/r**3-(6*d**2*\
-                np.log(d/((np.sqrt(1-d**2/r**2)+1)*r)))/r**3))/(3*np.sqrt(np.pi))
-
-        dsk_dl[d > radius] = 0.0
-        return dsk_dl
-
-    def d_sparse_kernel_dl(self, distance, radius):
-        d = np.array(distance)
-        d[d == 0.0] = 10e-6
-        d[d>radius] = radius - 10e-6
-        r = radius
-
-        ddsk_dll = (np.sqrt(2)*d**2*(((18*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))+39)*\
-            (1-d**2/r**2)**(5/2)+(18*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))+9)*(1-d**2/r**2)**(3/2)+\
-            36*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))+48)*r**8+((-18*d**2*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))\
-            -39*d**2)*(1-d**2/r**2)**(5/2)+(-18*d**2*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))-16*d**2)*\
-            (1-d**2/r**2)**(3/2)-2*d**2*np.sqrt(1-d**2/r**2)-108*d**2*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))-\
-            168*d**2)*r**6+(13*d**4*(1-d**2/r**2)**(3/2)-2*d**4*np.sqrt(1-d**2/r**2)+108*d**4*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))+\
-            216*d**4)*r**4+(4*d**6*np.sqrt(1-d**2/r**2)-36*d**6*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))-120*d**6)*\
-            r**2+24*d**8))/(3*np.sqrt(np.pi)*(np.sqrt(1-d**2/r**2)+1)**2*(1-d**2/r**2)**(3/2)*r**10*(r**2-d**2))
-
-        ddsk_dll[d > radius] = 0.0
-        return ddsk_dll
-
-
-
-    def dd_squared_exponential_kernel_dll(self, distance, length):
-        # returns the derivative of the 1d squared exponential kernel
-        # with respect to length scale
-        return (
-            self.squared_exponential_kernel(distance, length) * ((distance ** 4) / (length ** 6))
-        ) - (
-            3.0
-            * selfKernel.SquaredExpDer(distance, length)
-            * ((distance ** 2) / (length ** 4))
-        )
-
-    def dd_exponential_kernel_dll(self, distance, length):
-        # returns the derivative of the 1d exponential kernel
-        # with respect to length scale
-        ee = self.exponential_kernel(distance, length)
-        return ee * (
-            (-2.0 * distance / (length ** 3)) + ((distance ** 2) / (length ** 4))
-        )
-
-    def dd_matern_kernel_diff1_dll(self, distance, length):
-        # returns the derivative of the 1d Matern kernel (P1)
-        # with respect to length scale
-        ee = np.exp((-np.sqrt(3.0) * distance) / (length))
-        return ee * (
-            ((3.0 ** (3.0 / 2.0) * distance ** 3) / (length ** 5))
-            - ((9.0 * distance ** 2) / (length ** 4))
-        )
-
-    def dd_matern_kernel_diff2_dll(self, distance, length):
-        # returns the derivative of the 1d Matern kernel (P1)
-        # with respect to length scale
-        a = np.exp(-(np.sqrt(5.0) * distance) / (length))
-        return a * (
-            (
-                (15.0 * length ** 2)
-                + (3.0 * 5.0 ** (3.0 / 2.0) * distance * length)
-                - (25.0 * distance ** 2)
-            )
-            / (3.0 * length ** 6)
-        )
-
-    def dd_bump_function_kernel_dll(self, distance, beta, r):
-        A = distance ** 2 - r ** 2
-        B = BumpFunction(distance, beta, r)
-        if distance < r:
-            return (
-                (2 * beta * r ** 2)
-                * (
-                    3.0 * distance ** 4
-                    + ((2.0 * beta - 2) * r ** 2 * distance ** 2)
-                    - r ** 4
-                )
-                * B
-            ) / A ** 4
-        else:
-            return 0.0
-    """
-""" derivative test:
-
-
-        print("gradient test")
-        e = 0.01
-        d = 0
-        hps = np.random.rand(4) * 1.0   #np.array(self.hyper_parameters)
-        hps[0] = 200.0
-        print("hps:", hps)
-        hps1 = np.array(hps)
-        hps2 = np.array(hps)
-        hps2[d] = hps2[d] + e
-        hps1[d] = hps1[d] - e
-        print("hps1: ", hps1)
-        print("hps2: ", hps2)
-        a = self.log_likelihood(hps1,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        b = self.log_likelihood(hps2,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        print("likelihoods: ",a,b)
-        print("test grad: ",( b - a )/(2.0*e))
-        print("comp grad: ",self.log_likelihood_gradient_wrt_hyper_parameters(hps,
-        self.values,
-        self.variances,
-        self.prior_mean))
-        print("hessian test")
-        epsilon = 1e-5
-        d1 = 0
-        d2 = 1
-        hps = np.random.rand(4) * 1.0   #np.array(self.hyper_parameters)
-        hps[0] = 200.0
-        hps1 = np.array(hps)
-        hps2 = np.array(hps)
-        hps3 = np.array(hps)
-        hps4 = np.array(hps)
-        hps1[d1] = hps1[d1] + epsilon
-        hps1[d2] = hps1[d2] + epsilon
-
-        hps2[d1] = hps2[d1] + epsilon
-        hps2[d2] = hps2[d2] - epsilon
-
-        hps3[d1] = hps3[d1] - epsilon
-        hps3[d2] = hps3[d2] + epsilon
-
-        hps4[d1] = hps4[d1] - epsilon
-        hps4[d2] = hps4[d2] - epsilon
-
-        f1 = self.log_likelihood(hps1,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        f2 = self.log_likelihood(hps2,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        f3 = self.log_likelihood(hps3,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        f4 = self.log_likelihood(hps4,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        print("fin diff hess at ",d1," ",d2,(f1 - f2 - f3 +  f4) / (4.0*(epsilon**2)))
-        print(self.log_likelihood_hessian_wrt_hyper_parameters(hps,
-        self.values,
-        self.variances,
-        self.prior_mean))
-
-        plt.show()
-        exit()
-"""
