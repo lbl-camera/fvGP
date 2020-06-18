@@ -70,8 +70,7 @@ class FVGP:
         variances (N x n numpy array):                  variances of the values
         gp_kernel_function(func):                       None/function defining the kernel def name(x1,x2,hyper_parameters,self)
         gp_mean_function(func):                         None/a function def name(x, self), default = None
-        input_hyper_parameters (1d list):               default: list of [1,1,...]
-        output_hyper_parameters (1d list):              default: list of [1,1,...]
+        init_hyper_parameters (1d list):               default: list of [1,1,...]
 
     Example:
         obj = FVGP(
@@ -86,8 +85,7 @@ class FVGP:
             variances = np.array([[0.001,0.01],
                                 [0.1,2]]),
             gp_kernel_function = kernel_function,
-            input_hyper_parameters = [2,3,4,5],
-            output_hyper_parameters = [2],
+            init_hyper_parameters = [2,3,4,5],
             gp_mean_function = some_mean_function
         )
     ######################################################
@@ -109,8 +107,7 @@ class FVGP:
         compute_device = "cpu",
         gp_kernel_function = None,
         gp_mean_function = None,
-        init_input_hyper_parameters = None,
-        init_output_hyper_parameters = None,
+        init_hyper_parameters = None,
         ):
 
         """
@@ -160,31 +157,28 @@ class FVGP:
             self.kernel = gp_kernel_function
         self.d_kernel_dx = self.d_gp_kernel_dx
         self.gp_mean_function = gp_mean_function
-        self.mean_vec = self.compute_mean()
+        
+        if gp_mean_function is None:
+            self.mean_function = self.standard_mean_function
+        else:
+            self.mean_function = gp_mean_function
 
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        if init_input_hyper_parameters is None:
-            init_input_hyper_parameters = [1.0] * (self.input_dim+1)
-        if init_output_hyper_parameters is None:
-            init_output_hyper_parameters = [1.0] * self.output_dim
-        self.input_hyper_parameters = init_input_hyper_parameters
-        self.output_hyper_parameters = init_output_hyper_parameters
-        self.hyper_parameters = \
-        self.input_hyper_parameters + self.output_hyper_parameters
+        if init_hyper_parameters is None:
+            init_hyper_parameters = [1.0] * (self.input_dim + 1 + self.output_dim)
+        self.hyper_parameters = init_hyper_parameters
         ##########################################
         #transform index set and elements#########
         ##########################################
         self.iset_dim = self.input_dim + self.output_dim
-        self.points, self.values, self.variances, self.prior_mean = self.transform_index_set()
+        self.points, self.values, self.variances = self.transform_index_set()
         self.point_number = len(self.points)
         #########################################
         ####compute covariance value prod########
         #########################################
-        self.prior_mean,self.prior_covariance,self.covariance_value_prod = self.compute_prior_fvGP_pdf()
-        #NOTE TO MYSELF: The prior mean should actually not be computed first,than translated, but should be computed
-        #in "compute_prior_fvGP_pdf()".
+        self.compute_prior_fvGP_pdf()
 ######################################################################
 ######################################################################
 ######################################################################
@@ -229,13 +223,12 @@ class FVGP:
             self.variances = np.zeros((values.shape))
         else:
             self.variances = variances
-        self.mean_vec = self.compute_mean()
         ######################################
         #####transform to index set###########
         ######################################
         self.points, self.values, self.variances, self.prior_mean = self.transform_index_set()
         self.point_number = len(self.points)
-        self.prior_mean,self.prior_covariance,self.covariance_value_prod = self.compute_prior_fvGP_pdf()
+        self.compute_prior_fvGP_pdf()
     ###################################################################################
     ###################################################################################
     ###################################################################################
@@ -244,10 +237,8 @@ class FVGP:
     #################TRAINING##########################################################
     ###################################################################################
     def train(self,
-        input_hyper_parameter_bounds,
-        output_hyper_parameter_bounds,
-        init_input_hyper_parameters = None,
-        init_output_hyper_parameters = None,
+        hyper_parameter_bounds,
+        init_hyper_parameters = None,
         optimization_method = "global",
         likelihood_pop_size = 20,
         likelihood_optimization_tolerance = 0.1,
@@ -256,11 +247,9 @@ class FVGP:
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP.
         inputs:
-            bounds_input (2d list)
-            bounds_output(2d list)
+            bounds (2d list)
         optional inputs:
-            init_input_hyper_parameters (list):  default = None
-            init_output_hyper_parameters (list): default = None
+            init_hyper_parameters (list):  default = None
             optimization_method : default = "global",
             likelihood_pop_size: default = 20,
             likelihood_optimization_tolerance: default = 0.1,
@@ -270,14 +259,9 @@ class FVGP:
             None, just updated the class with then new hyper_parameters
         """
         ############################################
-        self.hyper_parameter_optimization_bounds = \
-        input_hyper_parameter_bounds + output_hyper_parameter_bounds
-        if init_input_hyper_parameters is None:
-            init_input_hyper_parameters = self.input_hyper_parameters
-        if init_output_hyper_parameters is None:
-            init_output_hyper_parameters = self.output_hyper_parameters
-        init_hyper_parameters = \
-            init_input_hyper_parameters + init_output_hyper_parameters
+        self.hyper_parameter_optimization_bounds = hyper_parameter_bounds
+        if init_hyper_parameters is None:
+            init_hyper_parameters = self.hyper_parameters
         ######################
         #####TRAINING#########
         ######################
@@ -289,9 +273,7 @@ class FVGP:
         likelihood_pop_size,
         likelihood_optimization_tolerance
         ))
-        self.input_hyper_parameters = self.hyper_parameters[0:self.input_dim+1]
-        self.output_hyper_parameters = self.hyper_parameters[self.input_dim+1:]
-        self.prior_mean,self.prior_covariance,self.covariance_value_prod = self.compute_prior_fvGP_pdf()
+        self.compute_prior_fvGP_pdf()
         ######################
         ######################
         ######################
@@ -307,7 +289,7 @@ class FVGP:
         hyper_parameters = self.optimize_log_likelihood(
             self.values,
             self.variances,
-            self.prior_mean,
+            self.prior_mean_vec,
             hyper_parameters_0,
             hyper_parameter_optimization_bounds,
             hyper_parameter_optimization_mode,
@@ -359,7 +341,6 @@ class FVGP:
                 popsize = likelihood_pop_size,
                 tol = likelihood_optimization_tolerance,
             )
-            print(res) 
             hyper_parameters1 = np.array(res["x"])
             Eval1 = self.log_likelihood(
                 hyper_parameters1,
@@ -523,6 +504,7 @@ class FVGP:
         x = np.ascontiguousarray(x, dtype=np.float32)
         x1 = np.ascontiguousarray(x1, dtype=np.float32)
         dL_dH = self.numba_dL_dH(y, mean, x1, x, len(hyper_parameters))
+        ###here we could have a multi GPU version dL_dH
         return -dL_dH
     ##################################################################################
     @staticmethod
@@ -555,6 +537,7 @@ class FVGP:
         s = np.ascontiguousarray(s, dtype=np.float32)
         ss = np.ascontiguousarray(ss, dtype=np.float32)
         d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
+        ###here we could have a multi GPU version for d2L_dH2
         #####################################
         #####################################
         #####################################
@@ -580,14 +563,14 @@ class FVGP:
             prior covariance
             covariance value product
         """
+        self.prior_mean_vec = self.mean_function(self.points)
         cov_y,K = self._compute_covariance_value_product(
                 self.hyper_parameters,
                 self.values,
                 self.variances,
-                self.prior_mean)
+                self.prior_mean_vec)
         self.prior_covariance = K
         self.covariance_value_prod = cov_y
-        return self.prior_mean,K,cov_y
     ##################################################################################
     def _compute_covariance_value_product(self, hyper_parameters,values, variances, mean):
         K = self.compute_covariance(hyper_parameters, variances)
@@ -704,8 +687,7 @@ class FVGP:
 
         if compute_means == True:
             A = k.T @ self.covariance_value_prod
-            if self.gp_mean_function is None: mean = np.reshape(self.prior_mean[0] + A, (n_orig, len(x_output)))
-            else: mean = np.reshape(self.gp_mean_function(x_input,self) + A, (n_orig, len(x_output)))
+            posterior_mean = np.reshape(self.mean_function(p) + A[:,0], (n_orig, len(x_output)))
         else:
             mean = None
         if compute_posterior_covariances == True:
@@ -713,7 +695,7 @@ class FVGP:
             a = kk - (k.T @ covariance_k_prod)
             diag = np.diag(a)
             diag = np.where(diag<0.0,0.0,diag)
-            if any([x < -0.0001 for x in np.diag(a)]):
+            if any([x < -0.001 for x in np.diag(a)]):
                 print("CAUTION, negative variances encountered. That normally means that the model is unstable.")
                 print("Rethink the kernel definitions, add more noise to the data, \
                       or double check the hyper-parameter optimization bounds. This will not terminate the \
@@ -728,7 +710,7 @@ class FVGP:
         else:
             covariance = None
         res = {"input points": p,
-               "posterior means": mean,
+               "posterior means": posterior_mean,
                "posterior covariances": covariance,
                "prior covariances": full_gp_covariances,
                "prior means": None,
@@ -1095,7 +1077,6 @@ class FVGP:
         new_points = np.zeros((self.point_number * self.output_num, self.iset_dim))
         new_values = np.zeros((self.point_number * self.output_num))
         new_variances = np.zeros((self.point_number * self.output_num))
-        new_mean = np.zeros((self.point_number * self.output_num))
         for i in range(self.output_num):
             new_points[i * self.point_number : (i + 1) * self.point_number] = \
             np.column_stack([self.points, self.value_positions[:, i, :]])
@@ -1103,27 +1084,13 @@ class FVGP:
             self.values[:, i]
             new_variances[i * self.point_number : (i + 1) * self.point_number] = \
             self.variances[:, i]
-            new_mean[i * self.point_number : (i + 1) * self.point_number] =\
-            self.mean_vec[:, i]
-        return new_points, new_values, new_variances, new_mean
+        return new_points, new_values, new_variances
 
-    def compute_mean(self):
+    def standard_mean_function(self,x):
         """evaluates the gp mean function at the data points """
-        if self.gp_mean_function is None:
-            mean = np.zeros((self.variances.shape))
-            for i in range(len(mean[0])):
-                mean[:, i] = np.mean(self.values[:, i], axis=0)
-            return mean
-        else:
-            mean = np.zeros((self.variances.shape))
-            for i in range(len(mean)):
-                mean[i, :] = self.gp_mean_function(np.array([self.points[i]]), self)
-            return mean
-
-    ############################################################
-    ######################finite difference derivative##########
-    ############################################################
-
+        mean = np.zeros((len(x)))
+        mean[:] = np.mean(self.values)
+        return mean
 ###########################################################################
 ###########################################################################
 ###########################################################################
