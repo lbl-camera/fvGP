@@ -19,7 +19,7 @@ def func(points):
     #return 0.3*np.sin((points)*10.0*points)
 
 points = np.empty((20,1))
-points[:,0] = np.linspace(0,2,20)
+points[:,0] = np.linspace(0,2,20) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
 values = func(points)      #example to test non-stationary kernels
 
 my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute_device = "cpu")
