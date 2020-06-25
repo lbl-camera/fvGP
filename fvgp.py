@@ -373,6 +373,10 @@ class FVGP:
         ####start of optimization:##
         ############################
         if hyper_parameter_optimization_mode == "global":
+            print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean))
+            exit()          
             print("I am performing a global differential evolution algorithm to find the optimal hyper-parameters.")
             res = differential_evolution(
                 self.log_likelihood,
