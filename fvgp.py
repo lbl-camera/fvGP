@@ -714,7 +714,7 @@ class FVGP:
             A = torch.Tensor(A)
             sign, logdet = torch.slogdet(A)
             return sign.numpy(), logdet.numpy()
-        if self.compute_device == "gpu":
+        elif self.compute_device == "gpu":
             A = torch.Tensor(A).cuda()
             sign, logdet = torch.slogdet(A)
             return sign.cpu().numpy(), logdet.cpu().numpy()
@@ -728,7 +728,7 @@ class FVGP:
             b = torch.Tensor(b)
             x, lu = torch.solve(b,A)
             return x.numpy()
-        if self.compute_device == "gpu":
+        elif self.compute_device == "gpu":
             A = torch.Tensor(A).cuda()
             b = torch.Tensor(b).cuda()
             try:
