@@ -521,7 +521,7 @@ class FVGP:
 
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y=values
-        sign, logdet = self.slogdet(K,compute_device = self.compute_device)
+        sign, logdet = self.slogdet(K)
         if sign == 0.0:
             return 0.5 * ((y - mean).T @ x)
         return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0]
@@ -656,7 +656,7 @@ class FVGP:
         y = values - mean
         y = y.reshape(-1,1)
         if self.gp_system_solve_method == "solve":
-            x = self.solve(K, y, compute_device = self.compute_device)
+            x = self.solve(K, y)
         #elif self.gp_system_solve_method == "minres":
         #    x, info = minres(K, y - mean)
         #    if info != 0:
@@ -705,30 +705,30 @@ class FVGP:
         )
         return CoVarianceInverse
 
-    def slogdet(self, A, compute_device = "cpu"):
+    def slogdet(self, A):
         """
         check this out
         """
 
-        if compute_device == "cpu":
+        if self.compute_device == "cpu":
             A = torch.Tensor(A)
             sign, logdet = torch.slogdet(A)
             return sign.numpy(), logdet.numpy()
-        if compute_device == "gpu":
+        if self.compute_device == "gpu":
             A = torch.Tensor(A).cuda()
             sign, logdet = torch.slogdet(A)
             return sign.cpu().numpy(), logdet.cpu().numpy()
 
-    def solve(self, A, b, compute_device = "cpu"):
+    def solve(self, A, b):
         """
         check out here
         """
-        if compute_device == "cpu":
+        if self.compute_device == "cpu":
             A = torch.Tensor(A)
             b = torch.Tensor(b)
             x, lu = torch.solve(b,A)
             return x.numpy()
-        if compute_device == "gpu":
+        if self.compute_device == "gpu":
             A = torch.Tensor(A).cuda()
             b = torch.Tensor(b).cuda()
             try:
@@ -807,7 +807,7 @@ class FVGP:
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
-                sgn, logdet = self.slogdet(np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]), compute_device = self.compute_device)
+                sgn, logdet = self.slogdet(np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]))
                 entropies.append(sgn*logdet)
             entropies = np.asarray(entropies)
         else: entropies = None
@@ -821,7 +821,7 @@ class FVGP:
         if compute_posterior_covariances == True:
             #covariance_k_prod = np.zeros(k.shape)
             #info = np.zeros((len(k[0])))
-            covariance_k_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
+            covariance_k_prod = self.solve(self.prior_covariance,k)
             #if self.gp_system_solve_method == "solve":
             #elif self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
             #    covariance_k_prod = self.K_inv() @ k
@@ -924,8 +924,8 @@ class FVGP:
         else:
             mean = None
         if compute_posterior_covariance == True:
-            covariance_k_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
-            covariance_k_g_prod = self.solve(self.prior_covariance,k_g,compute_device = self.compute_device)
+            covariance_k_prod = self.solve(self.prior_covariance,k)
+            covariance_k_g_prod = self.solve(self.prior_covariance,k_g)
             #if self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
             #    covariance_k_prod = self.K_inv() @ k
             #    covariance_k_g_prod = self.K_inv() @ k_g
