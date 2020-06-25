@@ -373,6 +373,9 @@ class FVGP:
         ####start of optimization:##
         ############################
         if hyper_parameter_optimization_mode == "global":
+            print(self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
+                    values = values,
+                    variances = variances, mean = mean))
             print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean))
@@ -712,6 +715,7 @@ class FVGP:
         if self.compute_device == "cpu":
             A = torch.Tensor(A)
             sign, logdet = torch.slogdet(A)
+            print( sign.numpy(), logdet.numpy())
             return sign.numpy(), logdet.numpy()
         elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
             A = torch.Tensor(A).cuda()
