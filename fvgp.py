@@ -671,16 +671,21 @@ class FVGP:
         elif mode == 'stack':
             new_points = np.column_stack([x_input,x_output])
         p = np.array(new_points)
+        n_trans = len(p)
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
         #########################################
-        if compute_prior_covariances == True: full_gp_covariances = np.asarray([np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]) for i in range(n_orig)])
+        if compute_prior_covariances == True: full_gp_covariances = np.asarray([np.block([[self.prior_covariance, 
+                                              k[:,i*n_trans:(i+1)*n_trans]],[k[:,i*n_trans:(i+1)*n_trans].T, 
+                                              kk[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]]) for i in range(n_orig)])
         else: full_gp_covariances = None
 
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
-                sgn, logdet = self.slogdet(np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]), compute_device = self.compute_device)
+                sgn, logdet = np.linalg.slogdet(np.block([[self.prior_covariance, 
+                                              k[:,i*n_trans:(i+1)*n_trans]],[k[:,i*n_trans:(i+1)*n_trans].T, 
+                                              kk[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]]) for i in range(n_orig))
                 entropies.append(sgn*logdet)
             entropies = np.asarray(entropies)
         else: entropies = None
@@ -692,7 +697,8 @@ class FVGP:
             mean = None
         if compute_posterior_covariances == True:
             covariance_k_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
-            a = kk - (k.T @ covariance_k_prod)
+            k_cov_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
+            a = kk - (k_cov_prod.T @ k)
             diag = np.diag(a)
             diag = np.where(diag<0.0,0.0,diag)
             if any([x < -0.001 for x in np.diag(a)]):
@@ -758,18 +764,19 @@ class FVGP:
         elif mode == 'stack':
             new_points = np.column_stack([x_input,x_output])
         p = np.array(new_points)
+        n_trans = len(p)
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         k_g = self.d_kernel_dx(p,self.points, direction,self.hyper_parameters).T
         kk =  self.kernel(p, p,self.hyper_parameters,self)
         kk_g =  self.d_kernel_dx(p, p,direction,self.hyper_parameters)
-        if compute_prior_covariances == True: full_gp_covariances = np.asarray([np.block([[self.prior_covariance, k_g[:,i:i+n_orig]],[k_g[:,i:i+n_orig].T, kk_g[i:i+n_orig,i:i+n_orig]]]) for i in range(n_orig)])
+        if compute_prior_covariances == True: full_gp_covariances = np.asarray([np.block([[self.prior_covariance, k_g[:,i*n_trans:(i+1)*n_trans]],[k_g[:,i*n_trans:(i+1)*n_trans].T, kk_g[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]]) for i in range(n_orig)])
         else: full_gp_covariances = None
 
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
-                Sigma =   np.block([[self.prior_covariance, k[:,i:i+n_orig]],  [k[:,i:i+n_orig].T,   kk[i:i+n_orig,i:i+n_orig]]])
-                Sigma_d = np.block([[self.prior_covariance, k_g[:,i:i+n_orig]],[k_g[:,i:i+n_orig].T, kk_g[i:i+n_orig,i:i+n_orig]]])
+                Sigma =   np.block([[self.prior_covariance, k[:,i*n_trans:(i+1)*n_trans]],  [k[:,i*n_trans:(i+1)*n_trans].T,   kk[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]])
+                Sigma_d = np.block([[self.prior_covariance, k_g[:,i*n_trans:(i+1)*n_trans]],[k_g[:,i*n_trans:(i+1)*n_trans].T, kk_g[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]])
                 entropies.append(np.trace(self.solve(Sigma,Sigma_d)))
             entropies = np.asarray(entropies)
         else: entropies = None
@@ -780,9 +787,9 @@ class FVGP:
         else:
             mean = None
         if compute_posterior_covariance == True:
-            covariance_k_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
-            covariance_k_g_prod = self.solve(self.prior_covariance,k_g,compute_device = self.compute_device)
-            a = kk_g - ((k_g.T @ covariance_k_prod) + (k.T @ covariance_k_g_prod))
+            k_covariance_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
+            kg_covariance_prod = self.solve(self.prior_covariance,k_g,compute_device = self.compute_device)
+            a = kk_g - ((k_covariance_prod.T @ k) + (k_g_covariance_prod.T @ k))
             M = len(x_output)
             covariance = [
                 a[i * M : (i + 1) * M, i * M : (i + 1) * M]
