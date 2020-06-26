@@ -373,10 +373,10 @@ class FVGP:
         ####start of optimization:##
         ############################
         if hyper_parameter_optimization_mode == "global":
-            print(self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
+            print('grad',self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean))
-            print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+            print('hessian',self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean))
             exit()          
@@ -452,7 +452,7 @@ class FVGP:
                     variances = variances, mean = mean)
             print(time.time() - a)
             a = time.time()
-            print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
+            print('hessian',self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean))
             print(time.time() - a)
@@ -720,7 +720,6 @@ class FVGP:
         elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
             A = torch.Tensor(A).cuda()
             sign, logdet = torch.slogdet(A)
-            print( sign.cpu().numpy(), logdet.cpu().numpy())
             return sign.cpu().numpy(), logdet.cpu().numpy()
 
     def solve(self, A, b):
@@ -735,11 +734,7 @@ class FVGP:
         elif self.compute_device == "gpu" or A.ndim<3:
             A = torch.Tensor(A).cuda()
             b = torch.Tensor(b).cuda()
-            try:
-                x, lu = torch.solve(b,A)
-            except np.linalg.LinAlgError:
-                x, qr = torch.lstsq(b,A)
-            return x.cpu().numpy()
+            return torch.solve(b,A)[0].cpu().numpy()
         elif self.compute_device == "multi-gpu":
             n = min(len(A), torch.cuda.device_count())
             split_A = np.array_split(A,n)
@@ -753,7 +748,6 @@ class FVGP:
             total = results[0].cpu().numpy()
             for i in range(1,len(results)):
                 total = np.append(total, results[i].cpu().numpy(), 0)
-            print(total.shape) 
             return total
 
     def safe_invert(self, Matrix):
