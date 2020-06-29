@@ -396,12 +396,9 @@ class FVGP:
                     variances = variances, mean = mean)
             print('done.')
 
-            a = time.time()
             self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean)
-                    values = values,
-                    variances = variances, mean = mean))
             from functools import partial
             func = partial(self.log_likelihood,values = values,
                     variances = variances, mean = mean)
