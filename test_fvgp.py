@@ -21,14 +21,12 @@ def func(points):
     #return 0.3*np.sin((points)*10.0*points)
 
 points = np.sort(np.random.uniform(low = 0.0, high = 2.0, size = (50,1)), axis = 0)
-#np.save("points",points)
-#points = np.load("points.npy")
-values = func(points)      #example to test non-stationary kernels
+values = func(points)
 
-my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute_device = "multi-gpu")
-#my_gp = FVGP(1,1,1,points,values,gp_kernel_function = non_stationary_kernel, compute_device = "cpu")
+#my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute_device = "multi-gpu")
+my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute_device = "cpu")
 
-my_gp.train([[0.00001,1000.1],[0.0001,1.0]],[[.99,1.0]],
+my_gp.train([[0.00001,1000.1],[0.0001,1.0],[.99,1.0]],
         optimization_method = 'global',
         likelihood_pop_size = 10,
         likelihood_optimization_tolerance = 0.01,
