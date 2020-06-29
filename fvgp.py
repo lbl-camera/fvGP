@@ -157,7 +157,6 @@ class FVGP:
             self.kernel = gp_kernel_function
         self.d_kernel_dx = self.d_gp_kernel_dx
         self.gp_mean_function = gp_mean_function
-        
         if gp_mean_function is None:
             self.mean_function = self.standard_mean_function
         else:
@@ -201,7 +200,7 @@ class FVGP:
         optional attributes:
             values_positions (N x dim1 x dim2 numpy array): the positions of the outputs in the output space
             variances (N x n):                              variances of the values
-        """
+            """
         self.points = points
         self.point_number = len(self.points)
         self.values = values
@@ -250,6 +249,7 @@ class FVGP:
             bounds (2d list)
         optional inputs:
             init_hyper_parameters (list):  default = None
+            bounds (2d list)
             optimization_method : default = "global",
             likelihood_pop_size: default = 20,
             likelihood_optimization_tolerance: default = 0.1,
@@ -400,33 +400,8 @@ class FVGP:
             self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean)
-            #print(time.time() - a)
-            #a = time.time()
-            print(self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean))
-            #print(time.time() - a)
-            #print(hp_bounds)
-            #x = np.linspace(hp_bounds[0][0]+10,hp_bounds[0][1],50)
-            x = np.linspace(5.0,50,100)
-            y = np.linspace(1.0,4,100)
-            X, Y = np.meshgrid(x,y)
-            Z = np.empty((X.shape))
-            for i in range(Z.shape[0]):
-                for j in range(Z.shape[1]):
-                    hyper_parameters = [X[i,j],Y[i,j],1.0]
-                    Z[i,j] = self.log_likelihood(hyper_parameters,values,variances,mean)
-                    #print(hyper_parameters)
-                    #print(Z[i,j])
-                    #print("=============")
-            #Z *= -1
-            #from matplotlib.colors import LogNorm
-            plt.pcolormesh(X, Y, Z)
-            plt.colorbar()
-            plt.contour(X,Y,Z,50, colors = 'k')
-            plt.show()
-            #print(np.amin(Z))
-            #exit()
             from functools import partial
             func = partial(self.log_likelihood,values = values,
                     variances = variances, mean = mean)
@@ -439,8 +414,7 @@ class FVGP:
 
             res = HGDL(func, grad, hess, np.asarray(hp_bounds), numIndividuals=20)
             print(res['minima'])
-            exit()
-            if len(res['minima']) != 0:
+            if len(res['minima']) !=0:
                 hyper_parameters = res['minima'][0]
             elif len(res['edge'])!=0:
                 if res['edge_y'][0]<res['genetic_y'][0]:
@@ -480,7 +454,7 @@ class FVGP:
 
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y=values
-        sign, logdet = self.slogdet(K,compute_device = self.compute_device)
+        sign, logdet = self.slogdet(K)
         if sign == 0.0:
             return 0.5 * ((y - mean).T @ x)
         return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0]
@@ -504,7 +478,6 @@ class FVGP:
         x = np.ascontiguousarray(x, dtype=np.float32)
         x1 = np.ascontiguousarray(x1, dtype=np.float32)
         dL_dH = self.numba_dL_dH(y, mean, x1, x, len(hyper_parameters))
-        ###here we could have a multi GPU version dL_dH
         return -dL_dH
     ##################################################################################
     @staticmethod
@@ -526,7 +499,6 @@ class FVGP:
         y = values - mean
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
         d2K_dH2 = self.hessian_gp_kernel(self.points,self.points, hyper_parameters)
-        #t = time.time()
         t = time.time()
         K = np.array([K,] * len(hyper_parameters))
         s = self.solve(K,dK_dH)
@@ -537,11 +509,6 @@ class FVGP:
         s = np.ascontiguousarray(s, dtype=np.float32)
         ss = np.ascontiguousarray(ss, dtype=np.float32)
         d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
-        ###here we could have a multi GPU version for d2L_dH2
-        #####################################
-        #####################################
-        #####################################
-        #print("vectorized solve:",d2L_dH2, time.time() - t)
         return -d2L_dH2
 
 
@@ -576,7 +543,7 @@ class FVGP:
         K = self.compute_covariance(hyper_parameters, variances)
         y = values - mean
         y = y.reshape(-1,1)
-        x = self.solve(K, y, compute_device = self.compute_device)
+        x = self.solve(K, y)
         return x,K
     ##################################################################################
     def compute_covariance(self, hyper_parameters, variances):
@@ -586,24 +553,24 @@ class FVGP:
         self.add_to_diag(CoVariance, variances)
         return CoVariance
 
-    def slogdet(self, A, compute_device = "cpu"):
+    def slogdet(self, A):
         """
         fvGPs slogdet method based on torch
         """
-        if compute_device == "cpu":
+        if self.compute_device == "cpu":
             A = torch.Tensor(A)
             sign, logdet = torch.slogdet(A)
             return sign.numpy(), logdet.numpy()
-        if compute_device == "gpu":
+        elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
             A = torch.Tensor(A).cuda()
             sign, logdet = torch.slogdet(A)
             return sign.cpu().numpy(), logdet.cpu().numpy()
 
-    def solve(self, A, b, compute_device = "cpu"):
+    def solve(self, A, b):
         """
         fvGPs slogdet method based on torch
         """
-        if compute_device == "cpu":
+        if self.compute_device == "cpu":
             A = torch.Tensor(A)
             b = torch.Tensor(b)
             try:
@@ -611,7 +578,7 @@ class FVGP:
             except:
                 x, qr = torch.lstsq(b,A)
             return x.numpy()
-        if compute_device == "gpu":
+        elif self.compute_device == "gpu" or A.ndim < 3:
             A = torch.Tensor(A).cuda()
             b = torch.Tensor(b).cuda()
             try:
@@ -619,7 +586,20 @@ class FVGP:
             except:
                 x, qr = torch.lstsq(b,A)
             return x.cpu().numpy()
-
+        elif self.compute_device == "multi-gpu":
+            n = min(len(A), torch.cuda.device_count())
+            split_A = np.array_split(A,n)
+            split_b = np.array_split(b,n)
+            results = []
+            for i, (tmp_A,tmp_b) in enumerate(zip(split_A,split_b)):
+                cur_device = torch.device("cuda:"+str(i))
+                tmp_A = torch.Tensor(tmp_A).cuda(cur_device)
+                tmp_b = torch.Tensor(tmp_b).cuda(cur_device)
+                results.append(torch.solve(tmp_b,tmp_A)[0])
+            total = results[0].cpu().numpy()
+            for i in range(1,len(results)):
+                total = np.append(total, results[i].cpu().numpy(), 0)
+            return total
     ##################################################################################
     def add_to_diag(self,Matrix, Vector):
         d = np.einsum("ii->i", Matrix)
@@ -799,7 +779,6 @@ class FVGP:
             k_covariance_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
             kg_covariance_prod = self.solve(self.prior_covariance,k_g,compute_device = self.compute_device)
             a = kk_g - ((k_covariance_prod.T @ k) + (k_g_covariance_prod.T @ k))
-
             covariance = [
                 a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
                 for i in range(int(a.shape[0] / tasks))
