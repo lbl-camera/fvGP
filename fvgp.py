@@ -659,9 +659,13 @@ class FVGP:
                "entropies": entropies
                }
         """
+        ########################################
         ####computation we need for all returns:
-        if len(x_input.shape) == 1: exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
+        ########################################
+        if len(x_input.shape) == 1: 
+            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
         n_orig = len(x_input)
+        tasks = len(x_output)
         if mode == 'cartesian product':
             new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
             counter = 0
@@ -671,21 +675,27 @@ class FVGP:
         elif mode == 'stack':
             new_points = np.column_stack([x_input,x_output])
         p = np.array(new_points)
-        n_trans = len(p)
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
-        #########################################
-        if compute_prior_covariances == True: full_gp_covariances = np.asarray([np.block([[self.prior_covariance, 
-                                              k[:,i*n_trans:(i+1)*n_trans]],[k[:,i*n_trans:(i+1)*n_trans].T, 
-                                              kk[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]]) for i in range(n_orig)])
+        print(n_orig)
+        print(tasks)
+        print(p)
+        print(k.shape)
+        print(kk.shape)
+        print(self.prior_covariance.shape)
+        if compute_prior_covariances == True: 
+            full_gp_covariances = \
+                    np.asarray([np.block([[self.prior_covariance,k[:,i*tasks:(i+1)*tasks]],\
+                             [k[:,i*tasks:(i+1)*tasks].T,kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
+                    for i in range(n_orig)])
         else: full_gp_covariances = None
 
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
                 sgn, logdet = np.linalg.slogdet(np.block([[self.prior_covariance, 
-                                              k[:,i*n_trans:(i+1)*n_trans]],[k[:,i*n_trans:(i+1)*n_trans].T, 
-                                              kk[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]]) for i in range(n_orig))
+                                              k[:,i*tasks:(i+1)*tasks]],[k[:,i*tasks:(i+1)*tasks].T, 
+                                              kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]]))
                 entropies.append(sgn*logdet)
             entropies = np.asarray(entropies)
         else: entropies = None
@@ -696,22 +706,24 @@ class FVGP:
         else:
             mean = None
         if compute_posterior_covariances == True:
-            covariance_k_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
             k_cov_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
             a = kk - (k_cov_prod.T @ k)
+            #print(k.T @ np.linalg.inv(self.prior_covariance) @ k)
+            #print(k.T @ (np.linalg.inv(self.prior_covariance) @ k))
+            #exit()
             diag = np.diag(a)
             diag = np.where(diag<0.0,0.0,diag)
             if any([x < -0.001 for x in np.diag(a)]):
                 print("CAUTION, negative variances encountered. That normally means that the model is unstable.")
-                print("Rethink the kernel definitions, add more noise to the data, \
-                      or double check the hyper-parameter optimization bounds. This will not terminate the \
-                      algorithm, but expect anomalies.")
+                print("Rethink the kernel definitions, add more noise to the data,")
+                print("or double check the hyper-parameter optimization bounds. This will not ")
+                print("terminate the algorithm, but expect anomalies.")
                 print("diagonal of the posterior covariance: ",np.diag(a))
+
             np.fill_diagonal(a,diag)
-            M = len(x_output)
             covariance = np.asarray([
-                a[i * M : (i + 1) * M, i * M : (i + 1) * M]
-                for i in range(int(a.shape[0] / M))
+                a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
+                for i in range(int(a.shape[0] / tasks))
             ])
         else:
             covariance = None
@@ -755,6 +767,7 @@ class FVGP:
         ####computation we need for all returns:
         if len(x_input.shape) == 1: exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.fvGP function, thank you")
         n_orig = len(x_input)
+        tasks = len(x_output)
         if mode == 'cartesian product':
             new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
             counter = 0
@@ -764,19 +777,24 @@ class FVGP:
         elif mode == 'stack':
             new_points = np.column_stack([x_input,x_output])
         p = np.array(new_points)
-        n_trans = len(p)
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         k_g = self.d_kernel_dx(p,self.points, direction,self.hyper_parameters).T
         kk =  self.kernel(p, p,self.hyper_parameters,self)
         kk_g =  self.d_kernel_dx(p, p,direction,self.hyper_parameters)
-        if compute_prior_covariances == True: full_gp_covariances = np.asarray([np.block([[self.prior_covariance, k_g[:,i*n_trans:(i+1)*n_trans]],[k_g[:,i*n_trans:(i+1)*n_trans].T, kk_g[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]]) for i in range(n_orig)])
+        if compute_prior_covariances == True: 
+            full_gp_covariances = np.asarray([
+                np.block([[self.prior_covariance, k_g[:,i*tasks:(i+1)*tasks]],\
+                          [k_g[:,i*tasks:(i+1)*tasks].T, kk_g[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
+                          for i in range(n_orig)])
         else: full_gp_covariances = None
 
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
-                Sigma =   np.block([[self.prior_covariance, k[:,i*n_trans:(i+1)*n_trans]],  [k[:,i*n_trans:(i+1)*n_trans].T,   kk[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]])
-                Sigma_d = np.block([[self.prior_covariance, k_g[:,i*n_trans:(i+1)*n_trans]],[k_g[:,i*n_trans:(i+1)*n_trans].T, kk_g[i*n_trans:(i+1)*n_trans,i*n_trans:(i+1)*n_trans]]])
+                Sigma = np.block([[self.prior_covariance, k[:,i*tasks:(i+1)*tasks]],  [\
+                                k[:,i*tasks:(i+1)*tasks].T,   kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])
+                Sigma_d = np.block([[self.prior_covariance, k_g[:,i*tasks:(i+1)*tasks]],\
+                                    [k_g[:,i*tasks:(i+1)*tasks].T, kk_g[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])
                 entropies.append(np.trace(self.solve(Sigma,Sigma_d)))
             entropies = np.asarray(entropies)
         else: entropies = None
@@ -790,15 +808,14 @@ class FVGP:
             k_covariance_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
             kg_covariance_prod = self.solve(self.prior_covariance,k_g,compute_device = self.compute_device)
             a = kk_g - ((k_covariance_prod.T @ k) + (k_g_covariance_prod.T @ k))
-            M = len(x_output)
+
             covariance = [
-                a[i * M : (i + 1) * M, i * M : (i + 1) * M]
-                for i in range(int(a.shape[0] / M))
+                a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
+                for i in range(int(a.shape[0] / tasks))
                 ]
         else:
             covariance = None
 
-        r1 = np.reshape(A, (n_orig, self.output_num))
         res = {"input points": p,
                "posterior mean gradients": mean,
                "posterior covariance gradients": covariance,
