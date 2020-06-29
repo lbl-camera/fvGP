@@ -677,12 +677,6 @@ class FVGP:
         p = np.array(new_points)
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
-        print(n_orig)
-        print(tasks)
-        print(p)
-        print(k.shape)
-        print(kk.shape)
-        print(self.prior_covariance.shape)
         if compute_prior_covariances == True: 
             full_gp_covariances = \
                     np.asarray([np.block([[self.prior_covariance,k[:,i*tasks:(i+1)*tasks]],\
@@ -708,9 +702,6 @@ class FVGP:
         if compute_posterior_covariances == True:
             k_cov_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
             a = kk - (k_cov_prod.T @ k)
-            #print(k.T @ np.linalg.inv(self.prior_covariance) @ k)
-            #print(k.T @ (np.linalg.inv(self.prior_covariance) @ k))
-            #exit()
             diag = np.diag(a)
             diag = np.where(diag<0.0,0.0,diag)
             if any([x < -0.001 for x in np.diag(a)]):
