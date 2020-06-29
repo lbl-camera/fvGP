@@ -29,7 +29,6 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 Contact: MarcusNoack@lbl.gov
 """
 
-
 from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
@@ -69,11 +68,9 @@ class FVGP:
     Optional Attributes:
         values_positions (N x dim1 x dim2 numpy array): the positions of the outputs in the output space
         variances (N x n numpy array):                  variances of the values
-        gp_system_solve_method (str):                   inv/cg/minres; default = inv
         gp_kernel_function(func):                       None/function defining the kernel def name(x1,x2,hyper_parameters,self)
         gp_mean_function(func):                         None/a function def name(x, self), default = None
-        input_hyper_parameters (1d list):               default: list of [1,1,...]
-        output_hyper_parameters (1d list):              default: list of [1,1,...]
+        init_hyper_parameters (1d list):               default: list of [1,1,...]
 
     Example:
         obj = FVGP(
@@ -87,10 +84,8 @@ class FVGP:
             value_positions = np.array([[[0]],[[1]]]),
             variances = np.array([[0.001,0.01],
                                 [0.1,2]]),
-            gp_system_solve_method="inv",
             gp_kernel_function = kernel_function,
-            input_hyper_parameters = [2,3,4,5],
-            output_hyper_parameters = [2],
+            init_hyper_parameters = [2,3,4,5],
             gp_mean_function = some_mean_function
         )
     ######################################################
@@ -110,11 +105,9 @@ class FVGP:
         value_positions = None,
         variances = None,
         compute_device = "cpu",
-        gp_system_solve_method="solve",
         gp_kernel_function = None,
         gp_mean_function = None,
-        init_input_hyper_parameters = None,
-        init_output_hyper_parameters = None,
+        init_hyper_parameters = None,
         ):
 
         """
@@ -155,14 +148,6 @@ class FVGP:
             self.variances = np.zeros((values.shape))
         else:
             self.variances = variances
-
-        ##########################################
-        #######define solve method################
-        ##########################################
-        if gp_system_solve_method == "rank-n-update": 
-            print("can't be initialized with gp_system_solve_method = 'rank-n update'. Changed to 'inv'")
-            gp_system_solve_method = 'inv'
-        self.gp_system_solve_method = gp_system_solve_method
         ##########################################
         #######define kernel and mean function####
         ##########################################
@@ -172,31 +157,27 @@ class FVGP:
             self.kernel = gp_kernel_function
         self.d_kernel_dx = self.d_gp_kernel_dx
         self.gp_mean_function = gp_mean_function
-        self.mean_vec = self.compute_mean()
+        if gp_mean_function is None:
+            self.mean_function = self.standard_mean_function
+        else:
+            self.mean_function = gp_mean_function
 
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        if init_input_hyper_parameters is None:
-            init_input_hyper_parameters = [1.0] * (self.input_dim+1)
-        if init_output_hyper_parameters is None:
-            init_output_hyper_parameters = [1.0] * self.output_dim
-        self.input_hyper_parameters = init_input_hyper_parameters
-        self.output_hyper_parameters = init_output_hyper_parameters
-        self.hyper_parameters = \
-        self.input_hyper_parameters + self.output_hyper_parameters
+        if init_hyper_parameters is None:
+            init_hyper_parameters = [1.0] * (self.input_dim + 1 + self.output_dim)
+        self.hyper_parameters = init_hyper_parameters
         ##########################################
         #transform index set and elements#########
         ##########################################
         self.iset_dim = self.input_dim + self.output_dim
-        self.points, self.values, self.variances, self.prior_mean = self.transform_index_set()
+        self.points, self.values, self.variances = self.transform_index_set()
         self.point_number = len(self.points)
         #########################################
         ####compute covariance value prod########
         #########################################
-        self.prior_mean,self.prior_covariance,self.covariance_value_prod = self.compute_prior_fvGP_pdf()
-        #NOTE TO MYSELF: The prior mean should actually not be computed first,than translated, but should be computed
-        #in "compute_prior_fvGP_pdf()".
+        self.compute_prior_fvGP_pdf()
 ######################################################################
 ######################################################################
 ######################################################################
@@ -206,7 +187,6 @@ class FVGP:
         values,
         value_positions = None,
         variances = None,
-        gp_system_solve_method="inv",
         ):
 
         """
@@ -220,8 +200,7 @@ class FVGP:
         optional attributes:
             values_positions (N x dim1 x dim2 numpy array): the positions of the outputs in the output space
             variances (N x n):                              variances of the values
-            gp_solve_method_solve_method (str):             'inv'/'cg'/'minres'/'rank-n update'; default = 'inv'
-        """
+            """
         self.points = points
         self.point_number = len(self.points)
         self.values = values
@@ -243,19 +222,12 @@ class FVGP:
             self.variances = np.zeros((values.shape))
         else:
             self.variances = variances
-        self.mean_vec = self.compute_mean()
-        ######################################
-        if self.output_num > 1 and gp_system_solve_method == "rank-n update":
-            print("CAUTION: It is highly discouraged to use 'rank-n update' in combination with multi-task GPs.")
-            print("I will revert to gp_system_solve_method = 'inv'")
-            gp_system_solve_method = 'inv'
-        self.gp_system_solve_method = gp_system_solve_method
         ######################################
         #####transform to index set###########
         ######################################
         self.points, self.values, self.variances, self.prior_mean = self.transform_index_set()
         self.point_number = len(self.points)
-        self.prior_mean,self.prior_covariance,self.covariance_value_prod = self.compute_prior_fvGP_pdf()
+        self.compute_prior_fvGP_pdf()
     ###################################################################################
     ###################################################################################
     ###################################################################################
@@ -264,10 +236,8 @@ class FVGP:
     #################TRAINING##########################################################
     ###################################################################################
     def train(self,
-        input_hyper_parameter_bounds,
-        output_hyper_parameter_bounds,
-        init_input_hyper_parameters = None,
-        init_output_hyper_parameters = None,
+        hyper_parameter_bounds,
+        init_hyper_parameters = None,
         optimization_method = "global",
         likelihood_pop_size = 20,
         likelihood_optimization_tolerance = 0.1,
@@ -276,11 +246,10 @@ class FVGP:
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP.
         inputs:
-            bounds_input (2d list)
-            bounds_output(2d list)
+            bounds (2d list)
         optional inputs:
-            init_input_hyper_parameters (list):  default = None
-            init_output_hyper_parameters (list): default = None
+            init_hyper_parameters (list):  default = None
+            bounds (2d list)
             optimization_method : default = "global",
             likelihood_pop_size: default = 20,
             likelihood_optimization_tolerance: default = 0.1,
@@ -289,19 +258,10 @@ class FVGP:
         output:
             None, just updated the class with then new hyper_parameters
         """
-        #####safety first:
-        if self.gp_system_solve_method == "rank-n update": 
-            print("CAUTION: rank-n update is requested. The training will change the hyper parameters, the covariance matrix therefore has to be fully updated. I will do that for you")
-            self.gp_system_solve_method = "inv"
         ############################################
-        self.hyper_parameter_optimization_bounds = \
-        input_hyper_parameter_bounds + output_hyper_parameter_bounds
-        if init_input_hyper_parameters is None:
-            init_input_hyper_parameters = self.input_hyper_parameters
-        if init_output_hyper_parameters is None:
-            init_output_hyper_parameters = self.output_hyper_parameters
-        init_hyper_parameters = \
-            init_input_hyper_parameters + init_output_hyper_parameters
+        self.hyper_parameter_optimization_bounds = hyper_parameter_bounds
+        if init_hyper_parameters is None:
+            init_hyper_parameters = self.hyper_parameters
         ######################
         #####TRAINING#########
         ######################
@@ -313,9 +273,7 @@ class FVGP:
         likelihood_pop_size,
         likelihood_optimization_tolerance
         ))
-        self.input_hyper_parameters = self.hyper_parameters[0:self.input_dim+1]
-        self.output_hyper_parameters = self.hyper_parameters[self.input_dim+1:]
-        self.prior_mean,self.prior_covariance,self.covariance_value_prod = self.compute_prior_fvGP_pdf()
+        self.compute_prior_fvGP_pdf()
         ######################
         ######################
         ######################
@@ -331,7 +289,7 @@ class FVGP:
         hyper_parameters = self.optimize_log_likelihood(
             self.values,
             self.variances,
-            self.prior_mean,
+            self.prior_mean_vec,
             hyper_parameters_0,
             hyper_parameter_optimization_bounds,
             hyper_parameter_optimization_mode,
@@ -373,13 +331,6 @@ class FVGP:
         ####start of optimization:##
         ############################
         if hyper_parameter_optimization_mode == "global":
-            print('grad',self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean))
-            print('hessian',self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean))
-            exit()          
             print("I am performing a global differential evolution algorithm to find the optimal hyper-parameters.")
             res = differential_evolution(
                 self.log_likelihood,
@@ -390,7 +341,6 @@ class FVGP:
                 popsize = likelihood_pop_size,
                 tol = likelihood_optimization_tolerance,
             )
-            print(res) 
             hyper_parameters1 = np.array(res["x"])
             Eval1 = self.log_likelihood(
                 hyper_parameters1,
@@ -450,28 +400,8 @@ class FVGP:
             self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean)
-            print(time.time() - a)
-            a = time.time()
-            print('hessian',self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean))
-            print(time.time() - a)
-            print(hp_bounds)
-            x = np.arange(hp_bounds[0][0]+10,hp_bounds[0][1],1.)
-            y = np.arange(hp_bounds[1][0],hp_bounds[1][1],1e-3)
-            X, Y = np.meshgrid(x,y)
-            Z = np.empty((X.shape))
-            for i in range(Z.shape[0]):
-                for j in range(Z.shape[1]):
-                    hyper_parameters = [X[i,j],Y[i,j],0.995]
-                    Z[i,j] = self.log_likelihood(hyper_parameters,values,variances,mean)
-            Z *= -1
-            from matplotlib.colors import LogNorm
-            plt.contourf(X, Y, Z, norm=LogNorm())
-            plt.colorbar()
-            plt.show()
-            print(np.amin(Z))
-            exit()
             from functools import partial
             func = partial(self.log_likelihood,values = values,
                     variances = variances, mean = mean)
@@ -484,7 +414,7 @@ class FVGP:
 
             res = HGDL(func, grad, hess, np.asarray(hp_bounds), numIndividuals=20)
             print(res['minima'])
-            if len(res['minima'])!=0:
+            if len(res['minima']) !=0:
                 hyper_parameters = res['minima'][0]
             elif len(res['edge'])!=0:
                 if res['edge_y'][0]<res['genetic_y'][0]:
@@ -538,35 +468,17 @@ class FVGP:
         return dL_dH
     ##################################################################################
     def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
-        solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y = values
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
-        if solve_method == 'solve':
-            #t = time.time()
-            #####################################
-            ####alternative to avoid inversion###
-            #####################################
-            K = np.array([K,] * len(hyper_parameters))
-            x1 = self.solve(K,dK_dH)
-            y = np.ascontiguousarray(y, dtype=np.float32)
-            mean = np.ascontiguousarray(mean, dtype=np.float32)
-            x = np.ascontiguousarray(x, dtype=np.float32)
-            x1 = np.ascontiguousarray(x1, dtype=np.float32)
-            dL_dH = self.numba_dL_dH(y, mean, x1, x, len(hyper_parameters))
-
-            #print("second   ",dL_dH,time.time() - t)
-            #exit()
-            return -dL_dH
-        if solve_method == 'inv':
-            t1 = time.time()
-            K_inv = self.safe_invert(K)
-            for i in range(len(hyper_parameters)):
-                dL_dH[i] = 0.5 * (
-                    ((y - mean).T @ K_inv @ dK_dH[i,:, :] @ K_inv @ (y - mean))
-                    - (np.trace(K_inv @ dK_dH[i,:, :])))
-            #print("inv: ",dL_dH, time.time() - t1)
-            return -dL_dH
+        K = np.array([K,] * len(hyper_parameters))
+        x1 = self.solve(K,dK_dH)
+        y = np.ascontiguousarray(y, dtype=np.float32)
+        mean = np.ascontiguousarray(mean, dtype=np.float32)
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        x1 = np.ascontiguousarray(x1, dtype=np.float32)
+        dL_dH = self.numba_dL_dH(y, mean, x1, x, len(hyper_parameters))
+        return -dL_dH
     ##################################################################################
     @staticmethod
     @nb.njit 
@@ -583,43 +495,21 @@ class FVGP:
         return d2L_dH2
     ##################################################################################
     def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
-        solve_method = "solve"
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y = values - mean
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
         d2K_dH2 = self.hessian_gp_kernel(self.points,self.points, hyper_parameters)
-        if solve_method == 'solve':
-            #t = time.time()
-            #####################################
-            ####alternative to avoid inversion###
-            #####################################
-            t = time.time()
-            K = np.array([K,] * len(hyper_parameters))
-            s = self.solve(K,dK_dH)
-            ss = self.solve(K,d2K_dH2)
-            # make contiguous 
-            K = np.ascontiguousarray(K, dtype=np.float32)
-            y = np.ascontiguousarray(y, dtype=np.float32)
-            s = np.ascontiguousarray(s, dtype=np.float32)
-            ss = np.ascontiguousarray(ss, dtype=np.float32)
-            d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
-            #####################################
-            #####################################
-            #####################################
-            #print("vectorized solve:",d2L_dH2, time.time() - t)
-            return -d2L_dH2
-        if solve_method == 'inv':
-            t = time.time()
-            K_inv = self.safe_invert(K)
-            for i in range(len(hyper_parameters)):
-                for j in range(len(hyper_parameters)):
-                    A = -(K_inv @ dK_dH[j,:,:] @ K_inv @ dK_dH[i,:,:] @ K_inv)\
-                        -(K_inv @ dK_dH[i,:,:] @ K_inv @ dK_dH[j,:,:] @ K_inv)\
-                        +(K_inv @ d2K_dH2[i,j,:,:] @ K_inv)
-                    B = np.trace((-K_inv @ dK_dH[j,:,:] @ K_inv @ dK_dH[i,:,:]) + (K_inv @ d2K_dH2[i,j,:,:]))
-                    d2L_dH2[i,j] = 0.5 * (((y).T @ A @ (y)) - B)
-            #print("inv solve:",d2L_dH2, time.time() - t)
-            return -d2L_dH2
+        t = time.time()
+        K = np.array([K,] * len(hyper_parameters))
+        s = self.solve(K,dK_dH)
+        ss = self.solve(K,d2K_dH2)
+        # make contiguous 
+        K = np.ascontiguousarray(K, dtype=np.float32)
+        y = np.ascontiguousarray(y, dtype=np.float32)
+        s = np.ascontiguousarray(s, dtype=np.float32)
+        ss = np.ascontiguousarray(ss, dtype=np.float32)
+        d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
+        return -d2L_dH2
 
 
     ##################################################################################
@@ -640,82 +530,36 @@ class FVGP:
             prior covariance
             covariance value product
         """
+        self.prior_mean_vec = self.mean_function(self.points)
         cov_y,K = self._compute_covariance_value_product(
                 self.hyper_parameters,
                 self.values,
                 self.variances,
-                self.prior_mean)
+                self.prior_mean_vec)
         self.prior_covariance = K
         self.covariance_value_prod = cov_y
-#        self.K_inv = K_inv
-        return self.prior_mean,K,cov_y
-    ##################################################################################
-    def K_inv(self):
-        return self.safe_invert(self.prior_covariance)
-
     ##################################################################################
     def _compute_covariance_value_product(self, hyper_parameters,values, variances, mean):
         K = self.compute_covariance(hyper_parameters, variances)
         y = values - mean
         y = y.reshape(-1,1)
-        if self.gp_system_solve_method == "solve":
-            x = self.solve(K, y)
-        #elif self.gp_system_solve_method == "minres":
-        #    x, info = minres(K, y - mean)
-        #    if info != 0:
-        #        print("MINRES solve failed, going back to inversion")
-        #        x = self.solve(K, y)
-        #elif self.gp_system_solve_method == "cg":
-        #    x, info = cg(K, y)
-        #    if info != 0:
-        #        print("CG solve failed, going back to inversion")
-#       #         K_inv = self.safe_invert(K)
-        #        x = self.solve(K, y)
-        #elif self.gp_system_solve_method == "rank-n update":
-        #    K_inv = self.covariance_update(K)
-        #    x = K_inv @ (y)
-        else:
-            print("No solve method specified in _compute_covariance_value_product(). That might indicate a wrong input"); exit()
+        x = self.solve(K, y)
         return x,K
     ##################################################################################
     def compute_covariance(self, hyper_parameters, variances):
         """computes the covariance matrix from the kernel"""
-        #print(hyper_parameters)
         CoVariance = self.kernel(
             self.points, self.points, hyper_parameters, self)
-        #plt.imshow(CoVariance)
-        #plt.show()
         self.add_to_diag(CoVariance, variances)
         return CoVariance
-    ##################################################################################
-    def covariance_update(self, CoVariance):
-        """performs a rank-n-update of the covariance matrix"""
-        OldInverse = np.array(self.K_inv())
-        r = len(OldInverse)
-        c = len(OldInverse[0])
-        F = CoVariance[0:r, c:]
-        G = CoVariance[r:, 0:c]
-        H = CoVariance[r:, c:]
-        EI = OldInverse
-
-        S = H - (G.dot(EI).dot(F))
-        SI = self.safe_invert(S)
-        CoVarianceInverse = np.block(
-            [
-                [EI + EI @ F @ SI @G @ EI, -EI @ F @ SI],
-                [-SI @ G @ EI, SI],
-            ]
-        )
-        return CoVarianceInverse
 
     def slogdet(self, A):
         """
-        check this out
+        fvGPs slogdet method based on torch
         """
         if self.compute_device == "cpu":
             A = torch.Tensor(A)
             sign, logdet = torch.slogdet(A)
-            print( sign.numpy(), logdet.numpy())
             return sign.numpy(), logdet.numpy()
         elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
             A = torch.Tensor(A).cuda()
@@ -724,17 +568,24 @@ class FVGP:
 
     def solve(self, A, b):
         """
-        check out here
+        fvGPs slogdet method based on torch
         """
         if self.compute_device == "cpu":
             A = torch.Tensor(A)
             b = torch.Tensor(b)
-            x, lu = torch.solve(b,A)
+            try:
+                x, lu = torch.solve(b,A)
+            except:
+                x, qr = torch.lstsq(b,A)
             return x.numpy()
-        elif self.compute_device == "gpu" or A.ndim<3:
+        elif self.compute_device == "gpu" or A.ndim < 3:
             A = torch.Tensor(A).cuda()
             b = torch.Tensor(b).cuda()
-            return torch.solve(b,A)[0].cpu().numpy()
+            try:
+                x, lu = torch.solve(b,A)
+            except:
+                x, qr = torch.lstsq(b,A)
+            return x.cpu().numpy()
         elif self.compute_device == "multi-gpu":
             n = min(len(A), torch.cuda.device_count())
             split_A = np.array_split(A,n)
@@ -749,15 +600,6 @@ class FVGP:
             for i in range(1,len(results)):
                 total = np.append(total, results[i].cpu().numpy(), 0)
             return total
-
-    def safe_invert(self, Matrix):
-        """computes in inverse or pseudo-inverse of a matrix"""
-        try:
-            M = np.linalg.inv(Matrix)
-        except:
-            print("Matrix not invertible, using pseudo-inverse")
-            M = np.linalg.pinv(Matrix)
-        return M
     ##################################################################################
     def add_to_diag(self,Matrix, Vector):
         d = np.einsum("ii->i", Matrix)
@@ -797,9 +639,13 @@ class FVGP:
                "entropies": entropies
                }
         """
+        ########################################
         ####computation we need for all returns:
-        if len(x_input.shape) == 1: exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
+        ########################################
+        if len(x_input.shape) == 1: 
+            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
         n_orig = len(x_input)
+        tasks = len(x_output)
         if mode == 'cartesian product':
             new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
             counter = 0
@@ -811,61 +657,49 @@ class FVGP:
         p = np.array(new_points)
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
-        #########################################
-        if compute_prior_covariances == True: full_gp_covariances = np.asarray([np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]) for i in range(n_orig)])
+        if compute_prior_covariances == True: 
+            full_gp_covariances = \
+                    np.asarray([np.block([[self.prior_covariance,k[:,i*tasks:(i+1)*tasks]],\
+                             [k[:,i*tasks:(i+1)*tasks].T,kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
+                    for i in range(n_orig)])
         else: full_gp_covariances = None
 
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
-                sgn, logdet = self.slogdet(np.block([[self.prior_covariance, k[:,i:i+n_orig]],[k[:,i:i+n_orig].T, kk[i:i+n_orig,i:i+n_orig]]]))
+                sgn, logdet = np.linalg.slogdet(np.block([[self.prior_covariance, 
+                                              k[:,i*tasks:(i+1)*tasks]],[k[:,i*tasks:(i+1)*tasks].T, 
+                                              kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]]))
                 entropies.append(sgn*logdet)
             entropies = np.asarray(entropies)
         else: entropies = None
 
         if compute_means == True:
             A = k.T @ self.covariance_value_prod
-            if self.gp_mean_function is None: mean = np.reshape(self.prior_mean[0] + A, (n_orig, len(x_output)))
-            else: mean = np.reshape(self.gp_mean_function(x_input,self) + A, (n_orig, len(x_output)))
+            posterior_mean = np.reshape(self.mean_function(p) + A[:,0], (n_orig, len(x_output)))
         else:
             mean = None
         if compute_posterior_covariances == True:
-            #covariance_k_prod = np.zeros(k.shape)
-            #info = np.zeros((len(k[0])))
-            covariance_k_prod = self.solve(self.prior_covariance,k)
-            #if self.gp_system_solve_method == "solve":
-            #elif self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
-            #    covariance_k_prod = self.K_inv() @ k
-            #elif self.gp_system_solve_method == "minres":
-            #    for i in range(len(k[0])):
-            #        covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
-            #elif self.gp_system_solve_method == "cg":
-            #    for i in range(len(k[0])):
-            #        covariance_k_prod[:, i], info[i] = cg(self.prior_covariance, k[:, i])
-            #    if any(info) != 0:
-            #        for i in range(len(k[0])):
-            #            covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
-            #else:
-            #    print(
-            #        "no valid solve method defined in fvGP; defined as: ", self.gp_system_solve_method
-            #    )
-            a = kk - (k.T @ covariance_k_prod)
+            k_cov_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
+            a = kk - (k_cov_prod.T @ k)
             diag = np.diag(a)
             diag = np.where(diag<0.0,0.0,diag)
-            if any([x < -0.0001 for x in np.diag(a)]):
+            if any([x < -0.001 for x in np.diag(a)]):
                 print("CAUTION, negative variances encountered. That normally means that the model is unstable.")
-                print("Reduce the differentiability of the model, add more noise to the data, or double check the hyper-parameter optimization bounds")
+                print("Rethink the kernel definitions, add more noise to the data,")
+                print("or double check the hyper-parameter optimization bounds. This will not ")
+                print("terminate the algorithm, but expect anomalies.")
                 print("diagonal of the posterior covariance: ",np.diag(a))
+
             np.fill_diagonal(a,diag)
-            M = len(x_output)
             covariance = np.asarray([
-                a[i * M : (i + 1) * M, i * M : (i + 1) * M]
-                for i in range(int(a.shape[0] / M))
+                a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
+                for i in range(int(a.shape[0] / tasks))
             ])
         else:
             covariance = None
         res = {"input points": p,
-               "posterior means": mean,
+               "posterior means": posterior_mean,
                "posterior covariances": covariance,
                "prior covariances": full_gp_covariances,
                "prior means": None,
@@ -904,6 +738,7 @@ class FVGP:
         ####computation we need for all returns:
         if len(x_input.shape) == 1: exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.fvGP function, thank you")
         n_orig = len(x_input)
+        tasks = len(x_output)
         if mode == 'cartesian product':
             new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
             counter = 0
@@ -917,15 +752,21 @@ class FVGP:
         k_g = self.d_kernel_dx(p,self.points, direction,self.hyper_parameters).T
         kk =  self.kernel(p, p,self.hyper_parameters,self)
         kk_g =  self.d_kernel_dx(p, p,direction,self.hyper_parameters)
-        if compute_prior_covariances == True: full_gp_covariances = np.asarray([np.block([[self.prior_covariance, k_g[:,i:i+n_orig]],[k_g[:,i:i+n_orig].T, kk_g[i:i+n_orig,i:i+n_orig]]]) for i in range(n_orig)])
+        if compute_prior_covariances == True: 
+            full_gp_covariances = np.asarray([
+                np.block([[self.prior_covariance, k_g[:,i*tasks:(i+1)*tasks]],\
+                          [k_g[:,i*tasks:(i+1)*tasks].T, kk_g[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
+                          for i in range(n_orig)])
         else: full_gp_covariances = None
 
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
-                Sigma =   np.block([[self.prior_covariance, k[:,i:i+n_orig]],  [k[:,i:i+n_orig].T,   kk[i:i+n_orig,i:i+n_orig]]])
-                Sigma_d = np.block([[self.prior_covariance, k_g[:,i:i+n_orig]],[k_g[:,i:i+n_orig].T, kk_g[i:i+n_orig,i:i+n_orig]]])
-                entropies.append(np.trace(np.linalg.inv(Sigma)@Sigma_d))
+                Sigma = np.block([[self.prior_covariance, k[:,i*tasks:(i+1)*tasks]],  [\
+                                k[:,i*tasks:(i+1)*tasks].T,   kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])
+                Sigma_d = np.block([[self.prior_covariance, k_g[:,i*tasks:(i+1)*tasks]],\
+                                    [k_g[:,i*tasks:(i+1)*tasks].T, kk_g[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])
+                entropies.append(np.trace(self.solve(Sigma,Sigma_d)))
             entropies = np.asarray(entropies)
         else: entropies = None
 
@@ -935,37 +776,16 @@ class FVGP:
         else:
             mean = None
         if compute_posterior_covariance == True:
-            covariance_k_prod = self.solve(self.prior_covariance,k)
-            covariance_k_g_prod = self.solve(self.prior_covariance,k_g)
-            #if self.gp_system_solve_method == "inv" or self.gp_system_solve_method == "rank-n update":
-            #    covariance_k_prod = self.K_inv() @ k
-            #    covariance_k_g_prod = self.K_inv() @ k_g
-            #elif self.gp_system_solve_method == "minres":
-            #    for i in range(len(k[0])):
-            #        covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
-            #        covariance_k_g_prod[:, i], info[i] = minres(self.prior_covariance, k_g[:, i])
-            #elif self.gp_system_solve_method == "cg":
-            #    for i in range(len(k[0])):
-            #        covariance_k_prod[:, i], info[i] = cg(self.prior_covariance, k[:, i])
-            #        covariance_k_g_prod[:, i], info[i] = cg(self.prior_covariance, k_g[:, i])
-            #    if any(info) != 0:
-            #        for i in range(len(k[0])):
-            #            covariance_k_prod[:, i], info[i] = minres(self.prior_covariance, k[:, i])
-            #            covariance_k_g_prod[:, i], info[i] = minres(self.prior_covariance, k_g[:, i])
-            #else:
-            #    print(
-            #        "no valid solve method defined in fvGP; defined as: ", self.gp_system_solve_method
-            #    )
-            a = kk_g - ((k_g.T @ covariance_k_prod) + (k.T @ covariance_k_g_prod))
-            M = len(x_output)
+            k_covariance_prod = self.solve(self.prior_covariance,k,compute_device = self.compute_device)
+            kg_covariance_prod = self.solve(self.prior_covariance,k_g,compute_device = self.compute_device)
+            a = kk_g - ((k_covariance_prod.T @ k) + (k_g_covariance_prod.T @ k))
             covariance = [
-                a[i * M : (i + 1) * M, i * M : (i + 1) * M]
-                for i in range(int(a.shape[0] / M))
+                a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
+                for i in range(int(a.shape[0] / tasks))
                 ]
         else:
             covariance = None
 
-        r1 = np.reshape(A, (n_orig, self.output_num))
         res = {"input points": p,
                "posterior mean gradients": mean,
                "posterior covariance gradients": covariance,
@@ -1251,7 +1071,6 @@ class FVGP:
         new_points = np.zeros((self.point_number * self.output_num, self.iset_dim))
         new_values = np.zeros((self.point_number * self.output_num))
         new_variances = np.zeros((self.point_number * self.output_num))
-        new_mean = np.zeros((self.point_number * self.output_num))
         for i in range(self.output_num):
             new_points[i * self.point_number : (i + 1) * self.point_number] = \
             np.column_stack([self.points, self.value_positions[:, i, :]])
@@ -1259,27 +1078,13 @@ class FVGP:
             self.values[:, i]
             new_variances[i * self.point_number : (i + 1) * self.point_number] = \
             self.variances[:, i]
-            new_mean[i * self.point_number : (i + 1) * self.point_number] =\
-            self.mean_vec[:, i]
-        return new_points, new_values, new_variances, new_mean
+        return new_points, new_values, new_variances
 
-    def compute_mean(self):
+    def standard_mean_function(self,x):
         """evaluates the gp mean function at the data points """
-        if self.gp_mean_function is None:
-            mean = np.zeros((self.variances.shape))
-            for i in range(len(mean[0])):
-                mean[:, i] = np.mean(self.values[:, i], axis=0)
-            return mean
-        else:
-            mean = np.zeros((self.variances.shape))
-            for i in range(len(mean)):
-                mean[i, :] = self.gp_mean_function(np.array([self.points[i]]), self)
-            return mean
-
-    ############################################################
-    ######################finite difference derivative##########
-    ############################################################
-
+        mean = np.zeros((len(x)))
+        mean[:] = np.mean(self.values)
+        return mean
 ###########################################################################
 ###########################################################################
 ###########################################################################
@@ -1377,262 +1182,5 @@ class FVGP:
         return hessian
 
 ###########################################################################
-###################################Obsolete################################
+###################################END#####################################
 ###########################################################################
-
-    ##################################################
-    #########Kernels##################################
-    ##################################################
-
-    ##################################################
-    #########Derivatives with respect to x ###########
-    ##################################################
-    """
-    def d_squared_exponential_kernel_dx(self, distance, length):
-        dkernel_dx = -(distance / length ** 2) * np.exp(
-            -(distance ** 2) / (2.0 * (length ** 2))
-        )
-        return dkernel_dx
-
-    def d_exponential_kernel_dx(self, distance, length):
-        dkernel_dx = -(1.0 / length) * np.exp(-(distance) / (length))
-        return dkernel_dx
-
-    def d_matern_kernel_diff1_dx(self, distance, length):
-        ee = np.exp(-(np.sqrt(3.0) * distance) / length)
-        a = np.sqrt(3.0) / length
-        b = a * distance
-        dkernel_dx = a * (ee - (ee * (1.0 + b)))
-        return dkernel_dx
-
-    def d_matern_kernel_diff2_dx(self, distance, length):
-        ee = np.exp(-(np.sqrt(5.0) * distance) / length)
-        a = np.sqrt(5.0) / length
-        b = a * distance
-        c = (10.0 * distance) / (3.0 * length ** 2)
-        d = (5.0 * distance ** 2) / (3.0 * length ** 2)
-        dkernel_dx = ((a + c) * ee) - ((1.0 + b + d) * a * ee)
-        return dkernel_dx
-
-    def d_sparse_kernel_dx(self,distance, radius):
-        d = np.array(distance)
-        d[d == 0.0] = 10e-6
-        d[d>radius] = radius - 10e-6
-        dkernel_dx = 2.0**(3.0/2.0)*d*((3.0*radius**2*np.sqrt(1-d**2/radius**2)-3.0*d**2+3.0*radius**2)*\
-                np.log(d/(radius*(np.sqrt(1-d**2/radius**2)+1.0)))+2.0*radius**2*(1.0-d**2/radius**2)**(3.0/2.0)+\
-                (radius**2-d**2)*np.sqrt(1.0-d**2/radius**2)-3.0*d**2+3.0*radius**2)/\
-                (3.0*np.sqrt(np.pi)*radius**4*np.sqrt(1.0-d**2/radius**2)*(np.sqrt(1.0-d**2/radius**2)+1))
-        dkernel_dx[d > radius] = 0.0
-        return dkernel_dx
-    def dd_sparse_kernel_dxx(self,distance, radius):
-        d = np.array(distance)
-        d[d == 0.0] = 10e-6
-        d[d>radius] = radius - 10e-6
-        r = radius
-        ddkernel_dxx = -(2**(3/2)*((np.sqrt(1-d**2/r**2)*(3*r**2*d**4-3*r**4*d**2)\
-                -6*r**2*d**4+(1-d**2/r**2)**(3/2)*(6*r**4*d**2-6*r**6)+12*r**4*d**2-6*r**6)\
-                *np.log(d/(r*(np.sqrt(1-d**2/r**2)+1)))-2*r**6*(1-d**2/r**2)**(5/2)+6*d**6+\
-                np.sqrt(1-d**2/r**2)*(6*r**2*d**4-6*r**4*d**2)-24*r**2*d**4+(1-d**2/r**2)**\
-                (3/2)*(16*r**4*d**2-10*r**6)+30*r**4*d**2-12*r**6))/(3*np.sqrt(np.pi)*r**8*\
-                (1-d**2/r**2)**(3/2)*(np.sqrt(1-d**2/r**2)+1)**2)
-        ddkernel_dxx[d > radius] = 0.0
-        return ddkernel_dxx
-
-    ##################################################
-    #########Derivatives with respect to length scale#
-    ##################################################
-    def d_squared_exponential_kernel_dl(self, distance, length):
-        # returns the derivative of the 1d squared exponential kernel
-        # with respect to length scale
-        return self.squared_exponential_kernel(distance, length) * (
-            (distance ** 2) / (length ** 3)
-        )
-
-    def d_exponential_kernel_dl(self, distance, length):
-        # returns the derivative of the 1d exponential kernel
-        # with respect to length scale
-        return np.exp(-(distance) / (length)) * (distance / (length ** 2))
-
-    def d_matern_kernel_diff1_dl(self, distance, length):
-        # returns the derivative of the 1d matern kernel (P1)
-        # with respect to length scale
-        return np.exp(-((np.sqrt(3.0) * distance) / (length))) * (
-            (3.0 * distance ** 2) / (length ** 3)
-        )
-
-    def d_matern_kernel_diff2_dl(self, distance, length):
-        # returns the derivative of the 1d Matern kernel (P1)
-        # with respect to length scale
-        a = np.exp(-(np.sqrt(5.0) * distance) / (length))
-        return a * (
-            (distance ** 2 * ((5.0 * length) + (5.0 ** (3.0 / 2.0) * distance)))
-            / (3.0 * length ** 4)
-        )
-
-    def d_sparse_kernel_dl(self, distance, radius):
-        d = np.array(distance)
-        d[d == 0.0] = 10e-6
-        d[d>radius] = radius - 10e-6
-        r = radius
-
-        dsk_dl = (np.sqrt(2)*((3*d*(np.sqrt(1-d**2/r**2)+1)*(-d/((np.sqrt(1-d**2/r**2)+1)*r**2)-d**3/\
-                ((np.sqrt(1-d**2/r**2)+1)**2*np.sqrt(1-d**2/r**2)*r**4)))/r+(d**2*((2*d**2)/r**2+1))/\
-                (np.sqrt(1-d**2/r**2)*r**3)-(4*d**2*np.sqrt(1-d**2/r**2))/r**3-(6*d**2*\
-                np.log(d/((np.sqrt(1-d**2/r**2)+1)*r)))/r**3))/(3*np.sqrt(np.pi))
-
-        dsk_dl[d > radius] = 0.0
-        return dsk_dl
-
-    def d_sparse_kernel_dl(self, distance, radius):
-        d = np.array(distance)
-        d[d == 0.0] = 10e-6
-        d[d>radius] = radius - 10e-6
-        r = radius
-
-        ddsk_dll = (np.sqrt(2)*d**2*(((18*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))+39)*\
-            (1-d**2/r**2)**(5/2)+(18*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))+9)*(1-d**2/r**2)**(3/2)+\
-            36*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))+48)*r**8+((-18*d**2*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))\
-            -39*d**2)*(1-d**2/r**2)**(5/2)+(-18*d**2*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))-16*d**2)*\
-            (1-d**2/r**2)**(3/2)-2*d**2*np.sqrt(1-d**2/r**2)-108*d**2*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))-\
-            168*d**2)*r**6+(13*d**4*(1-d**2/r**2)**(3/2)-2*d**4*np.sqrt(1-d**2/r**2)+108*d**4*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))+\
-            216*d**4)*r**4+(4*d**6*np.sqrt(1-d**2/r**2)-36*d**6*np.log(d/((np.sqrt(1-d**2/r**2)+1)*r))-120*d**6)*\
-            r**2+24*d**8))/(3*np.sqrt(np.pi)*(np.sqrt(1-d**2/r**2)+1)**2*(1-d**2/r**2)**(3/2)*r**10*(r**2-d**2))
-
-        ddsk_dll[d > radius] = 0.0
-        return ddsk_dll
-
-
-
-    def dd_squared_exponential_kernel_dll(self, distance, length):
-        # returns the derivative of the 1d squared exponential kernel
-        # with respect to length scale
-        return (
-            self.squared_exponential_kernel(distance, length) * ((distance ** 4) / (length ** 6))
-        ) - (
-            3.0
-            * selfKernel.SquaredExpDer(distance, length)
-            * ((distance ** 2) / (length ** 4))
-        )
-
-    def dd_exponential_kernel_dll(self, distance, length):
-        # returns the derivative of the 1d exponential kernel
-        # with respect to length scale
-        ee = self.exponential_kernel(distance, length)
-        return ee * (
-            (-2.0 * distance / (length ** 3)) + ((distance ** 2) / (length ** 4))
-        )
-
-    def dd_matern_kernel_diff1_dll(self, distance, length):
-        # returns the derivative of the 1d Matern kernel (P1)
-        # with respect to length scale
-        ee = np.exp((-np.sqrt(3.0) * distance) / (length))
-        return ee * (
-            ((3.0 ** (3.0 / 2.0) * distance ** 3) / (length ** 5))
-            - ((9.0 * distance ** 2) / (length ** 4))
-        )
-
-    def dd_matern_kernel_diff2_dll(self, distance, length):
-        # returns the derivative of the 1d Matern kernel (P1)
-        # with respect to length scale
-        a = np.exp(-(np.sqrt(5.0) * distance) / (length))
-        return a * (
-            (
-                (15.0 * length ** 2)
-                + (3.0 * 5.0 ** (3.0 / 2.0) * distance * length)
-                - (25.0 * distance ** 2)
-            )
-            / (3.0 * length ** 6)
-        )
-
-    def dd_bump_function_kernel_dll(self, distance, beta, r):
-        A = distance ** 2 - r ** 2
-        B = BumpFunction(distance, beta, r)
-        if distance < r:
-            return (
-                (2 * beta * r ** 2)
-                * (
-                    3.0 * distance ** 4
-                    + ((2.0 * beta - 2) * r ** 2 * distance ** 2)
-                    - r ** 4
-                )
-                * B
-            ) / A ** 4
-        else:
-            return 0.0
-    """
-""" derivative test:
-
-
-        print("gradient test")
-        e = 0.01
-        d = 0
-        hps = np.random.rand(4) * 1.0   #np.array(self.hyper_parameters)
-        hps[0] = 200.0
-        print("hps:", hps)
-        hps1 = np.array(hps)
-        hps2 = np.array(hps)
-        hps2[d] = hps2[d] + e
-        hps1[d] = hps1[d] - e
-        print("hps1: ", hps1)
-        print("hps2: ", hps2)
-        a = self.log_likelihood(hps1,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        b = self.log_likelihood(hps2,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        print("likelihoods: ",a,b)
-        print("test grad: ",( b - a )/(2.0*e))
-        print("comp grad: ",self.log_likelihood_gradient_wrt_hyper_parameters(hps,
-        self.values,
-        self.variances,
-        self.prior_mean))
-        print("hessian test")
-        epsilon = 1e-5
-        d1 = 0
-        d2 = 1
-        hps = np.random.rand(4) * 1.0   #np.array(self.hyper_parameters)
-        hps[0] = 200.0
-        hps1 = np.array(hps)
-        hps2 = np.array(hps)
-        hps3 = np.array(hps)
-        hps4 = np.array(hps)
-        hps1[d1] = hps1[d1] + epsilon
-        hps1[d2] = hps1[d2] + epsilon
-
-        hps2[d1] = hps2[d1] + epsilon
-        hps2[d2] = hps2[d2] - epsilon
-
-        hps3[d1] = hps3[d1] - epsilon
-        hps3[d2] = hps3[d2] + epsilon
-
-        hps4[d1] = hps4[d1] - epsilon
-        hps4[d2] = hps4[d2] - epsilon
-
-        f1 = self.log_likelihood(hps1,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        f2 = self.log_likelihood(hps2,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        f3 = self.log_likelihood(hps3,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        f4 = self.log_likelihood(hps4,
-        self.values,
-        self.variances,
-        self.prior_mean)
-        print("fin diff hess at ",d1," ",d2,(f1 - f2 - f3 +  f4) / (4.0*(epsilon**2)))
-        print(self.log_likelihood_hessian_wrt_hyper_parameters(hps,
-        self.values,
-        self.variances,
-        self.prior_mean))
-
-        plt.show()
-        exit()
-"""
