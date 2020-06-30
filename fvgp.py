@@ -29,14 +29,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 Contact: MarcusNoack@lbl.gov
 """
 
-#from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
 import math
 from scipy.optimize import differential_evolution
 from scipy.optimize import minimize
-#from scipy.sparse.linalg import cg
-#from scipy.sparse.linalg import minres
 import itertools
 import time
 import torch
@@ -582,7 +579,11 @@ class FVGP:
             try:
                 x, lu = torch.solve(b,A)
             except:
-                x, qr = torch.lstsq(b,A)
+                try:
+                    x, qr = torch.lstsq(b,A)
+                except:
+                    x = np.linalg.lstsq(A.numpy(),b.numpy())
+                    return x
             return x.cpu().numpy()
         elif self.compute_device == "multi-gpu":
             n = min(len(A), torch.cuda.device_count())
