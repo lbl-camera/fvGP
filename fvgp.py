@@ -226,7 +226,7 @@ class FVGP:
         ######################################
         #####transform to index set###########
         ######################################
-        self.points, self.values, self.variances, self.prior_mean = self.transform_index_set()
+        self.points, self.values, self.variances = self.transform_index_set()
         self.point_number = len(self.points)
         self.compute_prior_fvGP_pdf()
     ###################################################################################
