@@ -29,14 +29,14 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 Contact: MarcusNoack@lbl.gov
 """
 
-from scipy.optimize import curve_fit
+#from scipy.optimize import curve_fit
 import matplotlib.pyplot as plt
 import numpy as np
 import math
 from scipy.optimize import differential_evolution
 from scipy.optimize import minimize
-from scipy.sparse.linalg import cg
-from scipy.sparse.linalg import minres
+#from scipy.sparse.linalg import cg
+#from scipy.sparse.linalg import minres
 import itertools
 import time
 import torch
@@ -660,14 +660,14 @@ class FVGP:
                              [k[:,i*tasks:(i+1)*tasks].T,kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
                     for i in range(n_orig)])
         else: full_gp_covariances = None
-
         if compute_entropies == True:
             entropies = []
             for i in range(n_orig):
-                sgn, logdet = np.linalg.slogdet(np.block([[self.prior_covariance, 
+                sgn, logdet = self.slogdet(np.block([[self.prior_covariance, 
                                               k[:,i*tasks:(i+1)*tasks]],[k[:,i*tasks:(i+1)*tasks].T, 
                                               kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]]))
-                entropies.append(sgn*logdet)
+                if sgn == 0.0: entropies.append(0.0); print("entropy is zero, that should never happen. Double check your input!")
+                else:entropies.append(sgn*logdet)
             entropies = np.asarray(entropies)
         else: entropies = None
 
