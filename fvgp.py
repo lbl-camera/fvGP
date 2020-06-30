@@ -676,7 +676,7 @@ class FVGP:
             A = k.T @ self.covariance_value_prod
             posterior_mean = np.reshape(self.mean_function(p) + A[:,0], (n_orig, len(x_output)))
         else:
-            mean = None
+            posterior_mean = None
         if compute_posterior_covariances == True:
             k_cov_prod = self.solve(self.prior_covariance,k)
             a = kk - (k_cov_prod.T @ k)
