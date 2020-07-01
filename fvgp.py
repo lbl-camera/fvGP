@@ -237,7 +237,7 @@ class FVGP:
         hyper_parameter_bounds,
         init_hyper_parameters = None,
         optimization_method = "global",
-        likelihood_pop_size = 20,
+        likelihood_optimizatition_pop_size = 20,
         likelihood_optimization_tolerance = 0.1,
         likelihood_optimization_max_iter = 120
         ):
@@ -268,7 +268,7 @@ class FVGP:
         self.hyper_parameter_optimization_bounds,
         optimization_method,
         likelihood_optimization_max_iter,
-        likelihood_pop_size,
+        likelihood_optimization_pop_size,
         likelihood_optimization_tolerance
         ))
         self.compute_prior_fvGP_pdf()
@@ -420,7 +420,7 @@ class FVGP:
                 hyper_parameters = res['genetic'][0]
 
         else:
-            print("no optimization mode specified")
+            print("no optimization mode specified"); exit()
         print("New hyper-parameters: ",
             hyper_parameters,
             "with log likelihood: ",
@@ -582,7 +582,7 @@ class FVGP:
                 try:
                     x, qr = torch.lstsq(b,A)
                 except:
-                    x = np.linalg.lstsq(A.numpy(),b.numpy())
+                    x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
                     return x
             return x.cpu().numpy()
         elif self.compute_device == "multi-gpu":
