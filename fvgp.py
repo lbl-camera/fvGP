@@ -237,7 +237,7 @@ class FVGP:
         hyper_parameter_bounds,
         init_hyper_parameters = None,
         optimization_method = "global",
-        likelihood_optimizatition_pop_size = 20,
+        likelihood_optimization_pop_size = 20,
         likelihood_optimization_tolerance = 0.1,
         likelihood_optimization_max_iter = 120
         ):
