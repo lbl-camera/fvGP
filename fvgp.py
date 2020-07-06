@@ -571,6 +571,7 @@ class FVGP:
             try:
                 x, lu = torch.solve(b,A)
             except:
+                print("except statement invoked: torch.solve() on cpu did not work")
                 x, qr = torch.lstsq(b,A)
             return x.numpy()
         elif self.compute_device == "gpu" or A.ndim < 3:
@@ -579,9 +580,12 @@ class FVGP:
             try:
                 x, lu = torch.solve(b,A)
             except:
+                print("except statement invoked: torch.solve() on gpu did not work")
                 try:
                     x, qr = torch.lstsq(b,A)
                 except:
+                    print("except statement 2 invoked: torch.solve() and torch.lstsq() on gpu did not work")
+                    print("falling back to numpy.lstsq()")
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
                     return x
             return x.cpu().numpy()
@@ -689,6 +693,8 @@ class FVGP:
                 print("or double check the hyper-parameter optimization bounds. This will not ")
                 print("terminate the algorithm, but expect anomalies.")
                 print("diagonal of the posterior covariance: ",np.diag(a))
+                p = np.block([[self.prior_covariance, k],[k.T, kk]])
+                print("eigenvalues of the prior: ", np.linalg.eig(p)[0])
 
             np.fill_diagonal(a,diag)
             covariance = np.asarray([
