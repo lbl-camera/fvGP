@@ -571,8 +571,15 @@ class FVGP:
             try:
                 x, lu = torch.solve(b,A)
             except:
-                print("except statement invoked: torch.solve() on cpu did not work")
-                x, qr = torch.lstsq(b,A)
+                try:
+                    print("except statement invoked: torch.solve() on cpu did not work")
+                    x, qr = torch.lstsq(b,A)
+                except:
+                    print("except statement 2 invoked: torch.solve() and torch.lstsq() on cpu did not work")
+                    print("falling back to numpy.lstsq()")
+                    x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
+                    return x
+
             return x.numpy()
         elif self.compute_device == "gpu" or A.ndim < 3:
             A = torch.Tensor(A).cuda()
