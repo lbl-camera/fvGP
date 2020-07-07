@@ -37,7 +37,7 @@ my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute
 
 my_gp.train([[5.0,50.0],[1.0,4.0],[.99,1.0]],
         optimization_method = 'global',
-        likelihood_pop_size = 20,
+        likelihood_optimization_pop_size = 20,
         likelihood_optimization_tolerance = 0.0001,
         likelihood_optimization_max_iter = 20)
 

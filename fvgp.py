@@ -33,7 +33,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 from scipy.optimize import differential_evolution
-from scipy.optimize import minimize
+from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import spsolve
+from scipy.sparse import coo_matrix
+
 import itertools
 import time
 import torch
@@ -69,6 +72,7 @@ class FVGP:
         gp_kernel_function(func):                       None/function defining the kernel def name(x1,x2,hyper_parameters,self), default = None
         gp_mean_function(func):                         None/a function def name(x, self), default = None
         init_hyper_parameters (1d list):                default: list of [1,1,...]
+        sparse (bool):                                  default = False
 
     Example:
         obj = FVGP(
@@ -106,6 +110,7 @@ class FVGP:
         gp_kernel_function = None,
         gp_mean_function = None,
         init_hyper_parameters = None,
+        sparse = False
         ):
 
         """
@@ -566,6 +571,18 @@ class FVGP:
         fvGPs slogdet method based on torch
         """
         if self.compute_device == "cpu":
+            #####for sparsity:
+            if self.sparse == True:
+                zero_indices = np.where(A < 1e-16)
+                A[zero_indices] = 0.0
+                if self.is_sparse(A):
+                    try:
+                        A = scipy.sparse.csr_matrix(A)
+                        x = scipy.sparse.spsolve(A,b)
+                        return x
+                    except:
+                        print("Sparse solve did not work out.")
+            ##################
             A = torch.Tensor(A)
             b = torch.Tensor(b)
             try:
@@ -615,6 +632,9 @@ class FVGP:
         d = np.einsum("ii->i", Matrix)
         d += Vector
         return Matrix
+    def is_sparse(self,A):
+        if float(np.count_nonzero(A))/float(len(A)**2) < 0.01: return True
+        else: return False
 
     ###########################################################################
     ###########################################################################
