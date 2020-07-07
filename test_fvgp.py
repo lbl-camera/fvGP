@@ -21,9 +21,15 @@ def mt_kernel(x1,x2,hps, obj = None):
 def func(points):
     return 3.0*points + 0.3*np.sin(10.0*points)
     #return 0.3*np.sin((points)*10.0*points)
+#######################################################
+#######################################################
+#######################################################
+#######################################################
 
-points = np.empty((20,1))
-points[:,0] = np.linspace(0,2,20) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
+
+N = 200 ### how many training points
+points = np.empty((N,1))
+points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
 ####change here for multi-task case
 values = func(points)
 #values = np.empty((20,3))

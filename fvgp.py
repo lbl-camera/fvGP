@@ -33,6 +33,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import math
 from scipy.optimize import differential_evolution
+from scipy.optimize import minimize
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import spsolve
 from scipy.sparse import coo_matrix
