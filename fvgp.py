@@ -133,6 +133,7 @@ class FVGP:
         self.point_number = len(self.points)
         self.values = values
         self.compute_device = compute_device
+        self.sparse = sparse
         ##########################################
         #######prepare value positions############
         ##########################################
