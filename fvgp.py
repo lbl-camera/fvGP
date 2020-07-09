@@ -585,8 +585,8 @@ class FVGP:
                     except:
                         print("Sparse solve did not work out.")
             ##################
-            A = torch.Tensor(A)
-            b = torch.Tensor(b)
+            A = torch.from_numpy(A)
+            b = torch.from_numpy(b)
             try:
                 x, lu = torch.solve(b,A)
             except:
@@ -601,8 +601,8 @@ class FVGP:
 
             return x.numpy()
         elif self.compute_device == "gpu" or A.ndim < 3:
-            A = torch.Tensor(A).cuda()
-            b = torch.Tensor(b).cuda()
+            A = torch.from_numpy(A).cuda()
+            b = torch.from_numpy(b).cuda()
             try:
                 x, lu = torch.solve(b,A)
             except:
@@ -622,8 +622,8 @@ class FVGP:
             results = []
             for i, (tmp_A,tmp_b) in enumerate(zip(split_A,split_b)):
                 cur_device = torch.device("cuda:"+str(i))
-                tmp_A = torch.Tensor(tmp_A).cuda(cur_device)
-                tmp_b = torch.Tensor(tmp_b).cuda(cur_device)
+                tmp_A = torch.from_numpy(tmp_A).cuda(cur_device)
+                tmp_b = torch.from_numpy(tmp_b).cuda(cur_device)
                 results.append(torch.solve(tmp_b,tmp_A)[0])
             total = results[0].cpu().numpy()
             for i in range(1,len(results)):
