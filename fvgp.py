@@ -483,7 +483,7 @@ class FVGP:
         return -dL_dH
     ##################################################################################
     @staticmethod
-    @nb.njit 
+    @nb.njit
     def numba_d2L_dH2(x, y, s, ss):
         len_hyper_parameters = s.shape[0]
         d2L_dH2 = np.empty((len_hyper_parameters,len_hyper_parameters))
