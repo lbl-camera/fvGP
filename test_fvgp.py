@@ -41,11 +41,12 @@ my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute
 #my_gp = FVGP(1,1,3,points,values,gp_kernel_function = mt_kernel, compute_device = "cpu")
 #my_gp = FVGP(1,1,1,points,values,gp_kernel_function = non_stationary_kernel, compute_device = "cpu")
 
-my_gp.train([[5.0,50.0],[1.0,4.0],[.99,1.0]],
+my_gp.train([[0.0001,50000.0],[0.001,400.0],[.9,1.1]],
+        init_hyper_parameters = [10.0,10.0,1.0],
         optimization_method = 'global',
         likelihood_optimization_pop_size = 20,
-        likelihood_optimization_tolerance = 0.0001,
-        likelihood_optimization_max_iter = 20)
+        likelihood_optimization_tolerance = 0.01,
+        likelihood_optimization_max_iter = 2000)
 
 
 x_input = np.empty((1000,1))

@@ -363,7 +363,11 @@ class FVGP:
         elif hyper_parameter_optimization_mode == "local":
             hyper_parameters = np.array(starting_hps)
             print("Performing a local update of the hyper parameters.")
-            print("Attempting a BFGS optimization...")
+            print("starting hyper-parameters: ", hyper_parameters)
+            print("Attempting a BFGS optimization.")
+            print("maximum number of iterations: ", likelihood_optimization_max_iter)
+            print("termination tolerance: ", likelihood_optimization_tolerance)
+            print("bounds: ", hp_bounds)
             OptimumEvaluation = minimize(
                 self.log_likelihood,
                 hyper_parameters,
@@ -371,10 +375,12 @@ class FVGP:
                 method="L-BFGS-B",
                 jac=self.log_likelihood_gradient_wrt_hyper_parameters,
                 bounds = hp_bounds,
-                tol=10 ** -4,
-                callback=None,
+                tol = likelihood_optimization_tolerance,
+                callback = None,
                 options = {"maxiter": likelihood_optimization_max_iter,
-                           "gtol": likelihood_optimization_tolerance}
+                    #"iprint" : 101,
+                    }#,
+                           #"ftol": likelihood_optimization_tolerance}
                 )
 
             if OptimumEvaluation["success"] == True:
