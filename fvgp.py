@@ -650,6 +650,246 @@ class FVGP:
     ###############################gp prediction###############################
     ###########################################################################
     ###########################################################################
+    def posterior_mean(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
+        """
+        function to compute the posterior mean
+        input:
+        ------
+            
+        """
+        if len(x_input.shape) == 1: 
+            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
+        n_orig = len(x_input)
+        tasks = len(x_output)
+        if mode == 'cartesian product':
+            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
+            counter = 0
+            for element in itertools.product(x_input, x_output):
+                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
+                counter += 1   ###can't we append?
+        elif mode == 'stack':
+            new_points = np.column_stack([x_input,x_output])
+        p = np.array(new_points)
+        k = self.kernel(self.points,p,self.hyper_parameters,self)
+        kk = self.kernel(p, p,self.hyper_parameters,self)
+        A = k.T @ self.covariance_value_prod
+        posterior_mean = np.reshape(self.mean_function(p) + A[:,0], (n_orig, len(x_output)))
+
+        return {"x": p,
+                "f": posterior_mean}
+    ###########################################################################
+    def posterior_covariance(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
+        """
+        function to compute the posterior covariance
+        required input:
+        ------
+            x_input: 2d numpy array of input points
+        optional input:
+        ---------------
+            x_: 2d numpy array of points in the output space, default  = np.array([[0.0]])
+            mode: string, "cartesian product" or "stack". Instruction how to create points in the combined index set
+        output:
+        -------
+            {"x": the index set points,
+             "var": the posterior covariance numpy array}
+        """
+        if len(x_input.shape) == 1: 
+            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
+        n_orig = len(x_input)
+        tasks = len(x_output)
+        if mode == 'cartesian product':
+            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
+            counter = 0
+            for element in itertools.product(x_input, x_output):
+                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
+                counter += 1   ###can't we append?
+        elif mode == 'stack':
+            new_points = np.column_stack([x_input,x_output])
+        p = np.array(new_points)
+        k = self.kernel(self.points,p,self.hyper_parameters,self)
+        kk = self.kernel(p, p,self.hyper_parameters,self)
+        k_cov_prod = self.solve(self.prior_covariance,k)
+        a = kk - (k_cov_prod.T @ k)
+        diag = np.diag(a)
+        diag = np.where(diag<0.0,0.0,diag)
+        if any([x < -0.001 for x in np.diag(a)]):
+            print("CAUTION, negative variances encountered. That normally means that the model is unstable.")
+            print("Rethink the kernel definitions, add more noise to the data,")
+            print("or double check the hyper-parameter optimization bounds. This will not ")
+            print("terminate the algorithm, but expect anomalies.")
+            print("diagonal of the posterior covariance: ",np.diag(a))
+            p = np.block([[self.prior_covariance, k],[k.T, kk]])
+            print("eigenvalues of the prior: ", np.linalg.eig(p)[0])
+
+        np.fill_diagonal(a,diag)
+        covariance = np.asarray([
+            a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
+            for i in range(int(a.shape[0] / tasks))
+        ])
+
+        return {"x": p,
+                "var": covariance}
+    ###########################################################################
+    def gp_prior(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
+        """
+        function to compute the data-informed prior
+        required input:
+        ------
+            x_input: 2d numpy array of input points
+        optional input:
+        ---------------
+            x_: 2d numpy array of points in the output space, default  = np.array([[0.0]])
+            mode: string, "cartesian product" or "stack". Instruction how to create points in the combined index set
+        output:
+        -------
+            {"x": the index set points,
+             "K": covariance matrix between data points
+             "k": covariance between data and requested poins,
+             "kappa": covariance matrix between requested points,
+             "S:": joint prior}
+        """
+        if len(x_input.shape) == 1: 
+            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
+        n_orig = len(x_input)
+        tasks = len(x_output)
+        if mode == 'cartesian product':
+            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
+            counter = 0
+            for element in itertools.product(x_input, x_output):
+                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
+                counter += 1   ###can't we append?
+        elif mode == 'stack':
+            new_points = np.column_stack([x_input,x_output])
+        p = np.array(new_points)
+        k = self.kernel(self.points,p,self.hyper_parameters,self)
+        kk = self.kernel(p, p,self.hyper_parameters,self)
+
+        full_gp_covariances = \
+                np.asarray([np.block([[self.prior_covariance,k[:,i*tasks:(i+1)*tasks]],\
+                            [k[:,i*tasks:(i+1)*tasks].T,kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
+                for i in range(n_orig)])
+        return  {"x": p,
+             "K": self.covariance_matrix,
+             "k": k,
+             "kappa": kk,
+             "S:": full_gp_covariances}
+
+    ###########################################################################
+    def entropy(self, S):
+        """
+        function comuting the entropy of a normal distribution
+        a = entropy(S); S is a 2d numpy array, matrix has to be non-singular
+        """
+        dim  = len(S[0])
+        return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * s * logdet)
+    ###########################################################################
+    def kl_div(self,mu1, mu2, S1, S2):
+        """
+        function comuting the KL divergence between two normal distributions
+        a = kl_div(mu1, mu2, S1, S2); S1, S2 are a 2d numpy arrays, matrices has to be non-singular
+        mu1,mu2 are mean vectors
+        """
+        s1 = logdet1 = self.logdet(S1)
+        s2 = logdet2 = self.logdet(S2)
+        x1 = self.solve(S2,S1)
+        mu = np.subtract(mu2,mu1)
+        x2 = self.solve(S2,mu)
+        kld = 0.5 * (np.linalg.trace(x1) + (x2 @ mu) + - dim + ((s2*logdetd2)-(s1*logdet1)))
+        if kld < 1e-4: print("negative KL divergence encountered")
+        return kld
+    ###########################################################################
+    def gp_kl_div(self, x_input, comp_mean, comp_cov ,x_output=np.array([[0.0]]), mode = 'cartesian product'):
+        """
+        function to compute the KL divergence of a pposterior at
+        required input:
+        ------
+            x_input: 2d numpy array of input points
+        optional input:
+        ---------------
+            x_: 2d numpy array of points in the output space, default  = np.array([[0.0]])
+            mode: string, "cartesian product" or "stack". Instruction how to create points in the combined index set
+        output:
+        -------
+            {"x": the index set points,
+             "K": covariance matrix between data points
+             "k": covariance between data and requested poins,
+             "kappa": covariance matrix between requested points,
+             "S:": joint prior}
+        """
+        res = self.posterior_mean(x_input, x_output, mode)
+        gp_mean = res["f"]
+        p = res["x"]
+        gp_cov = self.posterior_covariance(x_input, x_output, mode)["var"]
+
+        kld = self.kl_div(gp_mean,comp_mean,gp_cov, comp_cov)
+
+        return {"x": p,
+                "gp_posterior_mean" : gp_mean,
+                "gp_posterior_covariance": cov,
+                "given mean": comp_mean,
+                "given covariance": comp_cov
+                "kl_divergence": kld}
+    ###########################################################################
+    def shannon_information_gain():
+        """
+        function to compute the shannon-information gain of data
+        required input:
+        ------
+            x_input: 2d numpy array of input points
+        optional input:
+        ---------------
+            x_: 2d numpy array of points in the output space, default  = np.array([[0.0]])
+            mode: string, "cartesian product" or "stack". Instruction how to create points in the combined index set
+        output:
+        -------
+            {"x": the index set points,
+             "K": covariance matrix between data points
+             "k": covariance between data and requested poins,
+             "kappa": covariance matrix between requested points,
+             "S:": joint prior}
+        """
+        if len(x_input.shape) == 1: 
+            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
+        n_orig = len(x_input)
+        tasks = len(x_output)
+        if mode == 'cartesian product':
+            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
+            counter = 0
+            for element in itertools.product(x_input, x_output):
+                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
+                counter += 1   ###can't we append?
+        elif mode == 'stack':
+            new_points = np.column_stack([x_input,x_output])
+        p = np.array(new_points)
+        k = self.kernel(self.points,p,self.hyper_parameters,self)
+        kk = self.kernel(p, p,self.hyper_parameters,self)
+
+        full_gp_covariances = \
+                np.asarray([np.block([[self.prior_covariance,k[:,i*tasks:(i+1)*tasks]],\
+                            [k[:,i*tasks:(i+1)*tasks].T,kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
+                for i in range(n_orig)])
+
+        e1 = self.entropy(prior_covariance)
+        e2 = self.entropy(full_gp_covariance)
+        return np.abs(e1 - e2)
+    ###########################################################################
+    def posterior_probability(self, x_input, comp_mean, comp_cov ,x_output=np.array([[0.0]]), mode = 'cartesian product'):
+        res = self.posterior_mean(x_input, x_output, mode)
+        gp_mean = res["f"]
+        p = res["x"]
+        gp_cov = self.posterior_covariance(x_input, x_output, mode)["var"]
+        gp_cov_inv = np.linalg.inv(gp_cov)
+        comp_cov_inv = np.linalg.inv(comp_cov)
+        cov = np.linalg.inv(gp_cov_inv + comp_cov_inv)
+        mu =  cov @ gp_cov_inv @ gp_mean + cov @ comp_conv_inv @ comp_mean
+        s, logdet = self.logdet(cov)
+        return {"mu": mu,
+                "covariance": cov,
+                "probability": ((((2.0*np.pi)**(dim/2.0))*np.sqrt(s* np.exp(logdet)))/\
+                        (np.sqrt(np.linalg.inv(2.0*np.pi*gp_cov)*np.linalg.inv(2.0*np.pi*comp_cov))))}
+    ###########################################################################
+
+
     def compute_posterior_fvGP_pdf(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product',
             compute_entropies = False, compute_prior_covariances = False,
             compute_posterior_covariances = False, compute_means = True):
