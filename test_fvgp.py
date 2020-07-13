@@ -27,7 +27,7 @@ def func(points):
 #######################################################
 
 
-N = 200 ### how many training points
+N = 20 ### how many training points
 points = np.empty((N,1))
 points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
 ####change here for multi-task case
@@ -45,14 +45,37 @@ my_gp.train([[0.0001,50000.0],[0.001,400.0],[.9,1.1]],
         init_hyper_parameters = [10.0,10.0,1.0],
         optimization_method = 'global',
         likelihood_optimization_pop_size = 20,
-        likelihood_optimization_tolerance = 0.01,
-        likelihood_optimization_max_iter = 2000)
+        likelihood_optimization_tolerance = 0.1,
+        likelihood_optimization_max_iter = 200)
 
 
 x_input = np.empty((1000,1))
 x_input[:,0] = np.linspace(0,2.0,1000)
 y = func(x_input)
-hps = my_gp.hyper_parameters
+#hps = my_gp.hyper_parameters
+
+pred1_mean = my_gp.posterior_mean(x_input)
+pred1_cov = my_gp.posterior_covariance(x_input)
+plt.figure(figsize = (10,4))
+plt.plot(x_input,pred1_mean["f(x)"], label = "posterior mean",linewidth = 3.0)
+plt.plot(x_input,y, label = "ground truth",linewidth = 3.0)
+m = pred1_mean["f(x)"][:,0]
+s = pred1_cov["v(x)"][:,0,0]
+plt.fill_between(x_input[:,0],m-3.0*np.sqrt(s),m+3.0*np.sqrt(s), alpha = 0.5, label = "95% confidence interval")
+plt.scatter(points,values, label = "data",linewidth = 3.0)
+plt.legend()
+plt.savefig('plot.png')
+#C = my_gp.gp_prior(x_input)
+c = np.empty((1000,1000))
+c = np.random.rand(1000,1000)
+m = np.random.rand(1000)
+C = my_gp.gp_kl_div(x_input, m,c)
+####################################################################
+####################################################################
+####################################################################
+####################################################################
+####################################################################
+
 pred2 = my_gp.compute_posterior_fvGP_pdf(x_input , mode='cartesian product', 
         compute_entropies=False, compute_prior_covariances=False,
         compute_posterior_covariances=True, compute_means=True)

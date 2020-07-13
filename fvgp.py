@@ -568,10 +568,16 @@ class FVGP:
         if self.compute_device == "cpu":
             A = torch.Tensor(A)
             sign, logdet = torch.slogdet(A)
+            #sign = sign.numpy()
+            #logdet = logdet.numpy()
+            #index = np.where(sign == 0)
+            #print(index)
+            #logdet[index] = 0.0
             return sign.numpy(), logdet.numpy()
         elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
             A = torch.Tensor(A).cuda()
             sign, logdet = torch.slogdet(A)
+            if sign == 0: return 0.0
             return sign.cpu().numpy(), logdet.cpu().numpy()
 
     def solve(self, A, b):
@@ -676,7 +682,7 @@ class FVGP:
         posterior_mean = np.reshape(self.mean_function(p) + A[:,0], (n_orig, len(x_output)))
 
         return {"x": p,
-                "f": posterior_mean}
+                "f(x)": posterior_mean}
     ###########################################################################
     def posterior_covariance(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
         """
@@ -728,7 +734,7 @@ class FVGP:
         ])
 
         return {"x": p,
-                "var": covariance}
+                "v(x)": covariance}
     ###########################################################################
     def gp_prior(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
         """
@@ -747,6 +753,8 @@ class FVGP:
              "k": covariance between data and requested poins,
              "kappa": covariance matrix between requested points,
              "S:": joint prior}
+
+             S here is a 3-dim numpy array storing the prior per requested point
         """
         if len(x_input.shape) == 1: 
             exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
@@ -763,16 +771,18 @@ class FVGP:
         p = np.array(new_points)
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
-
         full_gp_covariances = \
                 np.asarray([np.block([[self.prior_covariance,k[:,i*tasks:(i+1)*tasks]],\
                             [k[:,i*tasks:(i+1)*tasks].T,kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
                 for i in range(n_orig)])
+        full_gp_prior_means = \
+                np.asarray([np.append(self.prior_mean_vec,self.mean_function(x_input[i])) for i in range(n_orig)])
         return  {"x": p,
-             "K": self.covariance_matrix,
-             "k": k,
-             "kappa": kk,
-             "S:": full_gp_covariances}
+                 "K": self.prior_covariance,
+                 "k": k,
+                 "kappa": kk,
+                 "mean": full_gp_prior_means,
+                 "S": full_gp_covariances}
 
     ###########################################################################
     def entropy(self, S):
@@ -781,26 +791,41 @@ class FVGP:
         a = entropy(S); S is a 2d numpy array, matrix has to be non-singular
         """
         dim  = len(S[0])
+        s, logdet = self.slogdet(S)
         return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * s * logdet)
     ###########################################################################
+    def gp_entropy(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
+        """
+        function comuting the entropy of a normal distribution
+        a = entropy(S); S is a 2d numpy array, matrix has to be non-singular
+        """
+        priors = self.gp_prior(x_input, x_output = x_output, mode = mode)
+        S = priors["S"]
+        dim  = len(S[0])
+        s, logdet = self.slogdet(S)
+        #if s == 0: return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi))
+        return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * s * logdet)
+    ###########################################################################
+
     def kl_div(self,mu1, mu2, S1, S2):
         """
         function comuting the KL divergence between two normal distributions
         a = kl_div(mu1, mu2, S1, S2); S1, S2 are a 2d numpy arrays, matrices has to be non-singular
         mu1,mu2 are mean vectors
         """
-        s1 = logdet1 = self.logdet(S1)
-        s2 = logdet2 = self.logdet(S2)
+        s1 , logdet1 = self.slogdet(S1)
+        s2 , logdet2 = self.slogdet(S2)
         x1 = self.solve(S2,S1)
         mu = np.subtract(mu2,mu1)
         x2 = self.solve(S2,mu)
-        kld = 0.5 * (np.linalg.trace(x1) + (x2 @ mu) + - dim + ((s2*logdetd2)-(s1*logdet1)))
-        if kld < 1e-4: print("negative KL divergence encountered")
+        dim = len(mu)
+        kld = 0.5 * (np.trace(x1) + (x2.T @ mu) - dim + ((s2*logdet2)-(s1*logdet1)))
+        if kld < -1e-4: print("negative KL divergence encountered")
         return kld
     ###########################################################################
     def gp_kl_div(self, x_input, comp_mean, comp_cov ,x_output=np.array([[0.0]]), mode = 'cartesian product'):
         """
-        function to compute the KL divergence of a pposterior at
+        function to compute the KL divergence of a posterior at given points
         required input:
         ------
             x_input: 2d numpy array of input points
@@ -817,20 +842,25 @@ class FVGP:
              "S:": joint prior}
         """
         res = self.posterior_mean(x_input, x_output, mode)
-        gp_mean = res["f"]
+        gp_mean = res["f(x)"]
         p = res["x"]
-        gp_cov = self.posterior_covariance(x_input, x_output, mode)["var"]
+        gp_cov = self.posterior_covariance(x_input, x_output, mode)["v(x)"]
+        print(gp_cov[:,0,0].shape)
+        exit()
+        print(gp_mean[:,0].shape, comp_mean.shape, gp_cov[:,0,0].shape,comp_cov.shape)
+        exit()
 
-        kld = self.kl_div(gp_mean,comp_mean,gp_cov, comp_cov)
+        kld = np.asarray([self.kl_div(gp_mean[:,i],comp_mean,gp_cov[:,i,i], comp_cov) for i in range(len(gp_mean[0]))])
 
         return {"x": p,
                 "gp_posterior_mean" : gp_mean,
                 "gp_posterior_covariance": cov,
                 "given mean": comp_mean,
-                "given covariance": comp_cov
+                "given covariance": comp_cov,
                 "kl_divergence": kld}
     ###########################################################################
-    def shannon_information_gain():
+    def shannon_information_gain(self, x_input, comp_mean, comp_cov ,\
+            x_output=np.array([[0.0]]), mode = 'cartesian product'):
         """
         function to compute the shannon-information gain of data
         required input:
