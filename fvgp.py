@@ -565,25 +565,32 @@ class FVGP:
         """
         fvGPs slogdet method based on torch
         """
+        s,l = np.linalg.slogdet(A)
+        return s,l
+        ##torch is unstable, so I took it out for now
         if self.compute_device == "cpu":
             A = torch.Tensor(A)
             sign, logdet = torch.slogdet(A)
-            #sign = sign.numpy()
-            #logdet = logdet.numpy()
-            #index = np.where(sign == 0)
-            #print(index)
-            #logdet[index] = 0.0
-            return sign.numpy(), logdet.numpy()
+            sign = sign.numpy()
+            logdet = logdet.numpy()
+            logdet = np.nan_to_num(logdet)
+            #sign = np.where(sign == -1, sign, 1)
+            return sign, logdet
         elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
             A = torch.Tensor(A).cuda()
             sign, logdet = torch.slogdet(A)
-            if sign == 0: return 0.0
-            return sign.cpu().numpy(), logdet.cpu().numpy()
+            sign = sign.cpu().numpy()
+            i = np.where(sign == -1)
+            sign[i] = 1
+            logdet = logdet.cpu().numpy()
+            logdet = np.nan_to_num(logdet)
+            return sign, logdet
 
     def solve(self, A, b):
         """
         fvGPs slogdet method based on torch
         """
+        if b.ndim == 1: b = np.expand_dims(b,axis = 1)
         if self.compute_device == "cpu":
             #####for sparsity:
             if self.sparse == True:
@@ -594,20 +601,23 @@ class FVGP:
                         A = scipy.sparse.csr_matrix(A)
                         x = scipy.sparse.spsolve(A,b)
                         return x
-                    except:
+                    except Exceprion as e:
                         print("Sparse solve did not work out.")
+                        print("reason: ", str(e))
             ##################
             A = torch.from_numpy(A)
             b = torch.from_numpy(b)
             try:
                 x, lu = torch.solve(b,A)
-            except:
+            except Exception as e:
                 try:
                     print("except statement invoked: torch.solve() on cpu did not work")
+                    print("reason: ", str(e))
                     x, qr = torch.lstsq(b,A)
-                except:
+                except Exception as e:
                     print("except statement 2 invoked: torch.solve() and torch.lstsq() on cpu did not work")
                     print("falling back to numpy.lstsq()")
+                    print("reason: ", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
                     return x
 
@@ -617,13 +627,15 @@ class FVGP:
             b = torch.from_numpy(b).cuda()
             try:
                 x, lu = torch.solve(b,A)
-            except:
+            except Exception as e:
                 print("except statement invoked: torch.solve() on gpu did not work")
+                print("reason: ", str(e))
                 try:
                     x, qr = torch.lstsq(b,A)
-                except:
+                except Exception as e:
                     print("except statement 2 invoked: torch.solve() and torch.lstsq() on gpu did not work")
                     print("falling back to numpy.lstsq()")
+                    print("reason: ", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
                     return x
             return x.cpu().numpy()
@@ -656,62 +668,45 @@ class FVGP:
     ###############################gp prediction###############################
     ###########################################################################
     ###########################################################################
-    def posterior_mean(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
+    def posterior_mean(self, x_iset):
         """
         function to compute the posterior mean
         input:
         ------
-            
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
+        output:
+        -------
+            {"x":    the input points,
+             "f(x)": the posterior mean vector (1d numpy array)}
         """
-        if len(x_input.shape) == 1: 
-            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
-        n_orig = len(x_input)
-        tasks = len(x_output)
-        if mode == 'cartesian product':
-            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
-            counter = 0
-            for element in itertools.product(x_input, x_output):
-                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
-                counter += 1   ###can't we append?
-        elif mode == 'stack':
-            new_points = np.column_stack([x_input,x_output])
-        p = np.array(new_points)
+        p = np.array(x_iset)
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.points[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
         A = k.T @ self.covariance_value_prod
-        posterior_mean = np.reshape(self.mean_function(p) + A[:,0], (n_orig, len(x_output)))
-
+        posterior_mean = self.mean_function(p) + A[:,0]
         return {"x": p,
                 "f(x)": posterior_mean}
     ###########################################################################
-    def posterior_covariance(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
+    def posterior_covariance(self, x_iset):
         """
         function to compute the posterior covariance
-        required input:
+        input:
         ------
-            x_input: 2d numpy array of input points
-        optional input:
-        ---------------
-            x_: 2d numpy array of points in the output space, default  = np.array([[0.0]])
-            mode: string, "cartesian product" or "stack". Instruction how to create points in the combined index set
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
         output:
         -------
-            {"x": the index set points,
-             "var": the posterior covariance numpy array}
+            {"x":    the index set points,
+             "v(x)": the posterior variances (1d numpy array) for each input point,
+             "S":    covariance matrix, x(x) = diag(S)}
         """
-        if len(x_input.shape) == 1: 
-            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
-        n_orig = len(x_input)
-        tasks = len(x_output)
-        if mode == 'cartesian product':
-            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
-            counter = 0
-            for element in itertools.product(x_input, x_output):
-                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
-                counter += 1   ###can't we append?
-        elif mode == 'stack':
-            new_points = np.column_stack([x_input,x_output])
-        p = np.array(new_points)
+        p = np.array(x_iset)
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.points[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
         k_cov_prod = self.solve(self.prior_covariance,k)
@@ -728,82 +723,61 @@ class FVGP:
             print("eigenvalues of the prior: ", np.linalg.eig(p)[0])
 
         np.fill_diagonal(a,diag)
-        covariance = np.asarray([
-            a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
-            for i in range(int(a.shape[0] / tasks))
-        ])
-
         return {"x": p,
-                "v(x)": covariance}
+                "v(x)": np.diag(a),
+                "S": a}
     ###########################################################################
-    def gp_prior(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
+    def gp_prior(self, x_iset):
         """
         function to compute the data-informed prior
-        required input:
+        input:
         ------
-            x_input: 2d numpy array of input points
-        optional input:
-        ---------------
-            x_: 2d numpy array of points in the output space, default  = np.array([[0.0]])
-            mode: string, "cartesian product" or "stack". Instruction how to create points in the combined index set
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
         output:
         -------
             {"x": the index set points,
              "K": covariance matrix between data points
              "k": covariance between data and requested poins,
              "kappa": covariance matrix between requested points,
-             "S:": joint prior}
-
-             S here is a 3-dim numpy array storing the prior per requested point
+             "prior mean": the mean of the prior
+             "S:": joint prior covariance}
         """
-        if len(x_input.shape) == 1: 
-            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
-        n_orig = len(x_input)
-        tasks = len(x_output)
-        if mode == 'cartesian product':
-            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
-            counter = 0
-            for element in itertools.product(x_input, x_output):
-                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
-                counter += 1   ###can't we append?
-        elif mode == 'stack':
-            new_points = np.column_stack([x_input,x_output])
-        p = np.array(new_points)
+        p = np.array(x_iset)
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.points[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
-        full_gp_covariances = \
-                np.asarray([np.block([[self.prior_covariance,k[:,i*tasks:(i+1)*tasks]],\
-                            [k[:,i*tasks:(i+1)*tasks].T,kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
-                for i in range(n_orig)])
-        full_gp_prior_means = \
-                np.asarray([np.append(self.prior_mean_vec,self.mean_function(x_input[i])) for i in range(n_orig)])
+        post_mean = np.empty((len(x_iset)))
+        for i in range(len(x_iset)): post_mean[i] = self.mean_function(x_iset[i])
+        full_gp_prior_mean = np.append(self.prior_mean_vec, post_mean)
         return  {"x": p,
                  "K": self.prior_covariance,
                  "k": k,
                  "kappa": kk,
-                 "mean": full_gp_prior_means,
-                 "S": full_gp_covariances}
+                 "prior mean": full_gp_prior_mean,
+                 "S": np.block([[self.prior_covariance, k],[k.T, kk]])}
 
     ###########################################################################
     def entropy(self, S):
         """
         function comuting the entropy of a normal distribution
-        a = entropy(S); S is a 2d numpy array, matrix has to be non-singular
+        res = entropy(S); S is a 2d numpy array, matrix has to be non-singular
         """
         dim  = len(S[0])
         s, logdet = self.slogdet(S)
         return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * s * logdet)
     ###########################################################################
-    def gp_entropy(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product'):
+    def gp_entropy(self, x_iset):
         """
         function comuting the entropy of a normal distribution
         a = entropy(S); S is a 2d numpy array, matrix has to be non-singular
         """
-        priors = self.gp_prior(x_input, x_output = x_output, mode = mode)
+        priors = self.gp_prior(x_iset)
         S = priors["S"]
         dim  = len(S[0])
         s, logdet = self.slogdet(S)
-        #if s == 0: return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi))
         return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * s * logdet)
     ###########################################################################
 
@@ -811,10 +785,10 @@ class FVGP:
         """
         function comuting the KL divergence between two normal distributions
         a = kl_div(mu1, mu2, S1, S2); S1, S2 are a 2d numpy arrays, matrices has to be non-singular
-        mu1,mu2 are mean vectors
+        mu1, mu2 are mean vectors, given as 2d arrays
         """
-        s1 , logdet1 = self.slogdet(S1)
-        s2 , logdet2 = self.slogdet(S2)
+        s1, logdet1 = self.slogdet(S1)
+        s2, logdet2 = self.slogdet(S2)
         x1 = self.solve(S2,S1)
         mu = np.subtract(mu2,mu1)
         x2 = self.solve(S2,mu)
@@ -823,96 +797,94 @@ class FVGP:
         if kld < -1e-4: print("negative KL divergence encountered")
         return kld
     ###########################################################################
-    def gp_kl_div(self, x_input, comp_mean, comp_cov ,x_output=np.array([[0.0]]), mode = 'cartesian product'):
+    def gp_kl_div(self, x_iset, comp_mean, comp_cov):
         """
-        function to compute the KL divergence of a posterior at given points
-        required input:
+        function to compute the kl divergence of a posterior at given points
+        input:
         ------
-            x_input: 2d numpy array of input points
-        optional input:
-        ---------------
-            x_: 2d numpy array of points in the output space, default  = np.array([[0.0]])
-            mode: string, "cartesian product" or "stack". Instruction how to create points in the combined index set
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
         output:
         -------
             {"x": the index set points,
-             "K": covariance matrix between data points
-             "k": covariance between data and requested poins,
-             "kappa": covariance matrix between requested points,
-             "S:": joint prior}
+             "gp posterior mean": ,
+             "gp posterior covariance":  ,
+             "given mean": the user-provided mean vector,
+             "given covariance":  the use_provided covariance,
+             "kl-div:": the kl div between gp pdf and given pdf}
         """
-        res = self.posterior_mean(x_input, x_output, mode)
+        res = self.posterior_mean(x_iset)
         gp_mean = res["f(x)"]
-        p = res["x"]
-        gp_cov = self.posterior_covariance(x_input, x_output, mode)["v(x)"]
-        print(gp_cov[:,0,0].shape)
-        exit()
-        print(gp_mean[:,0].shape, comp_mean.shape, gp_cov[:,0,0].shape,comp_cov.shape)
-        exit()
+        gp_cov = self.posterior_covariance(x_iset)["S"]
 
-        kld = np.asarray([self.kl_div(gp_mean[:,i],comp_mean,gp_cov[:,i,i], comp_cov) for i in range(len(gp_mean[0]))])
-
-        return {"x": p,
-                "gp_posterior_mean" : gp_mean,
-                "gp_posterior_covariance": cov,
+        return {"x": x_iset,
+                "gp posterior mean" : gp_mean,
+                "gp posterior covariance": gp_cov,
                 "given mean": comp_mean,
                 "given covariance": comp_cov,
-                "kl_divergence": kld}
+                "kl-div": self.kl_div(gp_mean, comp_mean, gp_cov, comp_cov)}
     ###########################################################################
-    def shannon_information_gain(self, x_input, comp_mean, comp_cov ,\
-            x_output=np.array([[0.0]]), mode = 'cartesian product'):
+    def shannon_information_gain(self, x_iset):
         """
         function to compute the shannon-information gain of data
-        required input:
+        input:
         ------
-            x_input: 2d numpy array of input points
-        optional input:
-        ---------------
-            x_: 2d numpy array of points in the output space, default  = np.array([[0.0]])
-            mode: string, "cartesian product" or "stack". Instruction how to create points in the combined index set
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
         output:
         -------
             {"x": the index set points,
-             "K": covariance matrix between data points
-             "k": covariance between data and requested poins,
-             "kappa": covariance matrix between requested points,
-             "S:": joint prior}
+             "prior entropy": prior entropy
+             "posterior entropy": posterior entropy
+             "sig:" shannon_information gain}
         """
-        if len(x_input.shape) == 1: 
-            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
-        n_orig = len(x_input)
-        tasks = len(x_output)
-        if mode == 'cartesian product':
-            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
-            counter = 0
-            for element in itertools.product(x_input, x_output):
-                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
-                counter += 1   ###can't we append?
-        elif mode == 'stack':
-            new_points = np.column_stack([x_input,x_output])
-        p = np.array(new_points)
+        p = np.array(x_iset)
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
 
-        full_gp_covariances = \
-                np.asarray([np.block([[self.prior_covariance,k[:,i*tasks:(i+1)*tasks]],\
-                            [k[:,i*tasks:(i+1)*tasks].T,kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
-                for i in range(n_orig)])
 
-        e1 = self.entropy(prior_covariance)
-        e2 = self.entropy(full_gp_covariance)
-        return np.abs(e1 - e2)
+        full_gp_covariances = \
+                np.asarray([np.block([[self.prior_covariance,k],\
+                            [k.T,kk]])])
+
+        e1 = self.entropy(self.prior_covariance)
+        e2 = self.entropy(full_gp_covariances)
+        sig = (e2 - e1)
+        return {"x": p,
+                "prior entropy" : e1,
+                "posterior entropy": e2,
+                "sig":sig}
     ###########################################################################
-    def posterior_probability(self, x_input, comp_mean, comp_cov ,x_output=np.array([[0.0]]), mode = 'cartesian product'):
-        res = self.posterior_mean(x_input, x_output, mode)
-        gp_mean = res["f"]
-        p = res["x"]
-        gp_cov = self.posterior_covariance(x_input, x_output, mode)["var"]
+    def posterior_probability(self, x_iset, comp_mean, comp_cov):
+        """
+        function to compute the probability of an uncertain feature given the gp posterior
+        input:
+        ------
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
+            comp_mean: a vector of mean values, same length as x_iset
+            comp_cov: covarianve matrix, \in R^{len(x_iset)xlen(x_iset)}
+
+        output:
+        -------
+            {"x": the index set points,
+             "gp posterior mean": ,
+             "gp posterior covariance":  ,
+             "given mean": the user-provided mean vector,
+             "given covariance":  the use_provided covariance,
+             "kl-div:": the kl div between gp pdf and given pdf}
+        """
+
+        res = self.posterior_mean(x_iset)
+        gp_mean = res["f(x)"]
+        gp_cov = self.posterior_covariance(x_iset)["S"]
         gp_cov_inv = np.linalg.inv(gp_cov)
         comp_cov_inv = np.linalg.inv(comp_cov)
         cov = np.linalg.inv(gp_cov_inv + comp_cov_inv)
-        mu =  cov @ gp_cov_inv @ gp_mean + cov @ comp_conv_inv @ comp_mean
-        s, logdet = self.logdet(cov)
+        mu =  cov @ gp_cov_inv @ gp_mean + cov @ comp_cov_inv @ comp_mean
+        s, logdet = self.slogdet(cov)
+        dim  = len(mu)
+        print(s * logdet)
         return {"mu": mu,
                 "covariance": cov,
                 "probability": ((((2.0*np.pi)**(dim/2.0))*np.sqrt(s* np.exp(logdet)))/\

@@ -56,20 +56,30 @@ y = func(x_input)
 
 pred1_mean = my_gp.posterior_mean(x_input)
 pred1_cov = my_gp.posterior_covariance(x_input)
+sig = np.empty((len(x_input)))
+for i in range(len(x_input)):
+    sig[i] = my_gp.shannon_information_gain(np.array([x_input[i]]))["sig"]
 plt.figure(figsize = (10,4))
 plt.plot(x_input,pred1_mean["f(x)"], label = "posterior mean",linewidth = 3.0)
 plt.plot(x_input,y, label = "ground truth",linewidth = 3.0)
-m = pred1_mean["f(x)"][:,0]
-s = pred1_cov["v(x)"][:,0,0]
-plt.fill_between(x_input[:,0],m-3.0*np.sqrt(s),m+3.0*np.sqrt(s), alpha = 0.5, label = "95% confidence interval")
+plt.plot(x_input,sig + 10.0, label = "shannon ig", linewidth = 3.0)
+m = pred1_mean["f(x)"]
+s = np.diag(pred1_cov["S"])
+plt.plot(x_input, 1000.0*s, label = "std", linewidth = 3.0)
+plt.fill_between(x_input[:,0], m-3.0*np.sqrt(s), m+3.0*np.sqrt(s), alpha = 0.5, label = "95% confidence interval")
 plt.scatter(points,values, label = "data",linewidth = 3.0)
 plt.legend()
+
+comp_mean_vec = np.array(m) + np.random.rand()
+comp_var = np.zeros((len(m), len(m)))
+np.fill_diagonal(comp_var,np.random.rand(len(comp_var)))
+s = my_gp.posterior_probability(x_input, comp_mean_vec, comp_var)
+print("s: ",s)
+
+
 plt.savefig('plot.png')
-#C = my_gp.gp_prior(x_input)
-c = np.empty((1000,1000))
-c = np.random.rand(1000,1000)
-m = np.random.rand(1000)
-C = my_gp.gp_kl_div(x_input, m,c)
+plt.show()
+exit()
 ####################################################################
 ####################################################################
 ####################################################################
