@@ -70,10 +70,14 @@ plt.fill_between(x_input[:,0], m-3.0*np.sqrt(s), m+3.0*np.sqrt(s), alpha = 0.5, 
 plt.scatter(points,values, label = "data",linewidth = 3.0)
 plt.legend()
 
-comp_mean_vec = np.array(m) + np.random.rand()
-comp_var = np.zeros((len(m), len(m)))
+comp_mean_vec = np.array([2.0,1.0])
+comp_var = np.zeros((2, 2))
 np.fill_diagonal(comp_var,np.random.rand(len(comp_var)))
-s = my_gp.posterior_probability(x_input, comp_mean_vec, comp_var)
+x_input_prob = np.array([[0.55],[1.4]])
+print("mean: ",comp_mean_vec)
+print("var: ",comp_var)
+print("points: ", x_input_prob)
+s = my_gp.posterior_probability(x_input_prob, comp_mean_vec, comp_var)
 print("s: ",s)
 
 

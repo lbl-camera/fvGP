@@ -681,7 +681,7 @@ class FVGP:
              "f(x)": the posterior mean vector (1d numpy array)}
         """
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]"); exit()
         if len(p[0]) != len(self.points[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
@@ -882,14 +882,34 @@ class FVGP:
         comp_cov_inv = np.linalg.inv(comp_cov)
         cov = np.linalg.inv(gp_cov_inv + comp_cov_inv)
         mu =  cov @ gp_cov_inv @ gp_mean + cov @ comp_cov_inv @ comp_mean
-        s, logdet = self.slogdet(cov)
+        s1, logdet1 = self.slogdet(cov)
+        s2, logdet2 = self.slogdet(gp_cov)
+        s3, logdet3 = self.slogdet(comp_cov)
         dim  = len(mu)
-        print(s * logdet)
+        C = 0.5*(((gp_mean.T @ gp_cov_inv + comp_mean.T @ comp_cov_inv).T \
+               @ cov @ (gp_cov_inv @ gp_mean + comp_cov_inv @ comp_mean))\
+               -(gp_mean.T @ gp_cov_inv @ gp_mean + comp_mean.T @ comp_cov_inv @ comp_mean)).squeeze()
+        ln_p = (C + 0.5 * logdet1) - (np.log((2.0*np.pi)**(dim/2.0)) + (0.5*(logdet2 + logdet3)))
+        #print("posterior gp mean: ", gp_mean)
+        #print("given mean: ", comp_mean)
+        #print("posterior gp cov : ", gp_cov)
+        #print("given cov        : ", comp_cov)
+        #print("===========")
+        #print("combined mean: ", mu)
+        #print("combined cov:  ", cov)
+        #print("integral gp g: ", self._int_gauss(gp_cov))
+        #print("integral co g: ", self._int_gauss(comp_cov))
+        #print("integral res g: ", self._int_gauss(cov))
         return {"mu": mu,
                 "covariance": cov,
-                "probability": ((((2.0*np.pi)**(dim/2.0))*np.sqrt(s* np.exp(logdet)))/\
-                        (np.sqrt(np.linalg.inv(2.0*np.pi*gp_cov)*np.linalg.inv(2.0*np.pi*comp_cov))))}
+                "probability": 
+                #(np.exp(C) * self._int_gauss(cov))/(self._int_gauss(gp_cov)*self._int_gauss(comp_cov))
+                #(np.exp(C) * np.sqrt(det1))/(((2.0*np.pi)**(dim/2.0))*np.sqrt(det2 * det3))
+                np.exp(ln_p)
+                }
     ###########################################################################
+    def _int_gauss(self,S):
+        return ((2.0*np.pi)**(len(S)/2.0))*np.sqrt(np.linalg.det(S))
 
 
     def compute_posterior_fvGP_pdf(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product',
