@@ -79,11 +79,8 @@ print("var: ",comp_var)
 print("points: ", x_input_prob)
 s = my_gp.posterior_probability(x_input_prob, comp_mean_vec, comp_var)
 print("s: ",s)
-
-
 plt.savefig('plot.png')
 plt.show()
-exit()
 ####################################################################
 ####################################################################
 ####################################################################
