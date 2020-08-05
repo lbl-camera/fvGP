@@ -43,7 +43,7 @@ import time
 import torch
 from sys import exit
 import numba as nb
-#from functools import partial
+from functools import partial
 
 class FVGP:
     """
@@ -407,24 +407,27 @@ class FVGP:
                     values = values,
                     variances = variances, mean = mean)
             print('done.')
-            """
-            self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean)
-            func = partial(self.log_likelihood,values = values,
-                    variances = variances, mean = mean)
-            grad = partial(self.log_likelihood_gradient_wrt_hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean)
-            hess = partial(self.log_likelihood_hessian_wrt_hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean)
-            """
+            
+            #self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
+            #        values = values,
+            #        variances = variances, mean = mean)
+            #func = partial(self.log_likelihood,values = values,
+            #        variances = variances, mean = mean)
+            #grad = partial(self.log_likelihood_gradient_wrt_hyper_parameters,
+            #        values = values,
+            #        variances = variances, mean = mean)
+            #hess = partial(self.log_likelihood_hessian_wrt_hyper_parameters,
+            #        values = values,
+            #        variances = variances, mean = mean)
+            
             res = HGDL(self.log_likelihood, 
                        self.log_likelihood_gradient_wrt_hyper_parameters, 
                        self.log_likelihood_hessian_wrt_hyper_parameters, 
-                       np.asarray(hp_bounds),
-                       args = (values, variances, mean))
+                       np.asarray(hp_bounds), dask_client = False,
+                       args = (values, variances, mean), verbose = True)
+            #res = HGDL(func, grad, hess,
+            #           np.asarray(hp_bounds),)
+
             exit()
             print(res)
             if len(res['minima']) !=0:

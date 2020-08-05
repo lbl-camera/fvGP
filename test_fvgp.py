@@ -63,7 +63,7 @@ def main():
 
     my_gp.train([[100.0,200.0],[5.0,10.0]],
             init_hyper_parameters = [10.0,10.0],
-            optimization_method = 'global',
+            optimization_method = 'hgdl',
             likelihood_optimization_pop_size = 20,
             likelihood_optimization_tolerance = 0.0001,
             likelihood_optimization_max_iter = 200)
