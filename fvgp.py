@@ -43,6 +43,7 @@ import time
 import torch
 from sys import exit
 import numba as nb
+#from functools import partial
 
 class FVGP:
     """
@@ -406,11 +407,10 @@ class FVGP:
                     values = values,
                     variances = variances, mean = mean)
             print('done.')
-
+            """
             self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
                     values = values,
                     variances = variances, mean = mean)
-            from functools import partial
             func = partial(self.log_likelihood,values = values,
                     variances = variances, mean = mean)
             grad = partial(self.log_likelihood_gradient_wrt_hyper_parameters,
@@ -419,9 +419,14 @@ class FVGP:
             hess = partial(self.log_likelihood_hessian_wrt_hyper_parameters,
                     values = values,
                     variances = variances, mean = mean)
-
-            res = HGDL(func, grad, hess, np.asarray(hp_bounds), numIndividuals=20)
-            print(res['minima'])
+            """
+            res = HGDL(self.log_likelihood, 
+                       self.log_likelihood_gradient_wrt_hyper_parameters, 
+                       self.log_likelihood_hessian_wrt_hyper_parameters, 
+                       np.asarray(hp_bounds),
+                       args = (values, variances, mean))
+            exit()
+            print(res)
             if len(res['minima']) !=0:
                 hyper_parameters = res['minima'][0]
             elif len(res['edge'])!=0:
@@ -481,10 +486,10 @@ class FVGP:
         dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
         K = np.array([K,] * len(hyper_parameters))
         x1 = self.solve(K,dK_dH)
-        y = np.ascontiguousarray(y, dtype=np.float32)
-        mean = np.ascontiguousarray(mean, dtype=np.float32)
-        x = np.ascontiguousarray(x, dtype=np.float32)
-        x1 = np.ascontiguousarray(x1, dtype=np.float32)
+        y = np.ascontiguousarray(y, dtype=np.float64)
+        mean = np.ascontiguousarray(mean, dtype=np.float64)
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        x1 = np.ascontiguousarray(x1, dtype=np.float64)
         dL_dH = self.numba_dL_dH(y, mean, x1, x, len(hyper_parameters))
         return -dL_dH
     ##################################################################################
@@ -512,10 +517,11 @@ class FVGP:
         s = self.solve(K,dK_dH)
         ss = self.solve(K,d2K_dH2)
         # make contiguous 
-        K = np.ascontiguousarray(K, dtype=np.float32)
-        y = np.ascontiguousarray(y, dtype=np.float32)
-        s = np.ascontiguousarray(s, dtype=np.float32)
-        ss = np.ascontiguousarray(ss, dtype=np.float32)
+        K = np.ascontiguousarray(K, dtype=np.float64)
+        y = np.ascontiguousarray(y, dtype=np.float64)
+        s = np.ascontiguousarray(s, dtype=np.float64)
+        ss = np.ascontiguousarray(ss, dtype=np.float64)
+
         d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
         return -d2L_dH2
 
