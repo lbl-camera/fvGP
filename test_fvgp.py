@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from fvgp import FVGP
 import sys
+import time
 np.random.seed(42)
 def stationary_kernel(x1,x2,hps, obj = None):
     d = abs(np.subtract.outer(x1[:,0],x2[:,0])/hps[1])
@@ -67,6 +68,12 @@ def main():
             likelihood_optimization_pop_size = 20,
             likelihood_optimization_tolerance = 0.0001,
             likelihood_optimization_max_iter = 200)
+    print("main thread sleeps for 20 seconds while hgdl is working")
+    time.sleep(20)
+    print("done sleeping")
+    my_gp.hyper_parameters
+    print("sleep another 10s")
+    time.sleep(10)
     exit()
 
 

@@ -44,6 +44,7 @@ import torch
 from sys import exit
 import numba as nb
 from functools import partial
+from hgdl.hgdl import HGDL
 
 class FVGP:
     """
@@ -284,6 +285,13 @@ class FVGP:
         ######################
         ######################
     ##################################################################################
+    def update_hyper_parameters(self):
+        try:
+            res = self.opt.get_latest(1)
+            self.hyper_parameters = res["x"][0]
+        except: 
+            print("hyper-parameter not successful. I am keeping the old ones.")
+    ##################################################################################
     def find_hyper_parameters(self,
             hyper_parameters_0,
             hyper_parameter_optimization_bounds,
@@ -393,52 +401,22 @@ class FVGP:
             else:
                 print("Optimization not successful.")
         elif hyper_parameter_optimization_mode == "hgdl":
-            try:
-                from hgdl.hgdl import HGDL
-            except:# ModuleNotFoundError:
-                print('could not locate hgdl for import')
-                exit()
-            print('bounds are',hp_bounds) 
-            print('compiling...')
-            self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean)
-            self.log_likelihood_hessian_wrt_hyper_parameters(self.hyper_parameters,
-                    values = values,
-                    variances = variances, mean = mean)
-            print('done.')
-            
-            #self.log_likelihood_gradient_wrt_hyper_parameters(self.hyper_parameters,
-            #        values = values,
-            #        variances = variances, mean = mean)
-            #func = partial(self.log_likelihood,values = values,
-            #        variances = variances, mean = mean)
-            #grad = partial(self.log_likelihood_gradient_wrt_hyper_parameters,
-            #        values = values,
-            #        variances = variances, mean = mean)
-            #hess = partial(self.log_likelihood_hessian_wrt_hyper_parameters,
-            #        values = values,
-            #        variances = variances, mean = mean)
-            
-            res = HGDL(self.log_likelihood, 
-                       self.log_likelihood_gradient_wrt_hyper_parameters, 
-                       self.log_likelihood_hessian_wrt_hyper_parameters, 
-                       np.asarray(hp_bounds), dask_client = False,
-                       args = (values, variances, mean), verbose = True)
-            #res = HGDL(func, grad, hess,
-            #           np.asarray(hp_bounds),)
+            print("HGDL optimization submitted")
+            print('bounds are',hp_bounds)
+            try: 
+                res = self.get_latest(10)
+                x0 = res["x"]
+                self.opt.kill()
+            except: 
+                x0 = None
+            self.opt = HGDL(self.log_likelihood,
+                       self.log_likelihood_gradient_wrt_hyper_parameters,
+                       self.log_likelihood_hessian_wrt_hyper_parameters,
+                       np.asarray(hp_bounds), dask_client = None, x0 = x0,
+                       args = (values, variances, mean), verbose = False)
 
-            exit()
-            print(res)
-            if len(res['minima']) !=0:
-                hyper_parameters = res['minima'][0]
-            elif len(res['edge'])!=0:
-                if res['edge_y'][0]<res['genetic_y'][0]:
-                    hyper_parameters = res['edge'][0]
-                else:
-                    hyper_parameters = res['genetic'][0]
-            else:
-                hyper_parameters = res['genetic'][0]
+            res = self.opt.get_latest(10)
+            hyper_parameters = res["x"][0]
 
         else:
             print("no optimization mode specified"); exit()
