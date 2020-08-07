@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from fvgp import FVGP
+from fvgp.fvgp import FVGP
 import sys
 import time
 np.random.seed(42)
