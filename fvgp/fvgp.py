@@ -290,7 +290,7 @@ class FVGP:
             res = self.opt.get_latest(1)
             self.hyper_parameters = res["x"][0]
         except: 
-            print("hyper-parameter not successful. I am keeping the old ones.")
+            print("hyper-parameter update not successful. I am keeping the old ones.")
     ##################################################################################
     def find_hyper_parameters(self,
             hyper_parameters_0,

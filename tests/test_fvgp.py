@@ -64,24 +64,24 @@ def main():
 
     my_gp.train([[100.0,200.0],[5.0,10.0]],
             init_hyper_parameters = [10.0,10.0],
+            #optimization_method = 'global',
             optimization_method = 'hgdl',
             likelihood_optimization_pop_size = 20,
             likelihood_optimization_tolerance = 0.0001,
             likelihood_optimization_max_iter = 200)
-    print("main thread sleeps for 20 seconds while hgdl is working")
-    time.sleep(20)
-    print("done sleeping")
-    my_gp.hyper_parameters
-    print("sleep another 10s")
-    time.sleep(10)
-    exit()
+    print("lets see how the hyper-parameters are changing")
+    for i in range(10):
+        time.sleep(1)
+        my_gp.update_hyper_parameters()
+        print(my_gp.hyper_parameters)
 
-
+    #exit()
     x_input = np.empty((1000,1))
     x_input[:,0] = np.linspace(0,2.0,1000)
     y = func(x_input)
     #hps = my_gp.hyper_parameters
 
+    print("working on the prediction...")
     pred1_mean = my_gp.posterior_mean(x_input)
     pred1_cov = my_gp.posterior_covariance(x_input)
     sig = np.empty((len(x_input)))
