@@ -403,7 +403,7 @@ class FVGP:
         elif hyper_parameter_optimization_mode == "hgdl":
             print("HGDL optimization submitted")
             print('bounds are',hp_bounds)
-            try: 
+            try:
                 res = self.get_latest(10)
                 x0 = res["x"]
                 self.opt.kill()
