@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import dask.distributed as distributed
 """
 Software: FVGP
 File containing the gp class
@@ -414,7 +415,8 @@ class FVGP:
                        self.log_likelihood_hessian_wrt_hyper_parameters,
                        hp_bounds, dask_client = None, x0 = x0,
                        args = (values, variances, mean), verbose = False)
-            #self.opt.optimize()
+            client = distributed.Client()
+            self.opt.optimize(dask_client = client)
             res = self.opt.get_latest(10)
             hyper_parameters = res["x"][0]
 
@@ -445,7 +447,7 @@ class FVGP:
         output:
             log likelihood(scalar)
         """
-
+        
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y=values
         sign, logdet = self.slogdet(K)
