@@ -49,11 +49,6 @@ from hgdl.hgdl import HGDL
 
 class FVGP:
     """
-    ######################################################
-    ######################################################
-    ######################################################
-    ######################################################
-    ######################################################
     GP class: Finds hyper-parameters and therefore the mean
     and covariance of a (multi-output) Gaussian process
 
@@ -70,7 +65,7 @@ class FVGP:
         points (N x dim1 numpy array): array of points.
         values (N x n numpy array):    array of values.
     Optional Attributes:
-        values_positions (N x dim1 x dim2 numpy array): the positions of the outputs in the output space, default = [0,1,2,...]
+        value_positions (N x dim1 x dim2 numpy array): the positions of the outputs in the output space, default = [0,1,2,...]
         variances (N x n numpy array):                  variances of the values, default = [0,0,...]
         compute_device:                                 cpu/gpu, default = cpu
         gp_kernel_function(func):                       None/function defining the kernel def name(x1,x2,hyper_parameters,self), default = None
@@ -94,12 +89,7 @@ class FVGP:
             init_hyper_parameters = [2,3,4,5],
             gp_mean_function = some_mean_function
         )
-    ######################################################
-    ######################################################
-    ######################################################
-    ######################################################
-    ######################################################
-    ######################################################
+    ---------------------------------------------
     """
     def __init__(
         self,
