@@ -48,7 +48,7 @@ master_doc = 'index'
 # General information about the project.
 project = 'fvGP'
 copyright = "2020, Marcus Michael Noack"
-author = "Marcus Michael Noack"
+author = "Marcus Michael Noack, David Perryman"
 
 # The version info for the project you're documenting, acts as replacement
 # for |version| and |release|, also used in various other places throughout

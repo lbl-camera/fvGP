@@ -20,16 +20,18 @@ Python package for highly flexible function-valued Gaussian processes (fvGP)
 
 
 * Free software: GNU General Public License v3
-* Documentation: https://fvgp.readthedocs.io.
+* Documentation: https://www.overleaf.com/read/nrcyxxsbhvbx
 
 
 Features
 --------
 
-* TODO
+* function valued Gaussian process algorithm
 
 Credits
 -------
+This package used the hgdl packagae of David Perryman and Marcus Noack
+
 
 This package was created with Cookiecutter_ and the `audreyr/cookiecutter-pypackage`_ project template.
 
