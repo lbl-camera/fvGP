@@ -239,8 +239,8 @@ class FVGP:
         optimization_method = "global",
         likelihood_optimization_pop_size = 20,
         likelihood_optimization_tolerance = 0.1,
-        likelihood_optimization_max_iter = 120
-        ):
+        likelihood_optimization_max_iter = 120,
+        dask_client = False):
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP.
         inputs:
@@ -251,12 +251,14 @@ class FVGP:
             optimization_method : default = "global",
             likelihood_pop_size: default = 20,
             likelihood_optimization_tolerance: default = 0.1,
-            likelihood_optimization_max_iter: default = 120
+            likelihood_optimization_max_iter: default = 120,
+            dask_client: None/False/dask client, default = False
 
         output:
             None, just updated the class with then new hyper_parameters
         """
         ############################################
+        if dask_client is None: dask_client = distributed.Client()
         self.hyper_parameter_optimization_bounds = hyper_parameter_bounds
         if init_hyper_parameters is None:
             init_hyper_parameters = self.hyper_parameters
@@ -269,8 +271,8 @@ class FVGP:
         optimization_method,
         likelihood_optimization_max_iter,
         likelihood_optimization_pop_size,
-        likelihood_optimization_tolerance
-        ))
+        likelihood_optimization_tolerance,
+        dask_client))
         self.compute_prior_fvGP_pdf()
         ######################
         ######################
@@ -289,8 +291,9 @@ class FVGP:
             hyper_parameter_optimization_mode,
             likelihood_optimization_max_iter,
             likelihood_pop_size,
-            likelihood_optimization_tolerance
-            ):
+            likelihood_optimization_tolerance,
+            dask_client):
+
         hyper_parameters = self.optimize_log_likelihood(
             self.values,
             self.variances,
@@ -300,7 +303,8 @@ class FVGP:
             hyper_parameter_optimization_mode,
             likelihood_optimization_max_iter,
             likelihood_pop_size,
-            likelihood_optimization_tolerance
+            likelihood_optimization_tolerance,
+            dask_client
         )
         return hyper_parameters
     ##################################################################################
@@ -314,8 +318,8 @@ class FVGP:
         hyper_parameter_optimization_mode,
         likelihood_optimization_max_iter,
         likelihood_pop_size,
-        likelihood_optimization_tolerance
-        ):
+        likelihood_optimization_tolerance,
+        dask_client):
 
         epsilon = np.inf
         step_size = 1.0
@@ -403,10 +407,9 @@ class FVGP:
             self.opt = HGDL(self.log_likelihood,
                        self.log_likelihood_gradient_wrt_hyper_parameters,
                        self.log_likelihood_hessian_wrt_hyper_parameters,
-                       hp_bounds, dask_client = None, x0 = x0,
+                       hp_bounds, x0 = x0,
                        args = (values, variances, mean), verbose = False)
-            client = distributed.Client()
-            self.opt.optimize(dask_client = client)
+            self.opt.optimize(dask_client = dask_client)
             res = self.opt.get_latest(10)
             hyper_parameters = res["x"][0]
 

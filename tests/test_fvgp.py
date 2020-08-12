@@ -68,7 +68,8 @@ def main():
             optimization_method = 'hgdl',
             likelihood_optimization_pop_size = 20,
             likelihood_optimization_tolerance = 0.0001,
-            likelihood_optimization_max_iter = 200)
+            likelihood_optimization_max_iter = 200,
+            dask_client = None)
     print("lets see how the hyper-parameters are changing")
     for i in range(10):
         time.sleep(1)
