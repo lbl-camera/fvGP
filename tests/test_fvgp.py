@@ -74,6 +74,7 @@ def main():
     for i in range(10):
         time.sleep(1)
         my_gp.update_hyper_parameters()
+        #my_gp.stop_training()
         print(my_gp.hyper_parameters)
 
     #exit()

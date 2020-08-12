@@ -233,6 +233,11 @@ class FVGP:
     ###################################################################################
     #################TRAINING##########################################################
     ###################################################################################
+    def stop_training(self):
+        try: self.opt.cancel_tasks()
+        except:
+            print("no traing to be stopped")
+    ###################################################################################
     def train(self,
         hyper_parameter_bounds,
         init_hyper_parameters = None,
@@ -284,7 +289,8 @@ class FVGP:
             res = self.opt.get_latest(1)
             self.hyper_parameters = res["x"][0]
         except: 
-            print("hyper-parameter update not successful. I am keeping the old ones.")
+            print("Hyper-parameter update not successful. I am keeping the old ones.")
+            print("That probbaly means you are not optimizing them asyncronously")
     ##################################################################################
     def find_hyper_parameters(self,
             hyper_parameters_0,
