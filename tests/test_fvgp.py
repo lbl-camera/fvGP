@@ -66,9 +66,9 @@ def main():
             init_hyper_parameters = [10.0,10.0],
             #optimization_method = 'global',
             optimization_method = 'hgdl',
-            likelihood_optimization_pop_size = 20,
-            likelihood_optimization_tolerance = 0.0001,
-            likelihood_optimization_max_iter = 200,
+            optimization_pop_size = 20,
+            optimization_tolerance = 0.0001,
+            optimization_max_iter = 200,
             dask_client = None)
     print("lets see how the hyper-parameters are changing")
     for i in range(10):

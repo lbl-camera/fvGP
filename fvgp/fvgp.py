@@ -237,25 +237,26 @@ class FVGP:
         hyper_parameter_bounds,
         init_hyper_parameters = None,
         optimization_method = "global",
-        likelihood_optimization_pop_size = 20,
-        likelihood_optimization_tolerance = 0.1,
-        likelihood_optimization_max_iter = 120,
+        optimization_pop_size = 20,
+        optimization_tolerance = 0.1,
+        optimization_max_iter = 120,
         dask_client = False):
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP.
+        This can be done on a remote cluster/computer by giving a dask client
+
         inputs:
-            bounds (2d list)
+            hyper_parameter_bounds (2d list)
         optional inputs:
             init_hyper_parameters (list):  default = None
-            bounds (2d list)
             optimization_method : default = "global",
-            likelihood_pop_size: default = 20,
-            likelihood_optimization_tolerance: default = 0.1,
-            likelihood_optimization_max_iter: default = 120,
+            optimization_pop_size: default = 20,
+            optimization_tolerance: default = 0.1,
+            optimization_max_iter: default = 120,
             dask_client: None/False/dask client, default = False
 
         output:
-            None, just updated the class with then new hyper_parameters
+            None, just updates the class with new hyper_parameters
         """
         ############################################
         if dask_client is None: dask_client = distributed.Client()
@@ -269,9 +270,9 @@ class FVGP:
         init_hyper_parameters,
         self.hyper_parameter_optimization_bounds,
         optimization_method,
-        likelihood_optimization_max_iter,
-        likelihood_optimization_pop_size,
-        likelihood_optimization_tolerance,
+        optimization_max_iter,
+        optimization_pop_size,
+        optimization_tolerance,
         dask_client))
         self.compute_prior_fvGP_pdf()
         ######################
