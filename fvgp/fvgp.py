@@ -290,7 +290,7 @@ class FVGP:
             self.hyper_parameters = res["x"][0]
         except: 
             print("Hyper-parameter update not successful. I am keeping the old ones.")
-            print("That probbaly means you are not optimizing them asyncronously")
+            print("That probbaly means you are not optimizing them asynchronously")
     ##################################################################################
     def find_hyper_parameters(self,
             hyper_parameters_0,
