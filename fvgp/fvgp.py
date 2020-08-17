@@ -690,7 +690,7 @@ class FVGP:
         -------
             {"x":    the index set points,
              "v(x)": the posterior variances (1d numpy array) for each input point,
-             "S":    covariance matrix, x(x) = diag(S)}
+             "S":    covariance matrix, v(x) = diag(S)}
         """
         p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")

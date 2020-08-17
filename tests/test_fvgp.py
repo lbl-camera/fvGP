@@ -61,21 +61,23 @@ def main():
     plt.show()
     """
 
+    training_method = 'hgdl'
+    #training_method = 'global'
 
     my_gp.train([[100.0,200.0],[5.0,10.0]],
             init_hyper_parameters = [10.0,10.0],
-            #optimization_method = 'global',
-            optimization_method = 'hgdl',
+            optimization_method = training_method,
             optimization_pop_size = 20,
             optimization_tolerance = 0.0001,
             optimization_max_iter = 200,
             dask_client = None)
-    print("lets see how the hyper-parameters are changing")
-    for i in range(10):
-        time.sleep(1)
-        my_gp.update_hyper_parameters()
-        #my_gp.stop_training()
-        print(my_gp.hyper_parameters)
+    if training_method == "hgdl":
+        print("lets see how the hyper-parameters are changing")
+        for i in range(10):
+            time.sleep(1)
+            my_gp.update_hyper_parameters()
+            #my_gp.stop_training()
+            print(my_gp.hyper_parameters)
 
     #exit()
     x_input = np.empty((1000,1))
