@@ -414,7 +414,7 @@ class FVGP:
             self.opt = HGDL(self.log_likelihood,
                        self.log_likelihood_gradient_wrt_hyper_parameters,
                        self.log_likelihood_hessian_wrt_hyper_parameters,
-                       hp_bounds, x0 = x0,
+                       hp_bounds, x0 = x0, maxEpochs = 100,
                        args = (values, variances, mean), verbose = False)
             self.opt.optimize(dask_client = dask_client)
             res = self.opt.get_latest(10)
