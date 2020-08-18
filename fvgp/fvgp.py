@@ -451,9 +451,10 @@ class FVGP:
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y=values
         sign, logdet = self.slogdet(K)
+        n = len(y)
         if sign == 0.0:
-            return 0.5 * ((y - mean).T @ x)
-        return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0]
+            return 0.5 * ((y - mean).T @ x) + (0.5 * n * np.log(2.0*np.pi))
+        return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0] + (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
     @staticmethod
     @nb.njit
