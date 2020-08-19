@@ -424,6 +424,9 @@ class FVGP:
                        args = (values, variances, mean), verbose = False)
             self.opt.optimize(dask_client = dask_client)
             res = self.opt.get_latest(10)
+            while res["success"] == False:
+                time.sleep(0.1)
+                res = self.opt.get_latest(10)
             hyper_parameters = res["x"][0]
 
         else:
