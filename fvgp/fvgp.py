@@ -288,9 +288,13 @@ class FVGP:
         try:
             res = self.opt.get_latest(1)
             self.hyper_parameters = res["x"][0]
-        except: 
-            print("Hyper-parameter update not successful. I am keeping the old ones.")
+            self.compute_prior_fvGP_pdf()
+            print("Async hyper-parameter update successful")
+            print("Latest hyper-parameters: ", self.hyper_parameters)
+        except:
+            print("Async Hyper-parameter update not successful. I am keeping the old ones.")
             print("That probbaly means you are not optimizing them asynchronously")
+            print("hyper-parameters: ", self.hyper_parameters)
     ##################################################################################
     def find_hyper_parameters(self,
             hyper_parameters_0,
@@ -414,7 +418,7 @@ class FVGP:
             self.opt = HGDL(self.log_likelihood,
                        self.log_likelihood_gradient_wrt_hyper_parameters,
                        self.log_likelihood_hessian_wrt_hyper_parameters,
-                       hp_bounds, x0 = x0, maxEpochs = 100,
+                       hp_bounds, x0 = x0, maxEpochs = 10,
                        args = (values, variances, mean), verbose = False)
             self.opt.optimize(dask_client = dask_client)
             res = self.opt.get_latest(10)
@@ -422,6 +426,7 @@ class FVGP:
 
         else:
             print("no optimization mode specified"); exit()
+        ###################################################
         print("New hyper-parameters: ",
             hyper_parameters,
             "with log likelihood: ",
@@ -980,8 +985,17 @@ class FVGP:
                 print("or double check the hyper-parameter optimization bounds. This will not ")
                 print("terminate the algorithm, but expect anomalies.")
                 print("diagonal of the posterior covariance: ",np.diag(a))
-                p = np.block([[self.prior_covariance, k],[k.T, kk]])
-                print("eigenvalues of the prior: ", np.linalg.eig(p)[0])
+                prior = np.block([[self.prior_covariance, k],[k.T, kk]])
+                print("eigenvalues of the prior: ", np.linalg.eig(prior)[0])
+                print("data points:")
+                print(self.points)
+                print("prediction points:")
+                print(p)
+                print("hyper parameters")
+                print(self.hyper_parameters)
+                print(np.linalg.matrix_rank(prior), len(prior))
+                print("===============")
+                input()
 
             np.fill_diagonal(a,diag)
             covariance = np.asarray([
