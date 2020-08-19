@@ -45,7 +45,6 @@ import torch
 from sys import exit
 import numba as nb
 from functools import partial
-from hgdl.hgdl import HGDL
 
 class FVGP:
     """
@@ -410,6 +409,7 @@ class FVGP:
         elif hyper_parameter_optimization_mode == "hgdl":
             print("HGDL optimization submitted")
             print('bounds are',hp_bounds)
+            from hgdl.hgdl import HGDL
             try:
                 res = self.get_latest(10)
                 x0 = res["x"]
