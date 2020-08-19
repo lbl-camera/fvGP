@@ -234,9 +234,10 @@ class FVGP:
     #################TRAINING##########################################################
     ###################################################################################
     def stop_training(self):
+        print("Cancelling asynchronous training.")
         try: self.opt.cancel_tasks()
         except:
-            print("no traing to be stopped")
+            print("No asynchronous training to be cancelled, no training is running.")
     ###################################################################################
     def train(self,
         hyper_parameter_bounds,
