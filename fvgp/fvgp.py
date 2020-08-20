@@ -411,18 +411,20 @@ class FVGP:
             print('bounds are',hp_bounds)
             from hgdl.hgdl import HGDL
             try:
-                res = self.get_latest(likelihood_pop_size)
-                x0 = res["x"]
-                self.opt.kill()
-            except: 
+                res = self.opt.get_latest(10)
+                x0 = res["x"][0:min(len(res["x"])-1,likelihood_pop_size)]
+                print("starting with points from the last iteration")
+            except Exception as err:
+                print("starting with random points because")
+                print(str(err))
                 x0 = None
             self.opt = HGDL(self.log_likelihood,
                        self.log_likelihood_gradient_wrt_hyper_parameters,
                        self.log_likelihood_hessian_wrt_hyper_parameters,
-                       hp_bounds, x0 = x0, 
-                       number_of_walkers = likelihood_pop_size, maxEpochs = 10000,
+                       hp_bounds,
+                       number_of_walkers = likelihood_pop_size, maxEpochs = 10,
                        args = (values, variances, mean), verbose = False)
-            self.opt.optimize(dask_client = dask_client)
+            self.opt.optimize(dask_client = dask_client, x0 = x0)
             res = self.opt.get_latest(10)
             while res["success"] == False:
                 time.sleep(0.1)
