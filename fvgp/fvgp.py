@@ -1285,7 +1285,7 @@ class FVGP:
         """
         hps = hyper_parameters
         distance_matrix = np.zeros((len(x1),len(x2)))
-        for i in range(len(x1[0])):
+        for i in range(len(x1[0])-1):
             distance_matrix += abs(np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
         distance_matrix = np.sqrt(distance_matrix)
         return   hps[0] *  obj.exponential_kernel(distance_matrix,1)
