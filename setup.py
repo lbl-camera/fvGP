@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from setuptools import setup, find_packages
 import sys
-import versioneer
+#import versioneer
 from os import path
 """The setup script."""
 

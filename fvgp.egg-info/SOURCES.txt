@@ -28,10 +28,8 @@ fvgp.egg-info/requires.txt
 fvgp.egg-info/top_level.txt
 tests/.test_fvgp.py.un~
 tests/__init__.py
+tests/plot.png
 tests/test_fvgp.py
 tests/dask-worker-space/dask-worker-space/global.lock
 tests/dask-worker-space/dask-worker-space/purge.lock
-tests/dask-worker-space/dask-worker-space/worker-3mtyy04h.dirlock
-tests/dask-worker-space/dask-worker-space/worker-icn200av.dirlock
-tests/dask-worker-space/dask-worker-space/worker-ikroq2up.dirlock
-tests/dask-worker-space/dask-worker-space/worker-wsmqa1zg.dirlock
+tests/dask-worker-space/dask-worker-space/worker-lpcw9uo2.dirlock

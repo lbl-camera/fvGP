@@ -1,4 +1,9 @@
+wheel
+versioneer
 torch
 scipy
 numpy
 matplotlib
+dask
+distributed
+numba
