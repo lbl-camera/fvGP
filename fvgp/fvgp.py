@@ -422,7 +422,8 @@ class FVGP:
                        self.log_likelihood_gradient_wrt_hyper_parameters,
                        self.log_likelihood_hessian_wrt_hyper_parameters,
                        hp_bounds,
-                       number_of_walkers = likelihood_pop_size, maxEpochs = 10,
+                       number_of_walkers = likelihood_pop_size, 
+                       maxEpochs = likelihood_optimization_max_iter,
                        args = (values, variances, mean), verbose = False)
             self.opt.optimize(dask_client = dask_client, x0 = x0)
             res = self.opt.get_latest(10)
