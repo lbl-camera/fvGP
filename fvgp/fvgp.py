@@ -568,11 +568,10 @@ class FVGP:
         """
         fvGPs slogdet method based on torch
         """
-        s,l = np.linalg.slogdet(A)
-        return s,l
-        ##torch is unstable, so I took it out for now
+        #s,l = np.linalg.slogdet(A)
+        #return s,l
         if self.compute_device == "cpu":
-            A = torch.Tensor(A)
+            A = torch.from_numpy(A)
             sign, logdet = torch.slogdet(A)
             sign = sign.numpy()
             logdet = logdet.numpy()
@@ -580,7 +579,7 @@ class FVGP:
             #sign = np.where(sign == -1, sign, 1)
             return sign, logdet
         elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
-            A = torch.Tensor(A).cuda()
+            A = torch.from_numpy(A).cuda()
             sign, logdet = torch.slogdet(A)
             sign = sign.cpu().numpy()
             i = np.where(sign == -1)
