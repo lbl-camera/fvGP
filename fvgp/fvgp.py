@@ -268,6 +268,7 @@ class FVGP:
         self.hyper_parameter_optimization_bounds = hyper_parameter_bounds
         if init_hyper_parameters is None:
             init_hyper_parameters = self.hyper_parameters
+        print("fvGP training started with ",len(self.points)," data points")
         ######################
         #####TRAINING#########
         ######################

@@ -1,9 +1,9 @@
+wheel
+versioneer
+torch
+scipy
+numpy
+matplotlib
 dask
 distributed
-matplotlib
 numba
-numpy
-scipy
-torch
-versioneer
-wheel

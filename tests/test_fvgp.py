@@ -61,8 +61,8 @@ def main():
     plt.show()
     """
 
-    training_method = 'hgdl'
-    #training_method = 'global'
+    #training_method = 'hgdl'
+    training_method = 'global'
 
     my_gp.train([[100.0,200.0],[5.0,10.0]],
             init_hyper_parameters = [10.0,10.0],
