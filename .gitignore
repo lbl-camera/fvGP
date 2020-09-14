@@ -4,3 +4,5 @@ __pycache__
 *.un~*
 .*
 *dask*
+/*egg*
+*txt
