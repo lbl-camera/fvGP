@@ -683,7 +683,7 @@ class FVGP:
              "f(x)": the posterior mean vector (1d numpy array)}
         """
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]"); exit()
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]"); input()
         if len(p[0]) != len(self.points[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.points,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
