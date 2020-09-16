@@ -42,7 +42,6 @@ from scipy.sparse import coo_matrix
 import itertools
 import time
 import torch
-from sys import exit
 import numba as nb
 from functools import partial
 
@@ -114,10 +113,10 @@ class FVGP:
         #######check if dimensions match##########
         ##########################################
         if input_space_dim != len(points[0]):
-            print("input space dimensions are not in agreement with the point positions given"); exit()
+            raise ValueError("input space dimensions are not in agreement with the point positions given")
         ##########################################
         if output_number != len(values[0]):
-            print("the output number is not in agreement with the data values given"); exit()
+            raise ValueError("the output number is not in agreement with the data values given")
         ##########################################
         self.input_dim = input_space_dim
         self.output_dim = output_space_dim
@@ -133,7 +132,7 @@ class FVGP:
         if self.output_dim == 1 and isinstance(value_positions, np.ndarray) == False:
             self.value_positions = self.compute_standard_value_positions()
         elif self.output_dim > 1 and isinstance(value_positions, np.ndarray) == False:
-            exit(
+            raise ValueError(
                 "If the dimensionality of the output space is > 1, the value positions have to be given to the FVGP class. EXIT"
             )
         else:
@@ -207,7 +206,7 @@ class FVGP:
         if self.output_dim == 1 and isinstance(value_positions, np.ndarray) == False:
             self.value_positions = self.compute_standard_value_positions()
         elif self.output_dim > 1 and isinstance(value_positions, np.ndarray) == False:
-            exit(
+            raise ValueError(
                 "If the dimensionality of the output space is > 1, the value positions have to be given to the FVGP class. EXIT"
             )
         else:
@@ -434,7 +433,7 @@ class FVGP:
             hyper_parameters = res["x"][0]
 
         else:
-            print("no optimization mode specified"); exit()
+            raise ValueError("no optimization mode specified")
         ###################################################
         print("New hyper-parameters: ",
             hyper_parameters,
@@ -946,7 +945,7 @@ class FVGP:
         ####computation we need for all returns:
         ########################################
         if len(x_input.shape) == 1: 
-            exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
+            raise ValueError("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
         n_orig = len(x_input)
         tasks = len(x_output)
         if mode == 'cartesian product':
@@ -1050,7 +1049,7 @@ class FVGP:
                }
         """
         ####computation we need for all returns:
-        if len(x_input.shape) == 1: exit("x_input is not a 2d numpy array, please see docstring for correct usage of gp.fvGP function, thank you")
+        if len(x_input.shape) == 1: raise ValueError("x_input is not a 2d numpy array, please see docstring for correct usage of gp.fvGP function, thank you")
         n_orig = len(x_input)
         tasks = len(x_output)
         if mode == 'cartesian product':
