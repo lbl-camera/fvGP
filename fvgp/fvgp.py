@@ -258,13 +258,13 @@ class FVGP:
             optimization_pop_size: default = 20,
             optimization_tolerance: default = 0.1,
             optimization_max_iter: default = 120,
-            dask_client: None/False/dask client, default = False
+            dask_client: True/False/dask client, default = False
 
         output:
             None, just updates the class with new hyper_parameters
         """
         ############################################
-        if dask_client is None: dask_client = distributed.Client()
+        if dask_client is True: dask_client = distributed.Client()
         self.hyper_parameter_optimization_bounds = hyper_parameter_bounds
         if init_hyper_parameters is None:
             init_hyper_parameters = self.hyper_parameters
