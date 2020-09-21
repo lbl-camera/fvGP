@@ -162,7 +162,7 @@ class FVGP:
         #######prepare hyper parameters###########
         ##########################################
         if init_hyper_parameters is None:
-            init_hyper_parameters = [1.0] * (self.input_dim + 1 + self.output_dim)
+            init_hyper_parameters = [1.0] * (self.input_dim + self.output_dim)
         self.hyper_parameters = init_hyper_parameters
         ##########################################
         #transform index set and elements#########
