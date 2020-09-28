@@ -2,7 +2,9 @@ __pycache__
 *.png
 *.py.un*
 *.un~*
-.*
 *dask*
 /*egg*
-*txt
+*/*.txt
+*.yml
+*.swp
+*-info/
