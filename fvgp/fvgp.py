@@ -596,15 +596,9 @@ class FVGP:
         if self.compute_device == "cpu":
             #####for sparsity:
             if self.sparse == True:
-                print("sparsity activated")
-                zero_indices = np.where(A < 1e-10)
+                zero_indices = np.where(A < 1e-16)
                 A[zero_indices] = 0.0
-                print(A)
-                print(self.how_sparse_is(A))
-                plt.imshow(A)
-                plt.show()
                 if self.is_sparse(A):
-                    print("sparsity found")
                     try:
                         A = scipy.sparse.csr_matrix(A)
                         x = scipy.sparse.spsolve(A,b)
