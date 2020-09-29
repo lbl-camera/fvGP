@@ -121,9 +121,9 @@ class FVGP:
         self.input_dim = input_space_dim
         self.output_dim = output_space_dim
         self.output_num = output_number
-        self.points = points
-        self.point_number = len(self.points)
-        self.values = values
+        self.data_x = points
+        self.point_number = len(self.data_x)
+        self.data_y = values
         self.compute_device = compute_device
         self.sparse = sparse
         ##########################################
@@ -154,7 +154,7 @@ class FVGP:
         self.d_kernel_dx = self.d_gp_kernel_dx
         self.gp_mean_function = gp_mean_function
         if gp_mean_function is None:
-            self.mean_function = self.standard_mean_function
+            self.mean_function = self.default_mean_function
         else:
             self.mean_function = gp_mean_function
 
@@ -168,10 +168,10 @@ class FVGP:
         #transform index set and elements#########
         ##########################################
         self.iset_dim = self.input_dim + self.output_dim
-        self.points, self.values, self.variances = self.transform_index_set()
-        self.point_number = len(self.points)
+        self.data_x, self.data_y, self.variances = self.transform_index_set()
+        self.point_number = len(self.data_x)
         #########################################
-        ####compute covariance value prod########
+        ####compute prior########################
         #########################################
         self.compute_prior_fvGP_pdf()
 ######################################################################
@@ -197,9 +197,9 @@ class FVGP:
             values_positions (N x dim1 x dim2 numpy array): the positions of the outputs in the output space
             variances (N x n):                              variances of the values
             """
-        self.points = points
-        self.point_number = len(self.points)
-        self.values = values
+        self.data_x = points
+        self.point_number = len(self.data_x)
+        self.data_y = values
         ##########################################
         #######prepare value positions############
         ##########################################
@@ -221,8 +221,8 @@ class FVGP:
         ######################################
         #####transform to index set###########
         ######################################
-        self.points, self.values, self.variances = self.transform_index_set()
-        self.point_number = len(self.points)
+        self.data_x, self.data_y, self.variances = self.transform_index_set()
+        self.point_number = len(self.data_x)
         self.compute_prior_fvGP_pdf()
     ###################################################################################
     ###################################################################################
@@ -267,7 +267,7 @@ class FVGP:
         self.hyper_parameter_optimization_bounds = hyper_parameter_bounds
         if init_hyper_parameters is None:
             init_hyper_parameters = self.hyper_parameters
-        print("fvGP training started with ",len(self.points)," data points")
+        print("fvGP training started with ",len(self.data_x)," data points")
         ######################
         #####TRAINING#########
         ######################
@@ -306,9 +306,8 @@ class FVGP:
             dask_client):
 
         hyper_parameters = self.optimize_log_likelihood(
-            self.values,
+            self.data_y,
             self.variances,
-            self.prior_mean_vec,
             hyper_parameters_0,
             hyper_parameter_optimization_bounds,
             hyper_parameter_optimization_mode,
@@ -323,7 +322,6 @@ class FVGP:
         self,
         values,
         variances,
-        mean,
         starting_hps,
         hp_bounds,
         hyper_parameter_optimization_mode,
@@ -341,8 +339,7 @@ class FVGP:
                 self.log_likelihood(
                     starting_hps,
                     values,
-                    variances,
-                    mean
+                    variances
                 )
             )
         )
@@ -355,7 +352,7 @@ class FVGP:
             res = differential_evolution(
                 self.log_likelihood,
                 hp_bounds,
-                args=(values, variances, mean),
+                args=(values, variances),
                 disp=True,
                 maxiter=likelihood_optimization_max_iter,
                 popsize = likelihood_pop_size,
@@ -365,16 +362,14 @@ class FVGP:
             Eval1 = self.log_likelihood(
                 hyper_parameters1,
                 values,
-                variances,
-                mean
+                variances
             )
             hyper_parameters = np.array(hyper_parameters1)
             print("I found hyper-parameters ",hyper_parameters," with likelihood ",
                 self.log_likelihood(
                     hyper_parameters,
                     values,
-                    variances,
-                    mean))
+                    variances))
         elif hyper_parameter_optimization_mode == "local":
             hyper_parameters = np.array(starting_hps)
             print("Performing a local update of the hyper parameters.")
@@ -386,7 +381,7 @@ class FVGP:
             OptimumEvaluation = minimize(
                 self.log_likelihood,
                 hyper_parameters,
-                args=(values, variances, mean),
+                args=(values, variances),
                 method="L-BFGS-B",
                 jac=self.log_likelihood_gradient_wrt_hyper_parameters,
                 bounds = hp_bounds,
@@ -424,7 +419,7 @@ class FVGP:
                        hp_bounds,
                        number_of_walkers = likelihood_pop_size, 
                        maxEpochs = likelihood_optimization_max_iter,
-                       args = (values, variances, mean), verbose = False)
+                       args = (values, variances), verbose = False)
             self.opt.optimize(dask_client = dask_client, x0 = x0)
             res = self.opt.get_latest(10)
             while res["success"] == False:
@@ -439,7 +434,7 @@ class FVGP:
             hyper_parameters,
             "with log likelihood: ",
             self.log_likelihood(hyper_parameters,values,
-                variances,mean))
+                variances))
 
         return hyper_parameters
     ##################################################################################
@@ -448,8 +443,7 @@ class FVGP:
         self,
         hyper_parameters,
         values,
-        variances,
-        mean
+        variances
     ):
         """computes the log-likelihood
         input:
@@ -460,7 +454,7 @@ class FVGP:
         output:
             log likelihood(scalar)
         """
-        
+        mean = self.mean_function(self.data_x,hyper_parameters)
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y=values
         sign, logdet = self.slogdet(K)
@@ -480,7 +474,7 @@ class FVGP:
     def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y = values
-        dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
+        dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyper_parameters)
         K = np.array([K,] * len(hyper_parameters))
         x1 = self.solve(K,dK_dH)
         y = np.ascontiguousarray(y, dtype=np.float64)
@@ -507,8 +501,8 @@ class FVGP:
     def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
         x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
         y = values - mean
-        dK_dH = self.gradient_gp_kernel(self.points,self.points, hyper_parameters)
-        d2K_dH2 = self.hessian_gp_kernel(self.points,self.points, hyper_parameters)
+        dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyper_parameters)
+        d2K_dH2 = self.hessian_gp_kernel(self.data_x,self.data_x, hyper_parameters)
         t = time.time()
         K = np.array([K,] * len(hyper_parameters))
         s = self.solve(K,dK_dH)
@@ -541,10 +535,10 @@ class FVGP:
             prior covariance
             covariance value product
         """
-        self.prior_mean_vec = self.mean_function(self.points)
+        self.prior_mean_vec = self.mean_function(self.data_x, self.hyper_parameters)
         cov_y,K = self._compute_covariance_value_product(
                 self.hyper_parameters,
-                self.values,
+                self.data_y,
                 self.variances,
                 self.prior_mean_vec)
         self.prior_covariance = K
@@ -560,7 +554,7 @@ class FVGP:
     def compute_covariance(self, hyper_parameters, variances):
         """computes the covariance matrix from the kernel"""
         CoVariance = self.kernel(
-            self.points, self.points, hyper_parameters, self)
+            self.data_x, self.data_x, hyper_parameters, self)
         self.add_to_diag(CoVariance, variances)
         return CoVariance
 
@@ -686,11 +680,11 @@ class FVGP:
         """
         p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]"); input()
-        if len(p[0]) != len(self.points[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        k = self.kernel(self.points,p,self.hyper_parameters,self)
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        k = self.kernel(self.data_x,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
         A = k.T @ self.covariance_value_prod
-        posterior_mean = self.mean_function(p) + A[:,0]
+        posterior_mean = self.mean_function(p, self.hyper_parameters) + A[:,0]
         return {"x": p,
                 "f(x)": posterior_mean}
     ###########################################################################
@@ -709,9 +703,9 @@ class FVGP:
         """
         p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
-        if len(p[0]) != len(self.points[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.points,p,self.hyper_parameters,self)
+        k = self.kernel(self.data_x,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
         k_cov_prod = self.solve(self.prior_covariance,k)
         a = kk - (k_cov_prod.T @ k)
@@ -749,12 +743,12 @@ class FVGP:
         """
         p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
-        if len(p[0]) != len(self.points[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.points,p,self.hyper_parameters,self)
+        k = self.kernel(self.data_x,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
         post_mean = np.empty((len(x_iset)))
-        for i in range(len(x_iset)): post_mean[i] = self.mean_function(x_iset[i])
+        for i in range(len(x_iset)): post_mean[i] = self.mean_function(x_iset[i], self.hyper_parameters)
         full_gp_prior_mean = np.append(self.prior_mean_vec, post_mean)
         return  {"x": p,
                  "K": self.prior_covariance,
@@ -843,7 +837,7 @@ class FVGP:
              "sig:" shannon_information gain}
         """
         p = np.array(x_iset)
-        k = self.kernel(self.points,p,self.hyper_parameters,self)
+        k = self.kernel(self.data_x,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
 
 
@@ -959,7 +953,7 @@ class FVGP:
         elif mode == 'stack':
             new_points = np.column_stack([x_input,x_output])
         p = np.array(new_points)
-        k = self.kernel(self.points,p,self.hyper_parameters,self)
+        k = self.kernel(self.data_x,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
         if compute_prior_covariances == True: 
             full_gp_covariances = \
@@ -980,7 +974,7 @@ class FVGP:
 
         if compute_means == True:
             A = k.T @ self.covariance_value_prod
-            posterior_mean = np.reshape(self.mean_function(p) + A[:,0], (n_orig, len(x_output)))
+            posterior_mean = np.reshape(self.mean_function(p, self.hyper_parameters) + A[:,0], (n_orig, len(x_output)))
         else:
             posterior_mean = None
         if compute_posterior_covariances == True:
@@ -997,7 +991,7 @@ class FVGP:
                 prior = np.block([[self.prior_covariance, k],[k.T, kk]])
                 print("eigenvalues of the prior: ", np.linalg.eig(prior)[0])
                 print("data points:")
-                print(self.points)
+                print(self.data_x)
                 print("prediction points:")
                 print(p)
                 print("hyper parameters")
@@ -1063,8 +1057,8 @@ class FVGP:
         elif mode == 'stack':
             new_points = np.column_stack([x_input,x_output])
         p = np.array(new_points)
-        k = self.kernel(self.points,p,self.hyper_parameters,self)
-        k_g = self.d_kernel_dx(p,self.points, direction,self.hyper_parameters).T
+        k = self.kernel(self.data_x,p,self.hyper_parameters,self)
+        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyper_parameters).T
         kk =  self.kernel(p, p,self.hyper_parameters,self)
         kk_g =  self.d_kernel_dx(p, p,direction,self.hyper_parameters)
         if compute_prior_covariances == True: 
@@ -1388,17 +1382,17 @@ class FVGP:
         new_variances = np.zeros((self.point_number * self.output_num))
         for i in range(self.output_num):
             new_points[i * self.point_number : (i + 1) * self.point_number] = \
-            np.column_stack([self.points, self.value_positions[:, i, :]])
+            np.column_stack([self.data_x, self.value_positions[:, i, :]])
             new_values[i * self.point_number : (i + 1) * self.point_number] = \
-            self.values[:, i]
+            self.data_y[:, i]
             new_variances[i * self.point_number : (i + 1) * self.point_number] = \
             self.variances[:, i]
         return new_points, new_values, new_variances
 
-    def standard_mean_function(self,x):
+    def default_mean_function(self,x, hyper_parameters):
         """evaluates the gp mean function at the data points """
         mean = np.zeros((len(x)))
-        mean[:] = np.mean(self.values)
+        mean[:] = np.mean(self.data_y)
         return mean
 ###########################################################################
 ###########################################################################
