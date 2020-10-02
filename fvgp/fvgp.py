@@ -241,6 +241,7 @@ class FVGP:
         hyper_parameter_bounds,
         init_hyper_parameters = None,
         optimization_method = "global",
+        optimization_dict = None,
         optimization_pop_size = 20,
         optimization_tolerance = 0.1,
         optimization_max_iter = 120,
@@ -253,7 +254,8 @@ class FVGP:
             hyper_parameter_bounds (2d list)
         optional inputs:
             init_hyper_parameters (list):  default = None
-            optimization_method : default = "global",
+            optimization_method : default = "global","global"/"local"/"hgdl"/callable f(obj,optimization_dict)
+            optimization_dict: if optimization is callable, the this will be passed as dict
             optimization_pop_size: default = 20,
             optimization_tolerance: default = 0.1,
             optimization_max_iter: default = 120,
@@ -271,14 +273,17 @@ class FVGP:
         ######################
         #####TRAINING#########
         ######################
-        self.hyper_parameters = list(self.find_hyper_parameters(
-        init_hyper_parameters,
-        self.hyper_parameter_optimization_bounds,
-        optimization_method,
-        optimization_max_iter,
-        optimization_pop_size,
-        optimization_tolerance,
-        dask_client))
+        self.hyper_parameters = list(self.optimize_log_likelihood(
+            init_hyper_parameters,
+            self.hyper_parameter_optimization_bounds,
+            optimization_method,
+            optimization_dict,
+            optimization_max_iter,
+            optimization_pop_size,
+            optimization_tolerance,
+            dask_client
+        ))
+
         self.compute_prior_fvGP_pdf()
         ######################
         ######################
@@ -296,38 +301,15 @@ class FVGP:
             print("That probbaly means you are not optimizing them asynchronously")
             print("hyper-parameters: ", self.hyper_parameters)
     ##################################################################################
-    def find_hyper_parameters(self,
-            hyper_parameters_0,
-            hyper_parameter_optimization_bounds,
-            hyper_parameter_optimization_mode,
-            likelihood_optimization_max_iter,
-            likelihood_pop_size,
-            likelihood_optimization_tolerance,
-            dask_client):
-
-        hyper_parameters = self.optimize_log_likelihood(
-            self.data_y,
-            self.variances,
-            hyper_parameters_0,
-            hyper_parameter_optimization_bounds,
-            hyper_parameter_optimization_mode,
-            likelihood_optimization_max_iter,
-            likelihood_pop_size,
-            likelihood_optimization_tolerance,
-            dask_client
-        )
-        return hyper_parameters
-    ##################################################################################
     def optimize_log_likelihood(
         self,
-        values,
-        variances,
         starting_hps,
         hp_bounds,
-        hyper_parameter_optimization_mode,
-        likelihood_optimization_max_iter,
+        optimization_method,
+        optimization_dict,
+        optimization_max_iter,
         likelihood_pop_size,
-        likelihood_optimization_tolerance,
+        optimization_tolerance,
         dask_client):
 
         epsilon = np.inf
@@ -335,62 +317,46 @@ class FVGP:
         print(
             "Hyper-parameter tuning in progress. Old hyper-parameters: ",
             starting_hps, " with old log likelihood: ",
-            abs(
-                self.log_likelihood(
-                    starting_hps,
-                    values,
-                    variances
-                )
-            )
-        )
+            self.log_likelihood(starting_hps))
 
         ############################
         ####start of optimization:##
         ############################
-        if hyper_parameter_optimization_mode == "global":
+        if optimization_method == "global":
             print("I am performing a global differential evolution algorithm to find the optimal hyper-parameters.")
             res = differential_evolution(
                 self.log_likelihood,
                 hp_bounds,
-                args=(values, variances),
                 disp=True,
-                maxiter=likelihood_optimization_max_iter,
+                maxiter=optimization_max_iter,
                 popsize = likelihood_pop_size,
-                tol = likelihood_optimization_tolerance,
+                tol = optimization_tolerance,
             )
             hyper_parameters1 = np.array(res["x"])
-            Eval1 = self.log_likelihood(
-                hyper_parameters1,
-                values,
-                variances
-            )
+            Eval1 = self.log_likelihood(hyper_parameters1)
             hyper_parameters = np.array(hyper_parameters1)
             print("I found hyper-parameters ",hyper_parameters," with likelihood ",
-                self.log_likelihood(
-                    hyper_parameters,
-                    values,
-                    variances))
-        elif hyper_parameter_optimization_mode == "local":
+                self.log_likelihood(hyper_parameters))
+        elif optimization_method == "local":
             hyper_parameters = np.array(starting_hps)
             print("Performing a local update of the hyper parameters.")
             print("starting hyper-parameters: ", hyper_parameters)
             print("Attempting a BFGS optimization.")
-            print("maximum number of iterations: ", likelihood_optimization_max_iter)
-            print("termination tolerance: ", likelihood_optimization_tolerance)
+            print("maximum number of iterations: ", optimization_max_iter)
+            print("termination tolerance: ", optimization_tolerance)
             print("bounds: ", hp_bounds)
             OptimumEvaluation = minimize(
                 self.log_likelihood,
                 hyper_parameters,
-                args=(values, variances),
                 method="L-BFGS-B",
-                jac=self.log_likelihood_gradient_wrt_hyper_parameters,
+                jac=self.log_likelihood_gradient,
                 bounds = hp_bounds,
-                tol = likelihood_optimization_tolerance,
+                tol = optimization_tolerance,
                 callback = None,
-                options = {"maxiter": likelihood_optimization_max_iter,
+                options = {"maxiter": optimization_max_iter,
                     #"iprint" : 101,
                     }#,
-                           #"ftol": likelihood_optimization_tolerance}
+                           #"ftol": optimization_tolerance}
                 )
 
             if OptimumEvaluation["success"] == True:
@@ -401,7 +367,7 @@ class FVGP:
                 hyper_parameters = OptimumEvaluation["x"]
             else:
                 print("Optimization not successful.")
-        elif hyper_parameter_optimization_mode == "hgdl":
+        elif optimization_method == "hgdl":
             print("HGDL optimization submitted")
             print('bounds are',hp_bounds)
             from hgdl.hgdl import HGDL
@@ -414,74 +380,72 @@ class FVGP:
                 print(str(err))
                 x0 = None
             self.opt = HGDL(self.log_likelihood,
-                       self.log_likelihood_gradient_wrt_hyper_parameters,
-                       self.log_likelihood_hessian_wrt_hyper_parameters,
+                       self.log_likelihood_gradient,
+                       self.log_likelihood_hessian,
                        hp_bounds,
                        number_of_walkers = likelihood_pop_size, 
-                       maxEpochs = likelihood_optimization_max_iter,
-                       args = (values, variances), verbose = False)
+                       maxEpochs = optimization_max_iter, verbose = False)
             self.opt.optimize(dask_client = dask_client, x0 = x0)
             res = self.opt.get_latest(10)
             while res["success"] == False:
                 time.sleep(0.1)
                 res = self.opt.get_latest(10)
             hyper_parameters = res["x"][0]
-
+        elif callable(optimization_method):
+            hyper_parameters = optimization_method(self,optimization_dict)
         else:
             raise ValueError("no optimization mode specified")
         ###################################################
         print("New hyper-parameters: ",
             hyper_parameters,
             "with log likelihood: ",
-            self.log_likelihood(hyper_parameters,values,
-                variances))
+            self.log_likelihood(hyper_parameters))
 
         return hyper_parameters
     ##################################################################################
     ### note to me - this is main function 
-    def log_likelihood(
-        self,
-        hyper_parameters,
-        values,
-        variances
-    ):
-        """computes the log-likelihood
+    def log_likelihood(self,hyper_parameters):
+        """
+        computes the marginal log-likelihood
         input:
             hyper parameters
-            values
-            variances
-            means
         output:
-            log likelihood(scalar)
+            negative marginal log-likelihood (scalar)
         """
         mean = self.mean_function(self.data_x,hyper_parameters)
-        x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
-        y=values
+        x,K = self._compute_covariance_value_product(hyper_parameters,self.data_y, self.variances, mean)
+        y = self.data_y - mean
         sign, logdet = self.slogdet(K)
         n = len(y)
-        if sign == 0.0:
-            return 0.5 * ((y - mean).T @ x) + (0.5 * n * np.log(2.0*np.pi))
-        return ((0.5 * ((y - mean).T @ x)) + (0.5 * sign * logdet))[0] + (0.5 * n * np.log(2.0*np.pi))
+        if sign == 0.0:return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
+        return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
     @staticmethod
     @nb.njit
-    def numba_dL_dH(y, mean, x1, x, length):
+    def numba_dL_dH(y, x1, x, length):
         dL_dH = np.empty((length))
         for i in range(length):
-                dL_dH[i] = 0.5 * (((y - mean).T @ x1[i] @ x)-(np.trace(x1[i])))[0]
+                dL_dH[i] = 0.5 * ((y.T @ x1[i] @ x)-(np.trace(x1[i])))
         return dL_dH
     ##################################################################################
-    def log_likelihood_gradient_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
-        x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
-        y = values
+    def log_likelihood_gradient(self, hyper_parameters):
+        """
+        computes the gradient of the negative marginal log-likelihood
+        input:
+            hyper parameters
+        output:
+            gradient of the negative marginal log-likelihood (vector)
+        """
+        mean = self.mean_function(self.data_x,hyper_parameters)
+        x,K = self._compute_covariance_value_product(hyper_parameters,self.data_y, self.variances, mean)
+        y = self.data_y - mean
         dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyper_parameters)
         K = np.array([K,] * len(hyper_parameters))
         x1 = self.solve(K,dK_dH)
         y = np.ascontiguousarray(y, dtype=np.float64)
-        mean = np.ascontiguousarray(mean, dtype=np.float64)
         x = np.ascontiguousarray(x, dtype=np.float64)
         x1 = np.ascontiguousarray(x1, dtype=np.float64)
-        dL_dH = self.numba_dL_dH(y, mean, x1, x, len(hyper_parameters))
+        dL_dH = self.numba_dL_dH(y, x1, x, len(hyper_parameters))
         return -dL_dH
     ##################################################################################
     @staticmethod
@@ -495,15 +459,22 @@ class FVGP:
                 x2 = s[j]
                 x3 = ss[i,j]
                 f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
-                d2L_dH2[i,j] = d2L_dH2[j,i] = f[0]
+                d2L_dH2[i,j] = d2L_dH2[j,i] = f
         return d2L_dH2
     ##################################################################################
-    def log_likelihood_hessian_wrt_hyper_parameters(self, hyper_parameters, values, variances, mean):
-        x,K = self._compute_covariance_value_product(hyper_parameters,values, variances, mean)
-        y = values - mean
+    def log_likelihood_hessian(self, hyper_parameters):
+        """
+        computes the hessian of the negative  marginal  log-likelihood
+        input:
+            hyper parameters
+        output:
+            hessian of the negative marginal log-likelihood (matrix)
+        """
+        mean = self.mean_function(self.data_x,hyper_parameters)
+        x,K = self._compute_covariance_value_product(hyper_parameters,self.data_y, self.variances, mean)
+        y = self.data_y - mean
         dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyper_parameters)
         d2K_dH2 = self.hessian_gp_kernel(self.data_x,self.data_x, hyper_parameters)
-        t = time.time()
         K = np.array([K,] * len(hyper_parameters))
         s = self.solve(K,dK_dH)
         ss = self.solve(K,d2K_dH2)
@@ -512,7 +483,6 @@ class FVGP:
         y = np.ascontiguousarray(y, dtype=np.float64)
         s = np.ascontiguousarray(s, dtype=np.float64)
         ss = np.ascontiguousarray(ss, dtype=np.float64)
-
         d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
         return -d2L_dH2
 
@@ -547,9 +517,8 @@ class FVGP:
     def _compute_covariance_value_product(self, hyper_parameters,values, variances, mean):
         K = self.compute_covariance(hyper_parameters, variances)
         y = values - mean
-        y = y.reshape(-1,1)
         x = self.solve(K, y)
-        return x,K
+        return x[:,0],K
     ##################################################################################
     def compute_covariance(self, hyper_parameters, variances):
         """computes the covariance matrix from the kernel"""
@@ -684,7 +653,7 @@ class FVGP:
         k = self.kernel(self.data_x,p,self.hyper_parameters,self)
         kk = self.kernel(p, p,self.hyper_parameters,self)
         A = k.T @ self.covariance_value_prod
-        posterior_mean = self.mean_function(p, self.hyper_parameters) + A[:,0]
+        posterior_mean = self.mean_function(p, self.hyper_parameters) + A
         return {"x": p,
                 "f(x)": posterior_mean}
     ###########################################################################
@@ -974,7 +943,7 @@ class FVGP:
 
         if compute_means == True:
             A = k.T @ self.covariance_value_prod
-            posterior_mean = np.reshape(self.mean_function(p, self.hyper_parameters) + A[:,0], (n_orig, len(x_output)))
+            posterior_mean = np.reshape(self.mean_function(p, self.hyper_parameters) + A, (n_orig, len(x_output)))
         else:
             posterior_mean = None
         if compute_posterior_covariances == True:
