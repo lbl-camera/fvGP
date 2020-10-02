@@ -61,11 +61,11 @@ def main():
     plt.show()
     """
 
-    training_method = 'hgdl'
-    #training_method = 'global'
+    #training_method = 'hgdl'
+    training_method = 'global'
 
     my_gp.train([[100.0,200.0],[5.0,10.0]],
-            init_hyper_parameters = [10.0,10.0],
+            init_hyperparameters = [10.0,10.0],
             optimization_method = training_method,
             optimization_pop_size = 20,
             optimization_tolerance = 0.0001,
@@ -75,15 +75,15 @@ def main():
         print("lets see how the hyper-parameters are changing")
         for i in range(10):
             time.sleep(1)
-            my_gp.update_hyper_parameters()
+            my_gp.update_hyperparameters()
             #my_gp.stop_training()
-            print(my_gp.hyper_parameters)
+            print(my_gp.hyperparameters)
 
     #exit()
     x_input = np.empty((1000,1))
     x_input[:,0] = np.linspace(0,2.0,1000)
     y = func(x_input)
-    #hps = my_gp.hyper_parameters
+    #hps = my_gp.hyperparameters
 
     print("working on the prediction...")
     pred1_mean = my_gp.posterior_mean(x_input)
