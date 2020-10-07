@@ -102,7 +102,8 @@ class FVGP:
         gp_kernel_function = None,
         gp_mean_function = None,
         init_hyperparameters = None,
-        sparse = False
+        sparse = False,
+        compute_inverse = True
         ):
 
         """
@@ -126,6 +127,7 @@ class FVGP:
         self.data_y = values
         self.compute_device = compute_device
         self.sparse = sparse
+        self.compute_inverse = compute_inverse
         ##########################################
         #######prepare value positions############
         ##########################################
@@ -404,7 +406,6 @@ class FVGP:
 
         return hyperparameters
     ##################################################################################
-    ### note to me - this is main function 
     def log_likelihood(self,hyperparameters):
         """
         computes the marginal log-likelihood
@@ -418,7 +419,7 @@ class FVGP:
         y = self.data_y - mean
         sign, logdet = self.slogdet(K)
         n = len(y)
-        if sign == 0.0:return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
+        if sign == 0.0: return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
         return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
     @staticmethod
@@ -450,7 +451,6 @@ class FVGP:
         dL_dH = np.empty((len(hyperparameters)))
         for i in range(len(hyperparameters)):
             dL_dH[i] = 0.5 * ((y.T @ a[i] @ b) - (np.trace(a[i])))
-
         return -dL_dH
     ##################################################################################
     @staticmethod
@@ -518,6 +518,7 @@ class FVGP:
                 self.variances,
                 self.prior_mean_vec)
         self.prior_covariance = K
+        if self.compute_inverse is True: self.prior_covariance_inverse = np.linalg.inv(K)
         self.covariance_value_prod = cov_y
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean):
@@ -576,12 +577,12 @@ class FVGP:
                         print("Sparse solve did not work out.")
                         print("reason: ", str(e))
             ##################
-            #A = torch.from_numpy(A)
-            #b = torch.from_numpy(b)
+            A = torch.from_numpy(A)
+            b = torch.from_numpy(b)
             try:
-                #x, lu = torch.solve(b,A)
-                x = np.linalg.solve(A,b)
-                return x
+                x, lu = torch.solve(b,A)
+                #x = np.linalg.solve(A,b)
+                return x.numpy()
             except Exception as e:
                 try:
                     print("except statement invoked: torch.solve() on cpu did not work")
@@ -684,8 +685,11 @@ class FVGP:
 
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
-        k_cov_prod = self.solve(self.prior_covariance,k)
-        a = kk - (k_cov_prod.T @ k)
+        if self.compute_inverse is True:
+            a = kk - (k.T @ self.prior_covariance_inverse @ k)
+        else:
+            k_cov_prod = self.solve(self.prior_covariance,k)
+            a = kk - (k_cov_prod.T @ k)
         diag = np.diag(a)
         diag = np.where(diag<0.0,0.0,diag)
         if any([x < -0.001 for x in np.diag(a)]):
