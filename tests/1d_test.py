@@ -91,6 +91,7 @@ def main():
     sig = np.empty((len(x_input)))
     for i in range(len(x_input)):
         sig[i] = my_gp.shannon_information_gain(np.array([x_input[i]]))["sig"]
+    exit()
     plt.figure(figsize = (10,4))
     plt.plot(x_input,pred1_mean["f(x)"], label = "posterior mean",linewidth = 3.0)
     plt.plot(x_input,y, label = "ground truth",linewidth = 3.0)

@@ -958,7 +958,11 @@ class FVGP:
             posterior_mean = None
         if compute_posterior_covariances == True:
             k_cov_prod = self.solve(self.prior_covariance,k)
-            a = kk - (k_cov_prod.T @ k)
+            if self.compute_inverse is True:
+                a = kk - (k.T @ self.prior_covariance_inverse @ k)
+            else:
+                k_cov_prod = self.solve(self.prior_covariance,k)
+                a = kk - (k_cov_prod.T @ k)
             diag = np.diag(a)
             diag = np.where(diag<0.0,0.0,diag)
             if any([x < -0.001 for x in np.diag(a)]):
@@ -1064,9 +1068,13 @@ class FVGP:
         else:
             mean = None
         if compute_posterior_covariance == True:
-            k_covariance_prod = self.solve(self.prior_covariance,k)
-            kg_covariance_prod = self.solve(self.prior_covariance,k_g)
-            a = kk_g - ((k_covariance_prod.T @ k) + (k_g_covariance_prod.T @ k))
+            if self.compute_inverse is True:
+                a = kk - ((k.T @ self.prior_covariance_inverse @ k)+(k_g.T @ self.prior_covariance_inverse @ k_g))
+            else:
+                k_covariance_prod = self.solve(self.prior_covariance,k)
+                kg_covariance_prod = self.solve(self.prior_covariance,k_g)
+                a = kk_g - ((k_covariance_prod.T @ k) + (k_g_covariance_prod.T @ k))
+
             covariance = [
                 a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
                 for i in range(int(a.shape[0] / tasks))
