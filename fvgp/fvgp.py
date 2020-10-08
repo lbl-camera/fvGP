@@ -248,6 +248,7 @@ class FVGP:
         optimization_pop_size = 20,
         optimization_tolerance = 0.1,
         optimization_max_iter = 120,
+        compute_inverse = None,
         dask_client = False):
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP.
@@ -272,6 +273,7 @@ class FVGP:
         self.hyperparameter_optimization_bounds = hyperparameter_bounds
         if init_hyperparameters is None:
             init_hyperparameters = self.hyperparameters
+        if compute_inverse is not None: self.compute_inverse = compute_inverse
         print("fvGP training started with ",len(self.data_x)," data points")
         ######################
         #####TRAINING#########
