@@ -79,7 +79,6 @@ def main():
             #my_gp.stop_training()
             print(my_gp.hyperparameters)
 
-    #exit()
     x_input = np.empty((1000,1))
     x_input[:,0] = np.linspace(0,2.0,1000)
     y = func(x_input)
@@ -91,7 +90,6 @@ def main():
     sig = np.empty((len(x_input)))
     for i in range(len(x_input)):
         sig[i] = my_gp.shannon_information_gain(np.array([x_input[i]]))["sig"]
-    exit()
     plt.figure(figsize = (10,4))
     plt.plot(x_input,pred1_mean["f(x)"], label = "posterior mean",linewidth = 3.0)
     plt.plot(x_input,y, label = "ground truth",linewidth = 3.0)

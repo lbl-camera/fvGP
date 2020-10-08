@@ -103,7 +103,7 @@ class FVGP:
         gp_mean_function = None,
         init_hyperparameters = None,
         sparse = False,
-        compute_inverse = True
+        compute_inverse = False
         ):
 
         """
@@ -414,7 +414,7 @@ class FVGP:
         output:
             negative marginal log-likelihood (scalar)
         """
-        mean = self.mean_function(self.data_x,hyperparameters)
+        mean = self.mean_function(self,self.data_x,hyperparameters)
         x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
         y = self.data_y - mean
         sign, logdet = self.slogdet(K)
@@ -438,7 +438,7 @@ class FVGP:
         output:
             gradient of the negative marginal log-likelihood (vector)
         """
-        mean = self.mean_function(self.data_x,hyperparameters)
+        mean = self.mean_function(self,self.data_x,hyperparameters)
         b,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
         y = self.data_y - mean
         dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyperparameters)
@@ -475,7 +475,7 @@ class FVGP:
         output:
             hessian of the negative marginal log-likelihood (matrix)
         """
-        mean = self.mean_function(self.data_x,hyperparameters)
+        mean = self.mean_function(self,self.data_x,hyperparameters)
         x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
         #K = self.compute_covariance(hyperparameters, variances)
         y = self.data_y - mean
@@ -511,7 +511,7 @@ class FVGP:
             prior covariance
             covariance value product
         """
-        self.prior_mean_vec = self.mean_function(self.data_x, self.hyperparameters)
+        self.prior_mean_vec = self.mean_function(self,self.data_x,self.hyperparameters)
         cov_y,K = self._compute_covariance_value_product(
                 self.hyperparameters,
                 self.data_y,
@@ -662,7 +662,7 @@ class FVGP:
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
-        posterior_mean = self.mean_function(p, self.hyperparameters) + A
+        posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         return {"x": p,
                 "f(x)": posterior_mean}
     ###########################################################################
@@ -729,7 +729,7 @@ class FVGP:
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
         post_mean = np.empty((len(x_iset)))
-        for i in range(len(x_iset)): post_mean[i] = self.mean_function(x_iset[i], self.hyperparameters)
+        post_mean = self.mean_function(self,x_iset, self.hyperparameters)
         full_gp_prior_mean = np.append(self.prior_mean_vec, post_mean)
         return  {"x": p,
                  "K": self.prior_covariance,
@@ -953,7 +953,7 @@ class FVGP:
 
         if compute_means == True:
             A = k.T @ self.covariance_value_prod
-            posterior_mean = np.reshape(self.mean_function(p, self.hyperparameters) + A, (n_orig, len(x_output)))
+            posterior_mean = np.reshape(self.mean_function(self,p,self.hyperparameters) + A, (n_orig, len(x_output)))
         else:
             posterior_mean = None
         if compute_posterior_covariances == True:
@@ -1376,7 +1376,7 @@ class FVGP:
             self.variances[:, i]
         return new_points, new_values, new_variances
 
-    def default_mean_function(self,x, hyperparameters):
+    def default_mean_function(self,gp_obj,x,hyperparameters):
         """evaluates the gp mean function at the data points """
         mean = np.zeros((len(x)))
         mean[:] = np.mean(self.data_y)
