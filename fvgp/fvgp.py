@@ -481,19 +481,29 @@ class FVGP:
         """
         mean = self.mean_function(self,self.data_x,hyperparameters)
         x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
-        #K = self.compute_covariance(hyperparameters, variances)
         y = self.data_y - mean
         dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyperparameters)
         d2K_dH2 = self.hessian_gp_kernel(self.data_x,self.data_x, hyperparameters)
         K = np.array([K,] * len(hyperparameters))
         s = self.solve(K,dK_dH)
         ss = self.solve(K,d2K_dH2)
+        #print(np.sum(K),np.sum(dK_dH),np.sum(d2K_dH2))
         # make contiguous 
         K = np.ascontiguousarray(K, dtype=np.float64)
         y = np.ascontiguousarray(y, dtype=np.float64)
         s = np.ascontiguousarray(s, dtype=np.float64)
         ss = np.ascontiguousarray(ss, dtype=np.float64)
-        d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
+        #d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
+        len_hyperparameters = s.shape[0]
+        d2L_dH2 = np.empty((len_hyperparameters,len_hyperparameters))
+        for i in range(len_hyperparameters):
+            x1 = s[i]
+            for j in range(i+1):
+                x2 = s[j]
+                x3 = ss[i,j]
+                f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
+                d2L_dH2[i,j] = d2L_dH2[j,i] = f
+
         return -d2L_dH2
 
 
@@ -529,7 +539,12 @@ class FVGP:
         K = self.compute_covariance(hyperparameters, variances)
         y = values - mean
         x = self.solve(K, y)
+        #Jacobi preconditioned system:
+        #P = np.identity(len(K)) / K
+        #yy = np.linalg.solve(K@P,y)
+        #x = np.linalg.solve(P,yy)
         return x[:,0],K
+        #return x,K
     ##################################################################################
     def compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""
@@ -565,6 +580,8 @@ class FVGP:
         """
         fvGPs slogdet method based on torch
         """
+        #x = np.linalg.solve(A,b)
+        #return x
         if b.ndim == 1: b = np.expand_dims(b,axis = 1)
         if self.compute_device == "cpu":
             #####for sparsity:
@@ -1320,7 +1337,9 @@ class FVGP:
         return gradient
 
     def d2_gp_kernel_dh2(self, points1, points2, direction1, direction2, hyperparameters):
-        epsilon = 1e-6
+        ###things to consider then things go south with the Hessian:
+        ###make sure the epsilon is appropriate, not too large, not too small, 1e-3 seems alright
+        epsilon = 1e-3
         new_hyperparameters1 = np.array(hyperparameters)
         new_hyperparameters2 = np.array(hyperparameters)
         new_hyperparameters3 = np.array(hyperparameters)
