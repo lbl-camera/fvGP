@@ -420,6 +420,8 @@ class FVGP:
         x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
         y = self.data_y - mean
         sign, logdet = self.slogdet(K)
+        #print(sign,logdet,np.linalg.slogdet(K))
+        #sign = 1.0
         n = len(y)
         if sign == 0.0: return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
         return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
@@ -548,14 +550,13 @@ class FVGP:
             sign = sign.numpy()
             logdet = logdet.numpy()
             logdet = np.nan_to_num(logdet)
-            #sign = np.where(sign == -1, sign, 1)
             return sign, logdet
         elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
             A = torch.from_numpy(A).cuda()
             sign, logdet = torch.slogdet(A)
             sign = sign.cpu().numpy()
-            i = np.where(sign == -1)
-            sign[i] = 1
+            #i = np.where(sign == -1)
+            #sign[i] = 1
             logdet = logdet.cpu().numpy()
             logdet = np.nan_to_num(logdet)
             return sign, logdet
@@ -596,7 +597,6 @@ class FVGP:
                     print("reason: ", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
                     return x
-
             return x.numpy()
         elif self.compute_device == "gpu" or A.ndim < 3:
             A = torch.from_numpy(A).cuda()

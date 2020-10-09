@@ -7,6 +7,8 @@ import time
 def stationary_kernel(x1,x2,hps, obj = None):
     d = abs(np.subtract.outer(x1[:,0],x2[:,0])/hps[1])
     return hps[0] * obj.matern_kernel_diff1(d,1)
+    #return hps[0] * obj.matern_kernel_diff2(d,1)
+    #return hps[0] * obj.exponential_kernel(d,1)
 
 def func(points):
     return 3.0*points + 0.3*np.sin(10.0*points)
@@ -36,45 +38,49 @@ def main():
             dask_client = False)
     
     print(my_gp.log_likelihood(my_gp.hyperparameters))
-    x = np.linspace(100,105,100)
-    y = np.linspace(5,10,100)
-    dx = 5.0/100.0
-    dy = 5.0/100.0
+    res = 50
+    x = np.linspace(100,100.001,res)
+    y = np.linspace(5,5.001,res)
+    dx = 0.001/float(res)
+    dy = 0.001/float(res)
     X,Y = np.meshgrid(x,y)
     L = np.empty((X.shape))
     gx = np.empty((X.shape))
     gy = np.empty((X.shape))
     t = time.time()
+
     for i in range(len(x)):
-        print("progress: ", i, " time passed: ", time.time()-t)
+        print("progress: ", ((i+0.001)/float(res))*100.0, " time passed: ", time.time()-t)
         for j in range(len(y)):
             L[i,j] = my_gp.log_likelihood(np.array([X[i,j],Y[i,j]]))
             g = my_gp.log_likelihood_gradient(np.array([X[i,j],Y[i,j]]))
             gx[i,j]= g[0]
             gy[i,j]= g[1]
 
-    plt.figure(0)
-    a = plt.pcolormesh(X,Y,L)
-    plt.title("marginal log-likelihood")
-    plt.colorbar(a)
+
+    
+    #a = plt.pcolormesh(X,Y,L)
+    #plt.title("marginal log-likelihood")
+    #plt.colorbar(a)
+    
+    fig,axs = plt.subplots(2,2)
     gxfd,gyfd = np.gradient(L,dx,dy)
 
-    plt.figure(1)
-    a = plt.pcolormesh(X,Y,gxfd)
-    plt.title("finite diff grad x")
-    plt.colorbar(a)
-    plt.figure(2)
-    a = plt.pcolormesh(X,Y,gyfd)
-    plt.title("finite diff grad y")
-    plt.colorbar(a)
-    plt.figure(3)
-    a = plt.pcolormesh(X,Y,gx)
-    plt.title("analytical grad x")
-    plt.colorbar(a)
-    plt.figure(4)
-    a = plt.pcolormesh(X,Y,gy)
-    plt.title("analytical grad y")
-    plt.colorbar(a)
+    a = axs[0,0].pcolormesh(X,Y,gxfd)
+    axs[0,0].set_title("finite diff grad x")
+    fig.colorbar(a, ax = axs[0,0])
+
+    a = axs[1,0].pcolormesh(X,Y,gyfd)
+    axs[1,0].set_title("finite diff grad y")
+    fig.colorbar(a, ax = axs[1,0])
+
+    a = axs[1,1].pcolormesh(X,Y,gx)
+    axs[1,1].set_title("analytical grad x")
+    fig.colorbar(a, ax = axs[1,1])
+    
+    a = axs[0,1].pcolormesh(X,Y,gy)
+    axs[0,1].set_title("analytical grad y")
+    fig.colorbar(a, ax = axs[0,1])
 
     plt.show()
 
