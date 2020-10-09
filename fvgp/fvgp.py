@@ -420,8 +420,6 @@ class FVGP:
         x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
         y = self.data_y - mean
         sign, logdet = self.slogdet(K)
-        #print(sign,logdet,np.linalg.slogdet(K))
-        #sign = 1.0
         n = len(y)
         if sign == 0.0: return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
         return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
@@ -487,7 +485,6 @@ class FVGP:
         K = np.array([K,] * len(hyperparameters))
         s = self.solve(K,dK_dH)
         ss = self.solve(K,d2K_dH2)
-        #print(np.sum(K),np.sum(dK_dH),np.sum(d2K_dH2))
         # make contiguous 
         K = np.ascontiguousarray(K, dtype=np.float64)
         y = np.ascontiguousarray(y, dtype=np.float64)
