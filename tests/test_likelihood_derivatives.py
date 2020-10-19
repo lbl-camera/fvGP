@@ -24,7 +24,7 @@ def main():
     values = func(points)
     variances = np.ones((values.shape)) * 0.2
     #########################################
-    my_gp = FVGP(1,1,1,points,values,variances = variances,gp_kernel_function = stationary_kernel, compute_device = "cpu")
+    my_gp = FVGP(1,1,1,points,values,np.array([10,10]),variances = variances,gp_kernel_function = stationary_kernel, compute_device = "cpu")
 
 
     training_method = 'global'

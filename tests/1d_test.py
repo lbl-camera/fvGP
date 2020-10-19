@@ -40,9 +40,9 @@ def main():
     #values[:,1] = func(points)[0]*2.44
     #values[:,2] = func(points)[0]*3.55
     #########################################
-    my_gp = FVGP(1,1,1,points,values,gp_kernel_function = stationary_kernel, compute_device = "cpu")
-    #my_gp = FVGP(1,1,3,points,values,gp_kernel_function = mt_kernel, compute_device = "cpu")
-    #my_gp = FVGP(1,1,1,points,values,gp_kernel_function = non_stationary_kernel, compute_device = "cpu")
+    my_gp = FVGP(1,1,1,points,values,np.ones((2)),
+            gp_kernel_function = stationary_kernel,
+            compute_device = "cpu")
 
     """
     x = np.linspace(100.0,200.0,50)

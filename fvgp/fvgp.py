@@ -96,12 +96,12 @@ class FVGP:
         output_number,
         points,
         values,
+        init_hyperparameters,
         value_positions = None,
         variances = None,
         compute_device = "cpu",
         gp_kernel_function = None,
         gp_mean_function = None,
-        init_hyperparameters = None,
         sparse = False,
         compute_inverse = False
         ):
@@ -139,6 +139,7 @@ class FVGP:
             )
         else:
             self.value_positions = value_positions
+
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -164,8 +165,6 @@ class FVGP:
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        if init_hyperparameters is None:
-            init_hyperparameters = [1.0] * (self.input_dim + self.output_dim)
         self.hyperparameters = init_hyperparameters
         ##########################################
         #transform index set and elements#########

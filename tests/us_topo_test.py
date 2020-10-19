@@ -5,7 +5,7 @@ a = np.load("us_topo.npy")
 points = a[::8,0:2]
 values = a[::8,2:3]
 print("length of data set: ", len(points))
-my_gp = gp(2,1,1,points,values, sparse = False)
+my_gp = gp(2,1,1,points,values,np.array([1,1,1]), sparse = False)
 
 #train(hyperparameter_bounds, init_hyperparameters=None, optimization_method='global', optimization_pop_size=20, optimization_tolerance=0.1, optimization_max_iter=120, dask_client=False) method of fvgp.fvgp.FVGP instance
 
