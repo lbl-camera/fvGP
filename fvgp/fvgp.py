@@ -299,7 +299,7 @@ class FVGP:
         except:
             print("Async Hyper-parameter update not successful. I am keeping the old ones.")
             print("That probbaly means you are not optimizing them asynchronously")
-            print("hyper-parameters: ", self.hyperparameters)
+            print("hyperparameters: ", self.hyperparameters)
     ##################################################################################
     def optimize_log_likelihood(
         self,
