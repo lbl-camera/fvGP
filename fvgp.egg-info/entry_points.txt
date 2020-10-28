@@ -1,3 +1,0 @@
-[console_scripts]
-fvgp = fvgp.cli:main
-
