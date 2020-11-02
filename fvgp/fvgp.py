@@ -1070,7 +1070,7 @@ class FVGP:
             mean = np.reshape(A, (n_orig, len(x_output)))
         else:
             mean = None
-        if compute_posterior_covariance == True:
+        if compute_posterior_covariances == True:
             k_covariance_prod = self.solve(self.prior_covariance,k)
             kg_covariance_prod = self.solve(self.prior_covariance,k_g)
             a = kk_g - ((k_covariance_prod.T @ k) + (k_g_covariance_prod.T @ k))
