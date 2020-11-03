@@ -675,6 +675,34 @@ class FVGP:
         posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         return {"x": p,
                 "f(x)": posterior_mean}
+
+    def posterior_mean_grad(self, x_iset, direction):
+        """
+        function to compute the gradient of the posterior mean in
+        a specified direction
+        input:
+        ------
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
+        output:
+        -------
+            {"x":    the input points,
+             "direction": the direction
+             "df(x)/dx": the gradient of the posterior mean vector (1d numpy array)}
+        """
+        p = np.array(x_iset)
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]"); input()
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        kk = self.kernel(p, p,self.hyperparameters,self)
+        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
+        kk_g =  self.d_kernel_dx(p, p,direction,self.hyperparameters)
+        A = k_g.T @ self.covariance_value_prod
+        posterior_mean_grad = np.reshape(A, (n_orig, len(x_output)))
+        return {"x": p,
+                "direction":directione,
+                "df(x)/dx": posterior_mean}
+
     ###########################################################################
     def posterior_covariance(self, x_iset):
         """
@@ -712,6 +740,39 @@ class FVGP:
         return {"x": p,
                 "v(x)": np.diag(a),
                 "S": a}
+
+    def posterior_covariance_grad(self, x_iset,direction):
+        """
+        function to compute the gradient of the posterior covariance
+        in a specified direction
+        input:
+        ------
+            x_iset: 2d numpy array of points, note, these are elements of the
+            index set which results from a cartesian product of input and output space
+        output:
+        -------
+            {"x":    the index set points,
+             "v(x)": the posterior variances (1d numpy array) for each input point,
+             "S":    covariance matrix, v(x) = diag(S)}
+        """
+        p = np.array(x_iset)
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
+        kk =  self.kernel(p, p,self.hyperparameters,self)
+        kk_g =  self.d_kernel_dx(p, p,direction,self.hyperparameters)
+        k_covariance_prod = self.solve(self.prior_covariance,k)
+        kg_covariance_prod = self.solve(self.prior_covariance,k_g)
+        a = kk_g - ((k_covariance_prod.T @ k) + (k_g_covariance_prod.T @ k))
+        covariance_grad = [
+            a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
+            for i in range(int(a.shape[0] / tasks))
+            ]
+        return {"x": p,
+                "dv(x)/dx": np.diag(a),
+                "dS(x)/dx": a}
+
     ###########################################################################
     def gp_prior(self, x_iset):
         """
