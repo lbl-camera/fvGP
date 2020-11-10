@@ -378,6 +378,7 @@ class FVGP:
             except Exception as err:
                 print("starting with random points because")
                 print(str(err))
+                print("This is nothing to worry about, especially in the first iteration")
                 x0 = None
             self.opt = HGDL(self.log_likelihood,
                        self.log_likelihood_gradient,
