@@ -7,6 +7,7 @@ import unittest
 import numpy as np
 from fvgp.fvgp import FVGP
 import matplotlib.pyplot as plt
+import time
 
 class TestfvGP(unittest.TestCase):
     """Tests for `gpcam` package."""
@@ -23,11 +24,10 @@ class TestfvGP(unittest.TestCase):
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
         values = func(points)
         my_gp = FVGP(1,1,1,points,values,np.ones((2)),
-                gp_kernel_function = stationary_kernel,
+                gp_kernel_function = None,
                 compute_device = "cpu")
-        training_method = 'global'
         my_gp.train([[100.0,200.0],[5.0,10.0]],
-                init_hyperparameters = [10.0,10.0],
+                init_hyperparameters = [110.0,8.0],
                 optimization_method = training_method,
                 optimization_pop_size = 20,
                 optimization_tolerance = 0.0001,
@@ -38,7 +38,9 @@ class TestfvGP(unittest.TestCase):
             for i in range(10):
                 time.sleep(1)
                 my_gp.update_hyperparameters()
-                print(my_gp.hyperparameters)
+                print("++++++++++++++++++++++++++++++++++++++++++++++++")
+                print("|latest hyper parameters:| ",my_gp.hyperparameters)
+                print("++++++++++++++++++++++++++++++++++++++++++++++++")
             my_gp.stop_training()
 
         print("working on the prediction...")
@@ -76,8 +78,8 @@ class TestfvGP(unittest.TestCase):
     ############################################################
     def test_us_topo(self,method = "global",dask_client = False):
         a = np.load("us_topo.npy")
-        points = a[::8,0:2]
-        values = a[::8,2:3]
+        points = a[::16,0:2]
+        values = a[::16,2:3]
         print("length of data set: ", len(points))
         my_gp = FVGP(2,1,1,points,values,np.array([1,1,1]), sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
@@ -85,6 +87,17 @@ class TestfvGP(unittest.TestCase):
                 optimization_max_iter = 20,
                 optimization_pop_size = 20,
                 dask_client = dask_client)
+        if method == "hgdl":
+            print("lets see how the hyper-parameters are changing")
+            for i in range(30):
+                time.sleep(1)
+                my_gp.update_hyperparameters()
+                print("++++++++++++++++++++++++++++++++++++++++++++++++")
+                print("|latest hyper parameters:| ",my_gp.hyperparameters)
+                print("++++++++++++++++++++++++++++++++++++++++++++++++")
+            my_gp.stop_training()
+
+
     ############################################################
 
 
