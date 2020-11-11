@@ -85,7 +85,7 @@ class TestfvGP(unittest.TestCase):
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
         my_gp.train(bounds, optimization_method = method, 
                 optimization_max_iter = 20,
-                optimization_pop_size = 20,
+                optimization_pop_size = 4,
                 dask_client = dask_client)
         if method == "hgdl":
             print("lets see how the hyper-parameters are changing")
