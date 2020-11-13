@@ -481,7 +481,7 @@ class FVGP:
         K = np.array([K,] * len(hyperparameters))
         s = self.solve(K,dK_dH)
         ss = self.solve(K,d2K_dH2)
-        # make contiguous 
+        # make contiguous
         K = np.ascontiguousarray(K, dtype=np.float64)
         y = np.ascontiguousarray(y, dtype=np.float64)
         s = np.ascontiguousarray(s, dtype=np.float64)
@@ -496,10 +496,7 @@ class FVGP:
                 x3 = ss[i,j]
                 f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
                 d2L_dH2[i,j] = d2L_dH2[j,i] = f
-
         return -d2L_dH2
-
-
     ##################################################################################
     ##################################################################################
     ##################################################################################
