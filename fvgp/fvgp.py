@@ -227,8 +227,6 @@ class FVGP:
     ###################################################################################
     ###################################################################################
     ###################################################################################
-    ###################################################################################
-    ###################################################################################
     #################TRAINING##########################################################
     ###################################################################################
     def stop_training(self):
@@ -696,7 +694,7 @@ class FVGP:
         kk = self.kernel(p, p,self.hyperparameters,self)
         k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
         kk_g =  self.d_kernel_dx(p, p,direction,self.hyperparameters)
-        posterior_mean_grad = mean der + (k_g.T @ self.covariance_value_prod - k_cov_prod @ mean_der)
+        posterior_mean_grad = mean_der + (k_g.T @ self.covariance_value_prod - k_cov_prod @ mean_der)
         return {"x": p,
                 "direction":direction,
                 "df/dx": posterior_mean_grad}
@@ -859,6 +857,9 @@ class FVGP:
         function comuting the entropy given points
         """
         priors = self.gp_prior(x_iset)
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
         S = priors["S"]
         dim  = len(S[0])
         s, logdet = self.slogdet(S)
@@ -868,11 +869,14 @@ class FVGP:
         """
         function comuting the entropy given points
         """
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
         priors1 = self.gp_prior(x_iset)
         priors2 = self.gp_prior_grad(x_iset,direction)
         S1 = priors["S"]
         S2 = priors["dS/dx"]
-        return 0.5 * np.linalg.inv(S) @ S2
+        return 0.5 * np.trace(np.linalg.inv(S1) @ S2)
     ###########################################################################
     def kl_div(self,mu1, mu2, S1, S2):
         """
@@ -890,32 +894,58 @@ class FVGP:
         if kld < -1e-4: print("negative KL divergence encountered")
         return kld
     ###########################################################################
-    def gp_kl_div(self, x_iset, comp_mean, comp_cov):
+    def kl_div_grad(self,mu1,dmu1dx, mu2, S1, dS1dx, S2):
         """
-        function to compute the kl divergence of a posterior at given points
+        function comuting the gradient of the KL divergence between two normal distributions
+        when the gradients of the mean and covariance are given
+        a = kl_div(mu1, dmudx,mu2, S1, dS1dx, S2); S1, S2 are a 2d numpy arrays, matrices has to be non-singular
+        mu1, mu2 are mean vectors, given as 2d arrays
+        """
+        s1, logdet1 = self.slogdet(S1)
+        s2, logdet2 = self.slogdet(S2)
+        x1 = self.solve(S2,dS1dx)
+        mu = np.subtract(mu2,mu1)
+        x2 = self.solve(S2,mu)
+        x2 = self.solve(S2,-dmu1dx)
+        dim = len(mu)
+        kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2 @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
+        if kld < -1e-4: print("negative KL divergence encountered")
+        return kld
+    ###########################################################################
+    def gp_kl_div_grad(self, x_iset, comp_mean, comp_cov, direction):
+        """
+        function to compute the gradient of the kl divergence of a posterior at given points
         input:
         ------
             x_iset: 2d numpy array of points, note, these are elements of the 
-            index set which results from a cartesian product of input and output space
+                    index set which results from a cartesian product of input and output space
+            direction: direction in which the gradient will be computed
         output:
         -------
             {"x": the index set points,
              "gp posterior mean": ,
+             "gp posterior mean grad": ,
              "gp posterior covariance":  ,
+             "gp posterior covariance grad":  ,
              "given mean": the user-provided mean vector,
              "given covariance":  the use_provided covariance,
-             "kl-div:": the kl div between gp pdf and given pdf}
+             "kl-div grad": the grad of the kl div between gp pdf and given pdf}
         """
-        res = self.posterior_mean(x_iset)
-        gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_iset)["S"]
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        gp_mean = self.posterior_mean(x_iset)["f(x)"]
+        gp_mean_grad = self.posterior_mean_grad(x_iset,direction)["f(x)"]
+        gp_cov  = self.posterior_covariance(x_iset)["S"]
+        gp_cov_grad  = self.posterior_covariance(x_iset,direction)["dS/dx"]
 
         return {"x": x_iset,
                 "gp posterior mean" : gp_mean,
+                "gp posterior mean grad" : gp_mean_grad,
                 "gp posterior covariance": gp_cov,
+                "gp posterior covariance grad": gp_cov_grad,
                 "given mean": comp_mean,
                 "given covariance": comp_cov,
-                "kl-div": self.kl_div(gp_mean, comp_mean, gp_cov, comp_cov)}
+                "kl-div grad": self.kl_div(gp_mean, gp_mean_grad,comp_mean, gp_cov, gp_cov_grad, comp_cov)}
     ###########################################################################
     def shannon_information_gain(self, x_iset):
         """
@@ -931,6 +961,8 @@ class FVGP:
              "posterior entropy": posterior entropy
              "sig:" shannon_information gain}
         """
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         p = np.array(x_iset)
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
@@ -948,6 +980,26 @@ class FVGP:
                 "posterior entropy": e2,
                 "sig":sig}
     ###########################################################################
+    def shannon_information_gain_grad(self, x_iset, direction):
+        """
+        function to compute the gradient if the shannon-information gain of data
+        input:
+        ------
+            x_iset: 2d numpy array of points, note, these are elements of the 
+                    index set which results from a cartesian product of input and output space
+            direction: direction in which to compute the gradient
+        output:
+        -------
+            {"x": the index set points,
+             "sig_grad:" shannon_information gain gradient}
+        """
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        e2 = self.gp_entropy_grad(x_init,direction)
+        sig = e2
+        return {"x": p,
+                "sig_grad":sig_grad}
+    ###########################################################################
     def posterior_probability(self, x_iset, comp_mean, comp_cov):
         """
         function to compute the probability of an uncertain feature given the gp posterior
@@ -960,14 +1012,12 @@ class FVGP:
 
         output:
         -------
-            {"x": the index set points,
-             "gp posterior mean": ,
-             "gp posterior covariance":  ,
-             "given mean": the user-provided mean vector,
-             "given covariance":  the use_provided covariance,
-             "kl-div:": the kl div between gp pdf and given pdf}
+            {"mu":,
+             "covariance": ,
+             "probability":  ,
         """
-
+        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         res = self.posterior_mean(x_iset)
         gp_mean = res["f(x)"]
         gp_cov = self.posterior_covariance(x_iset)["S"]
@@ -983,220 +1033,37 @@ class FVGP:
                @ cov @ (gp_cov_inv @ gp_mean + comp_cov_inv @ comp_mean))\
                -(gp_mean.T @ gp_cov_inv @ gp_mean + comp_mean.T @ comp_cov_inv @ comp_mean)).squeeze()
         ln_p = (C + 0.5 * logdet1) - (np.log((2.0*np.pi)**(dim/2.0)) + (0.5*(logdet2 + logdet3)))
-        #print("posterior gp mean: ", gp_mean)
-        #print("given mean: ", comp_mean)
-        #print("posterior gp cov : ", gp_cov)
-        #print("given cov        : ", comp_cov)
-        #print("===========")
-        #print("combined mean: ", mu)
-        #print("combined cov:  ", cov)
-        #print("integral gp g: ", self._int_gauss(gp_cov))
-        #print("integral co g: ", self._int_gauss(comp_cov))
-        #print("integral res g: ", self._int_gauss(cov))
         return {"mu": mu,
                 "covariance": cov,
                 "probability": 
                 np.exp(ln_p)
                 }
+    def posterior_probability_grad(self, x_iset, comp_mean, comp_cov, direction):
+        """
+        function to compute the gradient of the probability of an uncertain feature given the gp posterior
+        input:
+        ------
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
+            comp_mean: a vector of mean values, same length as x_iset
+            comp_cov: covarianve matrix, \in R^{len(x_iset)xlen(x_iset)}
+            direction: direction in which to compute the gradient
+
+        output:
+        -------
+            {"probability grad":  ,}
+        """
+        x1 = np.array(x_init)
+        x2 = np.array(x_init)
+        x1[:,direction] = x1[:,direction] + 1e-6
+        x2[:,direction] = x2[:,direction] - 1e-6
+
+        probability_grad = (posterior_probability(x1, comp_mean_comp_cov) - posterior_probability(x2, comp_mean_comp_cov))/2e-6
+        return {"probability grad": probability_grad}
+
     ###########################################################################
     def _int_gauss(self,S):
         return ((2.0*np.pi)**(len(S)/2.0))*np.sqrt(np.linalg.det(S))
-
-
-    def compute_posterior_fvGP_pdf(self, x_input, x_output=np.array([[0.0]]), mode = 'cartesian product',
-            compute_entropies = False, compute_prior_covariances = False,
-            compute_posterior_covariances = False, compute_means = True):
-        """
-        Function to compute the variances, covariances and means of the (joint) posterior.
-        gp.compute_posterior_fvGP_pdf(x_input, x_output=None, mode = 'cartesian product',compute_entropy = True, compute_covariance = True, compute_mean = True)
-        Parameters:
-        -----------
-            x_input (2d numpy array): a set of elements of the input set, these are coordinates in the input (parameter) space
-        Optional:
-        ---------
-            x_output(2d numpy array):             a set of elements of the output set, these are coordinates in the output space, default: None
-            mode (str):                           'cartesian product' or 'stack', tell the algorithm how input and output coordinates will be combined, if 'stack' row number of x_input and x_output has to be the same
-            compute_entropies (bool):             True/False, can be turned off if not required for better computational performance, default: True
-            compute_prior_covariances (bool):     True/False, can be turned off if not required for better computational performance, default: True
-            compute_posterior_covariances (bool): True/False, can be turned off if not required for better computational performance, default: True
-            compute_mean(bool):                   True/False, can be turned off if not required for better computational performance, default: True
-        Returns:
-        --------
-        res = {"input points": p,
-               "posterior means": mean,
-               "posterior covariances": covariance,
-               "prior covariances": full_gp_covariances,
-               "prior means": None,
-               "entropies": entropies
-               }
-        """
-        ########################################
-        ####computation we need for all returns:
-        ########################################
-        if len(x_input.shape) == 1: 
-            raise ValueError("x_input is not a 2d numpy array, please see docstring for correct usage of gp.compute_posterior_fvGP_pdf() function, thank you")
-        n_orig = len(x_input)
-        tasks = len(x_output)
-        if mode == 'cartesian product':
-            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
-            counter = 0
-            for element in itertools.product(x_input, x_output):
-                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
-                counter += 1   ###can't we append?
-        elif mode == 'stack':
-            new_points = np.column_stack([x_input,x_output])
-        p = np.array(new_points)
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
-        kk = self.kernel(p, p,self.hyperparameters,self)
-        if compute_prior_covariances == True: 
-            full_gp_covariances = \
-                    np.asarray([np.block([[self.prior_covariance,k[:,i*tasks:(i+1)*tasks]],\
-                             [k[:,i*tasks:(i+1)*tasks].T,kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
-                    for i in range(n_orig)])
-        else: full_gp_covariances = None
-        if compute_entropies == True:
-            entropies = []
-            for i in range(n_orig):
-                sgn, logdet = self.slogdet(np.block([[self.prior_covariance, 
-                                              k[:,i*tasks:(i+1)*tasks]],[k[:,i*tasks:(i+1)*tasks].T, 
-                                              kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]]))
-                if sgn == 0.0: entropies.append(0.0); print("entropy is zero, that should never happen. Double check your input!")
-                else:entropies.append(sgn*logdet)
-            entropies = np.asarray(entropies)
-        else: entropies = None
-
-        if compute_means == True:
-            A = k.T @ self.covariance_value_prod
-            posterior_mean = np.reshape(self.mean_function(self,p,self.hyperparameters) + A, (n_orig, len(x_output)))
-        else:
-            posterior_mean = None
-        if compute_posterior_covariances == True:
-            k_cov_prod = self.solve(self.prior_covariance,k)
-            a = kk - (k_cov_prod.T @ k)
-            diag = np.diag(a)
-            diag = np.where(diag<0.0,0.0,diag)
-            if any([x < -0.001 for x in np.diag(a)]):
-                print("CAUTION, negative variances encountered. That normally means that the model is unstable.")
-                print("Rethink the kernel definitions, add more noise to the data,")
-                print("or double check the hyper-parameter optimization bounds. This will not ")
-                print("terminate the algorithm, but expect anomalies.")
-                print("diagonal of the posterior covariance: ",np.diag(a))
-                prior = np.block([[self.prior_covariance, k],[k.T, kk]])
-                print("eigenvalues of the prior: ", np.linalg.eig(prior)[0])
-                print("data points:")
-                print(self.data_x)
-                print("prediction points:")
-                print(p)
-                print("hyper parameters")
-                print(self.hyperparameters)
-                print(np.linalg.matrix_rank(prior), len(prior))
-                print("===============")
-                input()
-
-            np.fill_diagonal(a,diag)
-            covariance = np.asarray([
-                a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
-                for i in range(int(a.shape[0] / tasks))
-            ])
-        else:
-            covariance = None
-        res = {"input points": p,
-               "posterior means": posterior_mean,
-               "posterior covariances": covariance,
-               "prior covariances": full_gp_covariances,
-               "prior means": None,
-               "entropies": entropies
-               }
-        return res
-    ###########################################################################
-    def compute_posterior_fvGP_pdf_gradient(self, x_input, x_output=np.array([[0.0]]), direction = 0, mode = 'cartesian product',
-            compute_entropies = False, compute_prior_covariances = False,
-            compute_posterior_covariances = False, compute_means = True):
-        """
-        Function to compute the variances, covariances and means of the (joint) posterior.
-        gp.compute_posterior_fvGP_pdf_gradient(x_input, x_output=None, direction = 0, mode = 'cartesian product',compute_entropy = True, compute_covariance = True, compute_mean = True)
-        Parameters:
-        -----------
-            x_input (2d numpy array): a set of elements of the input set, these are coordinates in the input (parameter) space
-        Optional:
-        ---------
-            x_output(2d numpy array): a set of elements of the output set, these are coordinates in the output space, default: None
-            direction (int): index of the derivative direction
-            mode (str): 'cartesian product' or 'stack', tell the algorithm how input and output coordinates will be combined, if 'stack' row number of x_input and x_output has to be the same
-            compute_entropies (bool):             True/False, can be turned off if not required for better computational performance, default: True
-            compute_prior_covariances (bool):     True/False, can be turned off if not required for better computational performance, default: True
-            compute_posterior_covariances (bool): True/False, can be turned off if not required for better computational performance, default: True
-            compute_mean(bool):                   True/False, can be turned off if not required for better computational performance, default: True
-        Returns:
-        --------
-        res = {"input points": p,
-               "posterior mean gradients": mean,
-               "posterior covariance gradients": covariance,
-               "prior covariance gradients": full_gp_covariances,
-               "prior mean gradients": None,
-               "entropy gradients": entropies
-               }
-        """
-        ####computation we need for all returns:
-        if len(x_input.shape) == 1: raise ValueError("x_input is not a 2d numpy array, please see docstring for correct usage of gp.fvGP function, thank you")
-        n_orig = len(x_input)
-        tasks = len(x_output)
-        if mode == 'cartesian product':
-            new_points = np.zeros((len(x_input) * len(x_output), len(x_input[0]) + len(x_output[0])))
-            counter = 0
-            for element in itertools.product(x_input, x_output):
-                new_points[counter] = np.concatenate([element[0], element[1]], axis=0)
-                counter += 1   ###can't we append?
-        elif mode == 'stack':
-            new_points = np.column_stack([x_input,x_output])
-        p = np.array(new_points)
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
-        kk =  self.kernel(p, p,self.hyperparameters,self)
-        kk_g =  self.d_kernel_dx(p, p,direction,self.hyperparameters)
-        if compute_prior_covariances == True: 
-            full_gp_covariances = np.asarray([
-                np.block([[self.prior_covariance, k_g[:,i*tasks:(i+1)*tasks]],\
-                          [k_g[:,i*tasks:(i+1)*tasks].T, kk_g[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])\
-                          for i in range(n_orig)])
-        else: full_gp_covariances = None
-
-        if compute_entropies == True:
-            entropies = []
-            for i in range(n_orig):
-                Sigma = np.block([[self.prior_covariance, k[:,i*tasks:(i+1)*tasks]],  [\
-                                k[:,i*tasks:(i+1)*tasks].T,   kk[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])
-                Sigma_d = np.block([[self.prior_covariance, k_g[:,i*tasks:(i+1)*tasks]],\
-                                    [k_g[:,i*tasks:(i+1)*tasks].T, kk_g[i*tasks:(i+1)*tasks,i*tasks:(i+1)*tasks]]])
-                entropies.append(np.trace(self.solve(Sigma,Sigma_d)))
-            entropies = np.asarray(entropies)
-        else: entropies = None
-
-        if compute_means == True:
-            A = k_g.T @ self.covariance_value_prod
-            mean = np.reshape(A, (n_orig, len(x_output)))
-        else:
-            mean = None
-        if compute_posterior_covariances == True:
-            k_covariance_prod = self.solve(self.prior_covariance,k)
-            kg_covariance_prod = self.solve(self.prior_covariance,k_g)
-            a = kk_g - ((k_covariance_prod.T @ k) + (k_g_covariance_prod.T @ k))
-
-            covariance = [
-                a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
-                for i in range(int(a.shape[0] / tasks))
-                ]
-        else:
-            covariance = None
-
-        res = {"input points": p,
-               "posterior mean gradients": mean,
-               "posterior covariance gradients": covariance,
-               "prior covariance gradients": full_gp_covariances,
-               "prior mean gradients": None,
-               "entropy gradients": entropies
-               }
-        return res
 
     ##################################################################################
     ##################################################################################
