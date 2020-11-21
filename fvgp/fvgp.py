@@ -384,6 +384,12 @@ class FVGP:
                        hp_bounds,
                        number_of_walkers = likelihood_pop_size, 
                        maxEpochs = optimization_max_iter, verbose = False)
+            #self.opt = HGDL(self.log_likelihood,
+            #           self.log_likelihood_gradient,
+            #           self.log_likelihood_hessian,
+            #           hp_bounds,
+            #           maxEpochs = optimization_max_iter, verbose = False)
+
             self.opt.optimize(dask_client = dask_client, x0 = x0)
             res = self.opt.get_latest(10)
             while res["success"] == False:
