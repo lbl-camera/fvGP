@@ -215,7 +215,8 @@ class FVGP:
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.zeros((values.shape))
+            self.variances = np.ones((values.shape)) * abs(np.mean(self.data_y[0]) / 100.0)
+            print("CAUTION: you have not provided data variances, they will set to be 1 percent of the |mean| of the data values!")
         else:
             self.variances = variances
         ######################################
