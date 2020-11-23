@@ -311,18 +311,20 @@ class FVGP:
         optimization_tolerance,
         dask_client):
 
-        epsilon = np.inf
-        step_size = 1.0
+        start_log_likelihood = self.log_likelihood(starting_hps)
+
         print(
             "Hyper-parameter tuning in progress. Old hyper-parameters: ",
-            starting_hps, " with old log likelihood: ",
-            self.log_likelihood(starting_hps))
+            starting_hps, " with old log likelihood: ", start_log_likelihood)
 
         ############################
-        ####start of optimization:##
+        ####global optimization:##
         ############################
         if optimization_method == "global":
-            print("I am performing a global differential evolution algorithm to find the optimal hyper-parameters.")
+            print("I am performing a global differential evolution algorithm to find the optimal hyperparameters.")
+            print("maximum number of iterations: ", optimization_max_iter)
+            print("termination tolerance: ", optimization_tolerance)
+            print("bounds: ", hp_bounds)
             res = differential_evolution(
                 self.log_likelihood,
                 hp_bounds,
@@ -331,11 +333,13 @@ class FVGP:
                 popsize = likelihood_pop_size,
                 tol = optimization_tolerance,
             )
-            hyperparameters1 = np.array(res["x"])
-            Eval1 = self.log_likelihood(hyperparameters1)
-            hyperparameters = np.array(hyperparameters1)
+            hyperparameters = np.array(res["x"])
+            Eval = self.log_likelihood(hyperparameters)
             print("I found hyper-parameters ",hyperparameters," with likelihood ",
-                self.log_likelihood(hyperparameters))
+                Eval," via global optimization")
+        ############################
+        ####global optimization:##
+        ############################
         elif optimization_method == "local":
             hyperparameters = np.array(starting_hps)
             print("Performing a local update of the hyper parameters.")
@@ -352,11 +356,7 @@ class FVGP:
                 bounds = hp_bounds,
                 tol = optimization_tolerance,
                 callback = None,
-                options = {"maxiter": optimization_max_iter,
-                    #"iprint" : 101,
-                    }#,
-                           #"ftol": optimization_tolerance}
-                )
+                options = {"maxiter": optimization_max_iter})
 
             if OptimumEvaluation["success"] == True:
                 print(
@@ -365,7 +365,10 @@ class FVGP:
                 )
                 hyperparameters = OptimumEvaluation["x"]
             else:
-                print("Optimization not successful.")
+                print("Local optimization not successful.")
+        ############################
+        ####hybrid optimization:####
+        ############################
         elif optimization_method == "hgdl":
             print("HGDL optimization submitted")
             print('bounds are',hp_bounds)
@@ -402,11 +405,11 @@ class FVGP:
         else:
             raise ValueError("no optimization mode specified")
         ###################################################
+        if start_log_likelihood < self.log_likelihood(hyperparameters): hyperparameters = np.array(starting_hps)
         print("New hyper-parameters: ",
             hyperparameters,
             "with log likelihood: ",
             self.log_likelihood(hyperparameters))
-
         return hyperparameters
     ##################################################################################
     def log_likelihood(self,hyperparameters):
