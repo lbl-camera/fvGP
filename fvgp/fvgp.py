@@ -967,9 +967,9 @@ class FVGP:
              "posterior entropy": posterior entropy
              "sig:" shannon_information gain}
         """
+        p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        p = np.array(x_iset)
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
 
@@ -999,6 +999,7 @@ class FVGP:
             {"x": the index set points,
              "sig_grad:" shannon_information gain gradient}
         """
+        p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         e2 = self.gp_entropy_grad(x_init,direction)
@@ -1022,6 +1023,7 @@ class FVGP:
              "covariance": ,
              "probability":  ,
         """
+        p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         res = self.posterior_mean(x_iset)
