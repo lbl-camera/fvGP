@@ -332,6 +332,7 @@ class FVGP:
                 maxiter=optimization_max_iter,
                 popsize = likelihood_pop_size,
                 tol = optimization_tolerance,
+                workers = 1,
             )
             hyperparameters = np.array(res["x"])
             Eval = self.log_likelihood(hyperparameters)
