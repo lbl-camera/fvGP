@@ -665,7 +665,6 @@ class FVGP:
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]"); input()
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
-        kk = self.kernel(p, p,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
         posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         return {"x": p,
@@ -689,17 +688,16 @@ class FVGP:
         p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]"); input()
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        k_cov_prod = self.solve(self.prior_covariance,k)
-        x1 = np.array(x_init)
-        x2 = np.array(x_init)
-        x1[:,direction] = x1[:,direction] + 1e-6
-        x2[:,direction] = x2[:,direction] - 1e-6
-        mean_der = (self.mean_function(self,x1,hyperparameters) - self.mean_function(self,x2,hyperparameters))/2e-6
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
-        kk = self.kernel(p, p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
-        kk_g =  self.d_kernel_dx(p, p,direction,self.hyperparameters)
-        posterior_mean_grad = mean_der + (k_g.T @ self.covariance_value_prod - k_cov_prod @ mean_der)
+        x1 = np.array(x_iset)
+        x2 = np.array(x_iset)
+        eps = 1e-6
+        x1[:,direction] = x1[:,direction] + eps
+        x2[:,direction] = x2[:,direction] - eps
+        mean_der = (self.mean_function(self,x1,self.hyperparameters) - self.mean_function(self,x2,self.hyperparameters))/(2.0*eps)
+        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters)
+        posterior_mean_grad = mean_der + (k_g @ self.covariance_value_prod)
         return {"x": p,
                 "direction":direction,
                 "df/dx": posterior_mean_grad}
@@ -740,7 +738,7 @@ class FVGP:
         np.fill_diagonal(a,diag)
         return {"x": p,
                 "v(x)": np.diag(a),
-                "S": a}
+                "S(x)": a}
 
     def posterior_covariance_grad(self, x_iset,direction):
         """
@@ -763,14 +761,15 @@ class FVGP:
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
         kk =  self.kernel(p, p,self.hyperparameters,self)
-        kk_g =  self.d_kernel_dx(p, p,direction,self.hyperparameters)
+        x1 = np.array(x_iset)
+        x2 = np.array(x_iset)
+        eps = 1e-6
+        x1[:,direction] = x1[:,direction] + eps
+        x2[:,direction] = x2[:,direction] - eps
+        kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-self.kernel(x2, x2,self.hyperparameters,self)) /(2.0*eps)
         k_covariance_prod = self.solve(self.prior_covariance,k)
-        kg_covariance_prod = self.solve(self.prior_covariance,k_g)
-        a = kk_g - (k_covariance_prod.T @ k + k_g_covariance_prod.T @ k)
-        covariance_grad = [
-            a[i * tasks : (i + 1) * tasks, i * tasks : (i + 1) * tasks]
-            for i in range(int(a.shape[0] / tasks))
-            ]
+        k_g_covariance_prod = self.solve(self.prior_covariance,k_g)
+        a = kk_g - ((k_covariance_prod.T @ k_g) + (k_g_covariance_prod.T @ k))
         return {"x": p,
                 "dv/dx": np.diag(a),
                 "dS/dx": a}
@@ -805,9 +804,9 @@ class FVGP:
                  "k": k,
                  "kappa": kk,
                  "prior mean": full_gp_prior_mean,
-                 "S": np.block([[self.prior_covariance, k],[k.T, kk]])}
+                 "S(x)": np.block([[self.prior_covariance, k],[k.T, kk]])}
     ###########################################################################
-    def gp_prior_grad(self, x_iset):
+    def gp_prior_grad(self, x_iset,direction):
         """
         function to compute the gradient of the data-informed prior
         input:
@@ -831,20 +830,22 @@ class FVGP:
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
         k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
-        kk_g =  self.d_kernel_dx(p, p,direction,self.hyperparameters)
+        x1 = np.array(x_iset)
+        x2 = np.array(x_iset)
+        eps = 1e-6
+        x1[:,direction] = x1[:,direction] + eps
+        x2[:,direction] = x2[:,direction] - eps
+        kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-self.kernel(x2, x2,self.hyperparameters,self)) /(2.0*eps)
         post_mean = self.mean_function(self,x_iset, self.hyperparameters)
-        x1 = np.array(x_init)
-        x2 = np.array(x_init)
-        x1[:,direction] = x1[:,direction] + 1e-6
-        x2[:,direction] = x2[:,direction] - 1e-6
-        mean_der = (self.mean_function(self,x1,hyperparameters) - self.mean_function(self,x2,hyperparameters))/2e-6
+        mean_der = (self.mean_function(self,x1,self.hyperparameters) - self.mean_function(self,x2,self.hyperparameters))/(2.0*eps)
         full_gp_prior_mean_grad = np.append(np.zeros((self.prior_mean_vec.shape)), mean_der)
+        prior_cov_grad = np.zeros(self.prior_covariance.shape)
         return  {"x": p,
                  "K": self.prior_covariance,
                  "dk/dx": k_g,
                  "d kappa/dx": kk_g,
                  "d prior mean/x": full_gp_prior_mean_grad,
-                 "dS/dx": np.block([[self.prior_covariance, k_g],[k_g.T, kk_g]])}
+                 "dS/dx": np.block([[prior_cov_grad, k_g],[k_g.T, kk_g]])}
 
     ###########################################################################
 
@@ -861,11 +862,12 @@ class FVGP:
         """
         function comuting the entropy given points
         """
-        priors = self.gp_prior(x_iset)
+        p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        S = priors["S"]
+        priors = self.gp_prior(p)
+        S = priors["S(x)"]
         dim  = len(S[0])
         s, logdet = self.slogdet(S)
         return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * s * logdet)
@@ -874,13 +876,14 @@ class FVGP:
         """
         function comuting the entropy given points
         """
+        p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        priors1 = self.gp_prior(x_iset)
-        priors2 = self.gp_prior_grad(x_iset,direction)
-        S1 = priors["S"]
-        S2 = priors["dS/dx"]
+        priors1 = self.gp_prior(p)
+        priors2 = self.gp_prior_grad(p,direction)
+        S1 = priors1["S(x)"]
+        S2 = priors2["dS/dx"]
         return 0.5 * np.trace(np.linalg.inv(S1) @ S2)
     ###########################################################################
     def kl_div(self,mu1, mu2, S1, S2):
@@ -911,11 +914,40 @@ class FVGP:
         x1 = self.solve(S2,dS1dx)
         mu = np.subtract(mu2,mu1)
         x2 = self.solve(S2,mu)
-        x2 = self.solve(S2,-dmu1dx)
+        x3 = self.solve(S2,-dmu1dx)
         dim = len(mu)
         kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2 @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
         if kld < -1e-4: print("negative KL divergence encountered")
         return kld
+    ###########################################################################
+    def gp_kl_div(self, x_iset, comp_mean, comp_cov):
+        """
+        function to compute the kl divergence of a posterior at given points
+        input:
+        ------
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
+        output:
+        -------
+            {"x": the index set points,
+             "gp posterior mean": ,
+             "gp posterior covariance":  ,
+             "given mean": the user-provided mean vector,
+             "given covariance":  the use_provided covariance,
+             "kl-div:": the kl div between gp pdf and given pdf}
+        """
+        res = self.posterior_mean(x_iset)
+        gp_mean = res["f(x)"]
+        gp_cov = self.posterior_covariance(x_iset)["S(x)"]
+
+        return {"x": x_iset,
+                "gp posterior mean" : gp_mean,
+                "gp posterior covariance": gp_cov,
+                "given mean": comp_mean,
+                "given covariance": comp_cov,
+                "kl-div": self.kl_div(gp_mean, comp_mean, gp_cov, comp_cov)}
+
+
     ###########################################################################
     def gp_kl_div_grad(self, x_iset, comp_mean, comp_cov, direction):
         """
@@ -936,12 +968,10 @@ class FVGP:
              "given covariance":  the use_provided covariance,
              "kl-div grad": the grad of the kl div between gp pdf and given pdf}
         """
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         gp_mean = self.posterior_mean(x_iset)["f(x)"]
-        gp_mean_grad = self.posterior_mean_grad(x_iset,direction)["f(x)"]
-        gp_cov  = self.posterior_covariance(x_iset)["S"]
-        gp_cov_grad  = self.posterior_covariance(x_iset,direction)["dS/dx"]
+        gp_mean_grad = self.posterior_mean_grad(x_iset,direction)["df/dx"]
+        gp_cov  = self.posterior_covariance(x_iset)["S(x)"]
+        gp_cov_grad  = self.posterior_covariance_grad(x_iset,direction)["dS/dx"]
 
         return {"x": x_iset,
                 "gp posterior mean" : gp_mean,
@@ -950,7 +980,7 @@ class FVGP:
                 "gp posterior covariance grad": gp_cov_grad,
                 "given mean": comp_mean,
                 "given covariance": comp_cov,
-                "kl-div grad": self.kl_div(gp_mean, gp_mean_grad,comp_mean, gp_cov, gp_cov_grad, comp_cov)}
+                "kl-div grad": self.kl_div_grad(gp_mean, gp_mean_grad,comp_mean, gp_cov, gp_cov_grad, comp_cov)}
     ###########################################################################
     def shannon_information_gain(self, x_iset):
         """
@@ -1001,10 +1031,10 @@ class FVGP:
         p = np.array(x_iset)
         if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        e2 = self.gp_entropy_grad(x_init,direction)
+        e2 = self.gp_entropy_grad(p,direction)
         sig = e2
         return {"x": p,
-                "sig_grad":sig_grad}
+                "sig grad":sig}
     ###########################################################################
     def posterior_probability(self, x_iset, comp_mean, comp_cov):
         """
@@ -1027,7 +1057,7 @@ class FVGP:
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         res = self.posterior_mean(x_iset)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_iset)["S"]
+        gp_cov = self.posterior_covariance(x_iset)["S(x)"]
         gp_cov_inv = np.linalg.inv(gp_cov)
         comp_cov_inv = np.linalg.inv(comp_cov)
         cov = np.linalg.inv(gp_cov_inv + comp_cov_inv)
