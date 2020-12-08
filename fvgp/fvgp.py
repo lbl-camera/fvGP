@@ -121,9 +121,9 @@ class FVGP:
         self.input_dim = input_space_dim
         self.output_dim = output_space_dim
         self.output_num = output_number
-        self.data_x = points
+        self.data_x = np.array(points)
         self.point_number = len(self.data_x)
-        self.data_y = values
+        self.data_y = np.array(values)
         self.compute_device = compute_device
         self.sparse = sparse
         ##########################################
@@ -136,8 +136,7 @@ class FVGP:
                 "If the dimensionality of the output space is > 1, the value positions have to be given to the FVGP class"
             )
         else:
-            self.value_positions = value_positions
-
+            self.value_positions = np.array(value_positions)
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -145,7 +144,7 @@ class FVGP:
             self.variances = np.ones((values.shape)) * abs(np.mean(self.data_y[0]) / 100.0)
             print("CAUTION: you have not provided data variances, they will set to be 1 percent of the |mean| of the data values!")
         else:
-            self.variances = variances
+            self.variances = np.array(variances)
         ##########################################
         #######define kernel and mean function####
         ##########################################
@@ -163,7 +162,7 @@ class FVGP:
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        self.hyperparameters = init_hyperparameters
+        self.hyperparameters = np.array(init_hyperparameters)
         ##########################################
         #transform index set and elements#########
         ##########################################
@@ -197,9 +196,9 @@ class FVGP:
             values_positions (N x dim1 x dim2 numpy array): the positions of the outputs in the output space
             variances (N x n):                              variances of the values
             """
-        self.data_x = points
+        self.data_x = np.array(points)
         self.point_number = len(self.data_x)
-        self.data_y = values
+        self.data_y = np.array(values)
         ##########################################
         #######prepare value positions############
         ##########################################
@@ -218,7 +217,7 @@ class FVGP:
             self.variances = np.ones((values.shape)) * abs(np.mean(self.data_y[0]) / 100.0)
             print("CAUTION: you have not provided data variances, they will set to be 1 percent of the |mean| of the data values!")
         else:
-            self.variances = variances
+            self.variances = np.array(variances)
         ######################################
         #####transform to index set###########
         ######################################
@@ -265,14 +264,14 @@ class FVGP:
         """
         ############################################
         if dask_client is True: dask_client = distributed.Client()
-        self.hyperparameter_optimization_bounds = hyperparameter_bounds
+        self.hyperparameter_optimization_bounds = np.array(hyperparameter_bounds)
         if init_hyperparameters is None:
-            init_hyperparameters = self.hyperparameters
+            init_hyperparameters = np.array(self.hyperparameters)
         print("fvGP training started with ",len(self.data_x)," data points")
         ######################
         #####TRAINING#########
         ######################
-        self.hyperparameters = list(self.optimize_log_likelihood(
+        self.hyperparameters = self.optimize_log_likelihood(
             init_hyperparameters,
             self.hyperparameter_optimization_bounds,
             optimization_method,
@@ -281,7 +280,7 @@ class FVGP:
             optimization_pop_size,
             optimization_tolerance,
             dask_client
-        ))
+            )
 
         self.compute_prior_fvGP_pdf()
         ######################
@@ -661,8 +660,9 @@ class FVGP:
             {"x":    the input points,
              "f(x)": the posterior mean vector (1d numpy array)}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]"); input()
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
@@ -685,8 +685,9 @@ class FVGP:
              "direction": the direction
              "df/dx": the gradient of the posterior mean vector (1d numpy array)}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]"); input()
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         x1 = np.array(x_iset)
@@ -716,9 +717,10 @@ class FVGP:
              "v(x)": the posterior variances (1d numpy array) for each input point,
              "S":    covariance matrix, v(x) = diag(S)}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
+        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
@@ -755,8 +757,9 @@ class FVGP:
              "dv/dx": the posterior variances (1d numpy array) for each input point,
              "dS/dx":    covariance matrix, v(x) = diag(S)}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
@@ -791,8 +794,9 @@ class FVGP:
              "prior mean": the mean of the prior
              "S:": joint prior covariance}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
@@ -823,8 +827,9 @@ class FVGP:
              "prior mean": the mean of the prior
              "dS/dx:": joint prior covariance}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
@@ -862,8 +867,9 @@ class FVGP:
         """
         function comuting the entropy given points
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         priors = self.gp_prior(p)
@@ -876,8 +882,9 @@ class FVGP:
         """
         function comuting the entropy given points
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         priors1 = self.gp_prior(p)
@@ -936,6 +943,9 @@ class FVGP:
              "given covariance":  the use_provided covariance,
              "kl-div:": the kl div between gp pdf and given pdf}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
+        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         res = self.posterior_mean(x_iset)
         gp_mean = res["f(x)"]
         gp_cov = self.posterior_covariance(x_iset)["S(x)"]
@@ -968,6 +978,10 @@ class FVGP:
              "given covariance":  the use_provided covariance,
              "kl-div grad": the grad of the kl div between gp pdf and given pdf}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
+        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
+
         gp_mean = self.posterior_mean(x_iset)["f(x)"]
         gp_mean_grad = self.posterior_mean_grad(x_iset,direction)["df/dx"]
         gp_cov  = self.posterior_covariance(x_iset)["S(x)"]
@@ -996,9 +1010,11 @@ class FVGP:
              "posterior entropy": posterior entropy
              "sig:" shannon_information gain}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
+        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
 
@@ -1028,9 +1044,10 @@ class FVGP:
             {"x": the index set points,
              "sig_grad:" shannon_information gain gradient}
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
+        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         e2 = self.gp_entropy_grad(p,direction)
         sig = e2
         return {"x": p,
@@ -1052,9 +1069,10 @@ class FVGP:
              "covariance": ,
              "probability":  ,
         """
+        x_iset = np.array(x_iset)
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
+        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         p = np.array(x_iset)
-        if x_iset.ndim < 2: print("x_iset has to be given as a 2d numpy array: [[x1],[x2],...]")
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         res = self.posterior_mean(x_iset)
         gp_mean = res["f(x)"]
         gp_cov = self.posterior_covariance(x_iset)["S(x)"]
@@ -1090,6 +1108,7 @@ class FVGP:
         -------
             {"probability grad":  ,}
         """
+        x_iset = np.array(x_iset)
         x1 = np.array(x_init)
         x2 = np.array(x_init)
         x1[:,direction] = x1[:,direction] + 1e-6
