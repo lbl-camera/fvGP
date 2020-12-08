@@ -2,7 +2,7 @@
 
 import dask.distributed as distributed
 """
-Software: FVGP
+Software: FVGP, version: 2.3.0
 File containing the gp class
 use help() to find information about usage
 Author: Marcus Noack
