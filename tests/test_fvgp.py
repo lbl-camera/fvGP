@@ -32,7 +32,7 @@ class TestfvGP(unittest.TestCase):
                 optimization_pop_size = 20,
                 optimization_tolerance = 0.0001,
                 optimization_max_iter = 200,
-                dask_client = True)
+                dask_client = False)
         if training_method == "hgdl":
             print("lets see how the hyper-parameters are changing")
             for i in range(10):

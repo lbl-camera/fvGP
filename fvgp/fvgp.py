@@ -47,7 +47,7 @@ from functools import partial
 
 class FVGP:
     """
-    GP class: Finds hyper-parameters and therefore the mean
+    GP class: Finds hyperparameters and therefore the mean
     and covariance of a (multi-output) Gaussian process
 
     symbols:
@@ -60,32 +60,25 @@ class FVGP:
         input_space_dim (int):         dim1
         output_space_dim (int):        dim2
         output_number (int):           n
-        points (N x dim1 numpy array): array of points.
-        values (N x n numpy array):    array of values.
+        points (N x dim1 numpy array): array of points
+        values (N x n numpy array):    array of values
+        init_hyperparameters: 1d array
     Optional Attributes:
-        value_positions (N x dim1 x dim2 numpy array): the positions of the outputs in the output space, default = [0,1,2,...]
+        value_positions (N x dim1 x dim2 numpy array):  the positions of the outputs in the output space, default = [0,1,2,...]
         variances (N x n numpy array):                  variances of the values, default = [0,0,...]
         compute_device:                                 cpu/gpu, default = cpu
         gp_kernel_function(func):                       None/function defining the kernel def name(x1,x2,hyperparameters,self), default = None
         gp_mean_function(func):                         None/a function def name(x, self), default = None
-        init_hyperparameters (1d list):                default: list of [1,1,...]
         sparse (bool):                                  default = False
 
     Example:
-        obj = FVGP(
-            input_space_dim = 3,
-            output_space_dim = 1,
-            output_number = 2,
-            points = np.array([[1,2,3],
-                                4,5,6]),
-            values = np.array([[2,3],
-                            [13,27.2]]),
-            value_positions = np.array([[[0]],[[1]]]),
-            variances = np.array([[0.001,0.01],
-                                [0.1,2]]),
-            gp_kernel_function = kernel_function,
-            init_hyperparameters = [2,3,4,5],
-            gp_mean_function = some_mean_function
+        obj = FVGP(3,1,2,np.array([[1,2,3],[4,5,6]]),
+                         np.array([[2,3],[13,27.2]]),
+                        [2,3,4,5],
+                        value_positions = np.array([[[0],[1]],[[0],[1]]]),
+                        variances = np.array([[0.001,0.01],[0.1,2]]),
+                        gp_kernel_function = kernel_function,
+                        gp_mean_function = some_mean_function
         )
     ---------------------------------------------
     """
@@ -141,8 +134,8 @@ class FVGP:
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((values.shape)) * abs(np.mean(self.data_y[0]) / 100.0)
-            print("CAUTION: you have not provided data variances, they will set to be 1 percent of the |mean| of the data values!")
+            self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
+            print("CAUTION: you have not provided data variances, they will set to be 1 percent of the the data values!")
         else:
             self.variances = np.array(variances)
         ##########################################
@@ -158,7 +151,6 @@ class FVGP:
             self.mean_function = self.default_mean_function
         else:
             self.mean_function = gp_mean_function
-
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
@@ -187,7 +179,6 @@ class FVGP:
         """
         This function updates the data in the gp_class.
 
-
         Attributes:
             points (N x dim1 numpy array): An array of points.
             values (N x n):                An array of values.
@@ -214,8 +205,8 @@ class FVGP:
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((values.shape)) * abs(np.mean(self.data_y[0]) / 100.0)
-            print("CAUTION: you have not provided data variances, they will set to be 1 percent of the |mean| of the data values!")
+            self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
+            print("CAUTION: you have not provided data variances, they will set to be 1 percent of the data values!")
         else:
             self.variances = np.array(variances)
         ######################################
@@ -281,7 +272,6 @@ class FVGP:
             optimization_tolerance,
             dask_client
             )
-
         self.compute_prior_fvGP_pdf()
         ######################
         ######################
@@ -676,7 +666,7 @@ class FVGP:
         a specified direction
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             direction: direction in which to compute the gradient
         output:
@@ -709,7 +699,7 @@ class FVGP:
         function to compute the posterior covariance
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
             index set which results from a cartesian product of input and output space
         output:
         -------
@@ -748,7 +738,7 @@ class FVGP:
         in a specified direction
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             direction: direction in which the gradient to compute
         output:
@@ -783,8 +773,8 @@ class FVGP:
         function to compute the data-informed prior
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
-            index set which results from a cartesian product of input and output space
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+                    index set which results from a cartesian product of input and output space
         output:
         -------
             {"x": the index set points,
@@ -815,7 +805,7 @@ class FVGP:
         function to compute the gradient of the data-informed prior
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             direction: direction in which to compute the gradient
         output:
@@ -865,7 +855,14 @@ class FVGP:
     ###########################################################################
     def gp_entropy(self, x_iset):
         """
-        function comuting the entropy given points
+        function to compute the entropy of the data-informed prior
+        input:
+        ------
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+                    index set which results from a cartesian product of input and output space
+        output:
+        -------
+            scalar: entropy
         """
         x_iset = np.array(x_iset)
         if x_iset.ndim == 1: x_iset = np.array([x_iset])
@@ -880,7 +877,15 @@ class FVGP:
     ###########################################################################
     def gp_entropy_grad(self, x_iset,direction):
         """
-        function comuting the entropy given points
+        function to compute the gradient of the entropy of the data-informed prior
+        input:
+        ------
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+                    index set which results from a cartesian product of input and output space
+            direction: direction in which to compute the gradient
+        output:
+        -------
+            scalar: entropy gradient
         """
         x_iset = np.array(x_iset)
         if x_iset.ndim == 1: x_iset = np.array([x_iset])
@@ -895,9 +900,10 @@ class FVGP:
     ###########################################################################
     def kl_div(self,mu1, mu2, S1, S2):
         """
-        function comuting the KL divergence between two normal distributions
+        function computing the KL divergence between two normal distributions
         a = kl_div(mu1, mu2, S1, S2); S1, S2 are a 2d numpy arrays, matrices has to be non-singular
         mu1, mu2 are mean vectors, given as 2d arrays
+        returns a real scalar
         """
         s1, logdet1 = self.slogdet(S1)
         s2, logdet2 = self.slogdet(S2)
@@ -932,8 +938,8 @@ class FVGP:
         function to compute the kl divergence of a posterior at given points
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
-            index set which results from a cartesian product of input and output space
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+                    index set which results from a cartesian product of input and output space
         output:
         -------
             {"x": the index set points,
@@ -964,7 +970,7 @@ class FVGP:
         function to compute the gradient of the kl divergence of a posterior at given points
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             direction: direction in which the gradient will be computed
         output:
@@ -1001,8 +1007,8 @@ class FVGP:
         function to compute the shannon-information gain of data
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
-            index set which results from a cartesian product of input and output space
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+                    index set which results from a cartesian product of input and output space
         output:
         -------
             {"x": the index set points,
@@ -1036,7 +1042,7 @@ class FVGP:
         function to compute the gradient if the shannon-information gain of data
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             direction: direction in which to compute the gradient
         output:
@@ -1058,8 +1064,8 @@ class FVGP:
         function to compute the probability of an uncertain feature given the gp posterior
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
-            index set which results from a cartesian product of input and output space
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+                    index set which results from a cartesian product of input and output space
             comp_mean: a vector of mean values, same length as x_iset
             comp_cov: covarianve matrix, \in R^{len(x_iset)xlen(x_iset)}
 
@@ -1098,8 +1104,8 @@ class FVGP:
         function to compute the gradient of the probability of an uncertain feature given the gp posterior
         input:
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
-            index set which results from a cartesian product of input and output space
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+                    index set which results from a cartesian product of input and output space
             comp_mean: a vector of mean values, same length as x_iset
             comp_cov: covarianve matrix, \in R^{len(x_iset)xlen(x_iset)}
             direction: direction in which to compute the gradient
@@ -1108,6 +1114,8 @@ class FVGP:
         -------
             {"probability grad":  ,}
         """
+        if x_iset.ndim == 1: x_iset = np.array([x_iset])
+        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         x_iset = np.array(x_iset)
         x1 = np.array(x_init)
         x2 = np.array(x_init)
