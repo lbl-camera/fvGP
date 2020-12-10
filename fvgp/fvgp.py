@@ -1026,8 +1026,8 @@ class FVGP:
 
 
         full_gp_covariances = \
-                np.asarray([np.block([[self.prior_covariance,k],\
-                            [k.T,kk]])])
+                np.asarray(np.block([[self.prior_covariance,k],\
+                            [k.T,kk]]))
 
         e1 = self.entropy(self.prior_covariance)
         e2 = self.entropy(full_gp_covariances)
