@@ -38,6 +38,7 @@ from scipy.optimize import minimize
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import spsolve
 from scipy.sparse import coo_matrix
+from .mcmc import mcmc
 
 import itertools
 import time
@@ -383,7 +384,12 @@ class FVGP:
             while res["success"] == False:
                 time.sleep(0.1)
                 res = self.opt.get_latest(10)
-            hyperparameters = res["x"][0]
+            hyperparameters = res["x"]
+        elif optimization_method == "mcmc":
+            print("MCMC started")
+            print('bounds are',hp_bounds)
+            res = mcmc(self.log_likelihood,hp_bounds)
+            hyperparameters = np.array(res["x"])
         elif callable(optimization_method):
             hyperparameters = optimization_method(self,optimization_dict)
         else:
