@@ -28,7 +28,7 @@ with open(path.join(here, 'requirements.txt')) as requirements_file:
 setup(
     author="Marcus Michael Noack",
     author_email='MarcusNoack@lbl.gov',
-    python_requires='>=3.5',
+    python_requires='>=3.7',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
@@ -55,6 +55,6 @@ setup(
     packages=find_packages(include=['fvgp', 'fvgp.*']),
     test_suite='tests',
     url='https://github.com/MarcusMichaelNoack/fvgp',
-    version='v2.2.0',
+    version='2.3.0',
     zip_safe=False,
 )

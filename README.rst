@@ -2,21 +2,23 @@
 fvGP
 ====
 
+fvGP Copyright (c) 2021, The Regents of the University of California,
+through Lawrence Berkeley National Laboratory (subject to receipt of
+any required approvals from the U.S. Dept. of Energy). All rights reserved.
 
-.. image:: https://img.shields.io/pypi/v/fvgp.svg
-        :target: https://pypi.python.org/pypi/fvgp
+If you have questions about your rights to use or distribute this software,
+please contact Berkeley Lab's Intellectual Property Office at
+IPO@lbl.gov.
 
-.. image:: https://img.shields.io/travis/MarcusMichaelNoack/fvgp.svg
-        :target: https://travis-ci.com/MarcusMichaelNoack/fvgp
-
-.. image:: https://readthedocs.org/projects/fvgp/badge/?version=latest
-        :target: https://fvgp.readthedocs.io/en/latest/?badge=latest
-        :alt: Documentation Status
-
-
+NOTICE.  This Software was developed under funding from the U.S. Department
+of Energy and the U.S. Government consequently retains certain rights.  As
+such, the U.S. Government has been granted for itself and others acting on
+its behalf a paid-up, nonexclusive, irrevocable, worldwide license in the
+Software to reproduce, distribute copies to the public, prepare derivative 
+works, and perform publicly and display publicly, and to permit others to do so.
 
 
-Python package for highly flexible function-valued Gaussian processes (fvGP)
+
 
 
 * Free software: GNU General Public License v3
@@ -26,7 +28,7 @@ Python package for highly flexible function-valued Gaussian processes (fvGP)
 Features
 --------
 
-* function valued Gaussian process algorithm
+* Python package for highly flexible function-valued Gaussian processes (fvGP)
 
 Credits
 -------
@@ -34,6 +36,3 @@ This package used the hgdl packagae of David Perryman and Marcus Noack
 
 
 This package was created with Cookiecutter_ and the `audreyr/cookiecutter-pypackage`_ project template.
-
-.. _Cookiecutter: https://github.com/audreyr/cookiecutter
-.. _`audreyr/cookiecutter-pypackage`: https://github.com/audreyr/cookiecutter-pypackage
