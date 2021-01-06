@@ -8,3 +8,5 @@ __pycache__
 *.yml
 *.swp
 fvgp.egg-info
+dist
+build

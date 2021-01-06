@@ -34,5 +34,3 @@ Credits
 -------
 This package used the hgdl packagae of David Perryman and Marcus Noack
 
-
-This package was created with Cookiecutter_ and the `audreyr/cookiecutter-pypackage`_ project template.
