@@ -3,4 +3,4 @@
 ###########
 
 
-* MCMC for training?
+*normalize data
