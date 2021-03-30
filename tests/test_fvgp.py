@@ -32,7 +32,7 @@ class TestfvGP(unittest.TestCase):
                 optimization_pop_size = 20,
                 optimization_tolerance = 0.0001,
                 optimization_max_iter = 200,
-                dask_client = False)
+                dask_client = None)
         if training_method == "hgdl":
             print("lets see how the hyper-parameters are changing")
             for i in range(10):
@@ -76,7 +76,7 @@ class TestfvGP(unittest.TestCase):
         plt.savefig('plot.png')
         plt.show()
     ############################################################
-    def test_us_topo(self,method = "global",dask_client = False):
+    def test_us_topo(self,method = "global",dask_client = None):
         a = np.load("us_topo.npy")
         points = a[::16,0:2]
         values = a[::16,2:3]
@@ -105,10 +105,6 @@ class TestfvGP(unittest.TestCase):
         my_gp = FVGP(2,1,1,points,values,np.array([4.60539553e+06, 5.16902388e+02, 4.02848587e+02]), 
                 sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
-        #my_gp.train(bounds, optimization_method = "global", 
-        #        optimization_max_iter = 20,
-        #        optimization_pop_size = 20,
-        #        dask_client = False)
         print("ranges x:", np.min(points[:,0]),np.max(points[:,0]))
         print("ranges y:", np.min(points[:,1]),np.max(points[:,1]))
         eps = 1e-6

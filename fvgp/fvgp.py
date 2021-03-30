@@ -377,14 +377,14 @@ class FVGP:
                        self.log_likelihood_gradient,
                        self.log_likelihood_hessian,
                        hp_bounds,
-                       maxEpochs = optimization_max_iter, verbose = False)
+                       num_epochs = optimization_max_iter)
 
             self.opt.optimize(dask_client = dask_client, x0 = x0)
             res = self.opt.get_latest(10)
             while res["success"] == False:
                 time.sleep(0.1)
                 res = self.opt.get_latest(10)
-            hyperparameters = res["x"]
+            hyperparameters = res["x"][0]
         elif optimization_method == "mcmc":
             print("MCMC started")
             print('bounds are',hp_bounds)
@@ -395,7 +395,9 @@ class FVGP:
         else:
             raise ValueError("no optimization mode specified")
         ###################################################
-        if start_log_likelihood < self.log_likelihood(hyperparameters): hyperparameters = np.array(starting_hps)
+        if start_log_likelihood < self.log_likelihood(hyperparameters):
+            hyperparameters = np.array(starting_hps)
+            print("Optimization returned smaller log likelihood; resetting to old hyperparameters.")
         print("New hyper-parameters: ",
             hyperparameters,
             "with log likelihood: ",
