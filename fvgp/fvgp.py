@@ -36,7 +36,6 @@ import math
 from scipy.optimize import differential_evolution
 from scipy.optimize import minimize
 from scipy.sparse.linalg import spsolve
-from scipy.sparse.linalg import spsolve
 from scipy.sparse import coo_matrix
 from .mcmc import mcmc
 
@@ -97,6 +96,7 @@ class FVGP:
         gp_kernel_function = None,
         gp_mean_function = None,
         sparse = False,
+        normalize_y = False
         ):
 
         """
@@ -112,6 +112,7 @@ class FVGP:
         if output_number != len(values[0]):
             raise ValueError("the output number is not in agreement with the data values given")
         ##########################################
+        self.normalize_y = normalize_y
         self.input_dim = input_space_dim
         self.output_dim = output_space_dim
         self.output_num = output_number
@@ -120,6 +121,9 @@ class FVGP:
         self.data_y = np.array(values)
         self.compute_device = compute_device
         self.sparse = sparse
+        self.fy = 1.0
+        self.sy = 0.0
+        if self.normalize_y is True: self.fx, self.sy = self._normalize_y_data()
         ##########################################
         #######prepare value positions############
         ##########################################
@@ -191,6 +195,7 @@ class FVGP:
         self.data_x = np.array(points)
         self.point_number = len(self.data_x)
         self.data_y = np.array(values)
+        self.data_y = (self.data_y - self.sy) / self.fy
         ##########################################
         #######prepare value positions############
         ##########################################
@@ -398,7 +403,7 @@ class FVGP:
         if start_log_likelihood < self.log_likelihood(hyperparameters):
             hyperparameters = np.array(starting_hps)
             print("Optimization returned smaller log likelihood; resetting to old hyperparameters.")
-        print("New hyper-parameters: ",
+            print("New hyper-parameters: ",
             hyperparameters,
             "with log likelihood: ",
             self.log_likelihood(hyperparameters))
@@ -1524,7 +1529,19 @@ class FVGP:
                 (function(new_point1,args) - function(new_point2,args) - function(new_point3,args) +  function(new_point4,args))\
                 / (4.0*(epsilon**2))
         return hessian
-
+    def _normalize_x_data(self):
+        for i in range(len(self.data_x[0])):
+            mini = np.min(self.data_x[:,i])
+            self.data_x[:,i] = self.data_x[:,i] - mini
+            maxi = np.max(self.data_x[:,i])
+            self.data_x[:,i] = self.data_x[:,i] / maxi
+        return maxi,mini
+    def _normalize_y_data(self):
+        mini = np.min(self.data_y)
+        self.data_y = self.data_y - mini
+        maxi = np.max(self.data_x)
+        self.data_x = self.data_x / maxi
+        return maxi,mini
 ###########################################################################
 ###################################END#####################################
 ###########################################################################

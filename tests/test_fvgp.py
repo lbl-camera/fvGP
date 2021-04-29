@@ -26,12 +26,12 @@ class TestfvGP(unittest.TestCase):
         my_gp = FVGP(1,1,1,points,values,np.ones((2)),
                 gp_kernel_function = None,
                 compute_device = "cpu")
-        my_gp.train([[100.0,200.0],[5.0,10.0]],
+        my_gp.train([[100.0,200.0],[5.0,100.0]],
                 init_hyperparameters = [110.0,8.0],
                 optimization_method = training_method,
                 optimization_pop_size = 20,
                 optimization_tolerance = 0.0001,
-                optimization_max_iter = 200,
+                optimization_max_iter = 2,
                 dask_client = None)
         if training_method == "hgdl":
             print("lets see how the hyper-parameters are changing")
@@ -42,7 +42,8 @@ class TestfvGP(unittest.TestCase):
                 print("|latest hyper parameters:| ",my_gp.hyperparameters)
                 print("++++++++++++++++++++++++++++++++++++++++++++++++")
             my_gp.stop_training()
-
+            print("TRAINING STOPPED")
+        """
         print("working on the prediction...")
         x_input = np.empty((1000,1))
         x_input[:,0] = np.linspace(0,2.0,1000)
@@ -75,6 +76,7 @@ class TestfvGP(unittest.TestCase):
         print("s: ",s)
         plt.savefig('plot.png')
         plt.show()
+        """
     ############################################################
     def test_us_topo(self,method = "global",dask_client = None):
         a = np.load("us_topo.npy")

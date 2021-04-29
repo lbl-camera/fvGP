@@ -3,4 +3,6 @@
 ###########
 
 
-*normalize data
+*normalize data (implemented but not tested)
+*ensemble GP
+*GP manifold lerning
