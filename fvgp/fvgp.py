@@ -44,8 +44,10 @@ import time
 import torch
 import numba as nb
 from functools import partial
+from fvgp.base_gp import BaseGP
 
-class FVGP(BaseGP):
+
+class fvGP(BaseGP):
     """
     GP class: Finds hyperparameters and therefore the mean
     and covariance of a (multi-output) Gaussian process
@@ -63,22 +65,27 @@ class FVGP(BaseGP):
         points (N x dim1 numpy array): array of points
         values (N x n numpy array):    array of values
         init_hyperparameters: 1d array
+
     Optional Attributes:
-        value_positions (N x dim1 x dim2 numpy array):  the positions of the outputs in the output space, default = [0,1,2,...]
-        variances (N x n numpy array):                  variances of the values, default = [0,0,...]
+        value_positions (N x dim1 x dim2 numpy array):  the positions of the outputs in the output space
+                                                        default = np.array([[[0],[1],[2],...]])
+        variances (N x n numpy array):                  variances of the values, default = array of shape of points
+                                                        with 1 % of the values
         compute_device:                                 cpu/gpu, default = cpu
-        gp_kernel_function(func):                       None/function defining the kernel def name(x1,x2,hyperparameters,self), default = None
+        gp_kernel_function(func):                       None/function defining the 
+                                                        kernel def name(x1,x2,hyperparameters,self), default = None
         gp_mean_function(func):                         None/a function def name(x, self), default = None
         sparse (bool):                                  default = False
+        normalize_y:                                    default = False, normalizes the values \in [0,1]
 
     Example:
         obj = FVGP(3,1,2,np.array([[1,2,3],[4,5,6]]),
                          np.array([[2,3],[13,27.2]]),
-                        [2,3,4,5],
-                        value_positions = np.array([[[0],[1]],[[0],[1]]]),
-                        variances = np.array([[0.001,0.01],[0.1,2]]),
-                        gp_kernel_function = kernel_function,
-                        gp_mean_function = some_mean_function
+                         np.array([2,3,4,5]),
+                         value_positions = np.array([[[0],[1]],[[0],[1]]]),
+                         variances = np.array([[0.001,0.01],[0.1,2]]),
+                         gp_kernel_function = kernel_function,
+                         gp_mean_function = some_mean_function
         )
     ---------------------------------------------
     """
@@ -102,48 +109,41 @@ class FVGP(BaseGP):
         The constructor for the fvgp class.
         type help(FVGP) for more information about attributes, methods and their parameters
         """
-        self.normalize_y = normalize_y
-        self.input_dim = input_space_dim
-        self.output_dim = output_space_dim
-        self.output_num = output_number
         self.data_x = np.array(points)
-        self.point_number = len(self.data_x)
         self.data_y = np.array(values)
-        self.compute_device = compute_device
-        self.sparse = sparse
-
-        ####transform the space
-        if self.output_dim == 1 and isinstance(value_positions, np.ndarray) == False:
+        self.point_number, self.output_num, self.output_dim = len(points), output_number, output_space_dim
+        ###check the output dims
+        if np.ndim(values) == 1:
+            raise ValueError("the output number is 1, you can use BaseGP for single-tasks GPs")
+        if output_number != len(values[0]):
+            raise ValueError("the output number is not in agreement with the data values given")
+        if output_space_dim == 1 and isinstance(value_positions, np.ndarray) == False:
             self.value_positions = self.compute_standard_value_positions()
         elif self.output_dim > 1 and isinstance(value_positions, np.ndarray) == False:
             raise ValueError(
-                "If the dimensionality of the output space is > 1, the value positions have to be given to the FVGP class"
-            )
+                "If the dimensionality of the output space is > 1, the value positions have to be given to the FVGP class")
         else:
             self.value_positions = np.array(value_positions)
-        self.iset_dim = self.input_dim + self.output_dim
+        if variances is None:
+            self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
+            print("CAUTION: you have not provided data variances, they will set to be 1 percent of the data values!")
+        else:
+            self.variances = np.array(variances)
+
+        self.iset_dim = input_space_dim + self.output_dim
+        ####transform the space
         self.data_x, self.data_y, self.variances = self.transform_index_set()
         self.point_number = len(self.data_x)
 
         ####init BaseGP
-        BaseGP.__init__(self.data_x,self.data_y,init_hyperparameters,
-                variances = self.variances,compute_device = self.compute_device,
+        BaseGP.__init__(self,self.iset_dim, self.data_x,self.data_y,init_hyperparameters,
+                variances = self.variances,compute_device = compute_device,
                 gp_kernel_function = gp_kernel_function, gp_mean_function = gp_mean_function,
-                sparse = self.sparse, normalize_y = self.normalize_y)
+                sparse = sparse, normalize_y = normalize_y)
 
-
-        ##########################################
-        #######check if dimensions match##########
-        ##########################################
-        if input_space_dim != len(points[0]):
-            raise ValueError("input space dimensions are not in agreement with the point positions given")
-        ##########################################
-        if output_number != len(values[0]):
-            raise ValueError("the output number is not in agreement with the data values given")
-        ##########################################
         self.hyperparameters = np.array(init_hyperparameters)
         ##########################################
-    def update_gp_data(
+    def update_fvgp_data(
         self,
         points,
         values,
@@ -163,9 +163,7 @@ class FVGP(BaseGP):
             variances (N x n):                              variances of the values
             """
         self.data_x = np.array(points)
-        self.point_number = len(self.data_x)
         self.data_y = np.array(values)
-        self.data_y = (self.data_y - self.sy) / self.fy
         ##########################################
         #######prepare value positions############
         ##########################################
@@ -190,7 +188,7 @@ class FVGP(BaseGP):
         ######################################
         self.data_x, self.data_y, self.variances = self.transform_index_set()
         self.point_number = len(self.data_x)
-        self.compute_prior_fvGP_pdf()
+        BaseGP.update_gp_data(self.data_x, self.data_y, self.variances)
 
     def compute_standard_value_positions(self):
         value_pos = np.zeros((self.point_number, self.output_num, self.output_dim))

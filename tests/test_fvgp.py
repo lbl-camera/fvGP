@@ -5,25 +5,41 @@
 
 import unittest
 import numpy as np
-from fvgp.fvgp import FVGP
+from fvgp.fvgp import fvGP
+from fvgp.fvgp import BaseGP
 import matplotlib.pyplot as plt
 import time
 
 class TestfvGP(unittest.TestCase):
     """Tests for `gpcam` package."""
 
-    def test_initialization(self,points,values):
+    def test_initialization(self):
         """Test something."""
-        my_gp = FVGP(len(points[0]),1,len(values[0]),points,values,
+        N = 100
+        points = np.empty((N,2))
+        points = np.random.uniform(low = -1, high = 1, size = points.shape)
+        values = func(points)
+        my_base_gp = BaseGP(2,points,values,np.array([2,2]),
             gp_kernel_function = stationary_kernel,
             compute_device = "cpu")
-        print("success")
+        print("Base GP successfully initiated")
+        values = np.empty((N,2))
+        values[:,0] = func(points)
+        values[:,1] = func(points) + 10.0
+        my_fvgp = fvGP(2,1,2,points,values,np.array([2,2]),
+            gp_kernel_function = stationary_kernel,
+            compute_device = "cpu")
+        print("fvGP successfully initiated")
+        res = my_fvgp.posterior_mean(np.array([[3,3,0],[3,3,0]]))
+        print(res)
+        print("init test successful")
     ############################################################
     def test_1d_single_task(self,N = 100, training_method = "global"):
         points = np.empty((N,1))
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
         values = func(points)
-        my_gp = FVGP(1,1,1,points,values,np.ones((2)),
+        print("values:   ",values)
+        my_gp = BaseGP(1,points,values,np.ones((2)),
                 gp_kernel_function = None,
                 compute_device = "cpu")
         my_gp.train([[100.0,200.0],[5.0,100.0]],
@@ -31,8 +47,7 @@ class TestfvGP(unittest.TestCase):
                 optimization_method = training_method,
                 optimization_pop_size = 20,
                 optimization_tolerance = 0.0001,
-                optimization_max_iter = 2,
-                dask_client = None)
+                optimization_max_iter = 2)
         if training_method == "hgdl":
             print("lets see how the hyper-parameters are changing")
             for i in range(10):
@@ -43,52 +58,18 @@ class TestfvGP(unittest.TestCase):
                 print("++++++++++++++++++++++++++++++++++++++++++++++++")
             my_gp.stop_training()
             print("TRAINING STOPPED")
-        """
-        print("working on the prediction...")
-        x_input = np.empty((1000,1))
-        x_input[:,0] = np.linspace(0,2.0,1000)
-        y = func(x_input)
-        pred1_mean = my_gp.posterior_mean(x_input)
-        pred1_cov = my_gp.posterior_covariance(x_input)
-        sig = np.empty((len(x_input)))
-        for i in range(len(x_input)):
-            ##shannon ig always gives back the information gain for all input points
-            sig[i] = my_gp.shannon_information_gain(np.array([x_input[i]]))["sig"]
-        plt.figure(figsize = (10,4))
-        plt.plot(x_input,pred1_mean["f(x)"], label = "posterior mean",linewidth = 3.0)
-        plt.plot(x_input,y, label = "ground truth",linewidth = 3.0)
-        plt.plot(x_input,sig, label = "shannon ig", linewidth = 3.0)
-        m = pred1_mean["f(x)"]
-        s = np.diag(pred1_cov["S(x)"])
-        plt.plot(x_input, s, label = "std", linewidth = 3.0)
-        plt.fill_between(x_input[:,0], m-3.0*np.sqrt(s), m+3.0*np.sqrt(s), alpha = 0.5, label = "95% confidence interval")
-        plt.scatter(points,values, label = "data",linewidth = 3.0)
-        plt.legend()
-        print("computing probability of the given values")
-        comp_mean_vec = np.array([2.0,1.0])
-        comp_var = np.zeros((2, 2))
-        np.fill_diagonal(comp_var,np.random.rand(len(comp_var)))
-        x_input_prob = np.array([[0.55],[1.4]])
-        print("mean: ",comp_mean_vec)
-        print("var: ",comp_var)
-        print("points: ", x_input_prob)
-        s = my_gp.posterior_probability(x_input_prob, comp_mean_vec, comp_var)
-        print("s: ",s)
-        plt.savefig('plot.png')
-        plt.show()
-        """
+        print("1d test test successful")
     ############################################################
     def test_us_topo(self,method = "global",dask_client = None):
         a = np.load("us_topo.npy")
         points = a[::16,0:2]
         values = a[::16,2:3]
         print("length of data set: ", len(points))
-        my_gp = FVGP(2,1,1,points,values,np.array([1,1,1]), sparse = False)
+        my_gp = BaseGP(2,points,values,np.array([1,1,1]), sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
-        my_gp.train(bounds, optimization_method = method, 
+        my_gp.train(bounds, optimization_method = method,
                 optimization_max_iter = 20,
-                optimization_pop_size = 4,
-                dask_client = dask_client)
+                optimization_pop_size = 4)
         if method == "hgdl":
             print("lets see how the hyper-parameters are changing")
             for i in range(30):
@@ -104,9 +85,11 @@ class TestfvGP(unittest.TestCase):
         points = a[::64,0:2]
         values = a[::64,2:3]
         print("length of data set: ", len(points))
-        my_gp = FVGP(2,1,1,points,values,np.array([4.60539553e+06, 5.16902388e+02, 4.02848587e+02]), 
-                sparse = False)
+        my_gp = BaseGP(2,points,values,np.array([1,1,1]), sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
+        my_gp.train(bounds, optimization_method = method,
+                optimization_max_iter = 20,
+                optimization_pop_size = 4)
         print("ranges x:", np.min(points[:,0]),np.max(points[:,0]))
         print("ranges y:", np.min(points[:,1]),np.max(points[:,1]))
         eps = 1e-6
@@ -170,14 +153,9 @@ class TestfvGP(unittest.TestCase):
 
 
 
-
-
-
-
-
-
 def func(points):
-    return 3.0*points + 0.3*np.sin(10.0*points)
+    if len(points[0]) == 1: return 3.0*points[:,0] + 0.3 * np.sin(10.0*points[:,0])
+    elif len(points[0]) == 2: return 3.0*points[:,0] + 0.3 * np.sin(10.0*points[:,1])
 
 def stationary_kernel(x1,x2,hps, obj = None):
     d = abs(np.subtract.outer(x1[:,0],x2[:,0])/hps[1])

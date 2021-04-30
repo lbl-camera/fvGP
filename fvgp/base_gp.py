@@ -50,6 +50,7 @@ from functools import partial
 class BaseGP():
     def __init__(
         self,
+        input_space_dim,
         points,
         values,
         init_hyperparameters,
@@ -64,16 +65,18 @@ class BaseGP():
         The constructor for the gp class.
         type help(FVGP) for more information about attributes, methods and their parameters
         """
+        if input_space_dim != len(points[0]):
+            raise ValueError("input space dimensions are not in agreement with the point positions given")
+        if np.ndim(values) == 2: values = values[:,0]
+
         self.normalize_y = normalize_y
-        self.input_dim = len(points[0])
+        self.input_dim = input_space_dim
         self.data_x = np.array(points)
         self.point_number = len(self.data_x)
         self.data_y = np.array(values)
         self.compute_device = compute_device
         self.sparse = sparse
-        self.fy = 1.0
-        self.sy = 0.0
-        if self.normalize_y is True: self.fx, self.sy = self._normalize_y_data()
+        if self.normalize_y is True: self._normalize_y_data()
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -127,7 +130,7 @@ class BaseGP():
         self.data_x = np.array(points)
         self.point_number = len(self.data_x)
         self.data_y = np.array(values)
-        self.data_y = (self.data_y - self.sy) / self.fy
+        if self.normalize_y is True: self._normalize_y_data()
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -158,8 +161,7 @@ class BaseGP():
         optimization_dict = None,
         optimization_pop_size = 20,
         optimization_tolerance = 0.1,
-        optimization_max_iter = 120,
-        dask_client = False):
+        optimization_max_iter = 120):
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP synchronously.
         This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and 
@@ -180,7 +182,6 @@ class BaseGP():
             None, just updates the class with the new hyperparameters
         """
         ############################################
-        if dask_client is True: dask_client = distributed.Client()
         self.hyperparameter_optimization_bounds = np.array(hyperparameter_bounds)
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
@@ -195,8 +196,7 @@ class BaseGP():
             optimization_dict,
             optimization_max_iter,
             optimization_pop_size,
-            optimization_tolerance,
-            dask_client
+            optimization_tolerance
             )
         self.compute_prior_fvGP_pdf()
         ######################
@@ -306,8 +306,7 @@ class BaseGP():
         optimization_dict,
         optimization_max_iter,
         likelihood_pop_size,
-        optimization_tolerance,
-        dask_client):
+        optimization_tolerance):
 
         start_log_likelihood = self.log_likelihood(starting_hps)
 
@@ -1409,7 +1408,6 @@ class BaseGP():
     def _normalize_y_data(self):
         mini = np.min(self.data_y)
         self.data_y = self.data_y - mini
-        maxi = np.max(self.data_x)
-        self.data_x = self.data_x / maxi
-        return maxi,mini
+        maxi = np.max(self.data_y)
+        self.data_y = self.data_y / maxi
 
