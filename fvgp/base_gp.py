@@ -154,6 +154,12 @@ class BaseGP():
         except:
             print("No asynchronous training to be cancelled, no training is running.")
     ###################################################################################
+    def kill_training(self):
+        print("Cancelling asynchronous training.")
+        try: self.opt.kill()
+        except:
+            print("No asynchronous training to be killed, no training is running.")
+    ###################################################################################
     def train(self,
         hyperparameter_bounds,
         init_hyperparameters = None,
@@ -210,7 +216,7 @@ class BaseGP():
         optimization_pop_size = 20,
         optimization_tolerance = 0.1,
         optimization_max_iter = 120,
-        dask_client = False):
+        dask_client = None):
         """
         This function finds the maximum of the log_likelihood and therefore trains the 
         fvGP aynchronously using 'hgdl'.
@@ -230,7 +236,7 @@ class BaseGP():
             None, just updates the class with new hyperparameters
         """
         ############################################
-        if dask_client is True: dask_client = distributed.Client()
+        if dask_client is None: dask_client = distributed.Client()
         self.hyperparameter_optimization_bounds = np.array(hyperparameter_bounds)
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
@@ -238,7 +244,7 @@ class BaseGP():
         ######################
         #####TRAINING#########
         ######################
-        self.hyperparameters = self.optimize_log_likelihood_async(
+        self.optimize_log_likelihood_async(
             init_hyperparameters,
             self.hyperparameter_optimization_bounds,
             optimization_dict,
@@ -247,7 +253,6 @@ class BaseGP():
             optimization_tolerance,
             dask_client
             )
-        self.compute_prior_fvGP_pdf()
         ######################
         ######################
         ######################
@@ -264,12 +269,12 @@ class BaseGP():
             print("Async Hyper-parameter update not successful. I am keeping the old ones.")
             print("That probbaly means you are not optimizing them asynchronously")
             print("hyperparameters: ", self.hyperparameters)
+        return self.hyperparameters
     ##################################################################################
     def optimize_log_likelihood_async(        
         self,
         starting_hps,
         hp_bounds,
-        optimization_method,
         optimization_dict,
         optimization_max_iter,
         likelihood_pop_size,
@@ -289,13 +294,13 @@ class BaseGP():
             x0 = None
         self.opt = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
-                    self.log_likelihood_hessian,
-                    hp_bounds,
+                    hess = self.log_likelihood_hessian,
+                    bounds = hp_bounds,
                     num_epochs = optimization_max_iter)
 
         self.opt.optimize(dask_client = dask_client, x0 = x0)
-        res = self.opt.get_latest(10)
-        return self.opt
+        #res = self.opt.get_latest(10)
+        #return self.opt
 
 
     def optimize_log_likelihood(
@@ -382,11 +387,11 @@ class BaseGP():
                 x0 = None
             self.opt = HGDL(self.log_likelihood,
                        self.log_likelihood_gradient,
-                       self.log_likelihood_hessian,
-                       hp_bounds,
+                       hess = self.log_likelihood_hessian,
+                       bounds = hp_bounds,
                        num_epochs = optimization_max_iter)
 
-            self.opt.optimize(dask_client = dask_client, x0 = x0)
+            self.opt.optimize(dask_client = None, x0 = x0)
             res = self.opt.get_final(2)
             hyperparameters = res["x"][0]
         elif optimization_method == "mcmc":

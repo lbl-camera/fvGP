@@ -50,7 +50,7 @@ class TestfvGP(unittest.TestCase):
                 optimization_max_iter = 2)
         if training_method == "hgdl":
             print("lets see how the hyper-parameters are changing")
-            for i in range(10):
+            for i in range(5):
                 time.sleep(1)
                 my_gp.update_hyperparameters()
                 print("++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -58,8 +58,35 @@ class TestfvGP(unittest.TestCase):
                 print("++++++++++++++++++++++++++++++++++++++++++++++++")
             my_gp.stop_training()
             print("TRAINING STOPPED")
+        self.visualize(my_gp)
         print("1d test test successful")
     ############################################################
+    def test_1d_single_task_async(self,N = 100):
+        points = np.empty((N,1))
+        points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
+        values = func(points)
+        print("values:   ",values)
+        my_gp = BaseGP(1,points,values,np.ones((2)),
+                gp_kernel_function = None,
+                compute_device = "cpu")
+        my_gp.train_async([[100.0,200.0],[5.0,100.0]],
+                init_hyperparameters = [110.0,8.0],
+                optimization_pop_size = 20,
+                optimization_tolerance = 0.0001,
+                optimization_max_iter = 2)
+        print("lets see how the hyper-parameters are changing")
+        for i in range(100):
+            time.sleep(2)
+            my_gp.update_hyperparameters()
+            print("++++++++++++++++++++++++++++++++++++++++++++++++")
+            print("|latest hyper parameters:| ",my_gp.hyperparameters)
+            print("++++++++++++++++++++++++++++++++++++++++++++++++")
+        my_gp.stop_training()
+        print("TRAINING STOPPED")
+        self.visualize(my_gp)
+        print("1d test test successful")
+    ############################################################
+
     def test_us_topo(self,method = "global",dask_client = None):
         a = np.load("us_topo.npy")
         points = a[::16,0:2]
@@ -150,6 +177,39 @@ class TestfvGP(unittest.TestCase):
         print("finite difference sig gradient:   ", fin_dif)
         print("analytic difference sig gradient: ", ana_dif)
         input("check results and continue with enter...")
+    def visualize(self, my_gp):
+        print("working on the prediction...")
+        x_input = np.empty((1000,1))
+        x_input[:,0] = np.linspace(0,2.0,1000)
+        y = func(x_input)
+        pred1_mean = my_gp.posterior_mean(x_input)
+        pred1_cov = my_gp.posterior_covariance(x_input)
+        sig = np.empty((len(x_input)))
+        for i in range(len(x_input)):
+            ##shannon ig always gives back the information gain for all input points
+            sig[i] = my_gp.shannon_information_gain(np.array([x_input[i]]))["sig"]
+        plt.figure(figsize = (10,4))
+        plt.plot(x_input,pred1_mean["f(x)"], label = "posterior mean",linewidth = 3.0)
+        plt.plot(x_input,y, label = "ground truth",linewidth = 3.0)
+        plt.plot(x_input,sig, label = "shannon ig", linewidth = 3.0)
+        m = pred1_mean["f(x)"]
+        s = np.diag(pred1_cov["S(x)"])
+        plt.plot(x_input, s, label = "std", linewidth = 3.0)
+        plt.fill_between(x_input[:,0], m-3.0*np.sqrt(s), m+3.0*np.sqrt(s), alpha = 0.5, label = "95% confidence interval")
+        plt.scatter(my_gp.data_x,my_gp.data_y, label = "data",linewidth = 3.0)
+        plt.legend()
+        print("computing probability of the given values")
+        comp_mean_vec = np.array([2.0,1.0])
+        comp_var = np.zeros((2, 2))
+        np.fill_diagonal(comp_var,np.random.rand(len(comp_var)))
+        x_input_prob = np.array([[0.55],[1.4]])
+        print("mean: ",comp_mean_vec)
+        print("var: ",comp_var)
+        print("points: ", x_input_prob)
+        s = my_gp.posterior_probability(x_input_prob, comp_mean_vec, comp_var)
+        print("s: ",s)
+        plt.savefig('plot.png')
+        plt.show()
 
 
 
