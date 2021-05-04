@@ -48,6 +48,21 @@ from functools import partial
 
 
 class BaseGP():
+    """
+    This is the BaseGP Class which contains all methods for single task gps
+    parameters:
+        input_space_dim
+        points: 2d numpy array
+        values: 1d numpy array
+        init_hyperparameters: 1d array
+    optional parameters:
+        variances = None
+        compute_device = "cpu"
+        gp_kernel_function = None
+        gp_mean_function = None
+        sparse = False
+        normalize_y = False
+    """
     def __init__(
         self,
         input_space_dim,
@@ -124,8 +139,7 @@ class BaseGP():
             values (N x n):                An array of values.
 
         Optional Attributes:
-            values_positions (N x dim1 x dim2 numpy array): the positions of the outputs in the output space
-            variances (N x n):                              variances of the values
+            variances (N):                              variances of the values
         """
         self.data_x = np.array(points)
         self.point_number = len(self.data_x)
