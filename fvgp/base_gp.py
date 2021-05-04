@@ -182,7 +182,6 @@ class BaseGP():
             optimization_pop_size: default = 20,
             optimization_tolerance: default = 0.1,
             optimization_max_iter: default = 120,
-            dask_client: True/False/dask client, default = False
 
         output:
             None, just updates the class with the new hyperparameters
@@ -219,7 +218,7 @@ class BaseGP():
         dask_client = None):
         """
         This function finds the maximum of the log_likelihood and therefore trains the 
-        fvGP aynchronously using 'hgdl'.
+        GP aynchronously using 'hgdl'.
         This can be done on a remote cluster/computer by providing a dask client
 
         inputs:

@@ -86,7 +86,6 @@ class TestfvGP(unittest.TestCase):
         self.visualize(my_gp)
         print("1d test test successful")
     ############################################################
-
     def test_us_topo(self,method = "global",dask_client = None):
         a = np.load("us_topo.npy")
         points = a[::16,0:2]
@@ -95,8 +94,7 @@ class TestfvGP(unittest.TestCase):
         my_gp = BaseGP(2,points,values,np.array([1,1,1]), sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
         my_gp.train(bounds, optimization_method = method,
-                optimization_max_iter = 20,
-                optimization_pop_size = 4)
+                optimization_max_iter = 20)
         if method == "hgdl":
             print("lets see how the hyper-parameters are changing")
             for i in range(30):
