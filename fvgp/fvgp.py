@@ -62,9 +62,9 @@ class fvGP(BaseGP):
         input_space_dim (int):         dim1
         output_space_dim (int):        dim2
         output_number (int):           n
-        points (N x dim1 numpy array): array of points
-        values (N x n numpy array):    array of values
-        init_hyperparameters: 1d array
+        points (N x dim1 numpy array): numpy array of points
+        values (N x n numpy array):    numpy array of values
+        init_hyperparameters: 1d numpy array
 
     Optional Attributes:
         value_positions (N x dim1 x dim2 numpy array):  the positions of the outputs in the output space
@@ -79,7 +79,7 @@ class fvGP(BaseGP):
         normalize_y:                                    default = False, normalizes the values \in [0,1]
 
     Example:
-        obj = FVGP(3,1,2,np.array([[1,2,3],[4,5,6]]),
+        obj = fvGP(3,1,2,np.array([[1,2,3],[4,5,6]]),
                          np.array([[2,3],[13,27.2]]),
                          np.array([2,3,4,5]),
                          value_positions = np.array([[[0],[1]],[[0],[1]]]),
@@ -114,14 +114,14 @@ class fvGP(BaseGP):
         self.point_number, self.output_num, self.output_dim = len(points), output_number, output_space_dim
         ###check the output dims
         if np.ndim(values) == 1:
-            raise ValueError("the output number is 1, you can use BaseGP for single-tasks GPs")
+            raise ValueError("the output number is 1, you can use BaseGP for single-task GPs")
         if output_number != len(values[0]):
             raise ValueError("the output number is not in agreement with the data values given")
         if output_space_dim == 1 and isinstance(value_positions, np.ndarray) == False:
             self.value_positions = self.compute_standard_value_positions()
         elif self.output_dim > 1 and isinstance(value_positions, np.ndarray) == False:
             raise ValueError(
-                "If the dimensionality of the output space is > 1, the value positions have to be given to the FVGP class")
+                "If the dimensionality of the output space is > 1, the value positions have to be given to the fvGP class")
         else:
             self.value_positions = np.array(value_positions)
         if variances is None:
@@ -171,10 +171,10 @@ class fvGP(BaseGP):
             self.value_positions = self.compute_standard_value_positions()
         elif self.output_dim > 1 and isinstance(value_positions, np.ndarray) == False:
             raise ValueError(
-                "If the dimensionality of the output space is > 1, the value positions have to be given to the FVGP class. EXIT"
+                "If the dimensionality of the output space is > 1, the value positions have to be given to the fvGP class. EXIT"
             )
         else:
-            self.value_positions = value_positions
+            self.value_positions = np.array(value_positions)
         ##########################################
         #######prepare variances##################
         ##########################################

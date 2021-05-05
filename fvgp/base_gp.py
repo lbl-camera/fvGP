@@ -2,7 +2,7 @@
 
 import dask.distributed as distributed
 """
-Software: FVGP, version: 2.3.0
+Software: FVGP, version: 2.3.2
 File containing the gp class
 use help() to find information about usage
 Author: Marcus Noack
@@ -56,7 +56,7 @@ class BaseGP():
         values: 1d numpy array
         init_hyperparameters: 1d array
     optional parameters:
-        variances = None
+        variances = None, 1 d numpy array
         compute_device = "cpu"
         gp_kernel_function = None
         gp_mean_function = None
@@ -99,8 +99,12 @@ class BaseGP():
             self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
             print("CAUTION: you have not provided data variances,")
             print("they will set to be 1 percent of the the data values!")
-        else:
+        elif np.ndim(variances) == 2:
+            self.variances = variances[:,0]
+        elif np.ndim(variances) == 1:
             self.variances = np.array(variances)
+        else:
+            raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
         ##########################################
         #######define kernel and mean function####
         ##########################################
@@ -141,6 +145,10 @@ class BaseGP():
         Optional Attributes:
             variances (N):                              variances of the values
         """
+        if self.input__dim != len(points[0]):
+            raise ValueError("input space dimensions are not in agreement with the point positions given")
+        if np.ndim(values) == 2: values = values[:,0]
+
         self.data_x = np.array(points)
         self.point_number = len(self.data_x)
         self.data_y = np.array(values)
@@ -150,9 +158,14 @@ class BaseGP():
         ##########################################
         if variances is None:
             self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
-            print("CAUTION: you have not provided data variances, they will set to be 1 percent of the data values!")
-        else:
+            print("CAUTION: you have not provided data variances,")
+            print("they will set to be 1 percent of the the data values!")
+        elif np.ndim(variances) == 2:
+            self.variances = variances[:,0]
+        elif np.ndim(variances) == 1:
             self.variances = np.array(variances)
+        else:
+            raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
         ######################################
         #####transform to index set###########
         ######################################
@@ -165,14 +178,12 @@ class BaseGP():
     def stop_training(self):
         print("Cancelling asynchronous training.")
         try: self.opt.cancel_tasks()
-        except:
-            print("No asynchronous training to be cancelled, no training is running.")
+        except: print("No asynchronous training to be cancelled, no training is running.")
     ###################################################################################
     def kill_training(self):
         print("Cancelling asynchronous training.")
         try: self.opt.kill()
-        except:
-            print("No asynchronous training to be killed, no training is running.")
+        except: print("No asynchronous training to be killed, no training is running.")
     ###################################################################################
     def train(self,
         hyperparameter_bounds,
@@ -181,21 +192,23 @@ class BaseGP():
         optimization_dict = None,
         optimization_pop_size = 20,
         optimization_tolerance = 0.1,
-        optimization_max_iter = 120):
+        optimization_max_iter = 120,
+        dask_client = None):
         """
-        This function finds the maximum of the log_likelihood and therefore trains the fvGP synchronously.
+        This function finds the maximum of the log_likelihood and therefore trains the fvGP (synchronously).
         This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and 
         providing a dask client
 
         inputs:
-            hyperparameter_bounds (2d list)
+            hyperparameter_bounds (2d numpy array)
         optional inputs:
-            init_hyperparameters (list):  default = None
+            init_hyperparameters (1d numpy array):  default = None (= use earlier initialization)
             optimization_method : default = "global","global"/"local"/"hgdl"/callable f(obj,optimization_dict)
             optimization_dict: if optimization is callable, the this will be passed as dict
-            optimization_pop_size: default = 20,
-            optimization_tolerance: default = 0.1,
-            optimization_max_iter: default = 120,
+            optimization_pop_size: default = 20
+            optimization_tolerance: default = 0.1
+            optimization_max_iter: default = 120
+            dask_client = None (will use local client, only for hgdl)
 
         output:
             None, just updates the class with the new hyperparameters
@@ -215,7 +228,8 @@ class BaseGP():
             optimization_dict,
             optimization_max_iter,
             optimization_pop_size,
-            optimization_tolerance
+            optimization_tolerance,
+            dask_client
             )
         self.compute_prior_fvGP_pdf()
         ######################
@@ -232,8 +246,8 @@ class BaseGP():
         dask_client = None):
         """
         This function finds the maximum of the log_likelihood and therefore trains the 
-        GP aynchronously using 'hgdl'.
-        This can be done on a remote cluster/computer by providing a dask client
+        GP (aynchronously) using 'hgdl'.
+        This can be done on a remote cluster/computer by providing the right dask client
 
         inputs:
             hyperparameter_bounds (2d list)
@@ -243,7 +257,7 @@ class BaseGP():
             optimization_pop_size: default = 20,
             optimization_tolerance: default = 0.1,
             optimization_max_iter: default = 120,
-            dask_client: True/False/dask client, default = False
+            dask_client: True/False/dask client, default = None (will use a local client)
 
         output:
             None, just updates the class with new hyperparameters
@@ -270,10 +284,9 @@ class BaseGP():
         ######################
         ######################
     ##################################################################################
-
-    def update_hyperparameters(self):
+    def update_hyperparameters(self, n = 1):
         try:
-            res = self.opt.get_latest(1)
+            res = self.opt.get_latest(n)
             self.hyperparameters = res["x"][0]
             self.compute_prior_fvGP_pdf()
             print("Async hyper-parameter update successful")
@@ -282,16 +295,11 @@ class BaseGP():
             print("Async Hyper-parameter update not successful. I am keeping the old ones.")
             print("That probbaly means you are not optimizing them asynchronously")
             print("hyperparameters: ", self.hyperparameters)
-        return self.hyperparameters
+        return res
     ##################################################################################
-    def optimize_log_likelihood_async(        
-        self,
-        starting_hps,
-        hp_bounds,
-        optimization_dict,
-        optimization_max_iter,
-        likelihood_pop_size,
-        optimization_tolerance,
+    def optimize_log_likelihood_async(self,starting_hps,
+        hp_bounds,optimization_dict,optimization_max_iter,
+        likelihood_pop_size,optimization_tolerance,
         dask_client):
         print("HGDL optimization submitted for asynchronous training")
         print('bounds:',hp_bounds)
@@ -312,25 +320,18 @@ class BaseGP():
                     num_epochs = optimization_max_iter)
 
         self.opt.optimize(dask_client = dask_client, x0 = x0)
-        #res = self.opt.get_latest(10)
-        #return self.opt
-
-
-    def optimize_log_likelihood(
-        self,
-        starting_hps,
-        hp_bounds,
-        optimization_method,
-        optimization_dict,
-        optimization_max_iter,
-        likelihood_pop_size,
-        optimization_tolerance):
+    ##################################################################################
+    def optimize_log_likelihood(self,starting_hps,
+        hp_bounds,optimization_method,optimization_dict,optimization_max_iter,
+        likelihood_pop_size,optimization_tolerance,
+        dask_client = None):
 
         start_log_likelihood = self.log_likelihood(starting_hps)
 
         print(
             "Hyper-parameter tuning in progress. Old hyper-parameters: ",
             starting_hps, " with old log likelihood: ", start_log_likelihood)
+        print("method: ", optimization_method)
 
         ############################
         ####global optimization:##
@@ -354,7 +355,7 @@ class BaseGP():
             print("I found hyper-parameters ",hyperparameters," with likelihood ",
                 Eval," via global optimization")
         ############################
-        ####global optimization:##
+        ####local optimization:##
         ############################
         elif optimization_method == "local":
             hyperparameters = np.array(starting_hps)
@@ -404,7 +405,7 @@ class BaseGP():
                        bounds = hp_bounds,
                        num_epochs = optimization_max_iter)
 
-            self.opt.optimize(dask_client = None, x0 = x0)
+            self.opt.optimize(dask_client = dask_client, x0 = x0)
             res = self.opt.get_final(2)
             hyperparameters = res["x"][0]
         elif optimization_method == "mcmc":
@@ -684,9 +685,8 @@ class BaseGP():
             {"x":    the input points,
              "f(x)": the posterior mean vector (1d numpy array)}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
@@ -709,13 +709,13 @@ class BaseGP():
              "direction": the direction
              "df/dx": the gradient of the posterior mean vector (1d numpy array)}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
-        x1 = np.array(x_iset)
-        x2 = np.array(x_iset)
+        x1 = np.array(p)
+        x2 = np.array(p)
         eps = 1e-6
         x1[:,direction] = x1[:,direction] + eps
         x2[:,direction] = x2[:,direction] - eps
@@ -741,10 +741,9 @@ class BaseGP():
              "v(x)": the posterior variances (1d numpy array) for each input point,
              "S":    covariance matrix, v(x) = diag(S)}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
-        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
@@ -781,15 +780,15 @@ class BaseGP():
              "dv/dx": the posterior variances (1d numpy array) for each input point,
              "dS/dx":    covariance matrix, v(x) = diag(S)}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
         kk =  self.kernel(p, p,self.hyperparameters,self)
-        x1 = np.array(x_iset)
-        x2 = np.array(x_iset)
+        x1 = np.array(p)
+        x2 = np.array(p)
         eps = 1e-6
         x1[:,direction] = x1[:,direction] + eps
         x2[:,direction] = x2[:,direction] - eps
@@ -818,14 +817,13 @@ class BaseGP():
              "prior mean": the mean of the prior
              "S:": joint prior covariance}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
-        post_mean = self.mean_function(self,x_iset, self.hyperparameters)
+        post_mean = self.mean_function(self,p, self.hyperparameters)
         full_gp_prior_mean = np.append(self.prior_mean_vec, post_mean)
         return  {"x": p,
                  "K": self.prior_covariance,
@@ -851,21 +849,20 @@ class BaseGP():
              "prior mean": the mean of the prior
              "dS/dx:": joint prior covariance}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
         k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
-        x1 = np.array(x_iset)
-        x2 = np.array(x_iset)
+        x1 = np.array(p)
+        x2 = np.array(p)
         eps = 1e-6
         x1[:,direction] = x1[:,direction] + eps
         x2[:,direction] = x2[:,direction] - eps
         kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-self.kernel(x2, x2,self.hyperparameters,self)) /(2.0*eps)
-        post_mean = self.mean_function(self,x_iset, self.hyperparameters)
+        post_mean = self.mean_function(self,p, self.hyperparameters)
         mean_der = (self.mean_function(self,x1,self.hyperparameters) - self.mean_function(self,x2,self.hyperparameters))/(2.0*eps)
         full_gp_prior_mean_grad = np.append(np.zeros((self.prior_mean_vec.shape)), mean_der)
         prior_cov_grad = np.zeros(self.prior_covariance.shape)
@@ -898,9 +895,8 @@ class BaseGP():
         -------
             scalar: entropy
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         priors = self.gp_prior(p)
@@ -921,9 +917,8 @@ class BaseGP():
         -------
             scalar: entropy gradient
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         priors1 = self.gp_prior(p)
@@ -983,14 +978,15 @@ class BaseGP():
              "given covariance":  the use_provided covariance,
              "kl-div:": the kl div between gp pdf and given pdf}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
-        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
-        res = self.posterior_mean(x_iset)
+        p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
+        res = self.posterior_mean(p)
         gp_mean = res["f(x)"]
         gp_cov = self.posterior_covariance(x_iset)["S(x)"]
 
-        return {"x": x_iset,
+        return {"x": p,
                 "gp posterior mean" : gp_mean,
                 "gp posterior covariance": gp_cov,
                 "given mean": comp_mean,
@@ -1018,16 +1014,16 @@ class BaseGP():
              "given covariance":  the use_provided covariance,
              "kl-div grad": the grad of the kl div between gp pdf and given pdf}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
-        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
+        p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        gp_mean = self.posterior_mean(x_iset)["f(x)"]
-        gp_mean_grad = self.posterior_mean_grad(x_iset,direction)["df/dx"]
-        gp_cov  = self.posterior_covariance(x_iset)["S(x)"]
-        gp_cov_grad  = self.posterior_covariance_grad(x_iset,direction)["dS/dx"]
+        gp_mean = self.posterior_mean(p)["f(x)"]
+        gp_mean_grad = self.posterior_mean_grad(p,direction)["df/dx"]
+        gp_cov  = self.posterior_covariance(p)["S(x)"]
+        gp_cov_grad  = self.posterior_covariance_grad(p,direction)["dS/dx"]
 
-        return {"x": x_iset,
+        return {"x": p,
                 "gp posterior mean" : gp_mean,
                 "gp posterior mean grad" : gp_mean_grad,
                 "gp posterior covariance": gp_cov,
@@ -1050,10 +1046,9 @@ class BaseGP():
              "posterior entropy": posterior entropy
              "sig:" shannon_information gain}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
-        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
@@ -1084,10 +1079,10 @@ class BaseGP():
             {"x": the index set points,
              "sig_grad:" shannon_information gain gradient}
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
-        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
         e2 = self.gp_entropy_grad(p,direction)
         sig = e2
         return {"x": p,
@@ -1109,13 +1104,13 @@ class BaseGP():
              "covariance": ,
              "probability":  ,
         """
-        x_iset = np.array(x_iset)
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
-        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
         p = np.array(x_iset)
-        res = self.posterior_mean(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
+        res = self.posterior_mean(p)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_iset)["S(x)"]
+        gp_cov = self.posterior_covariance(p)["S(x)"]
         gp_cov_inv = np.linalg.inv(gp_cov)
         comp_cov_inv = np.linalg.inv(comp_cov)
         cov = np.linalg.inv(gp_cov_inv + comp_cov_inv)
@@ -1148,11 +1143,12 @@ class BaseGP():
         -------
             {"probability grad":  ,}
         """
-        if x_iset.ndim == 1: x_iset = np.array([x_iset])
-        if len(x_iset[0]) != len(self.data_x[0]): x_iset = np.column_stack([x_iset,np.zeros((len(x_iset)))])
-        x_iset = np.array(x_iset)
-        x1 = np.array(x_init)
-        x2 = np.array(x_init)
+        p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
+        x1 = np.array(p)
+        x2 = np.array(p)
         x1[:,direction] = x1[:,direction] + 1e-6
         x2[:,direction] = x2[:,direction] - 1e-6
 
@@ -1390,7 +1386,7 @@ class BaseGP():
         return gradient
 
     def d2_gp_kernel_dh2(self, points1, points2, direction1, direction2, hyperparameters):
-        ###things to consider then things go south with the Hessian:
+        ###things to consider when things go south with the Hessian:
         ###make sure the epsilon is appropriate, not too large, not too small, 1e-3 seems alright
         epsilon = 1e-3
         new_hyperparameters1 = np.array(hyperparameters)
