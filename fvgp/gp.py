@@ -47,9 +47,9 @@ from functools import partial
 
 
 
-class BaseGP():
+class GP():
     """
-    This is the BaseGP Class which contains all methods for single task gps
+    This is the GP Class which contains all methods for single task gps
     parameters:
         input_space_dim
         points: 2d numpy array
@@ -239,7 +239,6 @@ class BaseGP():
     def train_async(self,
         hyperparameter_bounds,
         init_hyperparameters = None,
-        optimization_dict = None,
         optimization_pop_size = 20,
         optimization_tolerance = 0.1,
         optimization_max_iter = 120,
@@ -274,7 +273,6 @@ class BaseGP():
         self.optimize_log_likelihood_async(
             init_hyperparameters,
             self.hyperparameter_optimization_bounds,
-            optimization_dict,
             optimization_max_iter,
             optimization_pop_size,
             optimization_tolerance,
@@ -298,7 +296,7 @@ class BaseGP():
         return res
     ##################################################################################
     def optimize_log_likelihood_async(self,starting_hps,
-        hp_bounds,optimization_dict,optimization_max_iter,
+        hp_bounds,optimization_max_iter,
         likelihood_pop_size,optimization_tolerance,
         dask_client):
         print("HGDL optimization submitted for asynchronous training")

@@ -44,10 +44,10 @@ import time
 import torch
 import numba as nb
 from functools import partial
-from fvgp.base_gp import BaseGP
+from fvgp.gp import GP
 
 
-class fvGP(BaseGP):
+class fvGP(GP):
     """
     GP class: Finds hyperparameters and therefore the mean
     and covariance of a (multi-output) Gaussian process
@@ -114,7 +114,7 @@ class fvGP(BaseGP):
         self.point_number, self.output_num, self.output_dim = len(points), output_number, output_space_dim
         ###check the output dims
         if np.ndim(values) == 1:
-            raise ValueError("the output number is 1, you can use BaseGP for single-task GPs")
+            raise ValueError("the output number is 1, you can use GP for single-task GPs")
         if output_number != len(values[0]):
             raise ValueError("the output number is not in agreement with the data values given")
         if output_space_dim == 1 and isinstance(value_positions, np.ndarray) == False:
@@ -135,8 +135,8 @@ class fvGP(BaseGP):
         self.data_x, self.data_y, self.variances = self.transform_index_set()
         self.point_number = len(self.data_x)
 
-        ####init BaseGP
-        BaseGP.__init__(self,self.iset_dim, self.data_x,self.data_y,init_hyperparameters,
+        ####init GP
+        GP.__init__(self,self.iset_dim, self.data_x,self.data_y,init_hyperparameters,
                 variances = self.variances,compute_device = compute_device,
                 gp_kernel_function = gp_kernel_function, gp_mean_function = gp_mean_function,
                 sparse = sparse, normalize_y = normalize_y)
@@ -188,7 +188,7 @@ class fvGP(BaseGP):
         ######################################
         self.data_x, self.data_y, self.variances = self.transform_index_set()
         self.point_number = len(self.data_x)
-        BaseGP.update_gp_data(self.data_x, self.data_y, self.variances)
+        GP.update_gp_data(self.data_x, self.data_y, self.variances)
 
     def compute_standard_value_positions(self):
         value_pos = np.zeros((self.point_number, self.output_num, self.output_dim))
@@ -208,3 +208,5 @@ class fvGP(BaseGP):
             new_variances[i * self.point_number : (i + 1) * self.point_number] = \
             self.variances[:, i]
         return new_points, new_values, new_variances
+    def multi_task_kernel(self):
+        return 0

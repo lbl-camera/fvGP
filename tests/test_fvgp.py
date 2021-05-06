@@ -6,7 +6,7 @@
 import unittest
 import numpy as np
 from fvgp.fvgp import fvGP
-from fvgp.fvgp import BaseGP
+from fvgp.fvgp import GP
 import matplotlib.pyplot as plt
 import time
 
@@ -19,7 +19,7 @@ class TestfvGP(unittest.TestCase):
         points = np.empty((N,2))
         points = np.random.uniform(low = -1, high = 1, size = points.shape)
         values = func(points)
-        my_base_gp = BaseGP(2,points,values,np.array([2,2]),
+        my_gp = GP(2,points,values,np.array([2,2]),
             gp_kernel_function = stationary_kernel,
             compute_device = "cpu")
         print("Base GP successfully initiated")
@@ -39,7 +39,7 @@ class TestfvGP(unittest.TestCase):
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
         values = func(points)
         print("values:   ",values)
-        my_gp = BaseGP(1,points,values,np.ones((2)),
+        my_gp = GP(1,points,values,np.ones((2)),
                 gp_kernel_function = None,
                 compute_device = "cpu")
         my_gp.train([[100.0,200.0],[5.0,100.0]],
@@ -66,7 +66,7 @@ class TestfvGP(unittest.TestCase):
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
         values = func(points)
         print("values:   ",values)
-        my_gp = BaseGP(1,points,values,np.ones((2)),
+        my_gp = GP(1,points,values,np.ones((2)),
                 gp_kernel_function = None,
                 compute_device = "cpu")
         my_gp.train_async([[100.0,200.0],[5.0,100.0]],
@@ -91,7 +91,7 @@ class TestfvGP(unittest.TestCase):
         points = a[::16,0:2]
         values = a[::16,2:3]
         print("length of data set: ", len(points))
-        my_gp = BaseGP(2,points,values,np.array([1,1,1]), sparse = False)
+        my_gp = GP(2,points,values,np.array([1,1,1]), sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
         my_gp.train(bounds, optimization_method = method,
                 optimization_max_iter = 20)
@@ -110,7 +110,7 @@ class TestfvGP(unittest.TestCase):
         points = a[::64,0:2]
         values = a[::64,2:3]
         print("length of data set: ", len(points))
-        my_gp = BaseGP(2,points,values,np.array([1,1,1]), sparse = False)
+        my_gp = GP(2,points,values,np.array([1,1,1]), sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
         my_gp.train(bounds, optimization_method = method,
                 optimization_max_iter = 20,
