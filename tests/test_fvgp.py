@@ -61,6 +61,35 @@ class TestfvGP(unittest.TestCase):
         self.visualize(my_gp)
         print("1d test test successful")
     ############################################################
+    def test_1d_multi_task(self,N = 100, training_method = "global"):
+        points = np.empty((N,1))
+        points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
+        values = np.empty((len(points),2))
+        values[:,0] = func(points)
+        values[:,1] = func(points) + 2.0
+        print("values:   ",values)
+        my_gp = fvGP(1,1,2,points,values,np.ones((2)),
+                gp_kernel_function = None,
+                compute_device = "cpu")
+        my_gp.train([[100.0,200.0],[5.0,100.0],[5.0,100.0]],
+                init_hyperparameters = [110.0,8.0,8.0],
+                optimization_method = training_method,
+                optimization_pop_size = 20,
+                optimization_tolerance = 0.0001,
+                optimization_max_iter = 2)
+        if training_method == "hgdl":
+            print("lets see how the hyper-parameters are changing")
+            for i in range(5):
+                time.sleep(1)
+                my_gp.update_hyperparameters()
+                print("++++++++++++++++++++++++++++++++++++++++++++++++")
+                print("|latest hyper parameters:| ",my_gp.hyperparameters)
+                print("++++++++++++++++++++++++++++++++++++++++++++++++")
+            my_gp.stop_training()
+            print("TRAINING STOPPED")
+        self.visualize_multi_task(my_gp)
+        print("1d test test successful")
+
     def test_1d_single_task_async(self,N = 100):
         points = np.empty((N,1))
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
@@ -175,6 +204,7 @@ class TestfvGP(unittest.TestCase):
         print("finite difference sig gradient:   ", fin_dif)
         print("analytic difference sig gradient: ", ana_dif)
         input("check results and continue with enter...")
+        ################################################
     def visualize(self, my_gp):
         print("working on the prediction...")
         x_input = np.empty((1000,1))
@@ -194,7 +224,7 @@ class TestfvGP(unittest.TestCase):
         s = np.diag(pred1_cov["S(x)"])
         plt.plot(x_input, s, label = "std", linewidth = 3.0)
         plt.fill_between(x_input[:,0], m-3.0*np.sqrt(s), m+3.0*np.sqrt(s), alpha = 0.5, label = "95% confidence interval")
-        plt.scatter(my_gp.data_x,my_gp.data_y, label = "data",linewidth = 3.0)
+        plt.scatter(my_gp.data_x[:,0],my_gp.data_y[0:len(x_input)], label = "data",linewidth = 3.0)
         plt.legend()
         print("computing probability of the given values")
         comp_mean_vec = np.array([2.0,1.0])
@@ -208,6 +238,52 @@ class TestfvGP(unittest.TestCase):
         print("s: ",s)
         plt.savefig('plot.png')
         plt.show()
+        #############################################################
+    def visualize_multi_task(self, my_gp):
+        print("working on the prediction...")
+        x_input = np.empty((2000,2))
+        x_input[0:1000,0] = np.linspace(0,2.0,1000)
+        x_input[0:1000,1] = 0
+        x_input[1000:,0] = np.linspace(0,2.0,1000)
+        x_input[1000:,1] = 1
+        y1 = func(x_input[0:1000,0:1])
+        y2 = func(x_input[1000:,0:1]) + 2.0
+        pred1_mean = my_gp.posterior_mean(x_input)
+        pred1_cov = my_gp.posterior_covariance(x_input)
+        sig = np.empty((len(x_input)))
+        for i in range(len(x_input)):
+            ##shannon ig always gives back the information gain for all input points
+            sig[i] = my_gp.shannon_information_gain(np.array([x_input[i]]))["sig"]
+        plt.figure(figsize = (10,4))
+        plt.plot(x_input[0:1000,0],pred1_mean["f(x)"][0:1000], label = "posterior mean task 1",linewidth = 3.0)
+        plt.plot(x_input[1000:,0],pred1_mean["f(x)"][1000:], label = "posterior mean task 2",linewidth = 3.0)
+        plt.plot(x_input[0:1000,0],y1, label = "ground truth task 1",linewidth = 3.0)
+        plt.plot(x_input[1000:,0], y2, label = "ground truth task 2",linewidth = 3.0)
+        #plt.plot(x_input[0:1000,0],sig[0:1000], label = "shannon ig task 1", linewidth = 3.0)
+        #plt.plot(x_input[1000:,0],sig[1000:], label = "shannon ig task 2", linewidth = 3.0)
+        m1 = pred1_mean["f(x)"][0:1000]
+        m2 = pred1_mean["f(x)"][1000:]
+        s1 = np.diag(pred1_cov["S(x)"])[0:1000]
+        s2 = np.diag(pred1_cov["S(x)"])[1000:]
+        #plt.plot(x_input[0:1000,0], s1, label = "std task 1", linewidth = 3.0)
+        #plt.plot(x_input[1000:,0], s2, label = "std task 2", linewidth = 3.0)
+        plt.fill_between(x_input[0:1000,0], m1-3.0*np.sqrt(s1), m1+3.0*np.sqrt(s1), alpha = 0.5, label = "95% confidence interval task 1")
+        plt.fill_between(x_input[1000:,0], m2-3.0*np.sqrt(s2), m2+3.0*np.sqrt(s2), alpha = 0.5, label = "95% confidence interval task 2")
+        #plt.scatter(my_gp.data_x[:,0],my_gp.data_y[0:len(x_input)], label = "data",linewidth = 3.0)
+        plt.legend()
+        #print("computing probability of the given values")
+        #comp_mean_vec = np.array([2.0,1.0])
+        #comp_var = np.zeros((2, 2))
+        #np.fill_diagonal(comp_var,np.random.rand(len(comp_var)))
+        #x_input_prob = np.array([[0.55],[1.4]])
+        #print("mean: ",comp_mean_vec)
+        #print("var: ",comp_var)
+        #print("points: ", x_input_prob)
+        #s = my_gp.posterior_probability(x_input_prob, comp_mean_vec, comp_var)
+        #print("s: ",s)
+        #plt.savefig('plot.png')
+        plt.show()
+
 
 
 

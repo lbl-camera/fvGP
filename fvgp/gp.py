@@ -2,7 +2,7 @@
 
 import dask.distributed as distributed
 """
-Software: FVGP, version: 2.3.2
+Software: FVGP, version: 2.3.4
 File containing the gp class
 use help() to find information about usage
 Author: Marcus Noack
@@ -49,19 +49,37 @@ from functools import partial
 
 class GP():
     """
-    This is the GP Class which contains all methods for single task gps
-    parameters:
-        input_space_dim
-        points: 2d numpy array
-        values: 1d numpy array
-        init_hyperparameters: 1d array
-    optional parameters:
-        variances = None, 1 d numpy array
-        compute_device = "cpu"
-        gp_kernel_function = None
-        gp_mean_function = None
-        sparse = False
-        normalize_y = False
+    GP class: Provides all tool for a single-task GP.
+
+    symbols:
+        N: Number of points in the data set
+        n: number of return values
+        dim1: number of dimension of the input space
+
+    Attributes:
+        input_space_dim (int):         dim1
+        points (N x dim1 numpy array): 2d numpy array of points
+        values (N x n numpy array):    2d numpy array of values
+        init_hyperparameters:          1d numpy array
+
+    Optional Attributes:
+        variances (N x n numpy array):                  variances of the values, default = array of shape of points
+                                                        with 1 % of the values
+        compute_device:                                 cpu/gpu, default = cpu
+        gp_kernel_function(func):                       None/function defining the 
+                                                        kernel def name(x1,x2,hyperparameters,self), default = None
+        gp_mean_function(func):                         None/a function def name(x, self), default = None
+        sparse (bool):                                  default = False
+        normalize_y:                                    default = False, normalizes the values \in [0,1]
+
+    Example:
+        obj = fvGP(3,np.array([[1,2,3],[4,5,6]]),
+                         np.array([2,4]),
+                         np.array([2,3,4,5]),
+                         variances = np.array([0.01,0.02]),
+                         gp_kernel_function = kernel_function,
+                         gp_mean_function = some_mean_function
+        )
     """
     def __init__(
         self,
@@ -78,7 +96,7 @@ class GP():
         ):
         """
         The constructor for the gp class.
-        type help(FVGP) for more information about attributes, methods and their parameters
+        type help(GP) for more information about attributes, methods and their parameters
         """
         if input_space_dim != len(points[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
@@ -549,8 +567,8 @@ class GP():
         K = self.compute_covariance(hyperparameters, variances)
         y = values - mean
         x = self.solve(K, y)
-        return x[:,0],K
-        #return x,K
+        if x.ndim == 2: x = x[:,0]
+        return x,K
     ##################################################################################
     def compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""

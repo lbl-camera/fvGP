@@ -2,7 +2,7 @@
 
 import dask.distributed as distributed
 """
-Software: FVGP, version: 2.3.0
+Software: FVGP, version: 2.3.4
 File containing the gp class
 use help() to find information about usage
 Author: Marcus Noack
@@ -49,8 +49,8 @@ from fvgp.gp import GP
 
 class fvGP(GP):
     """
-    GP class: Finds hyperparameters and therefore the mean
-    and covariance of a (multi-output) Gaussian process
+    fvGP class: Provides all tool for a multi-task GP.
+    This class inherits a lot of its method form the GP class.
 
     symbols:
         N: Number of points in the data set
@@ -62,9 +62,9 @@ class fvGP(GP):
         input_space_dim (int):         dim1
         output_space_dim (int):        dim2
         output_number (int):           n
-        points (N x dim1 numpy array): numpy array of points
-        values (N x n numpy array):    numpy array of values
-        init_hyperparameters: 1d numpy array
+        points (N x dim1 numpy array): 2d numpy array of points
+        values (N x n numpy array):    2d numpy array of values
+        init_hyperparameters:          1d numpy array
 
     Optional Attributes:
         value_positions (N x dim1 x dim2 numpy array):  the positions of the outputs in the output space
@@ -87,7 +87,6 @@ class fvGP(GP):
                          gp_kernel_function = kernel_function,
                          gp_mean_function = some_mean_function
         )
-    ---------------------------------------------
     """
     def __init__(
         self,
@@ -107,7 +106,7 @@ class fvGP(GP):
         ):
         """
         The constructor for the fvgp class.
-        type help(FVGP) for more information about attributes, methods and their parameters
+        type help(fvGP) for more information about attributes, methods and their parameters
         """
         self.data_x = np.array(points)
         self.data_y = np.array(values)
