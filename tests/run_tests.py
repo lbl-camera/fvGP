@@ -6,8 +6,8 @@ def main():
     a = TestfvGP()
     a.test_initialization()
     ###choose a function for testing here
-    #a.test_1d_single_task(training_method = "global", N = 100)
-    a.test_1d_multi_task(training_method = "global", N = 100)
+    a.test_1d_single_task(training_method = "global", N = 100)
+    #a.test_1d_multi_task(training_method = "global", N = 100)
     #a.test_1d_single_task(training_method = "mcmc", N = 100)
     #a.test_derivatives(0)
     #a.test_derivatives(1)
