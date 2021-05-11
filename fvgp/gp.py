@@ -260,6 +260,9 @@ class GP():
         optimization_pop_size = 20,
         optimization_tolerance = 0.1,
         optimization_max_iter = 120,
+        local_optimizer = "L-BFGS-B",
+        global_optimizer = "genetic",
+        deflation_radius = 1.0,
         dask_client = None):
         """
         This function finds the maximum of the log_likelihood and therefore trains the 
@@ -294,6 +297,9 @@ class GP():
             optimization_max_iter,
             optimization_pop_size,
             optimization_tolerance,
+            local_optimizer,
+            global_optimizer,
+            deflation_radius,
             dask_client
             )
         ######################
@@ -311,11 +317,13 @@ class GP():
             print("Async Hyper-parameter update not successful. I am keeping the old ones.")
             print("That probbaly means you are not optimizing them asynchronously")
             print("hyperparameters: ", self.hyperparameters)
+            res = np.array(self.hyperparameters)
         return res
     ##################################################################################
     def optimize_log_likelihood_async(self,starting_hps,
         hp_bounds,optimization_max_iter,
         likelihood_pop_size,optimization_tolerance,
+        local_optimizer, global_optimizer,deflation_radius,
         dask_client):
         print("HGDL optimization submitted for asynchronous training")
         print('bounds:',hp_bounds)
@@ -329,10 +337,15 @@ class GP():
             print(str(err))
             print("This is nothing to worry about, especially in the first iteration")
             x0 = None
+        local_optimizer = "L-BFGS-B"
+        global_optimizer = "genetic"
         self.opt = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
                     hess = self.log_likelihood_hessian,
                     bounds = hp_bounds,
+                    local_optimizer = local_optimizer,
+                    global_optimizer = global_optimizer,
+                    radius = deflation_radius,
                     num_epochs = optimization_max_iter)
 
         self.opt.optimize(dask_client = dask_client, x0 = x0)

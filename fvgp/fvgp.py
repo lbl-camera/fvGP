@@ -207,5 +207,5 @@ class fvGP(GP):
             new_variances[i * self.point_number : (i + 1) * self.point_number] = \
             self.variances[:, i]
         return new_points, new_values, new_variances
-    def multi_task_kernel(self):
+    def multi_task_kernel1(self):
         return 0
