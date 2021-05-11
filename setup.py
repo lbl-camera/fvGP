@@ -55,6 +55,6 @@ setup(
     packages=find_packages(include=['fvgp', 'fvgp.*']),
     test_suite='tests',
     url='https://github.com/MarcusMichaelNoack/fvgp',
-    version='2.3.4',
+    version='2.3.5',
     zip_safe=False,
 )

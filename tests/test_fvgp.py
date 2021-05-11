@@ -11,10 +11,12 @@ import matplotlib.pyplot as plt
 import time
 
 class TestfvGP(unittest.TestCase):
-    """Tests for `gpcam` package."""
+    """Tests for `fvgp` package."""
 
     def test_initialization(self):
-        """Test something."""
+        print("=========================================")
+        print("init test started ...")
+        print("=========================================")
         N = 100
         points = np.empty((N,2))
         points = np.random.uniform(low = -1, high = 1, size = points.shape)
@@ -32,9 +34,14 @@ class TestfvGP(unittest.TestCase):
         print("fvGP successfully initiated")
         res = my_fvgp.posterior_mean(np.array([[3,3,0],[3,3,0]]))
         print(res)
+        print("=========================================")
         print("init test successful")
+        print("=========================================")
     ############################################################
     def test_1d_single_task(self,N = 100, training_method = "global"):
+        print("=========================================")
+        print("1d single task test started ...")
+        print("=========================================")
         points = np.empty((N,1))
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
         values = func(points)
@@ -44,10 +51,10 @@ class TestfvGP(unittest.TestCase):
                 compute_device = "cpu")
         my_gp.train([[100.0,200.0],[5.0,100.0]],
                 init_hyperparameters = [110.0,8.0],
-                optimization_method = training_method,
-                optimization_pop_size = 20,
-                optimization_tolerance = 0.0001,
-                optimization_max_iter = 2)
+                method = training_method,
+                pop_size = 20,
+                tolerance = 0.0001,
+                max_iter = 2)
         if training_method == "hgdl":
             print("lets see how the hyper-parameters are changing")
             for i in range(5):
@@ -57,11 +64,17 @@ class TestfvGP(unittest.TestCase):
                 print("|latest hyper parameters:| ",my_gp.hyperparameters)
                 print("++++++++++++++++++++++++++++++++++++++++++++++++")
             my_gp.stop_training()
+            my_gp.kill_training()
             print("TRAINING STOPPED")
         self.visualize(my_gp)
-        print("1d test test successful")
+        print("=========================================")
+        print("1d single task test successful")
+        print("=========================================")
     ############################################################
     def test_1d_multi_task(self,N = 100, training_method = "global"):
+        print("=========================================")
+        print("1d multi-task test started ....")
+        print("=========================================")
         points = np.empty((N,1))
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
         values = np.empty((len(points),2))
@@ -73,10 +86,10 @@ class TestfvGP(unittest.TestCase):
                 compute_device = "cpu")
         my_gp.train([[100.0,200.0],[5.0,100.0],[5.0,100.0]],
                 init_hyperparameters = [110.0,8.0,8.0],
-                optimization_method = training_method,
-                optimization_pop_size = 20,
-                optimization_tolerance = 0.0001,
-                optimization_max_iter = 2)
+                method = training_method,
+                pop_size = 20,
+                tolerance = 0.0001,
+                max_iter = 2)
         if training_method == "hgdl":
             print("lets see how the hyper-parameters are changing")
             for i in range(5):
@@ -86,11 +99,17 @@ class TestfvGP(unittest.TestCase):
                 print("|latest hyper parameters:| ",my_gp.hyperparameters)
                 print("++++++++++++++++++++++++++++++++++++++++++++++++")
             my_gp.stop_training()
+            my_gp.kill_training()
             print("TRAINING STOPPED")
         self.visualize_multi_task(my_gp)
-        print("1d test test successful")
+        print("=========================================")
+        print("1d multi task test successful")
+        print("=========================================")
 
     def test_1d_single_task_async(self,N = 100):
+        print("=========================================")
+        print("1d async test started ....")
+        print("=========================================")
         points = np.empty((N,1))
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
         values = func(points)
@@ -100,30 +119,36 @@ class TestfvGP(unittest.TestCase):
                 compute_device = "cpu")
         my_gp.train_async([[100.0,200.0],[5.0,100.0]],
                 init_hyperparameters = [110.0,8.0],
-                optimization_pop_size = 20,
-                optimization_tolerance = 0.0001,
-                optimization_max_iter = 2)
+                pop_size = 20,
+                tolerance = 0.0001,
+                max_iter = 2)
         print("lets see how the hyper-parameters are changing")
         for i in range(100):
-            time.sleep(2)
+            time.sleep(10)
             my_gp.update_hyperparameters()
             print("++++++++++++++++++++++++++++++++++++++++++++++++")
             print("|latest hyper parameters:| ",my_gp.hyperparameters)
             print("++++++++++++++++++++++++++++++++++++++++++++++++")
         my_gp.stop_training()
+        my_gp.kill_training()
         print("TRAINING STOPPED")
         self.visualize(my_gp)
-        print("1d test test successful")
+        print("=========================================")
+        print("1d single task async training test successful")
+        print("=========================================")
     ############################################################
     def test_us_topo(self,method = "global",dask_client = None):
+        print("=========================================")
+        print("multi-task test started ...")
+        print("=========================================")
         a = np.load("us_topo.npy")
         points = a[::16,0:2]
         values = a[::16,2:3]
         print("length of data set: ", len(points))
         my_gp = GP(2,points,values,np.array([1,1,1]), sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
-        my_gp.train(bounds, optimization_method = method,
-                optimization_max_iter = 20)
+        my_gp.train(bounds, method = method,
+                max_iter = 20)
         if method == "hgdl":
             print("lets see how the hyper-parameters are changing")
             for i in range(30):
@@ -133,17 +158,22 @@ class TestfvGP(unittest.TestCase):
                 print("|latest hyper parameters:| ",my_gp.hyperparameters)
                 print("++++++++++++++++++++++++++++++++++++++++++++++++")
             my_gp.stop_training()
+        print("=========================================")
+        print("US topo test successfully concluded")
+        print("=========================================")
     ############################################################
     def test_derivatives(self,direction):
+        print("=========================================")
+        print("=========================================")
         a = np.load("us_topo.npy")
         points = a[::64,0:2]
         values = a[::64,2:3]
         print("length of data set: ", len(points))
         my_gp = GP(2,points,values,np.array([1,1,1]), sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
-        my_gp.train(bounds, optimization_method = method,
-                optimization_max_iter = 20,
-                optimization_pop_size = 4)
+        my_gp.train(bounds, method = method,
+                max_iter = 20,
+                pop_size = 4)
         print("ranges x:", np.min(points[:,0]),np.max(points[:,0]))
         print("ranges y:", np.min(points[:,1]),np.max(points[:,1]))
         eps = 1e-6
@@ -236,7 +266,7 @@ class TestfvGP(unittest.TestCase):
         print("points: ", x_input_prob)
         s = my_gp.posterior_probability(x_input_prob, comp_mean_vec, comp_var)
         print("s: ",s)
-        plt.savefig('plot.png')
+        #plt.savefig('plot.png')
         plt.show()
         #############################################################
     def visualize_multi_task(self, my_gp):
@@ -271,17 +301,6 @@ class TestfvGP(unittest.TestCase):
         plt.fill_between(x_input[1000:,0], m2-3.0*np.sqrt(s2), m2+3.0*np.sqrt(s2), alpha = 0.5, label = "95% confidence interval task 2")
         #plt.scatter(my_gp.data_x[:,0],my_gp.data_y[0:len(x_input)], label = "data",linewidth = 3.0)
         plt.legend()
-        #print("computing probability of the given values")
-        #comp_mean_vec = np.array([2.0,1.0])
-        #comp_var = np.zeros((2, 2))
-        #np.fill_diagonal(comp_var,np.random.rand(len(comp_var)))
-        #x_input_prob = np.array([[0.55],[1.4]])
-        #print("mean: ",comp_mean_vec)
-        #print("var: ",comp_var)
-        #print("points: ", x_input_prob)
-        #s = my_gp.posterior_probability(x_input_prob, comp_mean_vec, comp_var)
-        #print("s: ",s)
-        #plt.savefig('plot.png')
         plt.show()
 
 

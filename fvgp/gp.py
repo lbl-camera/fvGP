@@ -206,11 +206,11 @@ class GP():
     def train(self,
         hyperparameter_bounds,
         init_hyperparameters = None,
-        optimization_method = "global",
+        method = "global",
         optimization_dict = None,
-        optimization_pop_size = 20,
-        optimization_tolerance = 0.1,
-        optimization_max_iter = 120,
+        pop_size = 20,
+        tolerance = 0.1,
+        max_iter = 120,
         dask_client = None):
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP (synchronously).
@@ -221,18 +221,18 @@ class GP():
             hyperparameter_bounds (2d numpy array)
         optional inputs:
             init_hyperparameters (1d numpy array):  default = None (= use earlier initialization)
-            optimization_method : default = "global","global"/"local"/"hgdl"/callable f(obj,optimization_dict)
+            method : default = "global","global"/"local"/"hgdl"/callable f(obj,optimization_dict)
             optimization_dict: if optimization is callable, the this will be passed as dict
-            optimization_pop_size: default = 20
-            optimization_tolerance: default = 0.1
-            optimization_max_iter: default = 120
+            pop_size: default = 20
+            tolerance: default = 0.1
+            max_iter: default = 120
             dask_client = None (will use local client, only for hgdl)
 
         output:
             None, just updates the class with the new hyperparameters
         """
         ############################################
-        self.hyperparameter_optimization_bounds = np.array(hyperparameter_bounds)
+        self.hyperparameter_bounds = np.array(hyperparameter_bounds)
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         print("GP training started with ",len(self.data_x)," data points")
@@ -241,12 +241,12 @@ class GP():
         ######################
         self.hyperparameters = self.optimize_log_likelihood(
             init_hyperparameters,
-            self.hyperparameter_optimization_bounds,
-            optimization_method,
+            self.hyperparameter_bounds,
+            method,
             optimization_dict,
-            optimization_max_iter,
-            optimization_pop_size,
-            optimization_tolerance,
+            max_iter,
+            pop_size,
+            tolerance,
             dask_client
             )
         self.compute_prior_fvGP_pdf()
@@ -257,9 +257,9 @@ class GP():
     def train_async(self,
         hyperparameter_bounds,
         init_hyperparameters = None,
-        optimization_pop_size = 20,
-        optimization_tolerance = 0.1,
-        optimization_max_iter = 120,
+        pop_size = 20,
+        tolerance = 0.1,
+        max_iter = 120,
         local_optimizer = "L-BFGS-B",
         global_optimizer = "genetic",
         deflation_radius = 1.0,
@@ -274,9 +274,9 @@ class GP():
         optional inputs:
             init_hyperparameters (list):  default = None
             optimization_dict: if optimization is callable, the this will be passed as dict
-            optimization_pop_size: default = 20,
-            optimization_tolerance: default = 0.1,
-            optimization_max_iter: default = 120,
+            pop_size: default = 20,
+            tolerance: default = 0.1,
+            max_iter: default = 120,
             dask_client: True/False/dask client, default = None (will use a local client)
 
         output:
@@ -284,7 +284,7 @@ class GP():
         """
         ############################################
         if dask_client is None: dask_client = distributed.Client()
-        self.hyperparameter_optimization_bounds = np.array(hyperparameter_bounds)
+        self.hyperparameter_bounds = np.array(hyperparameter_bounds)
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         print("Async GP training started with ",len(self.data_x)," data points")
@@ -293,10 +293,10 @@ class GP():
         ######################
         self.optimize_log_likelihood_async(
             init_hyperparameters,
-            self.hyperparameter_optimization_bounds,
-            optimization_max_iter,
-            optimization_pop_size,
-            optimization_tolerance,
+            self.hyperparameter_bounds,
+            max_iter,
+            pop_size,
+            tolerance,
             local_optimizer,
             global_optimizer,
             deflation_radius,
@@ -321,8 +321,8 @@ class GP():
         return res
     ##################################################################################
     def optimize_log_likelihood_async(self,starting_hps,
-        hp_bounds,optimization_max_iter,
-        likelihood_pop_size,optimization_tolerance,
+        hp_bounds,max_iter,
+        likelihood_pop_size,tolerance,
         local_optimizer, global_optimizer,deflation_radius,
         dask_client):
         print("HGDL optimization submitted for asynchronous training")
@@ -346,13 +346,13 @@ class GP():
                     local_optimizer = local_optimizer,
                     global_optimizer = global_optimizer,
                     radius = deflation_radius,
-                    num_epochs = optimization_max_iter)
+                    num_epochs = max_iter)
 
         self.opt.optimize(dask_client = dask_client, x0 = x0)
     ##################################################################################
     def optimize_log_likelihood(self,starting_hps,
-        hp_bounds,optimization_method,optimization_dict,optimization_max_iter,
-        likelihood_pop_size,optimization_tolerance,
+        hp_bounds,method,optimization_dict,max_iter,
+        likelihood_pop_size,tolerance,
         dask_client = None):
 
         start_log_likelihood = self.log_likelihood(starting_hps)
@@ -360,23 +360,23 @@ class GP():
         print(
             "Hyper-parameter tuning in progress. Old hyper-parameters: ",
             starting_hps, " with old log likelihood: ", start_log_likelihood)
-        print("method: ", optimization_method)
+        print("method: ", method)
 
         ############################
         ####global optimization:##
         ############################
-        if optimization_method == "global":
+        if method == "global":
             print("I am performing a global differential evolution algorithm to find the optimal hyperparameters.")
-            print("maximum number of iterations: ", optimization_max_iter)
-            print("termination tolerance: ", optimization_tolerance)
+            print("maximum number of iterations: ", max_iter)
+            print("termination tolerance: ", tolerance)
             print("bounds: ", hp_bounds)
             res = differential_evolution(
                 self.log_likelihood,
                 hp_bounds,
                 disp=True,
-                maxiter=optimization_max_iter,
+                maxiter=max_iter,
                 popsize = likelihood_pop_size,
-                tol = optimization_tolerance,
+                tol = tolerance,
                 workers = 1,
             )
             hyperparameters = np.array(res["x"])
@@ -386,13 +386,13 @@ class GP():
         ############################
         ####local optimization:##
         ############################
-        elif optimization_method == "local":
+        elif method == "local":
             hyperparameters = np.array(starting_hps)
             print("Performing a local update of the hyper parameters.")
             print("starting hyper-parameters: ", hyperparameters)
             print("Attempting a BFGS optimization.")
-            print("maximum number of iterations: ", optimization_max_iter)
-            print("termination tolerance: ", optimization_tolerance)
+            print("maximum number of iterations: ", max_iter)
+            print("termination tolerance: ", tolerance)
             print("bounds: ", hp_bounds)
             OptimumEvaluation = minimize(
                 self.log_likelihood,
@@ -400,9 +400,9 @@ class GP():
                 method="L-BFGS-B",
                 jac=self.log_likelihood_gradient,
                 bounds = hp_bounds,
-                tol = optimization_tolerance,
+                tol = tolerance,
                 callback = None,
-                options = {"maxiter": optimization_max_iter})
+                options = {"maxiter": max_iter})
 
             if OptimumEvaluation["success"] == True:
                 print(
@@ -415,7 +415,7 @@ class GP():
         ############################
         ####hybrid optimization:####
         ############################
-        elif optimization_method == "hgdl":
+        elif method == "hgdl":
             print("HGDL optimization submitted")
             print('bounds are',hp_bounds)
             from hgdl.hgdl import HGDL
@@ -432,18 +432,18 @@ class GP():
                        self.log_likelihood_gradient,
                        hess = self.log_likelihood_hessian,
                        bounds = hp_bounds,
-                       num_epochs = optimization_max_iter)
+                       num_epochs = max_iter)
 
             self.opt.optimize(dask_client = dask_client, x0 = x0)
             res = self.opt.get_final(2)
             hyperparameters = res["x"][0]
-        elif optimization_method == "mcmc":
+        elif method == "mcmc":
             print("MCMC started")
             print('bounds are',hp_bounds)
             res = mcmc(self.log_likelihood,hp_bounds)
             hyperparameters = np.array(res["x"])
-        elif callable(optimization_method):
-            hyperparameters = optimization_method(self,optimization_dict)
+        elif callable(method):
+            hyperparameters = method(self,optimization_dict)
         else:
             raise ValueError("no optimization mode specified")
         ###################################################
