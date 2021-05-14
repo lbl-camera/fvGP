@@ -163,7 +163,7 @@ class GP():
         Optional Attributes:
             variances (N):                              variances of the values
         """
-        if self.input__dim != len(points[0]):
+        if self.input_dim != len(points[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(values) == 2: values = values[:,0]
 
