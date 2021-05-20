@@ -5,5 +5,5 @@ scipy
 numpy
 matplotlib
 dask
-distributed
+distributed >= 2021.4.1
 numba

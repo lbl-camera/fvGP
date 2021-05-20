@@ -60,7 +60,7 @@ class GP():
         input_space_dim (int):         dim1
         points (N x dim1 numpy array): 2d numpy array of points
         values (N x n numpy array):    2d numpy array of values
-        init_hyperparameters:          1d numpy array
+        init_hyperparameters:          1d numpy array (>0)
 
     Optional Attributes:
         variances (N x n numpy array):                  variances of the values, default = array of shape of points
@@ -176,8 +176,6 @@ class GP():
         ##########################################
         if variances is None:
             self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
-            print("CAUTION: you have not provided data variances,")
-            print("they will set to be 1 percent of the the data values!")
         elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
         elif np.ndim(variances) == 1:
@@ -194,13 +192,13 @@ class GP():
     #################TRAINING##########################################################
     ###################################################################################
     def stop_training(self):
-        print("Cancelling asynchronous training.")
-        try: self.opt.cancel_tasks()
+        print("Cancelling asynchronous training...")
+        try: self.opt.cancel_tasks(); print("fvGP successfully cancelled the current training.")
         except: print("No asynchronous training to be cancelled, no training is running.")
     ###################################################################################
     def kill_training(self):
-        print("Cancelling asynchronous training.")
-        try: self.opt.kill()
+        print("Killing asynchronous training....")
+        try: self.opt.kill(); print("fvGP successfully killed the training.")
         except: print("No asynchronous training to be killed, no training is running.")
     ###################################################################################
     def train(self,
@@ -311,14 +309,13 @@ class GP():
             res = self.opt.get_latest(n)
             self.hyperparameters = res["x"][0]
             self.compute_prior_fvGP_pdf()
-            print("Async hyper-parameter update successful")
-            print("Latest hyper-parameters: ", self.hyperparameters)
+            print("Async hyperparameter update successful")
+            print("Latest hyperparameters: ", self.hyperparameters)
         except:
             print("Async Hyper-parameter update not successful. I am keeping the old ones.")
             print("That probbaly means you are not optimizing them asynchronously")
             print("hyperparameters: ", self.hyperparameters)
-            res = np.array(self.hyperparameters)
-        return res
+        return self.hyperparameters
     ##################################################################################
     def optimize_log_likelihood_async(self,starting_hps,
         hp_bounds,max_iter,
@@ -358,7 +355,7 @@ class GP():
         start_log_likelihood = self.log_likelihood(starting_hps)
 
         print(
-            "Hyper-parameter tuning in progress. Old hyper-parameters: ",
+            "Hyper-parameter tuning in progress. Old hyperparameters: ",
             starting_hps, " with old log likelihood: ", start_log_likelihood)
         print("method: ", method)
 
@@ -381,7 +378,7 @@ class GP():
             )
             hyperparameters = np.array(res["x"])
             Eval = self.log_likelihood(hyperparameters)
-            print("I found hyper-parameters ",hyperparameters," with likelihood ",
+            print("I found hyperparameters ",hyperparameters," with likelihood ",
                 Eval," via global optimization")
         ############################
         ####local optimization:##
@@ -389,7 +386,7 @@ class GP():
         elif method == "local":
             hyperparameters = np.array(starting_hps)
             print("Performing a local update of the hyper parameters.")
-            print("starting hyper-parameters: ", hyperparameters)
+            print("starting hyperparameters: ", hyperparameters)
             print("Attempting a BFGS optimization.")
             print("maximum number of iterations: ", max_iter)
             print("termination tolerance: ", tolerance)
@@ -450,7 +447,7 @@ class GP():
         if start_log_likelihood < self.log_likelihood(hyperparameters):
             hyperparameters = np.array(starting_hps)
             print("Optimization returned smaller log likelihood; resetting to old hyperparameters.")
-            print("New hyper-parameters: ",
+            print("New hyperparameters: ",
             hyperparameters,
             "with log likelihood: ",
             self.log_likelihood(hyperparameters))
@@ -783,7 +780,7 @@ class GP():
         if any([x < -0.001 for x in np.diag(a)]):
             print("CAUTION, negative variances encountered. That normally means that the model is unstable.")
             print("Rethink the kernel definitions, add more noise to the data,")
-            print("or double check the hyper-parameter optimization bounds. This will not ")
+            print("or double check the hyperparameter optimization bounds. This will not ")
             print("terminate the algorithm, but expect anomalies.")
             print("diagonal of the posterior covariance: ",np.diag(a))
             p = np.block([[self.prior_covariance, k],[k.T, kk]])
