@@ -110,6 +110,7 @@ class fvGP(GP):
         """
         self.data_x = np.array(points)
         self.data_y = np.array(values)
+        self.input_space_dim = input_space_dim
         self.point_number, self.output_num, self.output_dim = len(points), output_number, output_space_dim
         ###check the output dims
         if np.ndim(values) == 1:
@@ -125,11 +126,11 @@ class fvGP(GP):
             self.value_positions = np.array(value_positions)
         if variances is None:
             self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
-            print("CAUTION: you have not provided data variances, they will set to be 1 percent of the data values!")
+            print("CAUTION: fvGP reports that you have not provided data variances, they will set to be 1 percent of the data values!")
         else:
             self.variances = np.array(variances)
 
-        self.iset_dim = input_space_dim + self.output_dim
+        self.iset_dim = self.input_space_dim + self.output_dim
         ####transform the space
         self.data_x, self.data_y, self.variances = self.transform_index_set()
         self.point_number = len(self.data_x)
@@ -179,15 +180,15 @@ class fvGP(GP):
         ##########################################
         if variances is None:
             self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
-            print("CAUTION: you have not provided data variances, they will set to be 1 percent of the data values!")
         else:
             self.variances = np.array(variances)
         ######################################
         #####transform to index set###########
         ######################################
+        self.point_number = len(self.data_x)
         self.data_x, self.data_y, self.variances = self.transform_index_set()
         self.point_number = len(self.data_x)
-        GP.update_gp_data(self.data_x, self.data_y, self.variances)
+        GP.update_gp_data(self,self.data_x, self.data_y, self.variances)
 
     def compute_standard_value_positions(self):
         value_pos = np.zeros((self.point_number, self.output_num, self.output_dim))
@@ -207,5 +208,6 @@ class fvGP(GP):
             new_variances[i * self.point_number : (i + 1) * self.point_number] = \
             self.variances[:, i]
         return new_points, new_values, new_variances
+
     def multi_task_kernel1(self):
         return 0

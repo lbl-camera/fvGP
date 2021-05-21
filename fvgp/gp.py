@@ -115,8 +115,8 @@ class GP():
         ##########################################
         if variances is None:
             self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
-            print("CAUTION: you have not provided data variances,")
-            print("they will set to be 1 percent of the the data values!")
+            print("CAUTION: you have not provided data variances in fvGP,")
+            print("they will set to be 1 percent of the data values!")
         elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
         elif np.ndim(variances) == 1:
@@ -192,12 +192,12 @@ class GP():
     #################TRAINING##########################################################
     ###################################################################################
     def stop_training(self):
-        print("Cancelling asynchronous training...")
+        print("fvGP is cancelling the asynchronous training...")
         try: self.opt.cancel_tasks(); print("fvGP successfully cancelled the current training.")
-        except: print("No asynchronous training to be cancelled, no training is running.")
+        except: print("No asynchronous training to be cancelled in fvGP, no training is running.")
     ###################################################################################
     def kill_training(self):
-        print("Killing asynchronous training....")
+        print("fvGP is killing asynchronous training....")
         try: self.opt.kill(); print("fvGP successfully killed the training.")
         except: print("No asynchronous training to be killed, no training is running.")
     ###################################################################################
@@ -233,7 +233,7 @@ class GP():
         self.hyperparameter_bounds = np.array(hyperparameter_bounds)
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
-        print("GP training started with ",len(self.data_x)," data points")
+        print("fvGP training started with ",len(self.data_x)," data points")
         ######################
         #####TRAINING#########
         ######################
@@ -285,7 +285,7 @@ class GP():
         self.hyperparameter_bounds = np.array(hyperparameter_bounds)
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
-        print("Async GP training started with ",len(self.data_x)," data points")
+        print("Async fvGP training started with ",len(self.data_x)," data points")
         ######################
         #####TRAINING#########
         ######################
@@ -309,10 +309,10 @@ class GP():
             res = self.opt.get_latest(n)
             self.hyperparameters = res["x"][0]
             self.compute_prior_fvGP_pdf()
-            print("Async hyperparameter update successful")
+            print("fvGP async hyperparameter update successful")
             print("Latest hyperparameters: ", self.hyperparameters)
         except:
-            print("Async Hyper-parameter update not successful. I am keeping the old ones.")
+            print("Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
             print("That probbaly means you are not optimizing them asynchronously")
             print("hyperparameters: ", self.hyperparameters)
         return self.hyperparameters
@@ -322,15 +322,15 @@ class GP():
         likelihood_pop_size,tolerance,
         local_optimizer, global_optimizer,deflation_radius,
         dask_client):
-        print("HGDL optimization submitted for asynchronous training")
+        print("fvGP submitted HGDL optimization for asynchronous training")
         print('bounds:',hp_bounds)
         from hgdl.hgdl import HGDL
         try:
             res = self.opt.get_latest(10)
             x0 = res["x"][0:min(len(res["x"])-1,likelihood_pop_size)]
-            print("starting with points from the last iteration")
+            print("fvGP HGDL trianing is starting with points from the last iteration")
         except Exception as err:
-            print("starting with random points because")
+            print("fvGP HGDL optimization is starting with random points because of")
             print(str(err))
             print("This is nothing to worry about, especially in the first iteration")
             x0 = None
@@ -355,7 +355,7 @@ class GP():
         start_log_likelihood = self.log_likelihood(starting_hps)
 
         print(
-            "Hyper-parameter tuning in progress. Old hyperparameters: ",
+            "fvGP hyperparameter tuning in progress. Old hyperparameters: ",
             starting_hps, " with old log likelihood: ", start_log_likelihood)
         print("method: ", method)
 
@@ -363,7 +363,7 @@ class GP():
         ####global optimization:##
         ############################
         if method == "global":
-            print("I am performing a global differential evolution algorithm to find the optimal hyperparameters.")
+            print("fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
             print("maximum number of iterations: ", max_iter)
             print("termination tolerance: ", tolerance)
             print("bounds: ", hp_bounds)
@@ -378,14 +378,14 @@ class GP():
             )
             hyperparameters = np.array(res["x"])
             Eval = self.log_likelihood(hyperparameters)
-            print("I found hyperparameters ",hyperparameters," with likelihood ",
+            print("fvGP found hyperparameters ",hyperparameters," with likelihood ",
                 Eval," via global optimization")
         ############################
         ####local optimization:##
         ############################
         elif method == "local":
             hyperparameters = np.array(starting_hps)
-            print("Performing a local update of the hyper parameters.")
+            print("fvGP is performing a local update of the hyper parameters.")
             print("starting hyperparameters: ", hyperparameters)
             print("Attempting a BFGS optimization.")
             print("maximum number of iterations: ", max_iter)
@@ -403,25 +403,25 @@ class GP():
 
             if OptimumEvaluation["success"] == True:
                 print(
-                    "Local optimization successfully concluded with result: ",
+                    "fvGP local optimization successfully concluded with result: ",
                     OptimumEvaluation["fun"],
                 )
                 hyperparameters = OptimumEvaluation["x"]
             else:
-                print("Local optimization not successful.")
+                print("fvGP local optimization not successful.")
         ############################
         ####hybrid optimization:####
         ############################
         elif method == "hgdl":
-            print("HGDL optimization submitted")
+            print("fvGP submitted HGDL optimization")
             print('bounds are',hp_bounds)
             from hgdl.hgdl import HGDL
             try:
                 res = self.opt.get_latest(10)
                 x0 = res["x"][0:min(len(res["x"])-1,likelihood_pop_size)]
-                print("starting with points from the last iteration")
+                print("fvGP hybrid HGDL training is starting with points from the last iteration")
             except Exception as err:
-                print("starting with random points because")
+                print("fvGP hybrid HGDL training is starting with random points because")
                 print(str(err))
                 print("This is nothing to worry about, especially in the first iteration")
                 x0 = None
@@ -435,18 +435,18 @@ class GP():
             res = self.opt.get_final(2)
             hyperparameters = res["x"][0]
         elif method == "mcmc":
-            print("MCMC started")
+            print("MCMC started in fvGP")
             print('bounds are',hp_bounds)
             res = mcmc(self.log_likelihood,hp_bounds)
             hyperparameters = np.array(res["x"])
         elif callable(method):
             hyperparameters = method(self,optimization_dict)
         else:
-            raise ValueError("no optimization mode specified")
+            raise ValueError("No optimization mode specified in fvGP")
         ###################################################
         if start_log_likelihood < self.log_likelihood(hyperparameters):
             hyperparameters = np.array(starting_hps)
-            print("Optimization returned smaller log likelihood; resetting to old hyperparameters.")
+            print("fvGP: Optimization returned smaller log likelihood; resetting to old hyperparameters.")
             print("New hyperparameters: ",
             hyperparameters,
             "with log likelihood: ",
@@ -626,7 +626,7 @@ class GP():
                         x = scipy.sparse.spsolve(A,b)
                         return x
                     except Exceprion as e:
-                        print("Sparse solve did not work out.")
+                        print("fvGP: Sparse solve did not work out.")
                         print("reason: ", str(e))
             ##################
             A = torch.from_numpy(A)
@@ -637,11 +637,11 @@ class GP():
                 return x.numpy()
             except Exception as e:
                 try:
-                    print("except statement invoked: torch.solve() on cpu did not work")
+                    print("fvGP: except statement invoked: torch.solve() on cpu did not work")
                     print("reason: ", str(e))
                     x, qr = torch.lstsq(b,A)
                 except Exception as e:
-                    print("except statement 2 invoked: torch.solve() and torch.lstsq() on cpu did not work")
+                    print("fvGP: except statement 2 invoked: torch.solve() and torch.lstsq() on cpu did not work")
                     print("falling back to numpy.lstsq()")
                     print("reason: ", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
@@ -653,12 +653,12 @@ class GP():
             try:
                 x, lu = torch.solve(b,A)
             except Exception as e:
-                print("except statement invoked: torch.solve() on gpu did not work")
+                print("fvGP: except statement invoked: torch.solve() on gpu did not work")
                 print("reason: ", str(e))
                 try:
                     x, qr = torch.lstsq(b,A)
                 except Exception as e:
-                    print("except statement 2 invoked: torch.solve() and torch.lstsq() on gpu did not work")
+                    print("fvGP: except statement 2 invoked: torch.solve() and torch.lstsq() on gpu did not work")
                     print("falling back to numpy.lstsq()")
                     print("reason: ", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
@@ -778,7 +778,7 @@ class GP():
         diag = np.diag(a)
         diag = np.where(diag<0.0,0.0,diag)
         if any([x < -0.001 for x in np.diag(a)]):
-            print("CAUTION, negative variances encountered. That normally means that the model is unstable.")
+            print("In fvGP: CAUTION, negative variances encountered. That normally means that the model is unstable.")
             print("Rethink the kernel definitions, add more noise to the data,")
             print("or double check the hyperparameter optimization bounds. This will not ")
             print("terminate the algorithm, but expect anomalies.")
@@ -967,7 +967,7 @@ class GP():
         x2 = self.solve(S2,mu)
         dim = len(mu)
         kld = 0.5 * (np.trace(x1) + (x2.T @ mu) - dim + ((s2*logdet2)-(s1*logdet1)))
-        if kld < -1e-4: print("negative KL divergence encountered")
+        if kld < -1e-4: print("fvGP: Negative KL divergence encountered")
         return kld
     ###########################################################################
     def kl_div_grad(self,mu1,dmu1dx, mu2, S1, dS1dx, S2):
@@ -985,7 +985,7 @@ class GP():
         x3 = self.solve(S2,-dmu1dx)
         dim = len(mu)
         kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2 @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
-        if kld < -1e-4: print("negative KL divergence encountered")
+        if kld < -1e-4: print("In fvGP: Negative KL divergence encountered")
         return kld
     ###########################################################################
     def gp_kl_div(self, x_iset, comp_mean, comp_cov):
