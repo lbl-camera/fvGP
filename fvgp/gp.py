@@ -404,7 +404,7 @@ class GP():
             if OptimumEvaluation["success"] == True:
                 print(
                     "fvGP local optimization successfully concluded with result: ",
-                    OptimumEvaluation["fun"],
+                    OptimumEvaluation["fun"]," at ", OptimumEvaluation["x"]
                 )
                 hyperparameters = OptimumEvaluation["x"]
             else:
