@@ -7,4 +7,4 @@ matplotlib
 dask
 distributed >= 2021.4.1
 numba
-hgdl >= 1.0.7
+hgdl >= 1.0.9

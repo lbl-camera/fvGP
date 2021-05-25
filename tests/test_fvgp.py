@@ -117,7 +117,7 @@ class TestfvGP(unittest.TestCase):
         my_gp = GP(1,points,values,np.ones((2)),
                 gp_kernel_function = None,
                 compute_device = "cpu")
-        my_gp.train_async([[100.0,200.0],[5.0,100.0]],
+        opt_obj = my_gp.train_async([[100.0,200.0],[5.0,100.0]],
                 init_hyperparameters = [110.0,8.0],
                 pop_size = 20,
                 tolerance = 0.0001,
@@ -125,12 +125,12 @@ class TestfvGP(unittest.TestCase):
         print("lets see how the hyper-parameters are changing")
         for i in range(100):
             time.sleep(10)
-            my_gp.update_hyperparameters()
+            my_gp.update_hyperparameters(opt_obj)
             print("++++++++++++++++++++++++++++++++++++++++++++++++")
             print("|latest hyper parameters:| ",my_gp.hyperparameters)
             print("++++++++++++++++++++++++++++++++++++++++++++++++")
-        my_gp.stop_training()
-        my_gp.kill_training()
+        my_gp.stop_training(opt_obj)
+        my_gp.kill_training(opt_obj)
         print("TRAINING STOPPED")
         self.visualize(my_gp)
         print("=========================================")

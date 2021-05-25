@@ -64,7 +64,7 @@ class EnsembleGP():
                          gp_kernel_function = [kernel_function],
                          gp_mean_function = [some_mean_function]
         )
-    """    
+    """
     def __init__(
         self,
         input_space_dim,
@@ -84,34 +84,83 @@ class EnsembleGP():
         type help(GP) for more information about attributes, methods and their parameters
         """
         self.number_of_GPs = number_of_GPs
-        self.ensembleGPs = [GP(input_space_dim,points,values,init_hyperparameters[i],
+        self.EnsembleGPs = [GP(input_space_dim,points,values,init_hyperparameters[i],
                                variances = variances,compute_device = compute_device,
-                               gp_kernel_function = gp_kernel_function[i]
-                               ,gp_mean_function = gp_mean_function[i],
+                               gp_kernel_function = gp_kernel_function[i],
+                               gp_mean_function = gp_mean_function[i],
                                sparse = sparse, normalize_y = normalize_y)
                                for i in range(number_of_GPs)]
-    def update_EnsembleGP_data():
-        return 0
 
-    def stop_training():
-        return 0
+    def update_EnsembleGP_data(self, points, values, variances = None):
+        for i in range(len(self.number_of_GPs)):
+            self.EnsembleGPs[i].update_gp_data(points,values, variances = variances)
+    ############################################################################
+    def stop_training(self):
+        print("Ensemble fvGP is cancelling the asynchronous training...")
+        try: self.opt.cancel_tasks(); print("Ensemble fvGP successfully cancelled the current training.")
+        except: print("No asynchronous training to be cancelled in Ensemble fvGP, no training is running.")
 
-    def kill_training():
-        return 0
+    def kill_training(self):
+        print("fvGP is killing asynchronous training....")
+        try: self.opt.kill(); print("fvGP successfully killed the training.")
+        except: print("No asynchronous training to be killed, no training is running.")
 
-    def train():
-        return 0
+    def train_async(self,
+        hps_bounds,
+        init_hyperparameters = None,
+        optimization_dict = None,
+        pop_size = 20,
+        tolerance = 0.1,
+        max_iter = 120,
+        dask_client = None
+        ):
+        #hps_vector = 
+        self.optimize_log_likelihood_async(
+            init_hyperparameters,
+            hps_bounds,
+            max_iter,
+            pop_size,
+            tolerance,
+            local_optimizer,
+            global_optimizer,
+            deflation_radius,
+            dask_client
+            )
 
-    def train_async():
-        return 0
-    def update_hyperparameters():
-        return 0
-    
-    def optimize_log_likelihood_async():
-        return 0
+    def update_hyperparameters(self, n = 1):
+        try:
+            res = self.opt.get_latest(n)
+            self.hyperparameters = res["x"][0]
+            self.compute_prior_pdf()
+            print("Ensemble fvGP async hyperparameter update successful")
+            print("Latest hyperparameters: ", self.hyperparameters)
+        except:
+            print("Async Hyper-parameter update not successful in Ensemble fvGP. I am keeping the old ones.")
+            print("That probbaly means you are not optimizing them asynchronously")
+            print("hyperparameters: ", self.hyperparameters)
+        return self.hyperparameters
 
-    def optimize_log_likelihood():
-        return 0
+    def optimize_log_likelihood_async(self):
+        print("Ensemble fvGP submitted to HGDL optimization")
+        print('bounds are',hp_bounds)
+        from hgdl.hgdl import HGDL
+        try:
+            res = self.opt.get_latest(10)
+            x0 = res["x"][0:min(len(res["x"])-1,likelihood_pop_size)]
+            print("fvGP hybrid HGDL training is starting with points from the last iteration")
+        except Exception as err:
+            print("fvGP hybrid HGDL training is starting with random points because")
+            print(str(err))
+            print("This is nothing to worry about, especially in the first iteration")
+            x0 = None
+
+        self.opt = HGDL(self.log_likelihood,
+                self.log_likelihood_gradient,
+                #hess = self.log_likelihood_hessian,
+                bounds = hp_bounds,
+                num_epochs = max_iter)
+
+        self.opt.optimize(dask_client = dask_client, x0 = x0)
 
     def ensemble_log_likelihood(self,hyperparameters):
         """
@@ -121,9 +170,10 @@ class EnsembleGP():
         output:
             negative marginal log-likelihood (scalar)
         """
-        L = 0
-        for i in range(self.number_of_GPs)
-            L += weight[i] * self.ensembleGPs[i].log_likelihood(hyperparameters[i])
+        L = 1
+
+        for i in range(self.number_of_GPs):
+            L *= np.ln(weight[i]) + self.EnsembleGPs[i].log_likelihood(hyperparameters[i])
         return L
 
     def ensemble_log_likelihood_gradient(self,hyperparameters):
@@ -131,16 +181,28 @@ class EnsembleGP():
 
     def ensemble_log_likelihood_hessian(self,hyperparameters):
         return 0
+    ##########################################################
+    def compute_prior_pdf(self):
+        for i in range(len(self.number_of_GPs)):
+            self.EnsembleGPs[i].compute_prior_fvGP_pdf()
 
     ##########################################################
-    def posterior_mean(self, x_iset):
-        return 0
+    def posterior(self,x_iset, res = 100):
+        means = [self.EnsembleGPs[i].posterior_mean(x_iset)["f(x)"] for i in range(self.number_of_GPs)]
+        covs  = [self.EnsembleGPs[i].posterior_covariance(x_iset)["v(x)"] for i in range(self.number_of_GPs)]
+        lower_bounds = [min(means[:][i]) for i in range(len(x_iset))]
+        upper_bounds = [max(means[:][i]) for i in range(len(x_iset))]
+        pdfs = []
+        for i in range(len(x_iset)):
+            pdf = np.zeros((res))
+            for j in range(self.number_of_GPs):
+                pdf += Gaussian(means[i],covs[i],lower_bounds[i],upper_bounds[i], res)
+            pdfs.append(pdf)
+        return {"f(x)": means, "v(x)":covs, "pdf": pdfs}
+    ##########################################################
+    def _Gaussian(self,mean,var,lower,upper,res):
+        x = np.linspace(lower,upper,res)
+        return np.exp(-np.power(x - mean, 2.) / (2. * np.power(var, 2.)))
 
-    def posterior_mean_grad(self, x_iset):
-        return 0
-
-    def posterior_covariance(self, x_iset):
-        return 0
-
-    def posterior_covariance_grad(self, x_iset):
+    def _vectorize(self, d):
         return 0

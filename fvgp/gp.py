@@ -44,6 +44,7 @@ import time
 import torch
 import numba as nb
 from functools import partial
+from hgdl.hgdl import HGDL
 
 
 
@@ -116,7 +117,7 @@ class GP():
         if variances is None:
             self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
             print("CAUTION: you have not provided data variances in fvGP,")
-            print("they will set to be 1 percent of the data values!")
+            print("they will be set to 1 percent of the data values!")
         elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
         elif np.ndim(variances) == 1:
@@ -131,6 +132,7 @@ class GP():
         else:
             self.kernel = gp_kernel_function
         self.d_kernel_dx = self.d_gp_kernel_dx
+
         self.gp_mean_function = gp_mean_function
         if gp_mean_function is None:
             self.mean_function = self.default_mean_function
@@ -191,14 +193,14 @@ class GP():
     ###################################################################################
     #################TRAINING##########################################################
     ###################################################################################
-    def stop_training(self):
+    def stop_training(self,opt_obj):
         print("fvGP is cancelling the asynchronous training...")
-        try: self.opt.cancel_tasks(); print("fvGP successfully cancelled the current training.")
+        try: opt_obj.cancel_tasks(); print("fvGP successfully cancelled the current training.")
         except: print("No asynchronous training to be cancelled in fvGP, no training is running.")
     ###################################################################################
-    def kill_training(self):
+    def kill_training(self,opt_obj):
         print("fvGP is killing asynchronous training....")
-        try: self.opt.kill(); print("fvGP successfully killed the training.")
+        try: opt_obj.kill(); print("fvGP successfully killed the training.")
         except: print("No asynchronous training to be killed, no training is running.")
     ###################################################################################
     def train(self,
@@ -230,7 +232,6 @@ class GP():
             None, just updates the class with the new hyperparameters
         """
         ############################################
-        self.hyperparameter_bounds = np.array(hyperparameter_bounds)
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         print("fvGP training started with ",len(self.data_x)," data points")
@@ -239,7 +240,7 @@ class GP():
         ######################
         self.hyperparameters = self.optimize_log_likelihood(
             init_hyperparameters,
-            self.hyperparameter_bounds,
+            np.array(hyperparameter_bounds),
             method,
             optimization_dict,
             max_iter,
@@ -282,16 +283,15 @@ class GP():
         """
         ############################################
         if dask_client is None: dask_client = distributed.Client()
-        self.hyperparameter_bounds = np.array(hyperparameter_bounds)
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         print("Async fvGP training started with ",len(self.data_x)," data points")
         ######################
         #####TRAINING#########
         ######################
-        self.optimize_log_likelihood_async(
+        opt_obj = self.optimize_log_likelihood_async(
             init_hyperparameters,
-            self.hyperparameter_bounds,
+            np.array(hyperparameter_bounds),
             max_iter,
             pop_size,
             tolerance,
@@ -300,13 +300,14 @@ class GP():
             deflation_radius,
             dask_client
             )
+        return opt_obj
         ######################
         ######################
         ######################
     ##################################################################################
-    def update_hyperparameters(self, n = 1):
+    def update_hyperparameters(self, opt_obj):
         try:
-            res = self.opt.get_latest(n)
+            res = opt_obj.get_latest(1)
             self.hyperparameters = res["x"][0]
             self.compute_prior_fvGP_pdf()
             print("fvGP async hyperparameter update successful")
@@ -317,26 +318,21 @@ class GP():
             print("hyperparameters: ", self.hyperparameters)
         return self.hyperparameters
     ##################################################################################
-    def optimize_log_likelihood_async(self,starting_hps,
-        hp_bounds,max_iter,
-        likelihood_pop_size,tolerance,
-        local_optimizer, global_optimizer,deflation_radius,
+    def optimize_log_likelihood_async(self,
+        starting_hps,
+        hp_bounds,
+        max_iter,
+        pop_size,
+        tolerance,
+        local_optimizer,
+        global_optimizer,
+        deflation_radius,
         dask_client):
         print("fvGP submitted HGDL optimization for asynchronous training")
         print('bounds:',hp_bounds)
-        from hgdl.hgdl import HGDL
-        try:
-            res = self.opt.get_latest(10)
-            x0 = res["x"][0:min(len(res["x"])-1,likelihood_pop_size)]
-            print("fvGP HGDL trianing is starting with points from the last iteration")
-        except Exception as err:
-            print("fvGP HGDL optimization is starting with random points because of")
-            print(str(err))
-            print("This is nothing to worry about, especially in the first iteration")
-            x0 = None
         local_optimizer = "L-BFGS-B"
         global_optimizer = "genetic"
-        self.opt = HGDL(self.log_likelihood,
+        opt_obj = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
                     hess = self.log_likelihood_hessian,
                     bounds = hp_bounds,
@@ -344,12 +340,12 @@ class GP():
                     global_optimizer = global_optimizer,
                     radius = deflation_radius,
                     num_epochs = max_iter)
-
-        self.opt.optimize(dask_client = dask_client, x0 = x0)
+        opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps))
+        return opt_obj
     ##################################################################################
     def optimize_log_likelihood(self,starting_hps,
         hp_bounds,method,optimization_dict,max_iter,
-        likelihood_pop_size,tolerance,
+        pop_size,tolerance,
         dask_client = None):
 
         start_log_likelihood = self.log_likelihood(starting_hps)
@@ -372,7 +368,7 @@ class GP():
                 hp_bounds,
                 disp=True,
                 maxiter=max_iter,
-                popsize = likelihood_pop_size,
+                popsize = pop_size,
                 tol = tolerance,
                 workers = 1,
             )
@@ -415,24 +411,14 @@ class GP():
         elif method == "hgdl":
             print("fvGP submitted HGDL optimization")
             print('bounds are',hp_bounds)
-            from hgdl.hgdl import HGDL
-            try:
-                res = self.opt.get_latest(10)
-                x0 = res["x"][0:min(len(res["x"])-1,likelihood_pop_size)]
-                print("fvGP hybrid HGDL training is starting with points from the last iteration")
-            except Exception as err:
-                print("fvGP hybrid HGDL training is starting with random points because")
-                print(str(err))
-                print("This is nothing to worry about, especially in the first iteration")
-                x0 = None
-            self.opt = HGDL(self.log_likelihood,
+            opt = HGDL(self.log_likelihood,
                        self.log_likelihood_gradient,
                        hess = self.log_likelihood_hessian,
                        bounds = hp_bounds,
                        num_epochs = max_iter)
 
-            self.opt.optimize(dask_client = dask_client, x0 = x0)
-            res = self.opt.get_final(2)
+            opt.optimize(dask_client = dask_client, x0 = starting_hps)
+            res = opt.get_final(2)
             hyperparameters = res["x"][0]
         elif method == "mcmc":
             print("MCMC started in fvGP")
