@@ -137,7 +137,7 @@ class TestfvGP(unittest.TestCase):
         print("1d single task async training test successful")
         print("=========================================")
     ############################################################
-    def test_us_topo(self,method = "global",dask_client = None):
+    def test_us_topo(self,method = "global"):
         print("=========================================")
         print("multi-task test started ...")
         print("=========================================")
@@ -148,93 +148,11 @@ class TestfvGP(unittest.TestCase):
         my_gp = GP(2,points,values,np.array([1,1,1]), sparse = False)
         bounds = np.array([[10,10000000],[1,10000],[1,10000]])
         my_gp.train(bounds, method = method,
-                max_iter = 20)
-        if method == "hgdl":
-            print("lets see how the hyper-parameters are changing")
-            for i in range(30):
-                time.sleep(1)
-                my_gp.update_hyperparameters()
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                print("|latest hyper parameters:| ",my_gp.hyperparameters)
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-            my_gp.stop_training()
+                max_iter = 1)
         print("=========================================")
         print("US topo test successfully concluded")
         print("=========================================")
     ############################################################
-    def test_derivatives(self,direction):
-        print("=========================================")
-        print("=========================================")
-        a = np.load("us_topo.npy")
-        points = a[::64,0:2]
-        values = a[::64,2:3]
-        print("length of data set: ", len(points))
-        my_gp = GP(2,points,values,np.array([1,1,1]), sparse = False)
-        bounds = np.array([[10,10000000],[1,10000],[1,10000]])
-        my_gp.train(bounds, method = method,
-                max_iter = 20,
-                pop_size = 4)
-        print("ranges x:", np.min(points[:,0]),np.max(points[:,0]))
-        print("ranges y:", np.min(points[:,1]),np.max(points[:,1]))
-        eps = 1e-6
-        x = np.array([[50.0,100.0]])
-        x1= np.array(x)
-        x2= np.array(x)
-        x1[:,direction] = x1[:,direction] + eps
-        x2[:,direction] = x2[:,direction] - eps
-        #######posterior mean#######
-        print("=============================")
-        print("posterior mean gradient test:")
-        print("=============================")
-        fin_dif = (my_gp.posterior_mean(x1)["f(x)"] - my_gp.posterior_mean(x2)["f(x)"])/(2.0*eps)
-        ana_dif = my_gp.posterior_mean_grad(x,direction)["df/dx"]
-        print("finite difference mean gradient:   ", fin_dif)
-        print("analytic difference mean gradient: ", ana_dif)
-        input("check results and continue with enter...")
-        print("=============================")
-        print("posterior variance gradient test:")
-        print("=============================")
-        fin_dif = (my_gp.posterior_covariance(x1)["v(x)"] - my_gp.posterior_covariance(x2)["v(x)"])/(2.0*eps)
-        ana_dif = my_gp.posterior_covariance_grad(x,direction)["dv/dx"]
-        print("finite difference variance gradient:   ", fin_dif)
-        print("analytic difference variance gradient: ", ana_dif)
-        input("check results and continue with enter...")
-        print("=============================")
-        print("prior gradient test:")
-        print("=============================")
-        fin_dif = (my_gp.gp_prior(x1)["S(x)"] - my_gp.gp_prior(x2)["S(x)"])/(2.0*eps)
-        ana_dif = my_gp.gp_prior_grad(x,direction)["dS/dx"]
-        print("finite difference prior gradient:   ", fin_dif)
-        print("analytic difference prior gradient: ", ana_dif)
-        input("check results and continue with enter...")
-        print("=============================")
-        print("entropy gradient test:")
-        print("=============================")
-        fin_dif = (my_gp.gp_entropy(x1) - my_gp.gp_entropy(x2))/(2.0*eps)
-        ana_dif = my_gp.gp_entropy_grad(x,direction)
-        print("finite difference entropy gradient:   ", fin_dif)
-        print("analytic difference entropy gradient: ", ana_dif)
-        input("check results and continue with enter...")
-        print("=============================")
-        print("kl-divergence gradient test:")
-        print("=============================")
-        comp_mean = 5.0
-        comp_cov = np.array([[2.0]])
-        fin_dif = (my_gp.gp_kl_div(x1,comp_mean,comp_cov)["kl-div"] - \
-                my_gp.gp_kl_div(x2,comp_mean,comp_cov)["kl-div"])/(2.0*eps)
-        ana_dif = my_gp.gp_kl_div_grad(x,comp_mean,comp_cov,direction)["kl-div grad"]
-        print("finite difference kl-div gradient:   ", fin_dif)
-        print("analytic difference kl-div gradient: ", ana_dif)
-        input("check results and continue with enter...")
-        print("=============================")
-        print("shannon info g gradient test:")
-        print("=============================")
-        fin_dif = (my_gp.shannon_information_gain(x1)["sig"] - my_gp.shannon_information_gain(x2)["sig"])/(2.0*eps)
-        ana_dif =  my_gp.shannon_information_gain_grad(x,direction)["sig grad"]
-        print("finite difference sig gradient:   ", fin_dif)
-        print("analytic difference sig gradient: ", ana_dif)
-        input("check results and continue with enter...")
-        ################################################
     def visualize(self, my_gp):
         print("working on the prediction...")
         x_input = np.empty((1000,1))
@@ -289,17 +207,12 @@ class TestfvGP(unittest.TestCase):
         plt.plot(x_input[1000:,0],pred1_mean["f(x)"][1000:], label = "posterior mean task 2",linewidth = 3.0)
         plt.plot(x_input[0:1000,0],y1, label = "ground truth task 1",linewidth = 3.0)
         plt.plot(x_input[1000:,0], y2, label = "ground truth task 2",linewidth = 3.0)
-        #plt.plot(x_input[0:1000,0],sig[0:1000], label = "shannon ig task 1", linewidth = 3.0)
-        #plt.plot(x_input[1000:,0],sig[1000:], label = "shannon ig task 2", linewidth = 3.0)
         m1 = pred1_mean["f(x)"][0:1000]
         m2 = pred1_mean["f(x)"][1000:]
         s1 = np.diag(pred1_cov["S(x)"])[0:1000]
         s2 = np.diag(pred1_cov["S(x)"])[1000:]
-        #plt.plot(x_input[0:1000,0], s1, label = "std task 1", linewidth = 3.0)
-        #plt.plot(x_input[1000:,0], s2, label = "std task 2", linewidth = 3.0)
         plt.fill_between(x_input[0:1000,0], m1-3.0*np.sqrt(s1), m1+3.0*np.sqrt(s1), alpha = 0.5, label = "95% confidence interval task 1")
         plt.fill_between(x_input[1000:,0], m2-3.0*np.sqrt(s2), m2+3.0*np.sqrt(s2), alpha = 0.5, label = "95% confidence interval task 2")
-        #plt.scatter(my_gp.data_x[:,0],my_gp.data_y[0:len(x_input)], label = "data",linewidth = 3.0)
         plt.legend()
         plt.show()
 

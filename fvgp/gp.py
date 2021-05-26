@@ -25,7 +25,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
+along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 Contact: MarcusNoack@lbl.gov
 """
@@ -47,7 +47,6 @@ from functools import partial
 from hgdl.hgdl import HGDL
 
 
-
 class GP():
     """
     GP class: Provides all tool for a single-task GP.
@@ -60,16 +59,16 @@ class GP():
     Attributes:
         input_space_dim (int):         dim1
         points (N x dim1 numpy array): 2d numpy array of points
-        values (N x n numpy array):    2d numpy array of values
+        values (N dim numpy array):    2d numpy array of values
         init_hyperparameters:          1d numpy array (>0)
 
     Optional Attributes:
-        variances (N x n numpy array):                  variances of the values, default = array of shape of points
+        variances (N dim numpy array):                  variances of the values, default = array of shape of points
                                                         with 1 % of the values
         compute_device:                                 cpu/gpu, default = cpu
         gp_kernel_function(func):                       None/function defining the 
-                                                        kernel def name(x1,x2,hyperparameters,self), default = None
-        gp_mean_function(func):                         None/a function def name(x, self), default = None
+                                                        kernel def name(x1,x2,hyperparameters,self), default = None uses default kernel
+        gp_mean_function(func):                         None/function def name(x, self), default = None
         sparse (bool):                                  default = False
         normalize_y:                                    default = False, normalizes the values \in [0,1]
 
@@ -82,6 +81,7 @@ class GP():
                          gp_mean_function = some_mean_function
         )
     """
+
     def __init__(
         self,
         input_space_dim,
@@ -143,7 +143,7 @@ class GP():
         ##########################################
         self.hyperparameters = np.array(init_hyperparameters)
         ##########################################
-        #transform index set and elements#########
+        #compute the prior########################
         ##########################################
         self.compute_prior_fvGP_pdf()
 
@@ -156,14 +156,15 @@ class GP():
 
         """
         This function updates the data in the gp_class.
-        Note, it does not append data, so please provide the full updated data set
+        The data will NOT be appended but overwritten!
+        Please provide the full updated data set
 
         Attributes:
-            points (N x dim1 numpy array): An array of points.
-            values (N x n):                An array of values.
+            points (N x dim1 numpy array): A 2d  array of points.
+            values (N)                   : A 1d  array of values.
 
         Optional Attributes:
-            variances (N):                              variances of the values
+            variances (N)                : variances for the values
         """
         if self.input_dim != len(points[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
@@ -211,6 +212,9 @@ class GP():
         pop_size = 20,
         tolerance = 0.1,
         max_iter = 120,
+        local_optimizer = "L-BFGS-B",
+        global_optimizer = "genetic",
+        deflation_radius = 1.0,
         dask_client = None):
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP (synchronously).
@@ -222,11 +226,14 @@ class GP():
         optional inputs:
             init_hyperparameters (1d numpy array):  default = None (= use earlier initialization)
             method : default = "global","global"/"local"/"hgdl"/callable f(obj,optimization_dict)
-            optimization_dict: if optimization is callable, the this will be passed as dict
+            optimization_dict: if optimizer is callable, the this will be passed as dict
             pop_size: default = 20
             tolerance: default = 0.1
             max_iter: default = 120
-            dask_client = None (will use local client, only for hgdl)
+            local_optimizer = "L-BFGS-B"  important for local and hgdl optimization
+            global_optimizer = "genetic"
+            deflation_radius = 1.0        for hgdl
+            dask_client = None (will use local client, only for hgdl optimization)
 
         output:
             None, just updates the class with the new hyperparameters
@@ -246,6 +253,9 @@ class GP():
             max_iter,
             pop_size,
             tolerance,
+            local_optimizer,
+            global_optimizer,
+            deflation_radius,
             dask_client
             )
         self.compute_prior_fvGP_pdf()
@@ -272,14 +282,17 @@ class GP():
             hyperparameter_bounds (2d list)
         optional inputs:
             init_hyperparameters (list):  default = None
-            optimization_dict: if optimization is callable, the this will be passed as dict
             pop_size: default = 20,
             tolerance: default = 0.1,
             max_iter: default = 120,
+            local_optimizer = "L-BFGS-B"
+            global_optimizer = "genetic"
+            deflation_radius = 1.0
             dask_client: True/False/dask client, default = None (will use a local client)
 
         output:
-            None, just updates the class with new hyperparameters
+            returns an optimization object that can later be queried for solutions
+            stopped and killed.
         """
         ############################################
         if dask_client is None: dask_client = distributed.Client()
@@ -330,8 +343,6 @@ class GP():
         dask_client):
         print("fvGP submitted HGDL optimization for asynchronous training")
         print('bounds:',hp_bounds)
-        local_optimizer = "L-BFGS-B"
-        global_optimizer = "genetic"
         opt_obj = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
                     hess = self.log_likelihood_hessian,
@@ -346,6 +357,9 @@ class GP():
     def optimize_log_likelihood(self,starting_hps,
         hp_bounds,method,optimization_dict,max_iter,
         pop_size,tolerance,
+        local_optimizer,
+        global_optimizer,
+        deflation_radius,
         dask_client = None):
 
         start_log_likelihood = self.log_likelihood(starting_hps)
@@ -377,7 +391,7 @@ class GP():
             print("fvGP found hyperparameters ",hyperparameters," with likelihood ",
                 Eval," via global optimization")
         ############################
-        ####local optimization:##
+        ####local optimization:#####
         ############################
         elif method == "local":
             hyperparameters = np.array(starting_hps)
@@ -390,7 +404,7 @@ class GP():
             OptimumEvaluation = minimize(
                 self.log_likelihood,
                 hyperparameters,
-                method="L-BFGS-B",
+                method= local_optimizer,
                 jac=self.log_likelihood_gradient,
                 bounds = hp_bounds,
                 tol = tolerance,
@@ -415,6 +429,9 @@ class GP():
                        self.log_likelihood_gradient,
                        hess = self.log_likelihood_hessian,
                        bounds = hp_bounds,
+                       local_optimizer = local_optimizer,
+                       global_optimizer = global_optimizer,
+                       radius = deflation_radius,
                        num_epochs = max_iter)
 
             opt.optimize(dask_client = dask_client, x0 = starting_hps)
