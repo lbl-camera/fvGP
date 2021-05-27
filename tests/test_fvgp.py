@@ -45,7 +45,7 @@ class TestfvGP(unittest.TestCase):
         points = np.empty((N,1))
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
         values = func(points)
-        print("values:   ",values)
+        print("shape of values:   ",values.shape)
         my_gp = GP(1,points,values,np.ones((2)),
                 gp_kernel_function = None,
                 compute_device = "cpu")
@@ -55,17 +55,6 @@ class TestfvGP(unittest.TestCase):
                 pop_size = 20,
                 tolerance = 0.0001,
                 max_iter = 2)
-        if training_method == "hgdl":
-            print("lets see how the hyper-parameters are changing")
-            for i in range(5):
-                time.sleep(1)
-                my_gp.update_hyperparameters()
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                print("|latest hyper parameters:| ",my_gp.hyperparameters)
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-            my_gp.stop_training()
-            my_gp.kill_training()
-            print("TRAINING STOPPED")
         self.visualize(my_gp)
         print("=========================================")
         print("1d single task test successful")
@@ -80,7 +69,7 @@ class TestfvGP(unittest.TestCase):
         values = np.empty((len(points),2))
         values[:,0] = func(points)
         values[:,1] = func(points) + 2.0
-        print("values:   ",values)
+        print("shape of values:   ",values.shape)
         my_gp = fvGP(1,1,2,points,values,np.ones((2)),
                 gp_kernel_function = None,
                 compute_device = "cpu")
@@ -90,17 +79,7 @@ class TestfvGP(unittest.TestCase):
                 pop_size = 20,
                 tolerance = 0.0001,
                 max_iter = 2)
-        if training_method == "hgdl":
-            print("lets see how the hyper-parameters are changing")
-            for i in range(5):
-                time.sleep(1)
-                my_gp.update_hyperparameters()
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-                print("|latest hyper parameters:| ",my_gp.hyperparameters)
-                print("++++++++++++++++++++++++++++++++++++++++++++++++")
-            my_gp.stop_training()
-            my_gp.kill_training()
-            print("TRAINING STOPPED")
+        print("TRAINING STOPPED")
         self.visualize_multi_task(my_gp)
         print("=========================================")
         print("1d multi task test successful")
@@ -112,8 +91,8 @@ class TestfvGP(unittest.TestCase):
         print("=========================================")
         points = np.empty((N,1))
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
-        values = func(points)
-        print("values:   ",values)
+        values = func(points)[:,0]
+        print("shape of values:   ",values.shape)
         my_gp = GP(1,points,values,np.ones((2)),
                 gp_kernel_function = None,
                 compute_device = "cpu")
