@@ -67,8 +67,10 @@ class GP():
                                                         with 1 % of the values
         compute_device:                                 cpu/gpu, default = cpu
         gp_kernel_function(func):                       None/function defining the 
-                                                        kernel def name(x1,x2,hyperparameters,self), default = None uses default kernel
-        gp_mean_function(func):                         None/function def name(x, self), default = None
+                                                        kernel def name(x1,x2,hyperparameters,self), 
+                                                        make sure to return a 2d numpy array, default = None uses default kernel
+        gp_mean_function(func):                         None/function def name(gp_obj, x, hyperparameters), 
+                                                        make sure to return a 1d numpy array, default = None
         sparse (bool):                                  default = False
         normalize_y:                                    default = False, normalizes the values \in [0,1]
 
@@ -189,6 +191,7 @@ class GP():
         #####transform to index set###########
         ######################################
         self.compute_prior_fvGP_pdf()
+        print("fvGP data updated")
     ###################################################################################
     ###################################################################################
     ###################################################################################
@@ -465,6 +468,7 @@ class GP():
             negative marginal log-likelihood (scalar)
         """
         mean = self.mean_function(self,self.data_x,hyperparameters)
+        if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
         x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
         y = self.data_y - mean
         sign, logdet = self.slogdet(K)

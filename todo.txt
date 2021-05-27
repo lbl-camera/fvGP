@@ -2,7 +2,6 @@
 ##TODO#####
 ###########
 
-
 *ensemble GP
 *GP manifold lerning
 *GP on manifold
@@ -10,14 +9,13 @@
 
 tests:
 (1) single task HP
-    * normailze y
+    * normalize y
     * kernel functions
     * prior mean functions
     * async training
-    * normalize data
 
 (2) multi task
-    * normailze y
+    * normalize y
     * kernel functions
     * prior mean functions
     * async training
