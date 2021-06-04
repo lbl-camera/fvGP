@@ -30,7 +30,8 @@ Contact: MarcusNoack@lbl.gov
 from fvgp.gp import GP
 from hgdl.hgdl import HGDL
 import numpy as np
-from scipy.optimize import differential_evolution
+from scipy.optimize import NonlinearConstraint,differential_evolution
+import matplotlib.pyplot as plt
 
 
 class EnsembleGP():
@@ -88,6 +89,8 @@ class EnsembleGP():
         self.number_of_GPs = number_of_GPs
         self.hps_obj = hps_obj
         self.init_weights = np.ones((number_of_GPs)) / float(number_of_GPs)
+        self.points = points
+        self.values = values
         if gp_kernel_functions is None: gp_kernel_functions = [None] * number_of_GPs
         if gp_mean_functions is None: gp_mean_functions = [None] * number_of_GPs
         self.EnsembleGPs = [GP(input_space_dim,points,values,hps_obj.hps[i],
@@ -147,6 +150,11 @@ class EnsembleGP():
             tolerance
             )
         self.hps_obj.set(weights,hps)
+        print("new weights after training: ", self.hps_obj.weights)
+        print("new hps     after training: ", self.hps_obj.hps)
+        for i in range(self.number_of_GPs): self.EnsembleGPs[i].hyperparameters = self.hps_obj.hps[i]
+        self.compute_prior_pdf()
+        print("GPs updated")
 
 
 
@@ -185,6 +193,10 @@ class EnsembleGP():
         print('bounds are',hps_obj.vectorized_bounds)
         print("maximum number of iterations: ", max_iter)
         print("termination tolerance: ", tolerance)
+        def constraint(v):
+            return np.array(np.sum(v[0:self.number_of_GPs]))
+        nlc = NonlinearConstraint(constraint,0.90,1.0)
+
         res = differential_evolution(
             self.ensemble_log_likelihood,
             hps_obj.vectorized_bounds,
@@ -193,6 +205,8 @@ class EnsembleGP():
             popsize = pop_size,
             tol = tolerance,
             workers = 1,
+            constraints = (nlc),
+            polish = False
         )
         v = np.array(res["x"])
         Eval = self.ensemble_log_likelihood(v)
@@ -212,11 +226,12 @@ class EnsembleGP():
         """
         L = 1.0
         weights,hps = self.hps_obj.devectorize_hps(v)
-        weights = weights/np.sum(weights)
-
-        for i in range(self.number_of_GPs):
-            L *= np.log(weights[i]) + self.EnsembleGPs[i].log_likelihood(hps[i])
-        return L
+        a0 = np.log(weights[0]) + self.EnsembleGPs[0].log_likelihood(hps[0])
+        for i in range(1,self.number_of_GPs):
+            a1 = np.log(weights[i]) + self.EnsembleGPs[i].log_likelihood(hps[i])
+            L += np.exp(a1 - a0)
+        l = np.log(1.0 + L)
+        return a0 + l
 
     def ensemble_log_likelihood_gradient(self,hyperparameters):
         return 0
@@ -225,22 +240,25 @@ class EnsembleGP():
         return 0
     ##########################################################
     def compute_prior_pdf(self):
-        for i in range(len(self.number_of_GPs)):
+        for i in range(self.number_of_GPs):
             self.EnsembleGPs[i].compute_prior_fvGP_pdf()
 
     ##########################################################
-    def calculate_posterior(self,x_iset, res = 100):
+    def posterior(self,x_iset, res = 100, lb = None, ub = None):
         means = [self.EnsembleGPs[i].posterior_mean(x_iset)["f(x)"] for i in range(self.number_of_GPs)]
         covs  = [self.EnsembleGPs[i].posterior_covariance(x_iset)["v(x)"] for i in range(self.number_of_GPs)]
-        lower_bounds = [min(means[:][i]) for i in range(len(x_iset))]
-        upper_bounds = [max(means[:][i]) for i in range(len(x_iset))]
+        means = np.array(means)
+        covs = np.array(covs)
+        if lb == None: lb = np.min(means - 3.0 * np.sqrt(covs))
+        if ub == None: ub = np.max(means + 3.0 * np.sqrt(covs))
+
         pdfs = []
         for i in range(len(x_iset)):
             pdf = np.zeros((res))
             for j in range(self.number_of_GPs):
-                pdf += Gaussian(means[i],covs[i],lower_bounds[i],upper_bounds[i], res)
+                pdf += self.hps_obj.weights[j] * self._Gaussian(means[j,i],covs[j,i],lb,ub, res)
             pdfs.append(pdf)
-        return {"f(x)": means, "v(x)":covs, "pdf": pdfs}
+        return {"f(x)": means, "v(x)":covs, "pdf": pdfs, "lb": lb, "ub": ub, "domain" : np.linspace(lb,ub,res)}
     ##########################################################
     def _Gaussian(self,mean,var,lower,upper,res):
         x = np.linspace(lower,upper,res)
