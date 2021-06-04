@@ -28,7 +28,9 @@ Contact: MarcusNoack@lbl.gov
 """
 
 from fvgp.gp import GP
-
+from hgdl.hgdl import HGDL
+import numpy as np
+from scipy.optimize import differential_evolution
 
 
 class EnsembleGP():
@@ -44,7 +46,7 @@ class EnsembleGP():
         input_space_dim (int):         dim1
         points (N x dim1 numpy array): 2d numpy array of points
         values (N x n numpy array):    2d numpy array of values
-        init_hyperparameters:          list of (1d numpy array (>0)), one entry per GP
+        hps_obj:                       instance of hyperparameter class
 
     Optional Attributes:
         variances (N x n numpy array):                  variances of the values, default = array of shape of points
@@ -71,11 +73,11 @@ class EnsembleGP():
         points,
         values,
         number_of_GPs,
-        init_hyperparameters,
+        hps_obj,
         variances = None,
         compute_device = "cpu",
-        gp_kernel_function = [None],
-        gp_mean_function = [None],
+        gp_kernel_functions = None,
+        gp_mean_functions = None,
         sparse = False,
         normalize_y = False
         ):
@@ -84,10 +86,14 @@ class EnsembleGP():
         type help(GP) for more information about attributes, methods and their parameters
         """
         self.number_of_GPs = number_of_GPs
-        self.EnsembleGPs = [GP(input_space_dim,points,values,init_hyperparameters[i],
+        self.hps_obj = hps_obj
+        self.init_weights = np.ones((number_of_GPs)) / float(number_of_GPs)
+        if gp_kernel_functions is None: gp_kernel_functions = [None] * number_of_GPs
+        if gp_mean_functions is None: gp_mean_functions = [None] * number_of_GPs
+        self.EnsembleGPs = [GP(input_space_dim,points,values,hps_obj.hps[i],
                                variances = variances,compute_device = compute_device,
-                               gp_kernel_function = gp_kernel_function[i],
-                               gp_mean_function = gp_mean_function[i],
+                               gp_kernel_function = gp_kernel_functions[i],
+                               gp_mean_function = gp_mean_functions[i],
                                sparse = sparse, normalize_y = normalize_y)
                                for i in range(number_of_GPs)]
 
@@ -107,16 +113,15 @@ class EnsembleGP():
 
     def train_async(self,
         hps_bounds,
-        init_hyperparameters = None,
-        optimization_dict = None,
+        hps_obj = None,
         pop_size = 20,
         tolerance = 0.1,
         max_iter = 120,
         dask_client = None
         ):
-        #hps_vector = 
+        if hps_obj is None: hps_obj = self.hps_obj
         self.optimize_log_likelihood_async(
-            init_hyperparameters,
+            hps_obj,
             hps_bounds,
             max_iter,
             pop_size,
@@ -126,6 +131,24 @@ class EnsembleGP():
             deflation_radius,
             dask_client
             )
+    
+    def train(self,
+        init_hps_obj = None,
+        pop_size = 20,
+        tolerance = 0.1,
+        max_iter = 120,
+        dask_client = None
+        ):
+        if init_hps_obj is None: init_hps_obj = self.hps_obj
+        weights, hps = self.optimize_log_likelihood(
+            init_hps_obj,
+            max_iter,
+            pop_size,
+            tolerance
+            )
+        self.hps_obj.set(weights,hps)
+
+
 
     def update_hyperparameters(self, n = 1):
         try:
@@ -140,19 +163,9 @@ class EnsembleGP():
             print("hyperparameters: ", self.hyperparameters)
         return self.hyperparameters
 
-    def optimize_log_likelihood_async(self):
+    def optimize_log_likelihood_async(self, x0):
         print("Ensemble fvGP submitted to HGDL optimization")
         print('bounds are',hp_bounds)
-        from hgdl.hgdl import HGDL
-        try:
-            res = self.opt.get_latest(10)
-            x0 = res["x"][0:min(len(res["x"])-1,likelihood_pop_size)]
-            print("fvGP hybrid HGDL training is starting with points from the last iteration")
-        except Exception as err:
-            print("fvGP hybrid HGDL training is starting with random points because")
-            print(str(err))
-            print("This is nothing to worry about, especially in the first iteration")
-            x0 = None
 
         self.opt = HGDL(self.log_likelihood,
                 self.log_likelihood_gradient,
@@ -162,7 +175,34 @@ class EnsembleGP():
 
         self.opt.optimize(dask_client = dask_client, x0 = x0)
 
-    def ensemble_log_likelihood(self,hyperparameters):
+    def optimize_log_likelihood(self,
+            hps_obj,
+            max_iter,
+            pop_size,
+            tolerance,
+            ):
+        print("Ensemble fvGP submitted to global optimization")
+        print('bounds are',hps_obj.vectorized_bounds)
+        print("maximum number of iterations: ", max_iter)
+        print("termination tolerance: ", tolerance)
+        res = differential_evolution(
+            self.ensemble_log_likelihood,
+            hps_obj.vectorized_bounds,
+            disp=True,
+            maxiter=max_iter,
+            popsize = pop_size,
+            tol = tolerance,
+            workers = 1,
+        )
+        v = np.array(res["x"])
+        Eval = self.ensemble_log_likelihood(v)
+        weights,hps = self.hps_obj.devectorize_hps(v)
+        print("fvGP found weights ",weights)
+        print("and hyperparameters: ",hps)
+        print(" with likelihood: ",Eval," via global optimization")
+        return weights,hps
+
+    def ensemble_log_likelihood(self,v):
         """
         computes the marginal log-likelihood
         input:
@@ -170,10 +210,12 @@ class EnsembleGP():
         output:
             negative marginal log-likelihood (scalar)
         """
-        L = 1
+        L = 1.0
+        weights,hps = self.hps_obj.devectorize_hps(v)
+        weights = weights/np.sum(weights)
 
         for i in range(self.number_of_GPs):
-            L *= np.ln(weight[i]) + self.EnsembleGPs[i].log_likelihood(hyperparameters[i])
+            L *= np.log(weights[i]) + self.EnsembleGPs[i].log_likelihood(hps[i])
         return L
 
     def ensemble_log_likelihood_gradient(self,hyperparameters):
@@ -187,7 +229,7 @@ class EnsembleGP():
             self.EnsembleGPs[i].compute_prior_fvGP_pdf()
 
     ##########################################################
-    def posterior(self,x_iset, res = 100):
+    def calculate_posterior(self,x_iset, res = 100):
         means = [self.EnsembleGPs[i].posterior_mean(x_iset)["f(x)"] for i in range(self.number_of_GPs)]
         covs  = [self.EnsembleGPs[i].posterior_covariance(x_iset)["v(x)"] for i in range(self.number_of_GPs)]
         lower_bounds = [min(means[:][i]) for i in range(len(x_iset))]
@@ -204,5 +246,71 @@ class EnsembleGP():
         x = np.linspace(lower,upper,res)
         return np.exp(-np.power(x - mean, 2.) / (2. * np.power(var, 2.)))
 
-    def _vectorize(self, d):
-        return 0
+
+class hyperparameters():
+    """
+    Parameters:
+        * weights: 1d numpy array
+        * weights_bounds: 2d numpy array
+        * hps: list of 1d numpy arrays
+        * hps_bounds: list of 2d numpy arrays
+    """
+    def __init__(self, weights, weights_bounds,hps,hps_bounds):
+        self.hps_bounds = hps_bounds
+        self.weights_bounds = weights_bounds
+        self.weights = weights
+        self.hps = hps
+        self.number_of_weights = len(weights)
+        self.number_of_hps_sets = len(hps)
+        self.number_of_hps = [len(hps[i]) for i in range(len(hps))]
+        if len(hps) != len(hps_bounds): raise Exception("hps and hps_bounds have to be lists of equal length")
+        if len(weights) != len(weights_bounds): 
+            raise Exception("weights (1d) and weights_bounds (2d) have to be numpy arrays of equal length")
+
+        self.vectorized_hps = self.vectorize_hps(weights,hps)
+        self.vectorized_bounds = self.vectorize_bounds(weights_bounds,hps_bounds)
+
+    def set(self,weights,hps):
+        if len(hps) != len(self.hps_bounds): raise Exception("hps and hps_bounds have to be lists of equal length")
+        if len(weights) != len(self.weights_bounds):
+            raise Exception("weights (1d) and weights_bounds (2d) have to be numpy arrays of equal length")
+
+        self.weights = weights
+        self.hps = hps
+        self.vectorized_hps = self.vectorize_hps(weights,hps)
+
+    def vectorize_hps(self, weights,hps):
+        v = [weights[i] for i in range(self.number_of_weights)]
+        for i in range(self.number_of_hps_sets):
+            for j in range(self.number_of_hps[i]):
+                v.append(hps[i][j])
+        return np.asarray(v)
+
+    def devectorize_hps(self, v):
+        weights = v[0:self.number_of_weights]
+        index = self.number_of_weights
+        hps = []
+        for i in range(self.number_of_hps_sets):
+            hps.append(v[index:index + self.number_of_hps[i]])
+            index += self.number_of_hps[i]
+        return weights, hps
+
+    def vectorize_bounds(self,weights_bounds,hps_bounds):
+        b = [weights_bounds[i] for i in range(self.number_of_weights)]
+        for i in range(self.number_of_hps_sets):
+            for j in range(self.number_of_hps[i]):
+                b.append(hps_bounds[i][j])
+        return np.asarray(b)
+
+
+    def devectorize_bounds(self,b):
+        weights_bounds = b[0:self.number_of_weights]
+        index = self.number_of_weights
+        hps_bounds = []
+        for i in range(self.number_of_hps_sets):
+            hps_bounds.append(b[index:index + self.number_of_hps[i]])
+            index += self.number_of_hps[i]
+        return weights_bounds, hps_bounds
+
+
+

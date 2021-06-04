@@ -387,7 +387,7 @@ class GP():
                 maxiter=max_iter,
                 popsize = pop_size,
                 tol = tolerance,
-                workers = 1,
+                workers = -1,
             )
             hyperparameters = np.array(res["x"])
             Eval = self.log_likelihood(hyperparameters)
