@@ -213,7 +213,7 @@ class GP():
         method = "global",
         optimization_dict = None,
         pop_size = 20,
-        tolerance = 0.1,
+        tolerance = 0.0001,
         max_iter = 120,
         local_optimizer = "L-BFGS-B",
         global_optimizer = "genetic",
@@ -387,7 +387,7 @@ class GP():
                 maxiter=max_iter,
                 popsize = pop_size,
                 tol = tolerance,
-                workers = -1,
+                workers = 1,
             )
             hyperparameters = np.array(res["x"])
             Eval = self.log_likelihood(hyperparameters)
