@@ -156,8 +156,6 @@ class EnsembleGP():
         self.compute_prior_pdf()
         print("GPs updated")
 
-
-
     def update_hyperparameters(self, n = 1):
         try:
             res = self.opt.get_latest(n)
@@ -224,17 +222,38 @@ class EnsembleGP():
         output:
             negative marginal log-likelihood (scalar)
         """
-        L = 1.0
-        weights,hps = self.hps_obj.devectorize_hps(v)
-        a0 = np.log(weights[0]) + self.EnsembleGPs[0].log_likelihood(hps[0])
+        L = 0.0
+        weights, hps = self.hps_obj.devectorize_hps(v)
+        phi_0 = np.log(weights[0]) + self.EnsembleGPs[0].log_likelihood(hps[0])
         for i in range(1,self.number_of_GPs):
-            a1 = np.log(weights[i]) + self.EnsembleGPs[i].log_likelihood(hps[i])
-            L += np.exp(a1 - a0)
+            phi_i = np.log(weights[i]) + self.EnsembleGPs[i].log_likelihood(hps[i])
+            L += np.exp(phi_i - phi_0)
         l = np.log(1.0 + L)
-        return a0 + l
+        return phi_0 + l
 
     def ensemble_log_likelihood_gradient(self,hyperparameters):
-        return 0
+        weights, hps = self.hps_obj.devectorize_hps(v)
+        A = 0.0
+        dA_dw0 = 0.0
+        B = np.empty((self.number_og_GPs))
+        B[0] = np.log(weights[0]) + self.EnsembleGPs[0].log_likelihood(hps[0])
+        dA_dw[0] = B[0]/weights[0]
+        dA_dPsi0 = 0.0
+        for i in range(1,self.number_of_GPs):
+            B[i] = np.log(weights[i]) + self.EnsembleGPs[i].log_likelihood(hps[i])
+            A += np.exp(B[i] - B[0])
+            dA_dw0 += -B[i]/weights[0]
+            dA_dw[i] = B[i]/weights[i]
+            dA_dPsi0 += -B[i]/self.EnsembleGPs[0].log_likelihood(hps[0])
+            dA_dPsii[i] = B[i]/self.EnsembleGPs[0].log_likelihood(hps[0])
+        
+
+        dL_dw0 = 1./weights[0] * dA_dw0/A
+        dL_dwi = dA_dw[i]/A
+        dL_dh0 = 1./self.EnsembleGPs[0].log_likelihood(hps[0]) + (dA_dPsi0*self.EnsembleGPs[0].log_likelihood_gradient(hps[0]))/A
+        dL_dhi = (dA_dPsii*self.EnsembleGPs[i].log_likelihood_gradient(hps[i]))/A
+
+        return gr
 
     def ensemble_log_likelihood_hessian(self,hyperparameters):
         return 0
