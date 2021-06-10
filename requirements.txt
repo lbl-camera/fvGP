@@ -8,3 +8,5 @@ dask
 distributed >= 2021.4.1
 numba
 hgdl >= 1.0.11
+notebook
+plotly

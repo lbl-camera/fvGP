@@ -505,7 +505,8 @@ class GP():
         dL_dH = np.empty((len(hyperparameters)))
         for i in range(len(hyperparameters)):
             dL_dH[i] = 0.5 * ((y.T @ a[i] @ b) - (np.trace(a[i])))
-        return -dL_dH
+        dL_dm = -b.T @ self.dm_dh(hyperparameters).T
+        return -dL_dH + dL_dm
     ##################################################################################
     @staticmethod
     @nb.njit
@@ -1451,6 +1452,18 @@ class GP():
             for j in range(i+1):
                 hessian[i,j] = hessian[j,i] = self.d2_gp_kernel_dh2(points1, points2, i,j, hyperparameters)
         return hessian
+
+    def dm_dh(self,hps):
+        gr = np.empty((len(hps),len(self.data_x)))
+        for i in range(len(hps)):
+            temp_hps1 = np.array(hps)
+            temp_hps1[i] = temp_hps1[i] + 1e-6
+            temp_hps2 = np.array(hps)
+            temp_hps2[i] = temp_hps2[i] - 1e-6
+            a = self.mean_function(self,self.data_x,temp_hps1)
+            b = self.mean_function(self,self.data_x,temp_hps2)
+            gr[i] = (a-b)/2e-6
+        return gr
     ################################################################
     def _normalize_y_data(self):
         mini = np.min(self.data_y)

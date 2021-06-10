@@ -32,6 +32,7 @@ from hgdl.hgdl import HGDL
 import numpy as np
 from scipy.optimize import NonlinearConstraint,differential_evolution
 import matplotlib.pyplot as plt
+from scipy.optimize import minimize
 
 
 class EnsembleGP():
@@ -172,10 +173,12 @@ class EnsembleGP():
     def optimize_log_likelihood_async(self, x0):
         print("Ensemble fvGP submitted to HGDL optimization")
         print('bounds are',hp_bounds)
+        raise Exception("Async training for ensemble GP not implemented yet. EXIT")
 
-        self.opt = HGDL(self.log_likelihood,
-                self.log_likelihood_gradient,
+        self.opt = HGDL(self.ensemble_log_likelihood,
+                self.ensemble_log_likelihood_grad,
                 #hess = self.log_likelihood_hessian,
+                method = "L-BFGS-B",
                 bounds = hp_bounds,
                 num_epochs = max_iter)
 
@@ -193,8 +196,8 @@ class EnsembleGP():
         print("termination tolerance: ", tolerance)
         def constraint(v):
             return np.array(np.sum(v[0:self.number_of_GPs]))
-        nlc = NonlinearConstraint(constraint,0.90,1.0)
 
+        nlc = NonlinearConstraint(constraint,0.8,1.0)
         res = differential_evolution(
             self.ensemble_log_likelihood,
             hps_obj.vectorized_bounds,
@@ -206,9 +209,23 @@ class EnsembleGP():
             constraints = (nlc),
             polish = False
         )
-        v = np.array(res["x"])
-        Eval = self.ensemble_log_likelihood(v)
-        weights,hps = self.hps_obj.devectorize_hps(v)
+
+        r = np.array(res["x"])
+        r[0:self.number_of_GPs] = 1./self.number_of_GPs
+        nlc = NonlinearConstraint(constraint,0.9999,1.0)
+        res = minimize(
+                self.ensemble_log_likelihood,r,
+                method= "SLSQP",
+                jac=self.ensemble_log_likelihood_grad,
+                bounds = hps_obj.vectorized_bounds,
+                tol = tolerance,
+                callback = None,
+                options = {"maxiter": max_iter},
+                constraints = (nlc))
+        r = np.array(res["x"])
+
+        Eval = self.ensemble_log_likelihood(r)
+        weights,hps = self.hps_obj.devectorize_hps(r)
         print("fvGP found weights ",weights)
         print("and hyperparameters: ",hps)
         print(" with likelihood: ",Eval," via global optimization")
@@ -231,29 +248,21 @@ class EnsembleGP():
         l = np.log(1.0 + L)
         return phi_0 + l
 
-    def ensemble_log_likelihood_gradient(self,hyperparameters):
+    def ensemble_log_likelihood_grad(self,v):
         weights, hps = self.hps_obj.devectorize_hps(v)
-        A = 0.0
-        dA_dw0 = 0.0
-        B = np.empty((self.number_og_GPs))
-        B[0] = np.log(weights[0]) + self.EnsembleGPs[0].log_likelihood(hps[0])
-        dA_dw[0] = B[0]/weights[0]
-        dA_dPsi0 = 0.0
-        for i in range(1,self.number_of_GPs):
-            B[i] = np.log(weights[i]) + self.EnsembleGPs[i].log_likelihood(hps[i])
-            A += np.exp(B[i] - B[0])
-            dA_dw0 += -B[i]/weights[0]
-            dA_dw[i] = B[i]/weights[i]
-            dA_dPsi0 += -B[i]/self.EnsembleGPs[0].log_likelihood(hps[0])
-            dA_dPsii[i] = B[i]/self.EnsembleGPs[0].log_likelihood(hps[0])
-        
+        exp_a = np.zeros((self.number_of_GPs))
+        w_grad = np.zeros((self.number_of_GPs))
+        h_grad = []
+        for i in range(self.number_of_GPs):
+            l = np.log(weights[i]) + self.EnsembleGPs[i].log_likelihood(hps[i])
+            for j in range(self.number_of_GPs):
+                exp_a[j] = np.exp(np.log(weights[j])+self.EnsembleGPs[j].log_likelihood(hps[j])-l)
 
-        dL_dw0 = 1./weights[0] * dA_dw0/A
-        dL_dwi = dA_dw[i]/A
-        dL_dh0 = 1./self.EnsembleGPs[0].log_likelihood(hps[0]) + (dA_dPsi0*self.EnsembleGPs[0].log_likelihood_gradient(hps[0]))/A
-        dL_dhi = (dA_dPsii*self.EnsembleGPs[i].log_likelihood_gradient(hps[i]))/A
-
-        return gr
+            index = np.arange(self.number_of_GPs)!=i
+            w_grad[i] = (1./(weights[i]*(1.+np.sum(exp_a[index]))))
+            h_grad.append((1. - (np.sum(exp_a[index])/(1.+np.sum(exp_a[index])))) * \
+            self.EnsembleGPs[i].log_likelihood_gradient(hps[i]))
+        return self.hps_obj.vectorize_hps(w_grad,h_grad)
 
     def ensemble_log_likelihood_hessian(self,hyperparameters):
         return 0
