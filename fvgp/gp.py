@@ -640,14 +640,14 @@ class GP():
             A = torch.from_numpy(A)
             b = torch.from_numpy(b)
             try:
-                x, lu = torch.solve(b,A)
-                #x = np.linalg.solve(A,b)
+                x = torch.linalg.solve(A,b)
                 return x.numpy()
             except Exception as e:
                 try:
                     print("fvGP: except statement invoked: torch.solve() on cpu did not work")
                     print("reason: ", str(e))
-                    x, qr = torch.lstsq(b,A)
+                    #x, qr = torch.lstsq(b,A)
+                    x, qr = torch.linalg.lstsq(A,b)
                 except Exception as e:
                     print("fvGP: except statement 2 invoked: torch.solve() and torch.lstsq() on cpu did not work")
                     print("falling back to numpy.lstsq()")
@@ -659,12 +659,13 @@ class GP():
             A = torch.from_numpy(A).cuda()
             b = torch.from_numpy(b).cuda()
             try:
-                x, lu = torch.solve(b,A)
+                x = torch.linalg.solve(A, b)
             except Exception as e:
                 print("fvGP: except statement invoked: torch.solve() on gpu did not work")
                 print("reason: ", str(e))
                 try:
-                    x, qr = torch.lstsq(b,A)
+                    #x, qr = torch.lstsq(b,A)
+                    x = torch.linalg.lstsq(A,b)
                 except Exception as e:
                     print("fvGP: except statement 2 invoked: torch.solve() and torch.lstsq() on gpu did not work")
                     print("falling back to numpy.lstsq()")
@@ -681,7 +682,7 @@ class GP():
                 cur_device = torch.device("cuda:"+str(i))
                 tmp_A = torch.from_numpy(tmp_A).cuda(cur_device)
                 tmp_b = torch.from_numpy(tmp_b).cuda(cur_device)
-                results.append(torch.solve(tmp_b,tmp_A)[0])
+                results.append(torch.linalg.solve(tmp_A,tmp_b)[0])
             total = results[0].cpu().numpy()
             for i in range(1,len(results)):
                 total = np.append(total, results[i].cpu().numpy(), 0)
