@@ -330,7 +330,7 @@ class GP():
             print("Latest hyperparameters: ", self.hyperparameters)
         except:
             print("Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
-            print("That probbaly means you are not optimizing them asynchronously")
+            print("That probably means you are not optimizing them asynchronously")
             print("hyperparameters: ", self.hyperparameters)
         return self.hyperparameters
     ##################################################################################
