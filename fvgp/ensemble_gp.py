@@ -276,7 +276,9 @@ class EnsembleGP():
         for i in range(self.number_of_GPs):
             l = np.log(weights[i]) - self.EnsembleGPs[i].log_likelihood(hps[i])
             for j in range(self.number_of_GPs):
-                exp_a[j] = np.exp(np.log(weights[j])-self.EnsembleGPs[j].log_likelihood(hps[j])-l)
+                t = np.log(weights[j])-self.EnsembleGPs[j].log_likelihood(hps[j])-l
+                if t > 100.0: exp_a[j] = np.inf
+                else: exp_a[j] = np.exp(np.log(weights[j])-self.EnsembleGPs[j].log_likelihood(hps[j])-l)
 
             index = np.arange(self.number_of_GPs)!=i
             s = np.sum(exp_a[index])
