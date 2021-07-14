@@ -273,23 +273,59 @@ class EnsembleGP():
         exp_a = np.zeros((self.number_of_GPs))
         w_grad = np.zeros((self.number_of_GPs))
         h_grad = []
-        for i in range(self.number_of_GPs):
-            l = np.log(weights[i]) - self.EnsembleGPs[i].log_likelihood(hps[i])
+        for k in range(self.number_of_GPs):
+            like = np.log(weights[k]) - self.EnsembleGPs[k].log_likelihood(hps[k])
             for j in range(self.number_of_GPs):
-                t = np.log(weights[j])-self.EnsembleGPs[j].log_likelihood(hps[j])-l
+                t = np.log(weights[j]) - self.EnsembleGPs[j].log_likelihood(hps[j])-like
                 if t > 100.0: exp_a[j] = np.inf
-                else: exp_a[j] = np.exp(np.log(weights[j])-self.EnsembleGPs[j].log_likelihood(hps[j])-l)
+                else: exp_a[j] = np.exp(t)
 
-            index = np.arange(self.number_of_GPs)!=i
+            index = np.arange(self.number_of_GPs) != k
             s = np.sum(exp_a[index])
             if s > 10e16: term = 1.0
             else: term = s/(1.+s)
-            w_grad[i] = -(1./(weights[i]*(1.+np.sum(exp_a[index]))))
-            h_grad.append((1. - term) * self.EnsembleGPs[i].log_likelihood_gradient(hps[i]))
+            w_grad[k] = -(1./(weights[k] * (1.+np.sum(exp_a[index]))))
+            h_grad.append((1. - term) * self.EnsembleGPs[k].log_likelihood_gradient(hps[k]))
         return self.hps_obj.vectorize_hps(w_grad,h_grad)
 
-    def ensemble_log_likelihood_hessian(self,hyperparameters):
-        return 0
+    def ensemble_log_likelihood_hess(self,v):
+        weights, hps = self.hps_obj.devectorize_hps(v)
+        exp_a = np.zeros((self.number_of_GPs))
+        d     = np.zeros((self.number_of_GPs))
+        w_hess = np.zeros((self.number_of_GPs,self.number_of_GPs))
+        h_hess = []
+        def kronecker(k,l):
+            if int(k) == int(l): return 1.0
+            else: return 0.0
+        for k in range(self.number_of_GPs):
+            like = np.log(weights[k]) - self.EnsembleGPs[k].log_likelihood(hps[k])
+            for i in range(self.number_of_GPs):
+                t = np.log(weights[i])-self.EnsembleGPs[i].log_likelihood(hps[i])-like
+                if t > 100.0: exp_a[i] = 10e16
+                else: exp_a[i] = np.exp(np.log(weights[i])-self.EnsembleGPs[i].log_likelihood(hps[i])-like)
+
+            for l in range(k,self.number_of_GPs):
+
+                d2 = np.empty((self.number_of_GPs, len(hps[l])))
+                for i in range(self.number_of_GPs):
+                    d[i] = (kronecker(i,l)/weights[i] - kronecker(k,l)/weights[k])
+                    if i != l and k != l: d2[i]= 0.0
+                    else: d2[i] =  (self.EnsembleGPs[i].log_likelihood_gradient(hps[l]) * kronecker(i,l) - \
+                                    self.EnsembleGPs[k].log_likelihood_gradient(hps[l]) * kronecker(k,l))
+
+                index = np.arange(self.number_of_GPs) != k
+                s = np.sum(exp_a[index])
+                if s > 1e16: term = 0.0
+                else: term = 1./(1.+s)
+                term2 = d[index].T @ exp_a[index]
+                term3 =  exp_a[index].T @ d2[index]
+                w_hess[k,l] = w_hess[l,k] = -((kronecker(k,l)/(weights[k]**2)) * term) \
+                                            -((1.0/weights[k])*(term)*term2)
+                h_hess.append(self.EnsembleGPs[k].log_likelihood_hessian(hps[k]) * kronecker(l,k) - term*s*self.EnsembleGPs[k].log_likelihood_hessian(hps[l]) * kronecker(l,k) \
+                            -(np.outer(self.EnsembleGPs[k].log_likelihood_gradient(hps[k]),term3) * (term**2)))
+                #print("cc: ",self.EnsembleGPs[k].log_likelihood_hessian(hps[k]), np.outer(self.EnsembleGPs[k].log_likelihood_gradient(hps[k]),term3))
+                #print("cc ",self.EnsembleGPs[k].log_likelihood_hessian(hps[k]) * kronecker(l,k) - term*s*self.EnsembleGPs[k].log_likelihood_hessian(hps[k]) * kronecker(l,k),np.outer(self.EnsembleGPs[k].log_likelihood_gradient(hps[k]),term3) * (term**2))
+        return -w_hess, h_hess
     ##########################################################
     def compute_prior_pdf(self):
         for i in range(self.number_of_GPs):

@@ -503,10 +503,11 @@ class GP():
         b = np.ascontiguousarray(b, dtype=np.float64)
         #dL_dH = self.numba_dL_dH(y, a, b, len(hyperparameters))
         dL_dH = np.empty((len(hyperparameters)))
+        dm_dh = self.dm_dh(hyperparameters)
         for i in range(len(hyperparameters)):
-            dL_dH[i] = 0.5 * ((y.T @ a[i] @ b) - (np.trace(a[i])))
-        dL_dm = -b.T @ self.dm_dh(hyperparameters).T
-        return -dL_dH + dL_dm
+            dL_dH[i] = 0.5*(-2.0 * b.T @ dm_dh[i] - y.T @ a[i] @ b) + 0.5 * np.trace(a[i])
+        return dL_dH
+
     ##################################################################################
     @staticmethod
     @nb.njit
@@ -530,6 +531,7 @@ class GP():
         output:
             hessian of the negative marginal log-likelihood (matrix)
         """
+        raise Exception("Hessian not correct, please use the gradient to approximate the Hessian")
         mean = self.mean_function(self,self.data_x,hyperparameters)
         x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
         y = self.data_y - mean
@@ -545,7 +547,11 @@ class GP():
         ss = np.ascontiguousarray(ss, dtype=np.float64)
         #d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
         len_hyperparameters = s.shape[0]
-        d2L_dH2 = np.empty((len_hyperparameters,len_hyperparameters))
+        d2L_dH2 =  np.empty((len_hyperparameters,len_hyperparameters))
+        d2L_dm2 =  np.empty((len_hyperparameters,len_hyperparameters))
+        d2L_dmdh = np.empty((len_hyperparameters,len_hyperparameters))
+        d2m_dh2 = self.d2m_dh2(hyperparameters)
+        m1 = self.dm_dh(hyperparameters)
         for i in range(len_hyperparameters):
             x1 = s[i]
             for j in range(i+1):
@@ -553,7 +559,10 @@ class GP():
                 x3 = ss[i,j]
                 f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
                 d2L_dH2[i,j] = d2L_dH2[j,i] = f
-        return -d2L_dH2
+                d2L_dm2[i,j] = d2L_dm2[j,i] = (m1[i,:].T @ np.linalg.inv(K[0]) @ m1[j,:]) - (x.T @ d2m_dh2[i,j])
+                d2L_dmdh[i,j] = d2L_dmdh[j,i] = (x @ x2 @ m1[i,:])
+
+        return -d2L_dH2 - d2L_dm2 + d2L_dmdh
     ##################################################################################
     ##################################################################################
     ##################################################################################
@@ -1465,6 +1474,36 @@ class GP():
             b = self.mean_function(self,self.data_x,temp_hps2)
             gr[i] = (a-b)/2e-6
         return gr
+    ##########################
+    def d2m_dh2(self,hps):
+        hess = np.empty((len(hps),len(hps),len(self.data_x)))
+        e = 1e-4
+        for i in range(len(hps)):
+            for j in range(i+1):
+                temp_hps1 = np.array(hps)
+                temp_hps2 = np.array(hps)
+                temp_hps3 = np.array(hps)
+                temp_hps4 = np.array(hps)
+                temp_hps1[i] = temp_hps1[i] + e
+                temp_hps1[j] = temp_hps1[j] + e
+
+                temp_hps2[i] = temp_hps2[i] - e
+                temp_hps2[j] = temp_hps2[j] - e
+
+                temp_hps3[i] = temp_hps3[i] + e
+                temp_hps3[j] = temp_hps3[j] - e
+
+                temp_hps4[i] = temp_hps4[i] - e
+                temp_hps4[j] = temp_hps4[j] + e
+
+
+                a = self.mean_function(self,self.data_x,temp_hps1)
+                b = self.mean_function(self,self.data_x,temp_hps2)
+                c = self.mean_function(self,self.data_x,temp_hps3)
+                d = self.mean_function(self,self.data_x,temp_hps4)
+                hess[i,j] = hess[j,i] = (a - c - d + b)/(4.*e*e)
+        return hess
+
     ################################################################
     def _normalize_y_data(self):
         mini = np.min(self.data_y)
