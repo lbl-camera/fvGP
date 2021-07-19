@@ -322,16 +322,18 @@ class GP():
         ######################
     ##################################################################################
     def update_hyperparameters(self, opt_obj):
+        print("Updating the hyperparameters in fvGP...")
         try:
             res = opt_obj.get_latest(1)
             self.hyperparameters = res["x"][0]
             self.compute_prior_fvGP_pdf()
-            print("fvGP async hyperparameter update successful")
-            print("Latest hyperparameters: ", self.hyperparameters)
-        except:
-            print("Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
-            print("That probably means you are not optimizing them asynchronously")
-            print("hyperparameters: ", self.hyperparameters)
+            print("    fvGP async hyperparameter update successful")
+            print("    Latest hyperparameters: ", self.hyperparameters)
+        except Exception as e:
+            print("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
+            print("    That probably means you are not optimizing them asynchronously")
+            print("    Here is the actual reason: ", str(e))
+            print("    hyperparameters: ", self.hyperparameters)
         return self.hyperparameters
     ##################################################################################
     def optimize_log_likelihood_async(self,
