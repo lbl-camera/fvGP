@@ -217,7 +217,7 @@ class GP():
         max_iter = 120,
         local_optimizer = "L-BFGS-B",
         global_optimizer = "genetic",
-        deflation_radius = 1.0,
+        deflation_radius = None,
         dask_client = None):
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP (synchronously).
@@ -274,7 +274,7 @@ class GP():
         max_iter = 120,
         local_optimizer = "L-BFGS-B",
         global_optimizer = "genetic",
-        deflation_radius = 1.0,
+        deflation_radius = None,
         dask_client = None):
         """
         This function finds the maximum of the log_likelihood and therefore trains the 
@@ -347,7 +347,8 @@ class GP():
         deflation_radius,
         dask_client):
         print("fvGP submitted HGDL optimization for asynchronous training")
-        print('bounds:',hp_bounds)
+        print("bounds:",hp_bounds)
+        print("deflation radius: ",deflation_radius)
         opt_obj = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
                     hess = self.log_likelihood_hessian,
