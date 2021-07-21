@@ -324,11 +324,18 @@ class GP():
     def update_hyperparameters(self, opt_obj):
         print("Updating the hyperparameters in fvGP...")
         try:
-            res = opt_obj.get_latest(1)
-            self.hyperparameters = res["x"][0]
-            self.compute_prior_fvGP_pdf()
-            print("    fvGP async hyperparameter update successful")
-            print("    Latest hyperparameters: ", self.hyperparameters)
+            res = opt_obj.get_latest(1)["x"][0]
+            l_n = self.log_likelihood(res)
+            l_o = self.log_likelihood(self.hyperparameters)
+            if l_n - l_o < 0.000001:
+                self.hyperparameters = res
+                self.compute_prior_fvGP_pdf()
+                print("    fvGP async hyperparameter update successful")
+                print("    Latest hyperparameters: ", self.hyperparameters)
+            else:
+                print("    The update was attempted but the new hyperparameters led to a lower likelihood, so I kept the old ones")
+                print("Old likelihood: ", -l_o, " at ", self.hyperparameters)
+                print("New likelihood: ", -l_n, " at ", res)
         except Exception as e:
             print("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
             print("    That probably means you are not optimizing them asynchronously")
