@@ -502,21 +502,26 @@ class GP():
         output:
             gradient of the negative marginal log-likelihood (vector)
         """
+        from numpy.core.umath_tests import inner1d
         mean = self.mean_function(self,self.data_x,hyperparameters)
         b,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
         y = self.data_y - mean
         dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyperparameters)
         K = np.array([K,] * len(hyperparameters))
         a = self.solve(K,dK_dH)
-        y = np.ascontiguousarray(y, dtype=np.float64)
-        a = np.ascontiguousarray(a, dtype=np.float64)
-        b = np.ascontiguousarray(b, dtype=np.float64)
+        bbT = np.outer(b , b.T)
         #dL_dH = self.numba_dL_dH(y, a, b, len(hyperparameters))
-        dL_dH = np.empty((len(hyperparameters)))
+        dL_dH = np.zeros((len(hyperparameters)))
+        dL_dHm = np.zeros((len(hyperparameters)))
         dm_dh = self.dm_dh(hyperparameters)
         for i in range(len(hyperparameters)):
-            dL_dH[i] = 0.5*(-2.0 * b.T @ dm_dh[i] - y.T @ a[i] @ b) + 0.5 * np.trace(a[i])
-        return dL_dH
+            dL_dHm[i] = -dm_dh[i].T @ b
+            if dL_dHm[i] == 0.0:
+                mtrace = np.sum(inner1d(bbT , dK_dH[i].T))
+                dL_dH[i] = - 0.5 * (mtrace - np.trace(a[i]))
+            else:
+                dL_dH[i] = 0.0
+        return dL_dH + dL_dHm
 
     ##################################################################################
     @staticmethod
