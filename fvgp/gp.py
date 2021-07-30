@@ -126,6 +126,7 @@ class GP():
             self.variances = np.array(variances)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
+        if (self.variances < 0.0).any(): raise Exception("Negative measurement variances communicated to fvgp.")
         ##########################################
         #######define kernel and mean function####
         ##########################################
@@ -187,6 +188,7 @@ class GP():
             self.variances = np.array(variances)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
+        if (self.variances < 0.0).any(): raise Exception("Negative measurement variances communicated to fvgp.")
         ######################################
         #####transform to index set###########
         ######################################
@@ -517,7 +519,7 @@ class GP():
         for i in range(len(hyperparameters)):
             dL_dHm[i] = -dm_dh[i].T @ b
             if dL_dHm[i] == 0.0:
-                mtrace = np.sum(inner1d(bbT , dK_dH[i].T))
+                mtrace = np.sum(inner1d(bbT , dK_dH[i]))
                 dL_dH[i] = - 0.5 * (mtrace - np.trace(a[i]))
             else:
                 dL_dH[i] = 0.0
@@ -546,38 +548,53 @@ class GP():
         output:
             hessian of the negative marginal log-likelihood (matrix)
         """
-        raise Exception("Hessian not correct, please use the gradient to approximate the Hessian")
-        mean = self.mean_function(self,self.data_x,hyperparameters)
-        x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
-        y = self.data_y - mean
-        dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyperparameters)
-        d2K_dH2 = self.hessian_gp_kernel(self.data_x,self.data_x, hyperparameters)
-        K = np.array([K,] * len(hyperparameters))
-        s = self.solve(K,dK_dH)
-        ss = self.solve(K,d2K_dH2)
+        #raise Exception("Hessian not correct, please use the gradient to approximate the Hessian")
+        #mean = self.mean_function(self,self.data_x,hyperparameters)
+        #x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
+        #y = self.data_y - mean
+        #dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyperparameters)
+        #d2K_dH2 = self.hessian_gp_kernel(self.data_x,self.data_x, hyperparameters)
+        #K = np.array([K,] * len(hyperparameters))
+        #s = self.solve(K,dK_dH)
+        #ss = self.solve(K,d2K_dH2)
         # make contiguous
-        K = np.ascontiguousarray(K, dtype=np.float64)
-        y = np.ascontiguousarray(y, dtype=np.float64)
-        s = np.ascontiguousarray(s, dtype=np.float64)
-        ss = np.ascontiguousarray(ss, dtype=np.float64)
+        #K = np.ascontiguousarray(K, dtype=np.float64)
+        #y = np.ascontiguousarray(y, dtype=np.float64)
+        #s = np.ascontiguousarray(s, dtype=np.float64)
+        #ss = np.ascontiguousarray(ss, dtype=np.float64)
         #d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
-        len_hyperparameters = s.shape[0]
-        d2L_dH2 =  np.empty((len_hyperparameters,len_hyperparameters))
-        d2L_dm2 =  np.empty((len_hyperparameters,len_hyperparameters))
-        d2L_dmdh = np.empty((len_hyperparameters,len_hyperparameters))
-        d2m_dh2 = self.d2m_dh2(hyperparameters)
-        m1 = self.dm_dh(hyperparameters)
+        len_hyperparameters = len(hyperparameters)
+        #d2L_dH2 =  np.empty((len_hyperparameters,len_hyperparameters))
+        #d2L_dm2 =  np.empty((len_hyperparameters,len_hyperparameters))
+        #d2L_dmdh = np.empty((len_hyperparameters,len_hyperparameters))
+        d2L_dmdh = np.zeros((len_hyperparameters,len_hyperparameters))
+        #d2m_dh2 = self.d2m_dh2(hyperparameters)
+        #m1 = self.dm_dh(hyperparameters)
+        epsilon = 1e-6
+        grad_at_hps = self.log_likelihood_gradient(hyperparameters)
         for i in range(len_hyperparameters):
-            x1 = s[i]
-            for j in range(i+1):
-                x2 = s[j]
-                x3 = ss[i,j]
-                f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
-                d2L_dH2[i,j] = d2L_dH2[j,i] = f
-                d2L_dm2[i,j] = d2L_dm2[j,i] = (m1[i,:].T @ np.linalg.inv(K[0]) @ m1[j,:]) - (x.T @ d2m_dh2[i,j])
-                d2L_dmdh[i,j] = d2L_dmdh[j,i] = (x @ x2 @ m1[i,:])
+            #x1 = s[i]
+            hps_temp = np.array(hyperparameters)
+            hps_temp[i] = hps_temp[i] + epsilon
+            d2L_dmdh[i,i:] = ((self.log_likelihood_gradient(hps_temp) - grad_at_hps)/epsilon)[i:]
+            #print(d2L_dmdh)
+        #i_lower = np.tril_indices(n, -1)
+        #matrix[i_lower] = matrix.T[i_lower]  # make the matrix symmetric
+            #for j in range(i+1):
+                #x2 = s[j]
+                #x3 = ss[i,j]
+                #f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
+                #d2L_dH2[i,j] = d2L_dH2[j,i] = f
+                #d2L_dm2[i,j] = d2L_dm2[j,i] = (m1[i,:].T @ np.linalg.inv(K[0]) @ m1[j,:]) - (x.T @ d2m_dh2[i,j])
+                #d2L_dmdh[i,j] = d2L_dmdh[j,i] = (x @ x2 @ m1[i,:])
+                #hps_temp1 = np.array(hyperparameters)
+                #hps_temp2 = np.array(hyperparameters)
+                #hps_temp1[i] = hps_temp1[i] + epsilon
+                #hps_temp2[j] = hps_temp2[j] + epsilon
+                #d2L_dmdh[i,j] = d2L_dmdh[j,i] = self.log_likelihood_gradient(hps_temp)
 
-        return -d2L_dH2 - d2L_dm2 + d2L_dmdh
+        return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
+        #return -d2L_dH2 - d2L_dm2 + d2L_dmdh
     ##################################################################################
     ##################################################################################
     ##################################################################################
