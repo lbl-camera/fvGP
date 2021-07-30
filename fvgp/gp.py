@@ -66,10 +66,10 @@ class GP():
         variances (N dim numpy array):                  variances of the values, default = array of shape of points
                                                         with 1 % of the values
         compute_device:                                 cpu/gpu, default = cpu
-        gp_kernel_function(func):                       None/function defining the 
+        gp_kernel_function(callable):                   None/function defining the 
                                                         kernel def name(x1,x2,hyperparameters,self), 
                                                         make sure to return a 2d numpy array, default = None uses default kernel
-        gp_mean_function(func):                         None/function def name(gp_obj, x, hyperparameters), 
+        gp_mean_function(callable):                     None/function def name(gp_obj, x, hyperparameters), 
                                                         make sure to return a 1d numpy array, default = None
         sparse (bool):                                  default = False
         normalize_y:                                    default = False, normalizes the values \in [0,1]
@@ -206,8 +206,8 @@ class GP():
     ###################################################################################
     def kill_training(self,opt_obj):
         print("fvGP is killing asynchronous training....")
-        try: opt_obj.kill(); print("fvGP successfully killed the training.")
-        except: print("No asynchronous training to be killed, no training is running.")
+        try: opt_obj.kill_client(); print("fvGP successfully killed the training.")
+        except Exception as err: print("No asynchronous training to be killed, no training is running.", str(err))
     ###################################################################################
     def train(self,
         hyperparameter_bounds,
@@ -230,14 +230,14 @@ class GP():
             hyperparameter_bounds (2d numpy array)
         optional inputs:
             init_hyperparameters (1d numpy array):  default = None (= use earlier initialization)
-            method : default = "global","global"/"local"/"hgdl"/callable f(obj,optimization_dict)
-            optimization_dict: if optimizer is callable, the this will be passed as dict
-            pop_size: default = 20
-            tolerance: default = 0.1
+            method = "global": "global"/"local"/"hgdl"/callable f(obj,optimization_dict)
+            optimization_dict = None: if optimizer is callable, the this will be passed as dict
+            pop_size = 20
+            tolerance = 0.0001
             max_iter: default = 120
             local_optimizer = "L-BFGS-B"  important for local and hgdl optimization
             global_optimizer = "genetic"
-            deflation_radius = 1.0        for hgdl
+            deflation_radius = None        for hgdl
             dask_client = None (will use local client, only for hgdl optimization)
 
         output:
@@ -271,8 +271,6 @@ class GP():
     def train_async(self,
         hyperparameter_bounds,
         init_hyperparameters = None,
-        pop_size = 20,
-        tolerance = 0.1,
         max_iter = 120,
         local_optimizer = "L-BFGS-B",
         global_optimizer = "genetic",
@@ -287,12 +285,10 @@ class GP():
             hyperparameter_bounds (2d list)
         optional inputs:
             init_hyperparameters (list):  default = None
-            pop_size: default = 20,
-            tolerance: default = 0.1,
             max_iter: default = 120,
             local_optimizer = "L-BFGS-B"
             global_optimizer = "genetic"
-            deflation_radius = 1.0
+            deflation_radius = None
             dask_client: True/False/dask client, default = None (will use a local client)
 
         output:
@@ -311,8 +307,6 @@ class GP():
             init_hyperparameters,
             np.array(hyperparameter_bounds),
             max_iter,
-            pop_size,
-            tolerance,
             local_optimizer,
             global_optimizer,
             deflation_radius,
@@ -349,8 +343,6 @@ class GP():
         starting_hps,
         hp_bounds,
         max_iter,
-        pop_size,
-        tolerance,
         local_optimizer,
         global_optimizer,
         deflation_radius,
@@ -360,8 +352,8 @@ class GP():
         print("deflation radius: ",deflation_radius)
         opt_obj = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
+                    hp_bounds,
                     hess = self.log_likelihood_hessian,
-                    bounds = hp_bounds,
                     local_optimizer = local_optimizer,
                     global_optimizer = global_optimizer,
                     radius = deflation_radius,
@@ -442,16 +434,17 @@ class GP():
             print('bounds are',hp_bounds)
             opt = HGDL(self.log_likelihood,
                        self.log_likelihood_gradient,
+                       hp_bounds,
                        hess = self.log_likelihood_hessian,
-                       bounds = hp_bounds,
                        local_optimizer = local_optimizer,
                        global_optimizer = global_optimizer,
                        radius = deflation_radius,
                        num_epochs = max_iter)
 
-            opt.optimize(dask_client = dask_client, x0 = starting_hps)
+            obj = opt.optimize(dask_client = dask_client, x0 = np.array(starting_hps))
             res = opt.get_final(2)
             hyperparameters = res["x"][0]
+            opt.kill_client(obj)
         elif method == "mcmc":
             print("MCMC started in fvGP")
             print('bounds are',hp_bounds)
