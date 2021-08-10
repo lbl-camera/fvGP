@@ -108,29 +108,25 @@ class EnsembleGP():
     def stop_training(self):
         print("Ensemble fvGP is cancelling the asynchronous training...")
         try: self.opt.cancel_tasks(); print("Ensemble fvGP successfully cancelled the current training.")
-        except: print("No asynchronous training to be cancelled in Ensemble fvGP, no training is running.")
+        except Exception as err: print("No asynchronous training to be cancelled in Ensemble fvGP, no training is running.", err)
 
     def kill_training(self):
         print("fvGP is killing asynchronous training....")
-        try: self.opt.kill(); print("fvGP successfully killed the training.")
-        except: print("No asynchronous training to be killed, no training is running.")
+        try: self.opt.kill_client(); print("fvGP successfully killed the training.")
+        except Exception as err: print("No asynchronous training to be killed, no training is running.", err)
 
     def train_async(self,
         hps_obj = None,
-        pop_size = 20,
-        tolerance = 0.1,
-        max_iter = 120,
-        dask_client = None
+        max_iter = 10000,
+        local_optimizer = "SLSQP",
+        global_optimizer = "genetic",
+        dask_client = None,
+        deflation_radius = None
         ):
         if hps_obj is None: hps_obj = self.hps_obj
-        local_optimizer = "SLSQP"
-        global_optimizer = "genetic"
-        deflation_radius = 0.1
         self.optimize_log_likelihood_async(
             hps_obj,
             max_iter,
-            pop_size,
-            tolerance,
             local_optimizer,
             global_optimizer,
             deflation_radius,
@@ -177,9 +173,13 @@ class EnsembleGP():
 
         return self.hps_obj.weights, self.hps_obj.hps
 
-    def optimize_log_likelihood_async(self, hps_obj,max_iter,pop_size,tol,
-            local_optimizer,global_optimizer,
-            deflation_radius,dask_client):
+    def optimize_log_likelihood_async(self, 
+            hps_obj,
+            max_iter,
+            local_optimizer,
+            global_optimizer,
+            deflation_radius,
+            dask_client):
         print("Ensemble fvGP submitted to HGDL optimization")
         print('bounds are',hps_obj.vectorized_bounds)
         print("initial weights: ", hps_obj.vectorized_hps)
@@ -190,10 +190,13 @@ class EnsembleGP():
 
         self.opt = HGDL(self.ensemble_log_likelihood,
                 self.ensemble_log_likelihood_grad,
-                #hess = self.log_likelihood_hessian,
+                hps_obj.vectorized_bounds,
+                hess = self.ensemble_log_likelihood_hess,
                 local_optimizer = local_optimizer,
-                bounds = hps_obj.vectorized_bounds,
-                num_epochs = max_iter, constr = (nlc))
+                global_optimizer = global_optimizer,
+                radius = deflation_radius,
+                num_epochs = max_iter,
+                constr = (nlc))
 
         self.opt.optimize(dask_client = dask_client)
 
@@ -256,76 +259,94 @@ class EnsembleGP():
         output:
             negative marginal log-likelihood (scalar)
         """
-        L = 0.0
         weights, hps = self.hps_obj.devectorize_hps(v)
         Psi = np.empty((self.number_of_GPs))
+        A = np.empty((self.number_of_GPs))
         for i in range(self.number_of_GPs):
-            Psi[i] = np.log(weights[i]) - self.EnsembleGPs[i].log_likelihood(hps[i])
-        largest_Psi_index = np.argmax(Psi)
-        for i in range(0,self.number_of_GPs):
-            if i == largest_Psi_index: continue
-            L += np.exp(Psi[i] - Psi[largest_Psi_index])
-        l = np.log(1.0 + L)
-        return -(Psi[largest_Psi_index] + l)
+            A[i] = np.log(weights[i]) - self.EnsembleGPs[i].log_likelihood(hps[i])
+        k = np.argmax(A)
+        A_largest = A[k]
+        indices = np.arange(self.number_of_GPs) != k
+        A = A - A_largest
+        L = np.sum(np.exp(A[indices]))
+        return -(A_largest + np.log(1.0 + L))
 
     def ensemble_log_likelihood_grad(self,v):
         weights, hps = self.hps_obj.devectorize_hps(v)
-        exp_a = np.zeros((self.number_of_GPs))
         w_grad = np.zeros((self.number_of_GPs))
         h_grad = []
-        for k in range(self.number_of_GPs):
-            like = np.log(weights[k]) - self.EnsembleGPs[k].log_likelihood(hps[k])
-            for j in range(self.number_of_GPs):
-                t = np.log(weights[j]) - self.EnsembleGPs[j].log_likelihood(hps[j])-like
-                if t > 100.0: exp_a[j] = np.inf
-                else: exp_a[j] = np.exp(t)
-
-            index = np.arange(self.number_of_GPs) != k
-            s = np.sum(exp_a[index])
-            if s > 10e16: term = 1.0
-            else: term = s/(1.+s)
-            w_grad[k] = -(1./(weights[k] * (1.+np.sum(exp_a[index]))))
-            h_grad.append((1. - term) * self.EnsembleGPs[k].log_likelihood_gradient(hps[k]))
-        return self.hps_obj.vectorize_hps(w_grad,h_grad)
-
-    def ensemble_log_likelihood_hess(self,v):
-        weights, hps = self.hps_obj.devectorize_hps(v)
-        exp_a = np.zeros((self.number_of_GPs))
-        d     = np.zeros((self.number_of_GPs))
-        w_hess = np.zeros((self.number_of_GPs,self.number_of_GPs))
-        h_hess = []
+        A = np.zeros((self.number_of_GPs))
+        dA_dw = np.zeros((self.number_of_GPs))
+        dA_dP = np.zeros((self.number_of_GPs))
         def kronecker(k,l):
             if int(k) == int(l): return 1.0
             else: return 0.0
-        for k in range(self.number_of_GPs):
-            like = np.log(weights[k]) - self.EnsembleGPs[k].log_likelihood(hps[k])
+
+        for i in range(self.number_of_GPs):
+            A[i] = np.log(weights[i]) - self.EnsembleGPs[i].log_likelihood(hps[i])
+
+        k = np.argmax(A)
+        A = A - A[k]
+        indices = np.arange(self.number_of_GPs) != k
+        s1 = np.sum(np.exp(A[indices]))
+
+        for p in range(self.number_of_GPs):
             for i in range(self.number_of_GPs):
-                t = np.log(weights[i])-self.EnsembleGPs[i].log_likelihood(hps[i])-like
-                if t > 100.0: exp_a[i] = 10e16
-                else: exp_a[i] = np.exp(np.log(weights[i])-self.EnsembleGPs[i].log_likelihood(hps[i])-like)
+                dA_dw[i] = (kronecker(i,p) - kronecker(k,p))/weights[p]
+                dA_dP[i] = kronecker(i,p) - kronecker(k,p)
 
-            for l in range(k,self.number_of_GPs):
+            s2 = np.exp(A[indices]).T @ dA_dw[indices]
+            s3 = np.exp(A[indices]).T @ dA_dP[indices]
 
-                d2 = np.empty((self.number_of_GPs, len(hps[l])))
-                for i in range(self.number_of_GPs):
-                    d[i] = (kronecker(i,l)/weights[i] - kronecker(k,l)/weights[k])
-                    if i != l and k != l: d2[i]= 0.0
-                    else: d2[i] =  (self.EnsembleGPs[i].log_likelihood_gradient(hps[l]) * kronecker(i,l) - \
-                                    self.EnsembleGPs[k].log_likelihood_gradient(hps[l]) * kronecker(k,l))
+            w_grad[p] = -(kronecker(k,p)/weights[p] + (s2/(1. + s1)))
+            h_grad.append((kronecker(k,p) + s3/(1. + s1)) * self.EnsembleGPs[p].log_likelihood_gradient(hps[p]))
+        return self.hps_obj.vectorize_hps(w_grad,h_grad)
 
-                index = np.arange(self.number_of_GPs) != k
-                s = np.sum(exp_a[index])
-                if s > 1e16: term = 0.0
-                else: term = 1./(1.+s)
-                term2 = d[index].T @ exp_a[index]
-                term3 =  exp_a[index].T @ d2[index]
-                w_hess[k,l] = w_hess[l,k] = -((kronecker(k,l)/(weights[k]**2)) * term) \
-                                            -((1.0/weights[k])*(term)*term2)
-                h_hess.append(self.EnsembleGPs[k].log_likelihood_hessian(hps[k]) * kronecker(l,k) - term*s*self.EnsembleGPs[k].log_likelihood_hessian(hps[l]) * kronecker(l,k) \
-                            -(np.outer(self.EnsembleGPs[k].log_likelihood_gradient(hps[k]),term3) * (term**2)))
+    def ensemble_log_likelihood_hess(self,v):
+        len_hyperparameters = len(v)
+        d2L_dmdh = np.zeros((len_hyperparameters,len_hyperparameters))
+        epsilon = 1e-6
+        grad_at_hps = self.ensemble_log_likelihood_grad(v)
+        for i in range(len_hyperparameters):
+            hps_temp = np.array(v)
+            hps_temp[i] = hps_temp[i] + epsilon
+            d2L_dmdh[i,i:] = ((self.ensemble_log_likelihood_grad(hps_temp) - grad_at_hps)/epsilon)[i:]
+        return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
+
+
+
+        #def kronecker(k,l):
+        #    if int(k) == int(l): return 1.0
+        #    else: return 0.0
+        #for k in range(self.number_of_GPs):
+        #    like = np.log(weights[k]) - self.EnsembleGPs[k].log_likelihood(hps[k])
+        #    for i in range(self.number_of_GPs):
+        #        t = np.log(weights[i])-self.EnsembleGPs[i].log_likelihood(hps[i])-like
+        #        if t > 100.0: exp_a[i] = 10e16
+        #        else: exp_a[i] = np.exp(np.log(weights[i])-self.EnsembleGPs[i].log_likelihood(hps[i])-like)
+        #
+        #    for l in range(k,self.number_of_GPs):
+        #
+        #        d2 = np.empty((self.number_of_GPs, len(hps[l])))
+        #        for i in range(self.number_of_GPs):
+        #            d[i] = (kronecker(i,l)/weights[i] - kronecker(k,l)/weights[k])
+        #            if i != l and k != l: d2[i]= 0.0
+        #            else: d2[i] =  (self.EnsembleGPs[i].log_likelihood_gradient(hps[l]) * kronecker(i,l) - \
+        #                            self.EnsembleGPs[k].log_likelihood_gradient(hps[l]) * kronecker(k,l))
+
+        #       index = np.arange(self.number_of_GPs) != k
+        #        s = np.sum(exp_a[index])
+        #        if s > 1e16: term = 0.0
+        #        else: term = 1./(1.+s)
+        #        term2 = d[index].T @ exp_a[index]
+        #        term3 =  exp_a[index].T @ d2[index]
+        #        w_hess[k,l] = w_hess[l,k] = -((kronecker(k,l)/(weights[k]**2)) * term) \
+        #                                    -((1.0/weights[k])*(term)*term2)
+        #        h_hess.append(self.EnsembleGPs[k].log_likelihood_hessian(hps[k]) * kronecker(l,k) - term*s*self.EnsembleGPs[k].log_likelihood_hessian(hps[l]) * kronecker(l,k) \
+        #                    -(np.outer(self.EnsembleGPs[k].log_likelihood_gradient(hps[k]),term3) * (term**2)))
                 #print("cc: ",self.EnsembleGPs[k].log_likelihood_hessian(hps[k]), np.outer(self.EnsembleGPs[k].log_likelihood_gradient(hps[k]),term3))
                 #print("cc ",self.EnsembleGPs[k].log_likelihood_hessian(hps[k]) * kronecker(l,k) - term*s*self.EnsembleGPs[k].log_likelihood_hessian(hps[k]) * kronecker(l,k),np.outer(self.EnsembleGPs[k].log_likelihood_gradient(hps[k]),term3) * (term**2))
-        return -w_hess, h_hess
+        #return -w_hess, h_hess
     ##########################################################
     def compute_prior_pdf(self):
         for i in range(self.number_of_GPs):
