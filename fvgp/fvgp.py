@@ -164,6 +164,7 @@ class fvGP(GP):
             """
         self.data_x = np.array(points)
         self.data_y = np.array(values)
+        self.point_number = len(self.data_x)
         ##########################################
         #######prepare value positions############
         ##########################################
@@ -185,7 +186,6 @@ class fvGP(GP):
         ######################################
         #####transform to index set###########
         ######################################
-        self.point_number = len(self.data_x)
         self.data_x, self.data_y, self.variances = self.transform_index_set()
         self.point_number = len(self.data_x)
         GP.update_gp_data(self,self.data_x, self.data_y, self.variances)
