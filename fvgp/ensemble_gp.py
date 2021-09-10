@@ -157,6 +157,7 @@ class EnsembleGP():
     def update_hyperparameters(self, n = 1):
         try:
             r = self.opt.get_latest(n)['x'][0]
+            #if len(r) == 0: raise Exception("No results available just yet"); 
             weights,hps = self.hps_obj.devectorize_hps(r)
             self.hps_obj.set(weights,hps)
             print("new weights after training: ", self.hps_obj.weights)
@@ -167,6 +168,7 @@ class EnsembleGP():
         except Exception as e:
             print("Async Hyper-parameter update not successful in Ensemble fvGP. I am keeping the old ones.")
             print("That probably means you are not optimizing them asynchronously")
+            print("Or there are simply no results yet.")
             print("error: ", e)
             print("weights: ", self.hps_obj.weights)
             print("hps    : ", self.hps_obj.hps)
@@ -182,7 +184,7 @@ class EnsembleGP():
             dask_client):
         print("Ensemble fvGP submitted to HGDL optimization")
         print('bounds are',hps_obj.vectorized_bounds)
-        print("initial weights: ", hps_obj.vectorized_hps)
+        print("initial hps: ", hps_obj.vectorized_hps)
         def constraint(v):
             return np.array(np.sum(v[0:self.number_of_GPs]))
 
@@ -196,9 +198,9 @@ class EnsembleGP():
                 global_optimizer = global_optimizer,
                 radius = deflation_radius,
                 num_epochs = max_iter,
-                constr = (nlc))
+                constr = ())
 
-        self.opt.optimize(dask_client = dask_client)
+        self.opt.optimize(dask_client = dask_client, x0 = hps_obj.vectorized_hps)
 
     def optimize_log_likelihood(self,
             hps_obj,
@@ -260,7 +262,7 @@ class EnsembleGP():
             negative marginal log-likelihood (scalar)
         """
         weights, hps = self.hps_obj.devectorize_hps(v)
-        Psi = np.empty((self.number_of_GPs))
+        #Psi = np.empty((self.number_of_GPs))
         A = np.empty((self.number_of_GPs))
         for i in range(self.number_of_GPs):
             A[i] = np.log(weights[i]) - self.EnsembleGPs[i].log_likelihood(hps[i])
@@ -269,7 +271,7 @@ class EnsembleGP():
         indices = np.arange(self.number_of_GPs) != k
         A = A - A_largest
         L = np.sum(np.exp(A[indices]))
-        return -(A_largest + np.log(1.0 + L))
+        return -(np.log(1./np.sum(weights)) + A_largest + np.log(1.0 + L))
 
     def ensemble_log_likelihood_grad(self,v):
         weights, hps = self.hps_obj.devectorize_hps(v)
@@ -298,14 +300,14 @@ class EnsembleGP():
             s2 = np.exp(A[indices]).T @ dA_dw[indices]
             s3 = np.exp(A[indices]).T @ dA_dP[indices]
 
-            w_grad[p] = -(kronecker(k,p)/weights[p] + (s2/(1. + s1)))
+            w_grad[p] = -((-1./np.sum(weights)) + kronecker(k,p)/weights[p] + (s2/(1. + s1)))
             h_grad.append((kronecker(k,p) + s3/(1. + s1)) * self.EnsembleGPs[p].log_likelihood_gradient(hps[p]))
         return self.hps_obj.vectorize_hps(w_grad,h_grad)
 
     def ensemble_log_likelihood_hess(self,v):
         len_hyperparameters = len(v)
         d2L_dmdh = np.zeros((len_hyperparameters,len_hyperparameters))
-        epsilon = 1e-6
+        epsilon = 1e-5
         grad_at_hps = self.ensemble_log_likelihood_grad(v)
         for i in range(len_hyperparameters):
             hps_temp = np.array(v)
@@ -366,7 +368,7 @@ class EnsembleGP():
             pdf = np.zeros((res))
             for j in range(self.number_of_GPs):
                 pdf += self.hps_obj.weights[j] * self._Gaussian(means[j,i],covs[j,i],lb,ub, res)
-            pdfs.append(pdf)
+            pdfs.append(pdf/(np.sum(pdf)*((ub-lb)/float(res))))
         return {"f(x)": means, "v(x)":covs, "pdf": pdfs, "lb": lb, "ub": ub, "domain" : np.linspace(lb,ub,res)}
     ##########################################################
     def _Gaussian(self,mean,var,lower,upper,res):
