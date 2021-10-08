@@ -77,6 +77,7 @@ class EnsembleGP():
         number_of_GPs,
         hps_obj,
         variances = None,
+        noise_w = None,
         compute_device = "cpu",
         gp_kernel_functions = None,
         gp_mean_functions = None,
@@ -91,19 +92,44 @@ class EnsembleGP():
         self.hps_obj = hps_obj
         self.init_weights = np.ones((number_of_GPs)) / float(number_of_GPs)
         self.points = points
+        if values.ndim == 1: values = values.reshape(-1,1)
+        if len(values[0]) == 1: values = np.tile(values,(1,number_of_GPs))
         self.values = values
+        if variances is None: variances = np.zeros(values.shape) + abs(np.mean(values)/100.)
+        if variances.ndim == 1: variances = variances.reshape(-1,1)
+        if len(variances[0]) == 1: variances = np.tile(variances,(1,number_of_GPs))
+        self.variances = variances
+
+        if noise_w is None: noise_w = np.zeros(values.shape) + 1./float(number_of_GPs)
+        if noise_w.ndim == 1: noise_w = noise_w.reshape(-1,1)
+        if len(noise_w[0]) == 1: noise_w = np.zeros(values.shape) + 1./float(number_of_GPs)
+        self.noise_w = noise_w
+
         if gp_kernel_functions is None: gp_kernel_functions = [None] * number_of_GPs
         if gp_mean_functions is None: gp_mean_functions = [None] * number_of_GPs
-        self.EnsembleGPs = [GP(input_space_dim,points,values,hps_obj.hps[i],
-                               variances = variances,compute_device = compute_device,
-                               gp_kernel_function = gp_kernel_functions[i],
-                               gp_mean_function = gp_mean_functions[i],
+        self.EnsembleGPs = [[GP(input_space_dim,points,self.values[:,i],hps_obj.hps[j],
+            variances = self.variances[:,i],compute_device = compute_device,
+                               gp_kernel_function = gp_kernel_functions[j],
+                               gp_mean_function = gp_mean_functions[j],
                                sparse = sparse, normalize_y = normalize_y)
-                               for i in range(number_of_GPs)]
+                               for i in range(number_of_GPs)] for j in range(number_of_GPs)]
+        print(self.EnsembleGPs)
+        print("==========")
 
-    def update_EnsembleGP_data(self, points, values, variances = None):
+    def update_EnsembleGP_data(self, points, values, variances = None, noise_w = None):
+        if values.ndim == 1: values = values.reshape(-1,1)
+        if len(values[0]) == 1: values = np.tile(values,(1,number_of_GPs))
+        if variances is None: variances = np.zeros(values.shape) + abs(np.mean(values)/100.)
+        if variances.ndim == 1: variances = variances.reshape(-1,1)
+        if len(variances[0]) == 1: variances = np.tile(variances,(1,number_of_GPs))
+        if noise_w is None: noise_w = np.zeros(values.shape) + 1./float(number_of_GPs)
+        if noise_w.ndim == 1: noise_w = noise_w.reshape(-1,1)
+        if len(noise_w[0]) == 1: noise_w = np.zeros(values.shape) + 1./float(number_of_GPs)
+        self.noise_w = noise_w
+
+
         for i in range(len(self.number_of_GPs)):
-            self.EnsembleGPs[i].update_gp_data(points,values, variances = variances)
+            self.EnsembleGPs[i].update_gp_data(points,values[:,i], variances = variances[:,i])
     ############################################################################
     def stop_training(self):
         print("Ensemble fvGP is cancelling the asynchronous training...")
@@ -150,14 +176,15 @@ class EnsembleGP():
         self.hps_obj.set(weights,hps)
         print("new weights after training: ", self.hps_obj.weights)
         print("new hps     after training: ", self.hps_obj.hps)
-        for i in range(self.number_of_GPs): self.EnsembleGPs[i].hyperparameters = self.hps_obj.hps[i]
+        for i in range(self.number_of_GPs): 
+            for j in range(self.number_of_GPs): 
+                self.EnsembleGPs[i][j].hyperparameters = self.hps_obj.hps[j]
         self.compute_prior_pdf()
         print("GPs updated")
 
     def update_hyperparameters(self, n = 1):
         try:
             r = self.opt.get_latest(n)['x'][0]
-            #if len(r) == 0: raise Exception("No results available just yet"); 
             weights,hps = self.hps_obj.devectorize_hps(r)
             self.hps_obj.set(weights,hps)
             print("new weights after training: ", self.hps_obj.weights)
@@ -212,13 +239,13 @@ class EnsembleGP():
         print('bounds are',hps_obj.vectorized_bounds)
         print("maximum number of iterations: ", max_iter)
         print("termination tolerance: ", tolerance)
-        def constraint(v):
-            return np.array(np.sum(v[0:self.number_of_GPs]))
-        def constraint2(v):
-            return np.array(v[0])
+        #def constraint(v):
+        #    return np.array(np.sum(v[0:self.number_of_GPs]))
+        #def constraint2(v):
+        #    return np.array(v[0])
 
-        nlc = NonlinearConstraint(constraint,0.8,1.0)
-        nlc2 = NonlinearConstraint(constraint2,0.2,0.4)
+        #nlc = NonlinearConstraint(constraint,0.8,1.0)
+        #nlc2 = NonlinearConstraint(constraint2,0.2,0.4)
         res = differential_evolution(
             self.ensemble_log_likelihood,
             hps_obj.vectorized_bounds,
@@ -227,23 +254,23 @@ class EnsembleGP():
             popsize = pop_size,
             tol = tolerance,
             workers = 1,
-            constraints = (nlc,nlc2),
+            constraints = (),
             polish = False
         )
 
         r = np.array(res["x"])
-        r[0:self.number_of_GPs] = 1./self.number_of_GPs
-        nlc = NonlinearConstraint(constraint,0.9999,1.0)
-        res = minimize(
-                self.ensemble_log_likelihood,r,
-                method= "SLSQP",
-                jac=self.ensemble_log_likelihood_grad,
-                bounds = hps_obj.vectorized_bounds,
-                tol = tolerance,
-                callback = None,
-                options = {"maxiter": max_iter},
-                constraints = (nlc,nlc2))
-        r = np.array(res["x"])
+        #r[0:self.number_of_GPs] = 1./self.number_of_GPs
+        #nlc = NonlinearConstraint(constraint,0.9999,1.0)
+        #res = minimize(
+        #        self.ensemble_log_likelihood,r,
+        #        method= "SLSQP",
+        #        jac=self.ensemble_log_likelihood_grad,
+        #        bounds = hps_obj.vectorized_bounds,
+        #        tol = tolerance,
+        #        callback = None,
+        #        options = {"maxiter": max_iter},
+        #        constraints = ())
+        #r = np.array(res["x"])
 
         Eval = self.ensemble_log_likelihood(r)
         weights,hps = self.hps_obj.devectorize_hps(r)
@@ -251,7 +278,6 @@ class EnsembleGP():
         print("and hyperparameters: ",hps)
         print(" with likelihood: ",Eval," via global optimization")
         return weights,hps
-
 
     def ensemble_log_likelihood(self,v):
         """
@@ -262,13 +288,15 @@ class EnsembleGP():
             negative marginal log-likelihood (scalar)
         """
         weights, hps = self.hps_obj.devectorize_hps(v)
-        #Psi = np.empty((self.number_of_GPs))
-        A = np.empty((self.number_of_GPs))
+        A = np.empty((self.number_of_GPs,self.number_of_GPs))
         for i in range(self.number_of_GPs):
-            A[i] = np.log(weights[i]) - self.EnsembleGPs[i].log_likelihood(hps[i])
+            for j in range(self.number_of_GPs):
+                A[i,j] = np.log(weights[i]*self.noise_w[0,j]) - self.EnsembleGPs[i][j].log_likelihood(hps[j])
+
+        A = A.flatten()
         k = np.argmax(A)
         A_largest = A[k]
-        indices = np.arange(self.number_of_GPs) != k
+        indices = np.arange(len(A)) != k
         A = A - A_largest
         L = np.sum(np.exp(A[indices]))
         return -(np.log(1./np.sum(weights)) + A_largest + np.log(1.0 + L))
@@ -352,12 +380,14 @@ class EnsembleGP():
     ##########################################################
     def compute_prior_pdf(self):
         for i in range(self.number_of_GPs):
-            self.EnsembleGPs[i].compute_prior_fvGP_pdf()
+            for j in range(self.number_of_GPs):
+                self.EnsembleGPs[i][j].compute_prior_fvGP_pdf()
 
     ##########################################################
     def posterior(self,x_iset, res = 100, lb = None, ub = None):
-        means = [self.EnsembleGPs[i].posterior_mean(x_iset)["f(x)"] for i in range(self.number_of_GPs)]
-        covs  = [self.EnsembleGPs[i].posterior_covariance(x_iset)["v(x)"] for i in range(self.number_of_GPs)]
+        means = [[self.EnsembleGPs[i][j].posterior_mean(x_iset)["f(x)"] for i in range(self.number_of_GPs)] for j in range(self.number_of_GPs)]
+
+        covs  = [[self.EnsembleGPs[i][j].posterior_covariance(x_iset)["v(x)"] for i in range(self.number_of_GPs)] for j in range(self.number_of_GPs)]
         means = np.array(means)
         covs = np.array(covs)
         if lb == None: lb = np.min(means - 3.0 * np.sqrt(covs))
@@ -367,7 +397,8 @@ class EnsembleGP():
         for i in range(len(x_iset)):
             pdf = np.zeros((res))
             for j in range(self.number_of_GPs):
-                pdf += self.hps_obj.weights[j] * self._Gaussian(means[j,i],covs[j,i],lb,ub, res)
+                for k in range(self.number_of_GPs):
+                    pdf += self.hps_obj.weights[j] * self._Gaussian(means[k,j,i],covs[k,j,i],lb,ub, res)
             pdfs.append(pdf/(np.sum(pdf)*((ub-lb)/float(res))))
         return {"f(x)": means, "v(x)":covs, "pdf": pdfs, "lb": lb, "ub": ub, "domain" : np.linspace(lb,ub,res)}
     ##########################################################
