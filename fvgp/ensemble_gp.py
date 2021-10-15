@@ -33,7 +33,7 @@ import numpy as np
 from scipy.optimize import NonlinearConstraint,differential_evolution
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
-
+from random import choice
 
 class EnsembleGP():
     """
@@ -75,6 +75,7 @@ class EnsembleGP():
         points,
         values,
         number_of_GPs,
+        number_of_G_likelihoods,
         hps_obj,
         variances = None,
         noise_w = None,
@@ -90,6 +91,7 @@ class EnsembleGP():
         """
         self.number_of_GPs = number_of_GPs
         self.hps_obj = hps_obj
+        self.number_of_G_likelihoods = number_of_G_likelihoods
         self.init_weights = np.ones((number_of_GPs)) / float(number_of_GPs)
         self.points = points
         if values.ndim == 1: values = values.reshape(-1,1)
@@ -107,14 +109,16 @@ class EnsembleGP():
 
         if gp_kernel_functions is None: gp_kernel_functions = [None] * number_of_GPs
         if gp_mean_functions is None: gp_mean_functions = [None] * number_of_GPs
-        self.EnsembleGPs = [[GP(input_space_dim,points,self.values[:,i],hps_obj.hps[j],
-            variances = self.variances[:,i],compute_device = compute_device,
-                               gp_kernel_function = gp_kernel_functions[j],
-                               gp_mean_function = gp_mean_functions[j],
-                               sparse = sparse, normalize_y = normalize_y)
-                               for i in range(number_of_GPs)] for j in range(number_of_GPs)]
-        print(self.EnsembleGPs)
-        print("==========")
+        new_y,new_w,new_var = self._find_set_G()
+
+        #self.EnsembleGPs = [[GP(input_space_dim,points,self.values[:,i],hps_obj.hps[j],
+        #    variances = self.variances[:,i],compute_device = compute_device,
+        #                       gp_kernel_function = gp_kernel_functions[j],
+        #                       gp_mean_function = gp_mean_functions[j],
+        #                       sparse = sparse, normalize_y = normalize_y)
+        #                       for i in range(self.number_of_G_likelihoods)] for j in range(number_of_GPs)]
+        #print(self.EnsembleGPs)
+        #print("==========")
 
     def update_EnsembleGP_data(self, points, values, variances = None, noise_w = None):
         if values.ndim == 1: values = values.reshape(-1,1)
@@ -126,7 +130,6 @@ class EnsembleGP():
         if noise_w.ndim == 1: noise_w = noise_w.reshape(-1,1)
         if len(noise_w[0]) == 1: noise_w = np.zeros(values.shape) + 1./float(number_of_GPs)
         self.noise_w = noise_w
-
 
         for i in range(len(self.number_of_GPs)):
             self.EnsembleGPs[i].update_gp_data(points,values[:,i], variances = variances[:,i])
@@ -181,6 +184,43 @@ class EnsembleGP():
                 self.EnsembleGPs[i][j].hyperparameters = self.hps_obj.hps[j]
         self.compute_prior_pdf()
         print("GPs updated")
+
+    def _find_set_G(self):
+        ###returns |G| mean vectors (y), covariance matrices and weights w^y
+        ln_w = np.log(self.noise_w)
+        max_ind = np.argmax(ln_w, axis = 1)   ###a 1 d array (len(weights)) of the largest index
+        new = [np.zeros((len(max_ind)))] * self.number_of_G_likelihoods
+        res_weights = []
+        res_v = []
+        res_y = []
+        W = []
+        #print(self.noise_w)
+        #print("==================")
+        for i in range(self.number_of_G_likelihoods):
+            sgn, logdet = np.linalg.slogdet(np.diag(self.noise_w[np.arange(self.noise_w.shape[0])[:, None], max_ind.reshape(-1,1)][:,0]))
+            res_weights.append(sgn * logdet)
+            res_y.append(self.values[np.arange(self.values.shape[0])[:, None], max_ind.reshape(-1,1)][:,0])
+            res_v.append(self.variances[np.arange(self.variances.shape[0])[:, None], max_ind.reshape(-1,1)][:,0])
+            change_ind = np.random.randint(0, high=len(max_ind)-1, size = 1, dtype=int)
+            n = [i for i in range(len(ln_w[0]))]
+            n.remove(max_ind[change_ind])
+            max_ind[change_ind] = choice(n)
+        #print(res_weights)
+        res_weights = np.asarray(res_weights)
+        index = np.argmax(res_weights)
+        #print("index ",index)
+        i = np.arange(len(res_weights)) != index
+        #print("i  ",i)
+        #print("exponent   ",res_weights[i]-res_weights[index])
+        Z = res_weights[index] + np.log(1.+np.sum(np.exp(res_weights[i]-res_weights[index])))
+        #print(Z)
+        res_weights = np.exp(res_weights-Z)
+        print("final res weights", res_weights)
+        print("with sum: ", np.sum(res_weights))
+        #exit()
+        return np.asarray(res_y), res_weights, np.asarray(res_v)
+
+
 
     def update_hyperparameters(self, n = 1):
         try:
