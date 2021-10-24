@@ -89,11 +89,13 @@ class EnsembleGP():
         The constructor for the ensemblegp class.
         type help(GP) for more information about attributes, methods and their parameters
         """
+        self.input_space_dim = input_space_dim
         self.number_of_GPs = number_of_GPs
         self.hps_obj = hps_obj
         self.number_of_G_likelihoods = number_of_G_likelihoods
         self.init_weights = np.ones((number_of_GPs)) / float(number_of_GPs)
         self.points = points
+        self.compute_device = compute_device
         if values.ndim == 1: values = values.reshape(-1,1)
         if len(values[0]) == 1: values = np.tile(values,(1,number_of_GPs))
         self.values = values
@@ -108,17 +110,10 @@ class EnsembleGP():
         self.noise_w = noise_w
 
         if gp_kernel_functions is None: gp_kernel_functions = [None] * number_of_GPs
+        self.gp_kernel_functions = gp_kernel_functions
         if gp_mean_functions is None: gp_mean_functions = [None] * number_of_GPs
-        new_y,new_w,new_var = self._find_set_G()
+        self.gp_mean_functions = gp_mean_functions
 
-        #self.EnsembleGPs = [[GP(input_space_dim,points,self.values[:,i],hps_obj.hps[j],
-        #    variances = self.variances[:,i],compute_device = compute_device,
-        #                       gp_kernel_function = gp_kernel_functions[j],
-        #                       gp_mean_function = gp_mean_functions[j],
-        #                       sparse = sparse, normalize_y = normalize_y)
-        #                       for i in range(self.number_of_G_likelihoods)] for j in range(number_of_GPs)]
-        #print(self.EnsembleGPs)
-        #print("==========")
 
     def update_EnsembleGP_data(self, points, values, variances = None, noise_w = None):
         if values.ndim == 1: values = values.reshape(-1,1)
@@ -133,6 +128,171 @@ class EnsembleGP():
 
         for i in range(len(self.number_of_GPs)):
             self.EnsembleGPs[i].update_gp_data(points,values[:,i], variances = variances[:,i])
+    ############################################################################
+    ############################################################################
+    ########################finding G###########################################
+    ############################################################################
+    ############################################################################
+    ############################################################################
+    def find_set_G(self):
+        ###returns |G| mean vectors (y), covariance matrices and weights w^y
+        ln_w = np.log(self.noise_w)
+        max_ind = np.argmax(ln_w, axis = 1)   ###a 1 d array (len(weights)) of the largest index
+        new = [np.zeros((len(max_ind)))] * self.number_of_G_likelihoods
+        res_weights = []
+        res_v = []
+        res_y = []
+        W = []
+        #print(self.noise_w)
+        #print("==================")
+        for i in range(self.number_of_G_likelihoods):
+            sgn, logdet = np.linalg.slogdet(np.diag(self.noise_w[np.arange(self.noise_w.shape[0])[:, None], max_ind.reshape(-1,1)][:,0]))
+            res_weights.append(sgn * logdet)
+            res_y.append(self.values[np.arange(self.values.shape[0])[:, None], max_ind.reshape(-1,1)][:,0])
+            res_v.append(self.variances[np.arange(self.variances.shape[0])[:, None], max_ind.reshape(-1,1)][:,0])
+            change_ind = np.random.randint(0, high=len(max_ind)-1, size = 1, dtype=int)
+            n = [i for i in range(len(ln_w[0]))]
+            n.remove(max_ind[change_ind])
+            max_ind[change_ind] = choice(n)
+        #print(res_weights)
+        res_weights = np.asarray(res_weights)
+        index = np.argmax(res_weights)
+        #print("index ",index)
+        i = np.arange(len(res_weights)) != index
+        #print("i  ",i)
+        #print("exponent   ",res_weights[i]-res_weights[index])
+        Z = res_weights[index] + np.log(1.+np.sum(np.exp(res_weights[i]-res_weights[index])))
+        #print(Z)
+        res_weights = np.exp(res_weights-Z)
+        print("final res weights", res_weights)
+        print("with sum: ", np.sum(res_weights))
+        #exit()
+        return np.asarray(res_y), res_weights, np.asarray(res_v)
+
+
+    def data_generating_potential(self,vec):
+        """
+        definition: data_generating_potential(self,vec)
+        input: vec containing |D| * |G| means and covariances
+        output:
+        """
+        D = len(self.points)
+        G = self.number_of_G_likelihoods
+
+        weights = vec[0:G]
+        means = vec[G:G + (G * D)].reshape(D,G)
+        variances = vec[G + (G * D):].reshape(D,G)
+
+        res = 1000
+        norm = 0
+        y_lim = [np.min(means,axis = 1) - 3. * np.sqrt(np.max(variances,axis = 1)),np.max(means,axis = 1) + 3. * np.sqrt(np.max(variances,axis = 1))]
+        y = np.linspace(y_lim[0],y_lim[1],res)
+        dx = (y_lim[1] - y_lim[0]) / float(res)
+        for i in range(D):
+            Psi1 = np.subtract.outer(y[:,i],means[i])
+            Psi1 = np.exp(-0.5*(Psi1**2/variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * variances[np.newaxis,i,:])
+            Psi1 = weights[np.newaxis,:] * Psi1
+            g = np.sum(Psi1,axis = 1)
+
+            Psi2 = np.subtract.outer(y[:,i],self.values[i])
+            Psi2 = np.exp(-0.5*(Psi2**2/self.variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * self.variances[np.newaxis,i,:])
+            Psi2 = self.noise_w[np.newaxis,i,:] * Psi2
+            d = np.sum(Psi2,axis = 1)
+            norm += np.linalg.norm(g-d) * dx[i]
+
+        return norm
+
+
+    def data_generating_potential_gradient(self,vec):
+        """
+        definition: data_generating_potential(self,vec)
+        input: vec containing |D| * |G| means and covariances
+        output:
+        """
+        D = len(self.points)
+        G = self.number_of_G_likelihoods
+
+        weights = vec[0:G]
+        means = vec[G:G + (G * D)].reshape(D,G)
+        variances = vec[G + (G * D):].reshape(D,G)
+
+        res = 1000
+        norm = 0
+        y_lim = [np.min(means,axis = 1) - 3. * np.sqrt(np.max(variances,axis = 1)),np.max(means,axis = 1) + 3. * np.sqrt(np.max(variances,axis = 1))]
+        y = np.linspace(y_lim[0],y_lim[1],res)
+        dx = (y_lim[1] - y_lim[0]) / float(res)
+        for i in range(D):
+            Psi1 = np.subtract.outer(y[:,i],means[i])
+            Psi1 = np.exp(-0.5*(Psi1**2/variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * variances[np.newaxis,i,:])
+            Psi1 = weights[np.newaxis,:] * Psi1
+            g = np.sum(Psi1,axis = 1)
+
+            Psi2 = np.subtract.outer(y[:,i],self.values[i])
+            Psi2 = np.exp(-0.5*(Psi2**2/self.variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * self.variances[np.newaxis,i,:])
+            Psi2 = self.noise_w[np.newaxis,i,:] * Psi2
+            d = np.sum(Psi2,axis = 1)
+            norm += np.linalg.norm(g-d) * dx[i]
+
+        return norm
+
+
+
+    def optimize_set_G(self,vec, bounds):
+        def constraint(v):
+            return np.array(np.sum(v[0:self.number_of_G_likelihoods]))
+
+        x0 = np.array(vec)
+        nlc = NonlinearConstraint(constraint,0.9999,1.0)
+        #res = minimize(
+        #        self.data_generating_potential,x0,
+        #        method= "SLSQP",
+        #        bounds = bounds,
+        #        tol = 1e-6,
+        #        callback = None,
+        #        options = {"disp" : True},
+        #        constraints = (nlc))
+        res = differential_evolution(self.data_generating_potential, 
+                bounds, args=(), strategy='best1bin', maxiter=5, 
+                popsize=15, tol=0.01, mutation=(0.5, 1), 
+                recombination=0.7,
+                seed=None, callback=None, disp=True, polish=True, 
+                init='latinhypercube', atol=0,
+                updating='immediate', workers=1, constraints=(nlc), x0=None)
+        r = np.array(res["x"])
+
+        weights = r[0:G]
+        means = r[G:G + (G * D)].reshape(D,G)
+        variances = r[G + (G * D):].reshape(D,G)
+
+
+        return weights, means, variances
+
+
+
+    ############################################################################
+    ############################################################################
+    ############################################################################
+    ####################enGP init###############################################
+    ############################################################################
+    ############################################################################
+
+    def init_GPs(self, weights, vals, vs):
+        self.EnsembleGPs = [[GP(self.input_space_dim,self.points,self.vals[:,i],sef.hps_obj.hps[j],
+                             variances = vs[:,i],compute_device = self.compute_device,
+                               gp_kernel_function = self.gp_kernel_functions[j],
+                               gp_mean_function = self.gp_mean_functions[j],
+                               sparse = sparse, normalize_y = normalize_y)
+                               for i in range(self.number_of_G_likelihoods)] 
+                               for j in range(self.number_of_GPs)]
+        print("All GPs in the ensemble GP successfully initalized")
+        print(self.EnsembleGPs)
+        print("==================================================")
+
+    ############################################################################
+    ############################################################################
+    ############################################################################
+    ##########################Training##########################################
+    ############################################################################
     ############################################################################
     def stop_training(self):
         print("Ensemble fvGP is cancelling the asynchronous training...")
@@ -179,47 +339,11 @@ class EnsembleGP():
         self.hps_obj.set(weights,hps)
         print("new weights after training: ", self.hps_obj.weights)
         print("new hps     after training: ", self.hps_obj.hps)
-        for i in range(self.number_of_GPs): 
+        for i in range(self.nubhgg): 
             for j in range(self.number_of_GPs): 
                 self.EnsembleGPs[i][j].hyperparameters = self.hps_obj.hps[j]
         self.compute_prior_pdf()
         print("GPs updated")
-
-    def _find_set_G(self):
-        ###returns |G| mean vectors (y), covariance matrices and weights w^y
-        ln_w = np.log(self.noise_w)
-        max_ind = np.argmax(ln_w, axis = 1)   ###a 1 d array (len(weights)) of the largest index
-        new = [np.zeros((len(max_ind)))] * self.number_of_G_likelihoods
-        res_weights = []
-        res_v = []
-        res_y = []
-        W = []
-        #print(self.noise_w)
-        #print("==================")
-        for i in range(self.number_of_G_likelihoods):
-            sgn, logdet = np.linalg.slogdet(np.diag(self.noise_w[np.arange(self.noise_w.shape[0])[:, None], max_ind.reshape(-1,1)][:,0]))
-            res_weights.append(sgn * logdet)
-            res_y.append(self.values[np.arange(self.values.shape[0])[:, None], max_ind.reshape(-1,1)][:,0])
-            res_v.append(self.variances[np.arange(self.variances.shape[0])[:, None], max_ind.reshape(-1,1)][:,0])
-            change_ind = np.random.randint(0, high=len(max_ind)-1, size = 1, dtype=int)
-            n = [i for i in range(len(ln_w[0]))]
-            n.remove(max_ind[change_ind])
-            max_ind[change_ind] = choice(n)
-        #print(res_weights)
-        res_weights = np.asarray(res_weights)
-        index = np.argmax(res_weights)
-        #print("index ",index)
-        i = np.arange(len(res_weights)) != index
-        #print("i  ",i)
-        #print("exponent   ",res_weights[i]-res_weights[index])
-        Z = res_weights[index] + np.log(1.+np.sum(np.exp(res_weights[i]-res_weights[index])))
-        #print(Z)
-        res_weights = np.exp(res_weights-Z)
-        print("final res weights", res_weights)
-        print("with sum: ", np.sum(res_weights))
-        #exit()
-        return np.asarray(res_y), res_weights, np.asarray(res_v)
-
 
 
     def update_hyperparameters(self, n = 1):
@@ -229,7 +353,8 @@ class EnsembleGP():
             self.hps_obj.set(weights,hps)
             print("new weights after training: ", self.hps_obj.weights)
             print("new hps     after training: ", self.hps_obj.hps)
-            for i in range(self.number_of_GPs): self.EnsembleGPs[i].hyperparameters = self.hps_obj.hps[i]
+            print("HAVE TO UPDATE GPs")
+            #for i in range(self.number_of_GPs): self.EnsembleGPs[i].hyperparameters = self.hps_obj.hps[i]
             self.compute_prior_pdf()
             print("Ensemble fvGP async hyperparameter update successful")
         except Exception as e:
@@ -442,6 +567,7 @@ class EnsembleGP():
             pdfs.append(pdf/(np.sum(pdf)*((ub-lb)/float(res))))
         return {"f(x)": means, "v(x)":covs, "pdf": pdfs, "lb": lb, "ub": ub, "domain" : np.linspace(lb,ub,res)}
     ##########################################################
+
     def _Gaussian(self,mean,var,lower,upper,res):
         x = np.linspace(lower,upper,res)
         return np.exp(-np.power(x - mean, 2.) / (2. * np.power(var, 2.)))
