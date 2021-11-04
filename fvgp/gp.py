@@ -95,7 +95,8 @@ class GP():
         gp_kernel_function = None,
         gp_mean_function = None,
         sparse = False,
-        normalize_y = False
+        normalize_y = False,
+        use_inv = False
         ):
         """
         The constructor for the gp class.
@@ -112,6 +113,8 @@ class GP():
         self.data_y = np.array(values)
         self.compute_device = compute_device
         self.sparse = sparse
+        self.use_inv = use_inv
+        self.K_inv = None
         if self.normalize_y is True: self._normalize_y_data()
         ##########################################
         #######prepare variances##################
@@ -207,7 +210,7 @@ class GP():
     def kill_training(self,opt_obj):
         print("fvGP is killing asynchronous training....")
         try: opt_obj.kill_client(); print("fvGP successfully killed the training.")
-        except Exception as err: print("No asynchronous training to be killed, no training is running.", str(err))
+        except: print("No asynchronous training to be killed, no training is running.")
     ###################################################################################
     def train(self,
         hyperparameter_bounds,
@@ -541,53 +544,16 @@ class GP():
         output:
             hessian of the negative marginal log-likelihood (matrix)
         """
-        #raise Exception("Hessian not correct, please use the gradient to approximate the Hessian")
-        #mean = self.mean_function(self,self.data_x,hyperparameters)
-        #x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
-        #y = self.data_y - mean
-        #dK_dH = self.gradient_gp_kernel(self.data_x,self.data_x, hyperparameters)
-        #d2K_dH2 = self.hessian_gp_kernel(self.data_x,self.data_x, hyperparameters)
-        #K = np.array([K,] * len(hyperparameters))
-        #s = self.solve(K,dK_dH)
-        #ss = self.solve(K,d2K_dH2)
-        # make contiguous
-        #K = np.ascontiguousarray(K, dtype=np.float64)
-        #y = np.ascontiguousarray(y, dtype=np.float64)
-        #s = np.ascontiguousarray(s, dtype=np.float64)
-        #ss = np.ascontiguousarray(ss, dtype=np.float64)
-        #d2L_dH2 = self.numba_d2L_dH2(x, y, s, ss)
+        ##implemented as first-order approximation
         len_hyperparameters = len(hyperparameters)
-        #d2L_dH2 =  np.empty((len_hyperparameters,len_hyperparameters))
-        #d2L_dm2 =  np.empty((len_hyperparameters,len_hyperparameters))
-        #d2L_dmdh = np.empty((len_hyperparameters,len_hyperparameters))
         d2L_dmdh = np.zeros((len_hyperparameters,len_hyperparameters))
-        #d2m_dh2 = self.d2m_dh2(hyperparameters)
-        #m1 = self.dm_dh(hyperparameters)
         epsilon = 1e-6
         grad_at_hps = self.log_likelihood_gradient(hyperparameters)
         for i in range(len_hyperparameters):
-            #x1 = s[i]
             hps_temp = np.array(hyperparameters)
             hps_temp[i] = hps_temp[i] + epsilon
             d2L_dmdh[i,i:] = ((self.log_likelihood_gradient(hps_temp) - grad_at_hps)/epsilon)[i:]
-            #print(d2L_dmdh)
-        #i_lower = np.tril_indices(n, -1)
-        #matrix[i_lower] = matrix.T[i_lower]  # make the matrix symmetric
-            #for j in range(i+1):
-                #x2 = s[j]
-                #x3 = ss[i,j]
-                #f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
-                #d2L_dH2[i,j] = d2L_dH2[j,i] = f
-                #d2L_dm2[i,j] = d2L_dm2[j,i] = (m1[i,:].T @ np.linalg.inv(K[0]) @ m1[j,:]) - (x.T @ d2m_dh2[i,j])
-                #d2L_dmdh[i,j] = d2L_dmdh[j,i] = (x @ x2 @ m1[i,:])
-                #hps_temp1 = np.array(hyperparameters)
-                #hps_temp2 = np.array(hyperparameters)
-                #hps_temp1[i] = hps_temp1[i] + epsilon
-                #hps_temp2[j] = hps_temp2[j] + epsilon
-                #d2L_dmdh[i,j] = d2L_dmdh[j,i] = self.log_likelihood_gradient(hps_temp)
-
         return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
-        #return -d2L_dH2 - d2L_dm2 + d2L_dmdh
     ##################################################################################
     ##################################################################################
     ##################################################################################
@@ -613,12 +579,15 @@ class GP():
                 self.variances,
                 self.prior_mean_vec)
         self.prior_covariance = K
+        if self.use_inv is True: self.K_inv = self.inv(K)
         self.covariance_value_prod = cov_y
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean):
         K = self.compute_covariance(hyperparameters, variances)
         y = values - mean
         x = self.solve(K, y)
+        #if self.use_inv is True: x = self.K_inv @ y
+        #else: x = self.solve(K, y)
         if x.ndim == 2: x = x[:,0]
         return x,K
     ##################################################################################
@@ -649,6 +618,11 @@ class GP():
             logdet = logdet.cpu().numpy()
             logdet = np.nan_to_num(logdet)
             return sign, logdet
+
+    def inv(self, A):
+            A = torch.from_numpy(A)
+            B = torch.inverse(A)
+            return B.numpy()
 
     def solve(self, A, b):
         """
@@ -797,7 +771,7 @@ class GP():
                 "df/dx": posterior_mean_grad}
 
     ###########################################################################
-    def posterior_covariance(self, x_iset):
+    def posterior_covariance(self, x_iset, variance_only = False):
         """
         function to compute the posterior covariance
         input:
@@ -816,23 +790,28 @@ class GP():
 
         k = self.kernel(self.data_x,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
-        k_cov_prod = self.solve(self.prior_covariance,k)
-        a = kk - (k_cov_prod.T @ k)
-        diag = np.diag(a)
-        diag = np.where(diag<0.0,0.0,diag)
-        if any([x < -0.001 for x in np.diag(a)]):
+        if self.use_inv is True:
+            if variance_only is True: v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.K_inv, k); S = False
+            if variance_only is False:  S = kk - (k.T @ self.K_inv @ k); v = np.diag(S)
+        else:
+            k_cov_prod = self.solve(self.prior_covariance,k)
+            S = kk - (k_cov_prod.T @ k)
+            v = np.diag(S)
+        if np.any(v < -0.001):
             print("In fvGP: CAUTION, negative variances encountered. That normally means that the model is unstable.")
             print("Rethink the kernel definitions, add more noise to the data,")
             print("or double check the hyperparameter optimization bounds. This will not ")
             print("terminate the algorithm, but expect anomalies.")
-            print("diagonal of the posterior covariance: ",np.diag(a))
+            print("diagonal of the posterior covariance: ",v)
             p = np.block([[self.prior_covariance, k],[k.T, kk]])
             print("eigenvalues of the prior: ", np.linalg.eig(p)[0])
+            i = np.where(v < 0.0)
+            v[i] = 0.0
+            if S is not False: S = np.fill_diagonal(S,v)
 
-        np.fill_diagonal(a,diag)
         return {"x": p,
-                "v(x)": np.diag(a),
-                "S(x)": a}
+                "v(x)": v,
+                "S(x)": S}
 
     def posterior_covariance_grad(self, x_iset,direction):
         """

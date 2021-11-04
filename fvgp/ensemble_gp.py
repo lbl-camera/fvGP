@@ -30,7 +30,7 @@ Contact: MarcusNoack@lbl.gov
 from fvgp.gp import GP
 from hgdl.hgdl import HGDL
 import numpy as np
-from scipy.optimize import NonlinearConstraint,differential_evolution
+from scipy.optimize import LinearConstraint,differential_evolution
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from random import choice
@@ -78,7 +78,7 @@ class EnsembleGP():
         number_of_G_likelihoods,
         hps_obj,
         variances = None,
-        noise_w = None,
+        weights_d = None,
         compute_device = "cpu",
         gp_kernel_functions = None,
         gp_mean_functions = None,
@@ -95,6 +95,8 @@ class EnsembleGP():
         self.number_of_G_likelihoods = number_of_G_likelihoods
         self.init_weights = np.ones((number_of_GPs)) / float(number_of_GPs)
         self.points = points
+        self.sparse = sparse
+        self.normalize_y = normalize_y
         self.compute_device = compute_device
         if values.ndim == 1: values = values.reshape(-1,1)
         if len(values[0]) == 1: values = np.tile(values,(1,number_of_GPs))
@@ -104,10 +106,10 @@ class EnsembleGP():
         if len(variances[0]) == 1: variances = np.tile(variances,(1,number_of_GPs))
         self.variances = variances
 
-        if noise_w is None: noise_w = np.zeros(values.shape) + 1./float(number_of_GPs)
-        if noise_w.ndim == 1: noise_w = noise_w.reshape(-1,1)
-        if len(noise_w[0]) == 1: noise_w = np.zeros(values.shape) + 1./float(number_of_GPs)
-        self.noise_w = noise_w
+        if weights_d is None: weights_d = np.zeros(values.shape) + 1./float(number_of_GPs)
+        if weights_d.ndim == 1: weights_d = weights_d.reshape(-1,1)
+        if len(weights_d[0]) == 1: weights_d = np.zeros(values.shape) + 1./float(number_of_GPs)
+        self.weights_d = weights_d
 
         if gp_kernel_functions is None: gp_kernel_functions = [None] * number_of_GPs
         self.gp_kernel_functions = gp_kernel_functions
@@ -115,19 +117,6 @@ class EnsembleGP():
         self.gp_mean_functions = gp_mean_functions
 
 
-    def update_EnsembleGP_data(self, points, values, variances = None, noise_w = None):
-        if values.ndim == 1: values = values.reshape(-1,1)
-        if len(values[0]) == 1: values = np.tile(values,(1,number_of_GPs))
-        if variances is None: variances = np.zeros(values.shape) + abs(np.mean(values)/100.)
-        if variances.ndim == 1: variances = variances.reshape(-1,1)
-        if len(variances[0]) == 1: variances = np.tile(variances,(1,number_of_GPs))
-        if noise_w is None: noise_w = np.zeros(values.shape) + 1./float(number_of_GPs)
-        if noise_w.ndim == 1: noise_w = noise_w.reshape(-1,1)
-        if len(noise_w[0]) == 1: noise_w = np.zeros(values.shape) + 1./float(number_of_GPs)
-        self.noise_w = noise_w
-
-        for i in range(len(self.number_of_GPs)):
-            self.EnsembleGPs[i].update_gp_data(points,values[:,i], variances = variances[:,i])
     ############################################################################
     ############################################################################
     ########################finding G###########################################
@@ -136,17 +125,15 @@ class EnsembleGP():
     ############################################################################
     def find_set_G(self):
         ###returns |G| mean vectors (y), covariance matrices and weights w^y
-        ln_w = np.log(self.noise_w)
+        ln_w = np.log(self.weights_d)
         max_ind = np.argmax(ln_w, axis = 1)   ###a 1 d array (len(weights)) of the largest index
         new = [np.zeros((len(max_ind)))] * self.number_of_G_likelihoods
         res_weights = []
         res_v = []
         res_y = []
         W = []
-        #print(self.noise_w)
-        #print("==================")
         for i in range(self.number_of_G_likelihoods):
-            sgn, logdet = np.linalg.slogdet(np.diag(self.noise_w[np.arange(self.noise_w.shape[0])[:, None], max_ind.reshape(-1,1)][:,0]))
+            sgn, logdet = np.linalg.slogdet(np.diag(self.weights_d[np.arange(self.weights_d.shape[0])[:, None], max_ind.reshape(-1,1)][:,0]))
             res_weights.append(sgn * logdet)
             res_y.append(self.values[np.arange(self.values.shape[0])[:, None], max_ind.reshape(-1,1)][:,0])
             res_v.append(self.variances[np.arange(self.variances.shape[0])[:, None], max_ind.reshape(-1,1)][:,0])
@@ -154,19 +141,13 @@ class EnsembleGP():
             n = [i for i in range(len(ln_w[0]))]
             n.remove(max_ind[change_ind])
             max_ind[change_ind] = choice(n)
-        #print(res_weights)
         res_weights = np.asarray(res_weights)
         index = np.argmax(res_weights)
-        #print("index ",index)
         i = np.arange(len(res_weights)) != index
-        #print("i  ",i)
-        #print("exponent   ",res_weights[i]-res_weights[index])
         Z = res_weights[index] + np.log(1.+np.sum(np.exp(res_weights[i]-res_weights[index])))
-        #print(Z)
         res_weights = np.exp(res_weights-Z)
         print("final res weights", res_weights)
         print("with sum: ", np.sum(res_weights))
-        #exit()
         return np.asarray(res_y), res_weights, np.asarray(res_v)
 
 
@@ -179,7 +160,7 @@ class EnsembleGP():
         D = len(self.points)
         G = self.number_of_G_likelihoods
 
-        weights = vec[0:G]
+        weights = vec[0:G]/np.sum(vec[0:G])
         means = vec[G:G + (G * D)].reshape(D,G)
         variances = vec[G + (G * D):].reshape(D,G)
 
@@ -196,7 +177,7 @@ class EnsembleGP():
 
             Psi2 = np.subtract.outer(y[:,i],self.values[i])
             Psi2 = np.exp(-0.5*(Psi2**2/self.variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * self.variances[np.newaxis,i,:])
-            Psi2 = self.noise_w[np.newaxis,i,:] * Psi2
+            Psi2 = self.weights_d[np.newaxis,i,:] * Psi2
             d = np.sum(Psi2,axis = 1)
             norm += np.linalg.norm(g-d) * dx[i]
 
@@ -212,7 +193,7 @@ class EnsembleGP():
         D = len(self.points)
         G = self.number_of_G_likelihoods
 
-        weights = vec[0:G]
+        weights = vec[0:G]/np.sum(vec[0:G])
         means = vec[G:G + (G * D)].reshape(D,G)
         variances = vec[G + (G * D):].reshape(D,G)
 
@@ -229,7 +210,7 @@ class EnsembleGP():
 
             Psi2 = np.subtract.outer(y[:,i],self.values[i])
             Psi2 = np.exp(-0.5*(Psi2**2/self.variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * self.variances[np.newaxis,i,:])
-            Psi2 = self.noise_w[np.newaxis,i,:] * Psi2
+            Psi2 = self.weights_d[np.newaxis,i,:] * Psi2
             d = np.sum(Psi2,axis = 1)
             norm += np.linalg.norm(g-d) * dx[i]
 
@@ -237,12 +218,16 @@ class EnsembleGP():
 
 
 
-    def optimize_set_G(self,vec, bounds):
+    def optimize_set_G(self,vec, bounds, popsize = 10, maxiter = 10, tol = 0.001):
         def constraint(v):
-            return np.array(np.sum(v[0:self.number_of_G_likelihoods]))
+            return np.array(np.sum(v[0:self.number_of_g_likelihoods]))
 
         x0 = np.array(vec)
-        nlc = NonlinearConstraint(constraint,0.9999,1.0)
+        constraint = np.zeros((len(vec),len(vec)))
+        constraint[0:self.number_of_G_likelihoods, 0:self.number_of_G_likelihoods] = np.identity(self.number_of_G_likelihoods)
+        nlc = LinearConstraint(constraint,0.9,1.0)
+        G = self.number_of_G_likelihoods
+        D = len(self.points)
         #res = minimize(
         #        self.data_generating_potential,x0,
         #        method= "SLSQP",
@@ -252,17 +237,25 @@ class EnsembleGP():
         #        options = {"disp" : True},
         #        constraints = (nlc))
         res = differential_evolution(self.data_generating_potential, 
-                bounds, args=(), strategy='best1bin', maxiter=5, 
-                popsize=15, tol=0.01, mutation=(0.5, 1), 
+                bounds, args=(), strategy='best1bin', maxiter=maxiter,
+                popsize=popsize, tol=tol, mutation=(0.5, 1), 
                 recombination=0.7,
                 seed=None, callback=None, disp=True, polish=True, 
                 init='latinhypercube', atol=0,
-                updating='immediate', workers=1, constraints=(nlc), x0=None)
+                updating='immediate', workers=1, constraints=(), x0=None)
         r = np.array(res["x"])
 
-        weights = r[0:G]
-        means = r[G:G + (G * D)].reshape(D,G)
-        variances = r[G + (G * D):].reshape(D,G)
+        print("result")
+        print(r)
+        print("------------")
+
+        weights = r[0:G]/np.sum(r[0:G])
+        means = r[G:G + (G * D)].reshape(G,D).T
+        variances = r[G + (G * D):].reshape(G,D).T
+
+        self.weights_y = weights
+        self.means_y = means
+        self.variances_y = variances
 
 
         return weights, means, variances
@@ -277,16 +270,35 @@ class EnsembleGP():
     ############################################################################
 
     def init_GPs(self, weights, vals, vs):
-        self.EnsembleGPs = [[GP(self.input_space_dim,self.points,self.vals[:,i],sef.hps_obj.hps[j],
+        self.EnsembleGPs = np.empty((self.number_of_G_likelihoods,self.number_of_GPs), dtype = object)
+        for i in range(self.number_of_G_likelihoods):
+            for j in range(self.number_of_GPs):
+                self.EnsembleGPs[i,j] = GP(self.input_space_dim,self.points,vals[:,i],self.hps_obj.hps[j],
                              variances = vs[:,i],compute_device = self.compute_device,
                                gp_kernel_function = self.gp_kernel_functions[j],
                                gp_mean_function = self.gp_mean_functions[j],
-                               sparse = sparse, normalize_y = normalize_y)
-                               for i in range(self.number_of_G_likelihoods)] 
-                               for j in range(self.number_of_GPs)]
+                               sparse = self.sparse, normalize_y = self.normalize_y)
         print("All GPs in the ensemble GP successfully initalized")
         print(self.EnsembleGPs)
         print("==================================================")
+    
+    #def update_EnsembleGP_data(self, points, values, variances = None, weights_d = None):
+    #    if values.ndim == 1: values = values.reshape(-1,1)
+    #    if len(values[0]) == 1: values = np.tile(values,(1,number_of_GPs))
+    #    if variances is None: variances = np.zeros(values.shape) + abs(np.mean(values)/100.)
+    #    if variances.ndim == 1: variances = variances.reshape(-1,1)
+    #    if len(variances[0]) == 1: variances = np.tile(variances,(1,number_of_GPs))
+    #    if weights_d is None: weights_d = np.zeros(values.shape) + 1./float(number_of_GPs)
+    #    if weights_d.ndim == 1: weights_d = weights_d.reshape(-1,1)
+    #    if len(weights_d[0]) == 1: weights_d = np.zeros(values.shape) + 1./float(number_of_GPs)
+    #    self.weights_d = weights_d
+        
+    #    #####find new likelihood here
+    #    raise Exception("not implemented yet")
+    #    #####update GPs
+    #    for i in range(self.number_of_G_likelihoods):
+    #        for j in range(self.number_of_GPs):
+    #            self.EnsembleGPs[i,j].update_gp_data(points,values[:,i], variances = variances[:,i])
 
     ############################################################################
     ############################################################################
@@ -339,9 +351,9 @@ class EnsembleGP():
         self.hps_obj.set(weights,hps)
         print("new weights after training: ", self.hps_obj.weights)
         print("new hps     after training: ", self.hps_obj.hps)
-        for i in range(self.nubhgg): 
-            for j in range(self.number_of_GPs): 
-                self.EnsembleGPs[i][j].hyperparameters = self.hps_obj.hps[j]
+        for i in range(self.number_of_G_likelihoods):
+            for j in range(self.number_of_GPs):
+                self.EnsembleGPs[i,j].hyperparameters = self.hps_obj.hps[j]
         self.compute_prior_pdf()
         print("GPs updated")
 
@@ -453,10 +465,16 @@ class EnsembleGP():
             negative marginal log-likelihood (scalar)
         """
         weights, hps = self.hps_obj.devectorize_hps(v)
-        A = np.empty((self.number_of_GPs,self.number_of_GPs))
-        for i in range(self.number_of_GPs):
+        A = np.empty((self.number_of_G_likelihoods,self.number_of_GPs))
+        #print("|G| :  ",self.number_of_G_likelihoods)
+        #print("|GPs|: ",self.number_of_GPs)
+        #print("len(weights GP):", len(weights))
+        #print("len(w_y):       ", len(self.weights_y))
+        #print("hps: ",hps)
+        #print("enGPs: ", self.EnsembleGPs)
+        for i in range(self.number_of_G_likelihoods):
             for j in range(self.number_of_GPs):
-                A[i,j] = np.log(weights[i]*self.noise_w[0,j]) - self.EnsembleGPs[i][j].log_likelihood(hps[j])
+                A[i,j] = np.log(weights[j] * self.weights_y[i]) - self.EnsembleGPs[i,j].log_likelihood(hps[j])
 
         A = A.flatten()
         k = np.argmax(A)
@@ -544,15 +562,25 @@ class EnsembleGP():
         #return -w_hess, h_hess
     ##########################################################
     def compute_prior_pdf(self):
-        for i in range(self.number_of_GPs):
+        for i in range(self.number_of_G_likelihoods):
             for j in range(self.number_of_GPs):
-                self.EnsembleGPs[i][j].compute_prior_fvGP_pdf()
-
-    ##########################################################
+                self.EnsembleGPs[i,j].compute_prior_fvGP_pdf()
+    ############################################################################
+    ############################################################################
+    ############################################################################
+    ##########################Posterior#########################################
+    ############################################################################
+    ############################################################################
     def posterior(self,x_iset, res = 100, lb = None, ub = None):
-        means = [[self.EnsembleGPs[i][j].posterior_mean(x_iset)["f(x)"] for i in range(self.number_of_GPs)] for j in range(self.number_of_GPs)]
-
-        covs  = [[self.EnsembleGPs[i][j].posterior_covariance(x_iset)["v(x)"] for i in range(self.number_of_GPs)] for j in range(self.number_of_GPs)]
+        means = np.zeros((self.number_of_G_likelihoods,self.number_of_GPs,len(x_iset)))
+        covs = np.zeros((self.number_of_G_likelihoods,self.number_of_GPs,len(x_iset)))
+        for i in range(self.number_of_G_likelihoods):
+            for j in range(self.number_of_GPs):
+                means[i,j,:] = self.EnsembleGPs[i,j].posterior_mean(x_iset)["f(x)"]
+                covs[i,j,:]  = self.EnsembleGPs[i,j].posterior_covariance(x_iset)["v(x)"]
+                #try: plt.plot(np.linspace(-3,3,res),means[i,j,:])
+                #try: plt.errorbar(self.EnsembleGPs[i,j].data_x,self.EnsembleGPs[i,j].data_y, yerr=self.EnsembleGPs[i,j].variances, fmt="o", color = 'black')
+        #try: plt.show()
         means = np.array(means)
         covs = np.array(covs)
         if lb == None: lb = np.min(means - 3.0 * np.sqrt(covs))
@@ -561,17 +589,24 @@ class EnsembleGP():
         pdfs = []
         for i in range(len(x_iset)):
             pdf = np.zeros((res))
-            for j in range(self.number_of_GPs):
+            for j in range(self.number_of_G_likelihoods):
                 for k in range(self.number_of_GPs):
-                    pdf += self.hps_obj.weights[j] * self._Gaussian(means[k,j,i],covs[k,j,i],lb,ub, res)
+                    pdf += self.hps_obj.weights[k] * self._Gaussian(means[j,k,i],covs[j,k,i],lb,ub, res)
             pdfs.append(pdf/(np.sum(pdf)*((ub-lb)/float(res))))
         return {"f(x)": means, "v(x)":covs, "pdf": pdfs, "lb": lb, "ub": ub, "domain" : np.linspace(lb,ub,res)}
     ##########################################################
 
     def _Gaussian(self,mean,var,lower,upper,res):
         x = np.linspace(lower,upper,res)
-        return np.exp(-np.power(x - mean, 2.) / (2. * np.power(var, 2.)))
+        if var < 1e-6: print("CAUTION: var <= 0: ", var)
+        return np.exp(-np.power(x - mean, 2.) / (2. * var))
 
+    ############################################################################
+    ############################################################################
+    ############################################################################
+    ##########################HP Class##########################################
+    ############################################################################
+    ############################################################################
 
 class hyperparameters():
     """

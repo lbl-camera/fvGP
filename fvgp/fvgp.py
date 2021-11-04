@@ -101,7 +101,7 @@ class fvGP(GP):
         compute_device = "cpu",
         gp_kernel_function = None,
         gp_mean_function = None,
-        sparse = False,
+        sparse = False, use_inv = False,
         normalize_y = False
         ):
         """
@@ -139,7 +139,7 @@ class fvGP(GP):
         GP.__init__(self,self.iset_dim, self.data_x,self.data_y,init_hyperparameters,
                 variances = self.variances,compute_device = compute_device,
                 gp_kernel_function = gp_kernel_function, gp_mean_function = gp_mean_function,
-                sparse = sparse, normalize_y = normalize_y)
+                sparse = sparse, use_inv = use_inv, normalize_y = normalize_y)
 
         self.hyperparameters = np.array(init_hyperparameters)
         ##########################################
