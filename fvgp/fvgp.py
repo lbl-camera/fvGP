@@ -42,7 +42,6 @@ from .mcmc import mcmc
 import itertools
 import time
 import torch
-import numba as nb
 from functools import partial
 from fvgp.gp import GP
 

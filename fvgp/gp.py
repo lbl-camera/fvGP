@@ -42,7 +42,6 @@ from .mcmc import mcmc
 import itertools
 import time
 import torch
-import numba as nb
 from functools import partial
 from hgdl.hgdl import HGDL
 
@@ -484,14 +483,6 @@ class GP():
         if sign == 0.0: return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
         return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
-    @staticmethod
-    @nb.njit
-    def numba_dL_dH(y, a, b, length):
-        dL_dH = np.empty((length))
-        for i in range(length):
-                dL_dH[i] = 0.5 * ((y.T @ (a[i] @ b)) - (np.trace(a[i])))
-        return dL_dH
-    ##################################################################################
     def log_likelihood_gradient(self, hyperparameters):
         """
         computes the gradient of the negative marginal log-likelihood
@@ -508,7 +499,6 @@ class GP():
         K = np.array([K,] * len(hyperparameters))
         a = self.solve(K,dK_dH)
         bbT = np.outer(b , b.T)
-        #dL_dH = self.numba_dL_dH(y, a, b, len(hyperparameters))
         dL_dH = np.zeros((len(hyperparameters)))
         dL_dHm = np.zeros((len(hyperparameters)))
         dm_dh = self.dm_dh(hyperparameters)
@@ -521,20 +511,6 @@ class GP():
                 dL_dH[i] = 0.0
         return dL_dH + dL_dHm
 
-    ##################################################################################
-    @staticmethod
-    @nb.njit
-    def numba_d2L_dH2(x, y, s, ss):
-        len_hyperparameters = s.shape[0]
-        d2L_dH2 = np.empty((len_hyperparameters,len_hyperparameters))
-        for i in range(len_hyperparameters):
-            x1 = s[i]
-            for j in range(i+1):
-                x2 = s[j]
-                x3 = ss[i,j]
-                f = 0.5 * ((y.T @ (-x2 @ x1 @ x - x1 @ x2 @ x + x3 @ x)) - np.trace(-x2 @ x1 + x3))
-                d2L_dH2[i,j] = d2L_dH2[j,i] = f
-        return d2L_dH2
     ##################################################################################
     def log_likelihood_hessian(self, hyperparameters):
         """
