@@ -151,7 +151,7 @@ class EnsembleGP():
         return np.asarray(res_y), res_weights, np.asarray(res_v)
 
 
-    def data_generating_potential(self,vec):
+    def data_generating_potential(self,vec, plot = False):
         """
         definition: data_generating_potential(self,vec)
         input: vec containing |D| * |G| means and covariances
@@ -166,20 +166,68 @@ class EnsembleGP():
 
         res = 1000
         norm = 0
-        y_lim = [np.min(means,axis = 1) - 3. * np.sqrt(np.max(variances,axis = 1)),np.max(means,axis = 1) + 3. * np.sqrt(np.max(variances,axis = 1))]
-        y = np.linspace(y_lim[0],y_lim[1],res)
-        dx = (y_lim[1] - y_lim[0]) / float(res)
+        y_lim = np.array([np.min(means,axis = 1) - 3. * np.sqrt(np.max(variances,axis = 1)),np.max(means,axis = 1) + 3. * np.sqrt(np.max(variances,axis = 1))]).T
+        y = np.linspace(y_lim[:,0],y_lim[:,1],res).T
+        dx = (y_lim[:,1] - y_lim[:,0]) / float(res)
         for i in range(D):
-            Psi1 = np.subtract.outer(y[:,i],means[i])
+            Psi1 = np.subtract.outer(y[i],means[i])
             Psi1 = np.exp(-0.5*(Psi1**2/variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * variances[np.newaxis,i,:])
             Psi1 = weights[np.newaxis,:] * Psi1
             g = np.sum(Psi1,axis = 1)
 
-            Psi2 = np.subtract.outer(y[:,i],self.values[i])
+            Psi2 = np.subtract.outer(y[i],self.values[i])
             Psi2 = np.exp(-0.5*(Psi2**2/self.variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * self.variances[np.newaxis,i,:])
             Psi2 = self.weights_d[np.newaxis,i,:] * Psi2
             d = np.sum(Psi2,axis = 1)
             norm += np.linalg.norm(g-d) * dx[i]
+            if plot  is True:
+                plt.plot(y[i],g, label = "g")
+                plt.plot(y[i],d, label = "data")
+                plt.legend()
+                plt.show()
+            #input()
+
+        return norm
+
+    def data_generating_potential2(self,vec, plot = False):
+        """
+        definition: data_generating_potential(self,vec)
+        input: vec containing |D| * |G| means and covariances
+        output:
+        """
+        D = len(self.points)
+        G = self.number_of_G_likelihoods
+
+        weights = vec[0:G]/np.sum(vec[0:G])
+        means = vec[G:G + (G * D)].reshape(D,G)
+        variances = vec[G + (G * D):].reshape(D,G)
+
+        res = 1000
+        norm = 0
+        y_lim = np.array([np.min(means,axis = 1) - 3. * np.sqrt(np.max(variances,axis = 1)),np.max(means,axis = 1) + 3. * np.sqrt(np.max(variances,axis = 1))]).T
+        y = np.linspace(y_lim[:,0],y_lim[:,1],res).T
+        dx = (y_lim[:,1] - y_lim[:,0]) / float(res)
+
+        Psi1 = 1.
+        g = np.exp(-0.5*(Psi1**2/variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * variances[np.newaxis,i,:])
+
+        #for i in range(D):
+        #    Psi1 = np.subtract.outer(y[i],means[i])
+        #    Psi1 = np.exp(-0.5*(Psi1**2/variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * variances[np.newaxis,i,:])
+        #    Psi1 = weights[np.newaxis,:] * Psi1
+        #    g = np.sum(Psi1,axis = 1)
+
+        #    Psi2 = np.subtract.outer(y[i],self.values[i])
+        #    Psi2 = np.exp(-0.5*(Psi2**2/self.variances[np.newaxis,i,:]))/np.sqrt(2.* np.pi * self.variances[np.newaxis,i,:])
+        #    Psi2 = self.weights_d[np.newaxis,i,:] * Psi2
+        #    d = np.sum(Psi2,axis = 1)
+        #    norm += np.linalg.norm(g-d) * dx[i]
+        #    if plot  is True:
+        #        plt.plot(y[i],g, label = "g")
+        #        plt.plot(y[i],d, label = "data")
+        #        plt.legend()
+        #        plt.show()
+        #    #input()
 
         return norm
 
@@ -253,9 +301,6 @@ class EnsembleGP():
         means = r[G:G + (G * D)].reshape(G,D).T
         variances = r[G + (G * D):].reshape(G,D).T
 
-        self.weights_y = weights
-        self.means_y = means
-        self.variances_y = variances
 
 
         return weights, means, variances
@@ -278,6 +323,10 @@ class EnsembleGP():
                                gp_kernel_function = self.gp_kernel_functions[j],
                                gp_mean_function = self.gp_mean_functions[j],
                                sparse = self.sparse, normalize_y = self.normalize_y)
+        self.weights_y = weights
+        self.means_y = vals
+        self.variances_y = vs
+
         print("All GPs in the ensemble GP successfully initalized")
         print(self.EnsembleGPs)
         print("==================================================")
@@ -348,6 +397,8 @@ class EnsembleGP():
             pop_size,
             tolerance
             )
+
+        weights = weights/np.sum(weights)
         self.hps_obj.set(weights,hps)
         print("new weights after training: ", self.hps_obj.weights)
         print("new hps     after training: ", self.hps_obj.hps)
@@ -465,6 +516,7 @@ class EnsembleGP():
             negative marginal log-likelihood (scalar)
         """
         weights, hps = self.hps_obj.devectorize_hps(v)
+        weights = weights/np.sum(weights)
         A = np.empty((self.number_of_G_likelihoods,self.number_of_GPs))
         #print("|G| :  ",self.number_of_G_likelihoods)
         #print("|GPs|: ",self.number_of_GPs)
