@@ -46,9 +46,9 @@ from functools import partial
 from hgdl.hgdl import HGDL
 
 
-class GPhgdl():
+class gpHGDL():
     """
-    GP class: Provides all tool for a single-task GP.
+    gpHGDL class: Provides all tool for a single-task GP tuned for HGDL optimization.
 
     symbols:
         N: Number of points in the data set
@@ -135,7 +135,7 @@ class GPhgdl():
             self.variances = torch.tensor(variances, dtype = float, requires_grad = True)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
-        if (self.variances < 0.0).any(): raise Exception("Negative measurement variances communicated to fvgp.")
+        if len(self.variances[self.variances < 0]) > 0: raise Exception("Negative measurement variances communicated to fvgp.")
         ##########################################
         #######define kernel and mean function####
         ##########################################
@@ -191,22 +191,26 @@ class GPhgdl():
             raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(values) == 2: values = values[:,0]
 
-        self.x_data = np.array(points)
+        self.x_data = torch.tensor(points, dtype = float, requires_grad = True)
         self.point_number = len(self.x_data)
-        self.y_data = np.array(values)
+        self.y_data = torch.tensor(values, dtype = float, requires_grad = True)
+
         if self.normalize_y is True: self._normalize_y_data()
         ##########################################
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((self.y_data.shape)) * abs(self.y_data / 100.0)
-        elif np.ndim(variances) == 2:
+            self.variances = torch.ones((self.y_data.shape), dtype = float, requires_grad = True) * abs(self.y_data / 100.0)
+            print("CAUTION: you have not provided data variances in fvGP,")
+            print("they will be set to 1 percent of the data values!")
+        elif variances.dim() == 2:
             self.variances = variances[:,0]
-        elif np.ndim(variances) == 1:
-            self.variances = np.array(variances)
+        elif variances.dim() == 1:
+            self.variances = torch.tensor(variances, dtype = float, requires_grad = True)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
-        if (self.variances < 0.0).any(): raise Exception("Negative measurement variances communicated to fvgp.")
+
+        if len(self.variances[self.variances < 0]) > 0: raise Exception("Negative measurement variances communicated to fvgp.")
         ######################################
         #####transform to index set###########
         ######################################
@@ -282,7 +286,8 @@ class GPhgdl():
         try:
             res = opt_obj.get_latest(1)["x"][0]
             l_n = self.log_likelihood(res)
-            l_o = self.log_likelihood(self.hyperparameters)
+            l_o = self.log_likelihood_torch(self.hyperparameters).detach().numpy()
+            print("see this")
             if l_n - l_o < 0.000001:
                 self.hyperparameters = torch.tensor(res, dtype = float)
                 self.compute_prior_fvGP_pdf()
@@ -346,7 +351,14 @@ class GPhgdl():
         return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
     def log_likelihood_gradient(self, hyperparameters):
+        #print("asking for grad at:",hyperparameters, flush = True)
         res = self.log_likelihood_gradient_torch(torch.tensor(hyperparameters, dtype = float))
+        #print("res autograd", flush = True)
+        #print(res, flush = True)
+        #print("res fd", flush = True)
+        #print(self.df_dx(hyperparameters,self.log_likelihood), flush = True)
+        #print("===============", flush = True)
+        #return self.df_dx(hyperparameters,self.log_likelihood)
         return res.detach().numpy()
 
     def log_likelihood_gradient_torch(self, hyperparameters, autograd = True):
@@ -390,13 +402,14 @@ class GPhgdl():
     def log_likelihood_hessian(self, hyperparameters):
         #print("asking for hess at:",hyperparameters, flush = True)
         res = self.log_likelihood_hessian_torch(torch.tensor(hyperparameters, dtype = float))
-        print("res autograd", flush = True)
-        print(res, flush = True)
-        print("res fd", flush = True)
-        print(self.d2f_dx2(hyperparameters,self.log_likelihood), flush = True)
-        print("===============", flush = True)
-
-        return res.detach().numpy()
+        #print("res autograd", flush = True)
+        #print(res, flush = True)
+        #print("res fd", flush = True)
+        #print(self.d2f_dx2(hyperparameters,self.log_likelihood), flush = True)
+        #print("===============", flush = True)
+        result = (res.detach().numpy() + res.detach().numpy().T)/2.0
+        #return (self.d2f_dx2(hyperparameters,self.log_likelihood) + self.d2f_dx2(hyperparameters,self.log_likelihood).T)/2.
+        return result
 
     def log_likelihood_hessian_torch(self, hyperparameters, autograd = True):
         """
@@ -576,9 +589,8 @@ class GPhgdl():
             {"x":    the input points,
              "f(x)": the posterior mean vector (1d numpy array)}
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        p = torch.tensor(x_iset, dtype = float)
+        if p.dim() == 1: p = p[None, :]
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
         posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
@@ -1074,7 +1086,7 @@ class GPhgdl():
         -------
             a structure of the she shape of the distance input parameter
         """
-        kernel = np.exp(-(distance ** 2) / (2.0 * (length ** 2)))
+        kernel = torch.exp(-(distance ** 2) / (2.0 * (length ** 2)))
         return kernel
 
 
@@ -1109,7 +1121,7 @@ class GPhgdl():
             a structure of the she shape of the distance input parameter
         """
 
-        kernel = np.exp(-(distance) / (length))
+        kernel = torch.exp(-(distance) / (length))
         return kernel
 
     def exponential_kernel_robust(self, distance, phi):
@@ -1127,7 +1139,7 @@ class GPhgdl():
             a structure of the she shape of the distance input parameter
         """
 
-        kernel = np.exp(-(distance) * (phi**2))
+        kernel = torch.exp(-(distance) * (phi**2))
         return kernel
 
 
@@ -1145,7 +1157,7 @@ class GPhgdl():
             a structure of the she shape of the distance input parameter
         """
 
-        kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
+        kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * torch.exp(
             -(np.sqrt(3.0) * distance) / length
         )
         return kernel
@@ -1189,7 +1201,7 @@ class GPhgdl():
             1.0
             + ((np.sqrt(5.0) * distance) / (length))
             + ((5.0 * distance ** 2) / (3.0 * length ** 2))
-        ) * np.exp(-(np.sqrt(5.0) * distance) / length)
+        ) * torch.exp(-(np.sqrt(5.0) * distance) / length)
         return kernel
 
 
@@ -1302,10 +1314,10 @@ class GPhgdl():
         kernel = (1.0+x1.T @ x2)**p
         return p
 
-    def get_distance_matrix(self,x1,x2,hps):
+    def get_distance_matrix_robust(self,x1,x2,hps):
         d = torch.zeros(size = (len(x1),len(x2)), dtype = float)
         for i in range(x1.shape[1]):
-            d += ((x1[:,i].reshape(-1, 1) - x2[:,i])/hps[i+1])**2
+            d += ((x1[:,i].reshape(-1, 1) - x2[:,i])*hps[i+1])**2
         return torch.sqrt(d + 1e-16)
 
     def default_kernel(self,x1,x2,hyperparameters,obj):
@@ -1321,27 +1333,9 @@ class GPhgdl():
         -------
         Kernel Matrix
         """
-        distance_matrix = self.get_distance_matrix(x1,x2,hyperparameters)
-        print()
-        return   hyperparameters[0] *  obj.matern_kernel_diff1_robust(distance_matrix,1)
-
-    def _compute_distance_matrix_l2(self,points1,points2,hp_list):
-        """computes the distance matrix for the l2 norm"""
-        distance_matrix = np.zeros((len(points2), len(points1)))
-        for i in range(len(points1[0])):
-            distance_matrix += (
-            np.abs(
-            np.subtract.outer(points2[:, i], points1[:, i]) ** 2
-            )/hp_list[i])
-        return np.sqrt(distance_matrix)
-    
-    def _compute_distance_matrix_l1(self,points1,points2):
-        """computes the distance matrix for the l1 norm"""
-        distance_matrix = (
-        np.abs(
-        np.subtract.outer(points2, points1)
-        ))
-        return distance_matrix
+        distance_matrix = self.get_distance_matrix_robust(x1,x2,hyperparameters)
+        return   hyperparameters[0]**2 *  obj.matern_kernel_diff1(distance_matrix,1)
+        #return hyperparameters[0]**2  *  torch.exp(-distance_matrix)
 
     def d_gp_kernel_dx(self, points1, points2, direction, hyperparameters):
         new_points = np.array(points1)
@@ -1478,10 +1472,24 @@ class GPhgdl():
                 hess[i,j] = hess[j,i] = (a - c - d + b)/(4.*e*e)
         return hess
 
+    def df_dx(self,hps,func):
+        grad = np.empty((len(hps)))
+        e = 1e-6
+        for i in range(len(hps)):
+            temp_hps1 = np.array(hps)
+            temp_hps2 = np.array(hps)
+            temp_hps1[i] = temp_hps1[i] + e
+            temp_hps2[i] = temp_hps2[i] - e
+
+            a = func(temp_hps1)
+            b = func(temp_hps2)
+            grad[i] = (a - b)/(2.*e)
+        return grad
+
     ################################################################
     def _normalize_y_data(self):
-        mini = np.min(self.y_data)
+        mini = torch.min(self.y_data)
         self.y_data = self.y_data - mini
-        maxi = np.max(self.y_data)
+        maxi = torch.max(self.y_data)
         self.y_data = self.y_data / maxi
 
