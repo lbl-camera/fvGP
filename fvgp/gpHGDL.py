@@ -3,7 +3,7 @@
 import dask.distributed as distributed
 """
 Software: FVGP, version: ALL
-File containing the gp class
+File containing the gpHGDL class
 use help() to find information about usage
 Author: Marcus Noack
 Institution: CAMERA, Lawrence Berkeley National Laboratory
@@ -46,7 +46,7 @@ from functools import partial
 from hgdl.hgdl import HGDL
 
 
-class GP():
+class GPhgdl():
     """
     GP class: Provides all tool for a single-task GP.
 
@@ -110,9 +110,9 @@ class GP():
 
         self.normalize_y = normalize_y
         self.input_dim = input_space_dim
-        self.data_x = np.array(points)
-        self.point_number = len(self.data_x)
-        self.data_y = np.array(values)
+        self.x_data = torch.tensor(points, dtype = float, requires_grad = True)
+        self.point_number = len(self.x_data)
+        self.y_data = torch.tensor(values, dtype = float, requires_grad = True)
         self.compute_device = compute_device
         self.ram_economy = ram_economy
         #self.gp_kernel_function_grad = gp_kernel_function_grad
@@ -126,13 +126,13 @@ class GP():
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
+            self.variances = torch.ones((self.y_data.shape), dtype = float, requires_grad = True) * abs(self.y_data / 100.0)
             print("CAUTION: you have not provided data variances in fvGP,")
             print("they will be set to 1 percent of the data values!")
-        elif np.ndim(variances) == 2:
+        elif variances.dim() == 2:
             self.variances = variances[:,0]
-        elif np.ndim(variances) == 1:
-            self.variances = np.array(variances)
+        elif variances.dim() == 1:
+            self.variances = torch.tensor(variances, dtype = float, requires_grad = True)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
         if (self.variances < 0.0).any(): raise Exception("Negative measurement variances communicated to fvgp.")
@@ -156,7 +156,12 @@ class GP():
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        self.hyperparameters = np.array(init_hyperparameters)
+        #print(self.x_data)
+        #print(self.y_data)
+        #print(self.variances)
+        self.hyperparameters = torch.tensor(init_hyperparameters, dtype = float,requires_grad = True)
+        #print(self.hyperparameters)
+        #print("====================================")
         ##########################################
         #compute the prior########################
         ##########################################
@@ -186,15 +191,15 @@ class GP():
             raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(values) == 2: values = values[:,0]
 
-        self.data_x = np.array(points)
-        self.point_number = len(self.data_x)
-        self.data_y = np.array(values)
+        self.x_data = np.array(points)
+        self.point_number = len(self.x_data)
+        self.y_data = np.array(values)
         if self.normalize_y is True: self._normalize_y_data()
         ##########################################
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
+            self.variances = np.ones((self.y_data.shape)) * abs(self.y_data / 100.0)
         elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
         elif np.ndim(variances) == 1:
@@ -222,64 +227,6 @@ class GP():
         try: opt_obj.kill_client(); print("fvGP successfully killed the training.")
         except: print("No asynchronous training to be killed, no training is running.")
     ###################################################################################
-    def train(self,
-        hyperparameter_bounds,
-        init_hyperparameters = None,
-        method = "global",
-        optimization_dict = None,
-        pop_size = 20,
-        tolerance = 0.0001,
-        max_iter = 120,
-        local_optimizer = "L-BFGS-B",
-        global_optimizer = "genetic",
-        deflation_radius = None,
-        dask_client = None):
-        """
-        This function finds the maximum of the log_likelihood and therefore trains the fvGP (synchronously).
-        This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and 
-        providing a dask client
-
-        inputs:
-            hyperparameter_bounds (2d numpy array)
-        optional inputs:
-            init_hyperparameters (1d numpy array):  default = None (= use earlier initialization)
-            method = "global": "global"/"local"/"hgdl"/callable f(obj,optimization_dict)
-            optimization_dict = None: if optimizer is callable, the this will be passed as dict
-            pop_size = 20
-            tolerance = 0.0001
-            max_iter: default = 120
-            local_optimizer = "L-BFGS-B"  important for local and hgdl optimization
-            global_optimizer = "genetic"
-            deflation_radius = None        for hgdl
-            dask_client = None (will use local client, only for hgdl optimization)
-
-        output:
-            None, just updates the class with the new hyperparameters
-        """
-        ############################################
-        if init_hyperparameters is None:
-            init_hyperparameters = np.array(self.hyperparameters)
-        print("fvGP training started with ",len(self.data_x)," data points")
-        ######################
-        #####TRAINING#########
-        ######################
-        self.hyperparameters = self.optimize_log_likelihood(
-            init_hyperparameters,
-            np.array(hyperparameter_bounds),
-            method,
-            optimization_dict,
-            max_iter,
-            pop_size,
-            tolerance,
-            local_optimizer,
-            global_optimizer,
-            deflation_radius,
-            dask_client
-            )
-        self.compute_prior_fvGP_pdf()
-        ######################
-        ######################
-        ######################
     ##################################################################################
     def train_async(self,
         hyperparameter_bounds,
@@ -311,14 +258,14 @@ class GP():
         ############################################
         if dask_client is None: dask_client = distributed.Client()
         if init_hyperparameters is None:
-            init_hyperparameters = np.array(self.hyperparameters)
-        print("Async fvGP training started with ",len(self.data_x)," data points")
+            init_hyperparameters = self.hyperparameters.detach().numpy()
+        print("Async fvGP training started with ",len(self.x_data)," data points")
         ######################
         #####TRAINING#########
         ######################
         opt_obj = self.optimize_log_likelihood_async(
             init_hyperparameters,
-            np.array(hyperparameter_bounds),
+            hyperparameter_bounds,
             max_iter,
             local_optimizer,
             global_optimizer,
@@ -337,7 +284,7 @@ class GP():
             l_n = self.log_likelihood(res)
             l_o = self.log_likelihood(self.hyperparameters)
             if l_n - l_o < 0.000001:
-                self.hyperparameters = res
+                self.hyperparameters = torch.tensor(res, dtype = float)
                 self.compute_prior_fvGP_pdf()
                 print("    fvGP async hyperparameter update successful")
                 print("    Latest hyperparameters: ", self.hyperparameters)
@@ -365,6 +312,7 @@ class GP():
         print("deflation radius: ",deflation_radius)
         print("local optimizer: ",local_optimizer)
         print("global optimizer: ",global_optimizer)
+        print("starting x: ",starting_hps )
         opt_obj = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
                     hp_bounds,
@@ -373,113 +321,14 @@ class GP():
                     global_optimizer = global_optimizer,
                     radius = deflation_radius,
                     num_epochs = max_iter)
-        opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps))
+        opt_obj.optimize(dask_client = dask_client, x0 = starting_hps)
         return opt_obj
     ##################################################################################
-    def optimize_log_likelihood(self,starting_hps,
-        hp_bounds,method,optimization_dict,max_iter,
-        pop_size,tolerance,
-        local_optimizer,
-        global_optimizer,
-        deflation_radius,
-        dask_client = None):
-
-        start_log_likelihood = self.log_likelihood(starting_hps)
-
-        print(
-            "fvGP hyperparameter tuning in progress. Old hyperparameters: ",
-            starting_hps, " with old log likelihood: ", start_log_likelihood)
-        print("method: ", method)
-
-        ############################
-        ####global optimization:##
-        ############################
-        if method == "global":
-            print("fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
-            print("maximum number of iterations: ", max_iter)
-            print("termination tolerance: ", tolerance)
-            print("bounds: ", hp_bounds)
-            res = differential_evolution(
-                self.log_likelihood,
-                hp_bounds,
-                disp=True,
-                maxiter=max_iter,
-                popsize = pop_size,
-                tol = tolerance,
-                workers = 1,
-            )
-            hyperparameters = np.array(res["x"])
-            Eval = self.log_likelihood(hyperparameters)
-            print("fvGP found hyperparameters ",hyperparameters," with likelihood ",
-                Eval," via global optimization")
-        ############################
-        ####local optimization:#####
-        ############################
-        elif method == "local":
-            hyperparameters = np.array(starting_hps)
-            print("fvGP is performing a local update of the hyper parameters.")
-            print("starting hyperparameters: ", hyperparameters)
-            print("Attempting a BFGS optimization.")
-            print("maximum number of iterations: ", max_iter)
-            print("termination tolerance: ", tolerance)
-            print("bounds: ", hp_bounds)
-            OptimumEvaluation = minimize(
-                self.log_likelihood,
-                hyperparameters,
-                method= local_optimizer,
-                jac=self.log_likelihood_gradient,
-                bounds = hp_bounds,
-                tol = tolerance,
-                callback = None,
-                options = {"maxiter": max_iter})
-
-            if OptimumEvaluation["success"] == True:
-                print(
-                    "fvGP local optimization successfully concluded with result: ",
-                    OptimumEvaluation["fun"]," at ", OptimumEvaluation["x"]
-                )
-                hyperparameters = OptimumEvaluation["x"]
-            else:
-                print("fvGP local optimization not successful.")
-        ############################
-        ####hybrid optimization:####
-        ############################
-        elif method == "hgdl":
-            print("fvGP submitted HGDL optimization")
-            print('bounds are',hp_bounds)
-            opt = HGDL(self.log_likelihood,
-                       self.log_likelihood_gradient,
-                       hp_bounds,
-                       hess = self.log_likelihood_hessian,
-                       local_optimizer = local_optimizer,
-                       global_optimizer = global_optimizer,
-                       radius = deflation_radius,
-                       num_epochs = max_iter)
-
-            obj = opt.optimize(dask_client = dask_client, x0 = np.array(starting_hps))
-            res = opt.get_final(2)
-            hyperparameters = res["x"][0]
-            opt.kill_client(obj)
-        elif method == "mcmc":
-            print("MCMC started in fvGP")
-            print('bounds are',hp_bounds)
-            res = mcmc(self.log_likelihood,hp_bounds)
-            hyperparameters = np.array(res["x"])
-        elif callable(method):
-            hyperparameters = method(self,optimization_dict)
-        else:
-            raise ValueError("No optimization mode specified in fvGP")
-        ###################################################
-        if start_log_likelihood < self.log_likelihood(hyperparameters):
-            hyperparameters = np.array(starting_hps)
-            print("fvGP: Optimization returned smaller log likelihood; resetting to old hyperparameters.")
-            print("New hyperparameters: ",
-            hyperparameters,
-            "with log likelihood: ",
-            self.log_likelihood(hyperparameters))
-        return hyperparameters
-    ##################################################################################
     def log_likelihood(self,hyperparameters):
+        res = self.log_likelihood_torch(torch.tensor(hyperparameters, dtype = float))
+        return res.detach().numpy()
+
+    def log_likelihood_torch(self,hyperparameters):
         """
         computes the marginal log-likelihood
         input:
@@ -487,16 +336,20 @@ class GP():
         output:
             negative marginal log-likelihood (scalar)
         """
-        mean = self.mean_function(self,self.data_x,hyperparameters)
+        mean = self.mean_function(self,self.x_data,hyperparameters)
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
-        x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
-        y = self.data_y - mean
+        x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        y = self.y_data - mean
         sign, logdet = self.slogdet(K)
         n = len(y)
         if sign == 0.0: return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
         return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
     def log_likelihood_gradient(self, hyperparameters):
+        res = self.log_likelihood_gradient_torch(torch.tensor(hyperparameters, dtype = float))
+        return res.detach().numpy()
+
+    def log_likelihood_gradient_torch(self, hyperparameters, autograd = True):
         """
         computes the gradient of the negative marginal log-likelihood
         input:
@@ -504,34 +357,48 @@ class GP():
         output:
             gradient of the negative marginal log-likelihood (vector)
         """
-        mean = self.mean_function(self,self.data_x,hyperparameters)
-        b,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
-        y = self.data_y - mean
-        if self.ram_economy is False:
-            dK_dH = self.dk_dh(self.data_x,self.data_x, hyperparameters)
-            K = np.array([K,] * len(hyperparameters))
-            a = self.solve(K,dK_dH)
-        bbT = np.outer(b , b.T)
-        dL_dH = np.zeros((len(hyperparameters)))
-        dL_dHm = np.zeros((len(hyperparameters)))
+        #print("in grad torch", hyperparameters,flush = True)
+        if autograd is True: return torch.autograd.functional.jacobian(self.log_likelihood_torch,hyperparameters)
+        mean = self.mean_function(self,self.x_data,hyperparameters)
+        b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        y = self.y_data - mean
+        #if self.ram_economy is False:
+        #    dK_dH = self.dk_dh(self.x_data,self.x_data, hyperparameters)
+        #    K = np.array([K,] * len(hyperparameters))
+        #    a = self.solve(K,dK_dH)
+        bbT = torch.outer(b , b.T)
+        dL_dH = torch.zeros((len(hyperparameters)))
+        dL_dHm = torch.zeros((len(hyperparameters)))
         dm_dh = self.dm_dh(hyperparameters)
 
         for i in range(len(hyperparameters)):
             dL_dHm[i] = -dm_dh[i].T @ b
-            if self.ram_economy is False: matr = a[i]
-            else:
-                dK_dH = self.dk_dh(self.data_x,self.data_x, i,hyperparameters)
-                matr = self.solve(K,dK_dH)
+            #if self.ram_economy is False: matr = a[i]
+            #else:
+            dK_dH = self.dk_dh(self.x_data,self.x_data, i,hyperparameters)
+            matr = self.solve(K,dK_dH)
             if dL_dHm[i] == 0.0:
-                if self.ram_economy is False: mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
-                else: mtrace = np.einsum('ij,ji->', bbT, dK_dH)
-                dL_dH[i] = - 0.5 * (mtrace - np.trace(matr))
+                #if self.ram_economy is False: mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
+                #else: 
+                mtrace = torch.einsum('ij,ji->', bbT, dK_dH)
+                dL_dH[i] = - 0.5 * (mtrace - torch.trace(matr))
             else:
                 dL_dH[i] = 0.0
         return dL_dH + dL_dHm
 
     ##################################################################################
     def log_likelihood_hessian(self, hyperparameters):
+        #print("asking for hess at:",hyperparameters, flush = True)
+        res = self.log_likelihood_hessian_torch(torch.tensor(hyperparameters, dtype = float))
+        print("res autograd", flush = True)
+        print(res, flush = True)
+        print("res fd", flush = True)
+        print(self.d2f_dx2(hyperparameters,self.log_likelihood), flush = True)
+        print("===============", flush = True)
+
+        return res.detach().numpy()
+
+    def log_likelihood_hessian_torch(self, hyperparameters, autograd = True):
         """
         computes the hessian of the negative  marginal  log-likelihood
         input:
@@ -539,13 +406,15 @@ class GP():
         output:
             hessian of the negative marginal log-likelihood (matrix)
         """
+        #print("in hessian torch", hyperparameters,flush = True)
         ##implemented as first-order approximation
+        if autograd is True: return torch.autograd.functional.hessian(self.log_likelihood_torch,hyperparameters)
         len_hyperparameters = len(hyperparameters)
         d2L_dmdh = np.zeros((len_hyperparameters,len_hyperparameters))
         epsilon = 1e-5
-        grad_at_hps = self.log_likelihood_gradient(hyperparameters)
+        grad_at_hps = self.log_likelihood_gradient(hyperparameters.numpy())
         for i in range(len_hyperparameters):
-            hps_temp = np.array(hyperparameters)
+            hps_temp = np.array(hyperparameters.numpy())
             hps_temp[i] = hps_temp[i] + epsilon
             d2L_dmdh[i,i:] = ((self.log_likelihood_gradient(hps_temp) - grad_at_hps)/epsilon)[i:]
         return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
@@ -567,10 +436,10 @@ class GP():
             prior covariance
             covariance value product
         """
-        self.prior_mean_vec = self.mean_function(self,self.data_x,self.hyperparameters)
+        self.prior_mean_vec = self.mean_function(self,self.x_data,self.hyperparameters)
         cov_y,K = self._compute_covariance_value_product(
                 self.hyperparameters,
-                self.data_y,
+                self.y_data,
                 self.variances,
                 self.prior_mean_vec)
         self.prior_covariance = K
@@ -589,7 +458,7 @@ class GP():
     def compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""
         CoVariance = self.kernel(
-            self.data_x, self.data_x, hyperparameters, self)
+            self.x_data, self.x_data, hyperparameters, self)
         self.add_to_diag(CoVariance, variances)
         return CoVariance
 
@@ -600,24 +469,19 @@ class GP():
         #s,l = np.linalg.slogdet(A)
         #return s,l
         if self.compute_device == "cpu":
-            A = torch.from_numpy(A)
             sign, logdet = torch.slogdet(A)
-            sign = sign.numpy()
-            logdet = logdet.numpy()
-            logdet = np.nan_to_num(logdet)
+            logdet = torch.nan_to_num(logdet)
             return sign, logdet
         elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
-            A = torch.from_numpy(A).cuda()
             sign, logdet = torch.slogdet(A)
-            sign = sign.cpu().numpy()
-            logdet = logdet.cpu().numpy()
-            logdet = np.nan_to_num(logdet)
+            sign = sign.cpu()
+            logdet = logdet.cpu()
+            logdet = torch.nan_to_num(logdet)
             return sign, logdet
 
     def inv(self, A):
-            A = torch.from_numpy(A)
             B = torch.inverse(A)
-            return B.numpy()
+            return B
 
     def solve(self, A, b):
         """
@@ -625,26 +489,24 @@ class GP():
         """
         #x = np.linalg.solve(A,b)
         #return x
-        if b.ndim == 1: b = np.expand_dims(b,axis = 1)
+        #if b.dim() == 1: b = np.expand_dims(b,axis = 1)
         if self.compute_device == "cpu":
-            #####for sparsity:
-            if self.sparse == True:
-                zero_indices = np.where(A < 1e-16)
-                A[zero_indices] = 0.0
-                if self.is_sparse(A):
-                    try:
-                        A = scipy.sparse.csr_matrix(A)
-                        x = scipy.sparse.spsolve(A,b)
-                        return x
-                    except Exceprion as e:
-                        print("fvGP: Sparse solve did not work out.")
-                        print("reason: ", str(e))
+        #    #####for sparsity:
+        #    if self.sparse == True:
+        #        zero_indices = np.where(A < 1e-16)
+        #        A[zero_indices] = 0.0
+        #        if self.is_sparse(A):
+        #            try:
+        #                A = scipy.sparse.csr_matrix(A)
+        #                x = scipy.sparse.spsolve(A,b)
+        #                return x
+        #            except Exceprion as e:
+        #                print("fvGP: Sparse solve did not work out.")
+        #                print("reason: ", str(e))
             ##################
-            A = torch.from_numpy(A)
-            b = torch.from_numpy(b)
             try:
                 x = torch.linalg.solve(A,b)
-                return x.numpy()
+                return x
             except Exception as e:
                 try:
                     print("fvGP: except statement invoked: torch.solve() on cpu did not work")
@@ -655,55 +517,46 @@ class GP():
                     print("fvGP: except statement 2 invoked: torch.solve() and torch.lstsq() on cpu did not work")
                     print("falling back to numpy.lstsq()")
                     print("reason: ", str(e))
-                    x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
+                    x,res,rank,s = torch.linalg.lstsq(A,b)
                     return x
-            return x.numpy()
+            return x
         elif self.compute_device == "gpu" or A.ndim < 3:
-            A = torch.from_numpy(A).cuda()
-            b = torch.from_numpy(b).cuda()
+            A = A.to(device = "cuda")
+            b = b.to(device = "cuda")
             try:
                 x = torch.linalg.solve(A, b)
             except Exception as e:
                 print("fvGP: except statement invoked: torch.solve() on gpu did not work")
                 print("reason: ", str(e))
-                try:
-                    #x, qr = torch.lstsq(b,A)
-                    x = torch.linalg.lstsq(A,b)
-                except Exception as e:
-                    print("fvGP: except statement 2 invoked: torch.solve() and torch.lstsq() on gpu did not work")
-                    print("falling back to numpy.lstsq()")
-                    print("reason: ", str(e))
-                    x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
-                    return x
-            return x.cpu().numpy()
-        elif self.compute_device == "multi-gpu":
-            n = min(len(A), torch.cuda.device_count())
-            split_A = np.array_split(A,n)
-            split_b = np.array_split(b,n)
-            results = []
-            for i, (tmp_A,tmp_b) in enumerate(zip(split_A,split_b)):
-                cur_device = torch.device("cuda:"+str(i))
-                tmp_A = torch.from_numpy(tmp_A).cuda(cur_device)
-                tmp_b = torch.from_numpy(tmp_b).cuda(cur_device)
-                results.append(torch.linalg.solve(tmp_A,tmp_b)[0])
-            total = results[0].cpu().numpy()
-            for i in range(1,len(results)):
-                total = np.append(total, results[i].cpu().numpy(), 0)
-            return total
+                x,res,rank,s = torch.linalg.lstsq(A,b)
+            return x.cpu()
+        #elif self.compute_device == "multi-gpu":
+        #    n = min(len(A), torch.cuda.device_count())
+        #    split_A = torch.tensor_split(A,n)
+        #    split_b = torch.tensor_split(b,n)
+        #    results = []
+        #    for i, (tmp_A,tmp_b) in enumerate(zip(split_A,split_b)):
+        #        cur_device = torch.device("cuda:"+str(i))
+        #        tmp_A = tmp_A.to(device = cur_device)
+        #        tmp_b = tmp_b.to(device = cur_device)
+        #        results.append(torch.linalg.solve(tmp_A,tmp_b)[0])
+        #    total = results[0].cpu()
+        #    for i in range(1,len(results)):
+        #        total = np.append(total, results[i].cpu().numpy(), 0)
+        #    return total
     ##################################################################################
     def add_to_diag(self,Matrix, Vector):
-        d = np.einsum("ii->i", Matrix)
+        d = torch.einsum("ii->i", Matrix)
         d += Vector
         return Matrix
-    def is_sparse(self,A):
-        if float(np.count_nonzero(A))/float(len(A)**2) < 0.01: return True
-        else: return False
-    def how_sparse_is(self,A):
-        return float(np.count_nonzero(A))/float(len(A)**2)
+    #def is_sparse(self,A):
+    #    if float(np.count_nonzero(A))/float(len(A)**2) < 0.01: return True
+    #    else: return False
+    #def how_sparse_is(self,A):
+    #    return float(np.count_nonzero(A))/float(len(A)**2)
     def default_mean_function(self,gp_obj,x,hyperparameters):
         """evaluates the gp mean function at the data points """
-        mean = np.zeros((len(x)))
-        mean[:] = np.mean(self.data_y)
+        mean = torch.ones((len(x)), dtype = float, requires_grad = True) + torch.mean(self.y_data, dtype = float)
         return mean
     ###########################################################################
     ###########################################################################
@@ -725,8 +578,8 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
         posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         return {"x": p,
@@ -749,17 +602,17 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         x1 = np.array(p)
         x2 = np.array(p)
         eps = 1e-6
         x1[:,direction] = x1[:,direction] + eps
         x2[:,direction] = x2[:,direction] - eps
         mean_der = (self.mean_function(self,x1,self.hyperparameters) - self.mean_function(self,x2,self.hyperparameters))/(2.0*eps)
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
+        k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters)
         posterior_mean_grad = mean_der + (k_g @ self.covariance_value_prod)
         return {"x": p,
                 "direction":direction,
@@ -781,19 +634,19 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
         if self.use_inv is True:
             if variance_only is True: v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.K_inv, k); S = False
-            if variance_only is False:  S = kk - (k.T @ self.K_inv @ k); v = np.array(np.diag(S))
+            if variance_only is False:  S = kk - (k.T @ self.K_inv @ k); v = np.diag(S)
         else:
             k_cov_prod = self.solve(self.prior_covariance,k)
             S = kk - (k_cov_prod.T @ k)
-            v = np.array(np.diag(S))
+            v = np.diag(S)
         if np.any(v < -0.001):
-            print("WARNING in fvGP: CAUTION, negative variances encountered. That normally means that the model is unstable.")
+            print("In fvGP: CAUTION, negative variances encountered. That normally means that the model is unstable.")
             print("Rethink the kernel definitions, add more noise to the data,")
             print("or double check the hyperparameter optimization bounds. This will not ")
             print("terminate the algorithm, but expect anomalies.")
@@ -825,10 +678,10 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
+        k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
         kk =  self.kernel(p, p,self.hyperparameters,self)
         x1 = np.array(p)
         x2 = np.array(p)
@@ -862,9 +715,9 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
         post_mean = self.mean_function(self,p, self.hyperparameters)
         full_gp_prior_mean = np.append(self.prior_mean_vec, post_mean)
@@ -894,11 +747,11 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
+        k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
         x1 = np.array(p)
         x2 = np.array(p)
         eps = 1e-6
@@ -940,7 +793,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         priors = self.gp_prior(p)
         S = priors["S(x)"]
@@ -962,7 +815,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         priors1 = self.gp_prior(p)
         priors2 = self.gp_prior_grad(p,direction)
@@ -1023,7 +876,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         res = self.posterior_mean(p)
         gp_mean = res["f(x)"]
@@ -1059,7 +912,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         gp_mean = self.posterior_mean(p)["f(x)"]
         gp_mean_grad = self.posterior_mean_grad(p,direction)["df/dx"]
@@ -1091,9 +944,9 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
 
 
@@ -1124,7 +977,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         e2 = self.gp_entropy_grad(p,direction)
         sig = e2
@@ -1149,7 +1002,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         res = self.posterior_mean(p)
         gp_mean = res["f(x)"]
@@ -1188,7 +1041,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         x1 = np.array(p)
         x2 = np.array(p)
@@ -1313,7 +1166,7 @@ class GP():
             a structure of the she shape of the distance input parameter
         """
         ##1/l --> phi**2
-        kernel = (1.0 + ((np.sqrt(3.0) * distance) * (phi**2))) * np.exp(
+        kernel = (1.0 + ((np.sqrt(3.0) * distance) * (phi**2))) * torch.exp(
             -(np.sqrt(3.0) * distance) * (phi**2))
         return kernel
 
@@ -1448,6 +1301,13 @@ class GP():
         """
         kernel = (1.0+x1.T @ x2)**p
         return p
+
+    def get_distance_matrix(self,x1,x2,hps):
+        d = torch.zeros(size = (len(x1),len(x2)), dtype = float)
+        for i in range(x1.shape[1]):
+            d += ((x1[:,i].reshape(-1, 1) - x2[:,i])/hps[i+1])**2
+        return torch.sqrt(d + 1e-16)
+
     def default_kernel(self,x1,x2,hyperparameters,obj):
         ################################################################
         ###standard anisotropic kernel in an input space with l2########
@@ -1461,12 +1321,9 @@ class GP():
         -------
         Kernel Matrix
         """
-        hps = hyperparameters
-        distance_matrix = np.zeros((len(x1),len(x2)))
-        for i in range(len(hps)-1):
-            distance_matrix += abs(np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
-        distance_matrix = np.sqrt(distance_matrix)
-        return   hps[0] *  obj.exponential_kernel(distance_matrix,1)
+        distance_matrix = self.get_distance_matrix(x1,x2,hyperparameters)
+        print()
+        return   hyperparameters[0] *  obj.matern_kernel_diff1_robust(distance_matrix,1)
 
     def _compute_distance_matrix_l2(self,points1,points2,hp_list):
         """computes the distance matrix for the l2 norm"""
@@ -1552,19 +1409,19 @@ class GP():
         return hessian
 
     def dm_dh(self,hps):
-        gr = np.empty((len(hps),len(self.data_x)))
+        gr = torch.empty((len(hps),len(self.x_data)), dtype = float)
         for i in range(len(hps)):
-            temp_hps1 = np.array(hps)
+            temp_hps1 = hps.detach().clone()
             temp_hps1[i] = temp_hps1[i] + 1e-6
-            temp_hps2 = np.array(hps)
+            temp_hps2 = hps.detach().clone()
             temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.mean_function(self,self.data_x,temp_hps1)
-            b = self.mean_function(self,self.data_x,temp_hps2)
+            a = self.mean_function(self,self.x_data,temp_hps1)
+            b = self.mean_function(self,self.x_data,temp_hps2)
             gr[i] = (a-b)/2e-6
         return gr
     ##########################
     def d2m_dh2(self,hps):
-        hess = np.empty((len(hps),len(hps),len(self.data_x)))
+        hess = np.empty((len(hps),len(hps),len(self.x_data)))
         e = 1e-4
         for i in range(len(hps)):
             for j in range(i+1):
@@ -1585,10 +1442,10 @@ class GP():
                 temp_hps4[j] = temp_hps4[j] + e
 
 
-                a = self.mean_function(self,self.data_x,temp_hps1)
-                b = self.mean_function(self,self.data_x,temp_hps2)
-                c = self.mean_function(self,self.data_x,temp_hps3)
-                d = self.mean_function(self,self.data_x,temp_hps4)
+                a = self.mean_function(self,self.x_data,temp_hps1)
+                b = self.mean_function(self,self.x_data,temp_hps2)
+                c = self.mean_function(self,self.x_data,temp_hps3)
+                d = self.mean_function(self,self.x_data,temp_hps4)
                 hess[i,j] = hess[j,i] = (a - c - d + b)/(4.*e*e)
         return hess
 
@@ -1623,8 +1480,8 @@ class GP():
 
     ################################################################
     def _normalize_y_data(self):
-        mini = np.min(self.data_y)
-        self.data_y = self.data_y - mini
-        maxi = np.max(self.data_y)
-        self.data_y = self.data_y / maxi
+        mini = np.min(self.y_data)
+        self.y_data = self.y_data - mini
+        maxi = np.max(self.y_data)
+        self.y_data = self.y_data / maxi
 

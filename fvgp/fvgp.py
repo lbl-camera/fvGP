@@ -99,9 +99,12 @@ class fvGP(GP):
         variances = None,
         compute_device = "cpu",
         gp_kernel_function = None,
+        gp_kernel_function_grad = None,
         gp_mean_function = None,
+        gp_mean_function_grad = None,
         sparse = False, use_inv = False,
-        normalize_y = False
+        normalize_y = False,
+        ram_economy = True
         ):
         """
         The constructor for the fvgp class.
@@ -138,7 +141,8 @@ class fvGP(GP):
         GP.__init__(self,self.iset_dim, self.data_x,self.data_y,init_hyperparameters,
                 variances = self.variances,compute_device = compute_device,
                 gp_kernel_function = gp_kernel_function, gp_mean_function = gp_mean_function,
-                sparse = sparse, use_inv = use_inv, normalize_y = normalize_y)
+                gp_kernel_function_grad = gp_kernel_function_grad, gp_mean_function_grad = gp_mean_function_grad,
+                sparse = sparse, use_inv = use_inv, normalize_y = normalize_y,ram_economy = ram_economy)
 
         self.hyperparameters = np.array(init_hyperparameters)
         ##########################################
