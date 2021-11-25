@@ -6,6 +6,6 @@ numpy
 matplotlib
 dask >= 2021.6.2
 distributed >= 2021.6.2
-hgdl >= 1.4.0
+hgdl >= 1.4.3
 notebook
 plotly
