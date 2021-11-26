@@ -1706,9 +1706,9 @@ class gpHGDL():
 
         self.normalize_y = normalize_y
         self.input_dim = input_space_dim
-        self.x_data = torch.tensor(points, dtype = float, requires_grad = True)
+        self.x_data = torch.tensor(points, dtype = float)#, requires_grad = True)
         self.point_number = len(self.x_data)
-        self.y_data = torch.tensor(values, dtype = float, requires_grad = True)
+        self.y_data = torch.tensor(values, dtype = float)#, requires_grad = True)
         self.compute_device = compute_device
         self.ram_economy = ram_economy
         #self.gp_kernel_function_grad = gp_kernel_function_grad
@@ -1722,13 +1722,15 @@ class gpHGDL():
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = torch.ones((self.y_data.shape), dtype = float, requires_grad = True) * abs(self.y_data / 100.0)
+            #, requires_grad = True) *
+            self.variances = torch.ones((self.y_data.shape), dtype = float) * \
+                    abs(self.y_data / 100.0)
             print("CAUTION: you have not provided data variances in fvGP,")
             print("they will be set to 1 percent of the data values!")
         elif variances.dim() == 2:
             self.variances = variances[:,0]
         elif variances.dim() == 1:
-            self.variances = torch.tensor(variances, dtype = float, requires_grad = True)
+            self.variances = torch.tensor(variances, dtype = float)#, requires_grad = True)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
         if len(self.variances[self.variances < 0]) > 0: raise Exception("Negative measurement variances communicated to fvgp.")
@@ -1755,7 +1757,7 @@ class gpHGDL():
         #print(self.x_data)
         #print(self.y_data)
         #print(self.variances)
-        self.hyperparameters = torch.tensor(init_hyperparameters, dtype = float,requires_grad = True)
+        self.hyperparameters = torch.tensor(init_hyperparameters, dtype = float) #,requires_grad = True)
         #print(self.hyperparameters)
         #print("====================================")
         ##########################################
@@ -1787,22 +1789,23 @@ class gpHGDL():
             raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(values) == 2: values = values[:,0]
 
-        self.x_data = torch.tensor(points, dtype = float, requires_grad = True)
+        self.x_data = torch.tensor(points, dtype = float) #, requires_grad = True)
         self.point_number = len(self.x_data)
-        self.y_data = torch.tensor(values, dtype = float, requires_grad = True)
+        self.y_data = torch.tensor(values, dtype = float) #, requires_grad = True)
 
         if self.normalize_y is True: self._normalize_y_data()
         ##########################################
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = torch.ones((self.y_data.shape), dtype = float, requires_grad = True) * abs(self.y_data / 100.0)
+            #, requires_grad = True
+            self.variances = torch.ones((self.y_data.shape), dtype = float) * abs(self.y_data / 100.0)
             print("CAUTION: you have not provided data variances in fvGP,")
             print("they will be set to 1 percent of the data values!")
         elif variances.dim() == 2:
             self.variances = variances[:,0]
         elif variances.dim() == 1:
-            self.variances = torch.tensor(variances, dtype = float, requires_grad = True)
+            self.variances = torch.tensor(variances, dtype = float) #, requires_grad = True)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
 
@@ -1947,14 +1950,7 @@ class gpHGDL():
         return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
     def log_likelihood_gradient(self, hyperparameters):
-        #print("asking for grad at:",hyperparameters, flush = True)
         res = self.log_likelihood_gradient_torch(torch.tensor(hyperparameters, dtype = float))
-        #print("res autograd", flush = True)
-        #print(res, flush = True)
-        #print("res fd", flush = True)
-        #print(self.df_dx(hyperparameters,self.log_likelihood), flush = True)
-        #print("===============", flush = True)
-        #return self.df_dx(hyperparameters,self.log_likelihood)
         return res.detach().numpy()
 
     def log_likelihood_gradient_torch(self, hyperparameters, autograd = True):
@@ -1965,8 +1961,18 @@ class gpHGDL():
         output:
             gradient of the negative marginal log-likelihood (vector)
         """
-        #print("in grad torch", hyperparameters,flush = True)
-        if autograd is True: return torch.autograd.functional.jacobian(self.log_likelihood_torch,hyperparameters)
+        return torch.autograd.functional.jacobian(self.log_likelihood_torch,hyperparameters)
+
+
+
+    def log_likelihood_gradient_torch_analytical(self, hyperparameters):
+        """
+        computes the gradient of the negative marginal log-likelihood
+        input:
+            hyper parameters
+        output:
+            gradient of the negative marginal log-likelihood (vector)
+        """
         mean = self.mean_function(self,self.x_data,hyperparameters)
         b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
         y = self.y_data - mean
@@ -1986,7 +1992,7 @@ class gpHGDL():
             dK_dH = self.dk_dh(self.x_data,self.x_data, i,hyperparameters)
             matr = self.solve(K,dK_dH)
             if dL_dHm[i] == 0.0:
-                #if self.ram_economy is False: mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
+                #if self.ram_economy is False: mtrace = torch.einsum('ij,ji->', bbT, dK_dH[i])
                 #else: 
                 mtrace = torch.einsum('ij,ji->', bbT, dK_dH)
                 dL_dH[i] = - 0.5 * (mtrace - torch.trace(matr))
@@ -1994,17 +2000,11 @@ class gpHGDL():
                 dL_dH[i] = 0.0
         return dL_dH + dL_dHm
 
+
     ##################################################################################
     def log_likelihood_hessian(self, hyperparameters):
-        #print("asking for hess at:",hyperparameters, flush = True)
         res = self.log_likelihood_hessian_torch(torch.tensor(hyperparameters, dtype = float))
-        #print("res autograd", flush = True)
-        #print(res, flush = True)
-        #print("res fd", flush = True)
-        #print(self.d2f_dx2(hyperparameters,self.log_likelihood), flush = True)
-        #print("===============", flush = True)
         result = (res.detach().numpy() + res.detach().numpy().T)/2.0
-        #return (self.d2f_dx2(hyperparameters,self.log_likelihood) + self.d2f_dx2(hyperparameters,self.log_likelihood).T)/2.
         return result
 
     def log_likelihood_hessian_torch(self, hyperparameters, autograd = True):
@@ -2015,18 +2015,7 @@ class gpHGDL():
         output:
             hessian of the negative marginal log-likelihood (matrix)
         """
-        #print("in hessian torch", hyperparameters,flush = True)
-        ##implemented as first-order approximation
-        if autograd is True: return torch.autograd.functional.hessian(self.log_likelihood_torch,hyperparameters)
-        len_hyperparameters = len(hyperparameters)
-        d2L_dmdh = np.zeros((len_hyperparameters,len_hyperparameters))
-        epsilon = 1e-5
-        grad_at_hps = self.log_likelihood_gradient(hyperparameters.numpy())
-        for i in range(len_hyperparameters):
-            hps_temp = np.array(hyperparameters.numpy())
-            hps_temp[i] = hps_temp[i] + epsilon
-            d2L_dmdh[i,i:] = ((self.log_likelihood_gradient(hps_temp) - grad_at_hps)/epsilon)[i:]
-        return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
+        return torch.autograd.functional.hessian(self.log_likelihood_torch,hyperparameters)
     ##################################################################################
     ##################################################################################
     ##################################################################################
@@ -2165,7 +2154,8 @@ class gpHGDL():
     #    return float(np.count_nonzero(A))/float(len(A)**2)
     def default_mean_function(self,gp_obj,x,hyperparameters):
         """evaluates the gp mean function at the data points """
-        mean = torch.ones((len(x)), dtype = float, requires_grad = True) + torch.mean(self.y_data, dtype = float)
+        #, requires_grad = True
+        mean = torch.ones((len(x)), dtype = float) + torch.mean(self.y_data, dtype = float)
         return mean
     ###########################################################################
     ###########################################################################
@@ -2240,9 +2230,8 @@ class gpHGDL():
              "v(x)": the posterior variances (1d numpy array) for each input point,
              "S":    covariance matrix, v(x) = diag(S)}
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        p = torch.tensor(x_iset, dtype = float)
+        if p.dim() == 1: p = p[None, :]
 
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
@@ -2252,18 +2241,14 @@ class gpHGDL():
         else:
             k_cov_prod = self.solve(self.prior_covariance,k)
             S = kk - (k_cov_prod.T @ k)
-            v = np.diag(S)
-        if np.any(v < -0.001):
+            v = torch.diag(S)
+        if len(v[ v < -0.001]) > 0:
             print("In fvGP: CAUTION, negative variances encountered. That normally means that the model is unstable.")
             print("Rethink the kernel definitions, add more noise to the data,")
             print("or double check the hyperparameter optimization bounds. This will not ")
             print("terminate the algorithm, but expect anomalies.")
             print("diagonal of the posterior covariance: ",v)
-            p = np.block([[self.prior_covariance, k],[k.T, kk]])
-            print("eigenvalues of the prior: ", np.linalg.eig(p)[0])
-            i = np.where(v < 0.0)
-            v[i] = 0.0
-            if S is not False: S = np.fill_diagonal(S,v)
+            raise Exception("EXIT")
 
         return {"x": p,
                 "v(x)": v,
