@@ -31,8 +31,16 @@ Contact: MarcusNoack@lbl.gov
 """
 
 import matplotlib.pyplot as plt
-import numpy as np
+
+import jax.numpy as np
+from jax import grad, vmap
+import matplotlib.pyplot as plt
+from jax import jacfwd, jacrev
+
+
+
 import math
+import numpy
 from scipy.optimize import differential_evolution
 from scipy.optimize import minimize
 from scipy.sparse.linalg import spsolve
@@ -45,9 +53,7 @@ import torch
 from functools import partial
 from hgdl.hgdl import HGDL
 
-from .gpHGDL import gpHGDL
-
-class GP():
+class GPJAX():
     """
     GP class: Provides all tool for a single-task GP.
 
@@ -366,10 +372,10 @@ class GP():
         print("deflation radius: ",deflation_radius)
         print("local optimizer: ",local_optimizer)
         print("global optimizer: ",global_optimizer)
-        opt_obj = HGDL(self.log_likelihood,
-                    self.log_likelihood_gradient,
+        opt_obj = HGDL(self.log_likelihood_jax,
+                    self.log_likelihood_gradient_jax,
                     hp_bounds,
-                    hess = self.log_likelihood_hessian,
+                    hess = None,#self.log_likelihood_hessian_jax,
                     local_optimizer = local_optimizer,
                     global_optimizer = global_optimizer,
                     radius = deflation_radius,
@@ -377,110 +383,7 @@ class GP():
         opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps))
         return opt_obj
     ##################################################################################
-    def optimize_log_likelihood(self,starting_hps,
-        hp_bounds,method,optimization_dict,max_iter,
-        pop_size,tolerance,
-        local_optimizer,
-        global_optimizer,
-        deflation_radius,
-        dask_client = None):
-
-        start_log_likelihood = self.log_likelihood(starting_hps)
-
-        print(
-            "fvGP hyperparameter tuning in progress. Old hyperparameters: ",
-            starting_hps, " with old log likelihood: ", start_log_likelihood)
-        print("method: ", method)
-
-        ############################
-        ####global optimization:##
-        ############################
-        if method == "global":
-            print("fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
-            print("maximum number of iterations: ", max_iter)
-            print("termination tolerance: ", tolerance)
-            print("bounds: ", hp_bounds)
-            res = differential_evolution(
-                self.log_likelihood,
-                hp_bounds,
-                disp=True,
-                maxiter=max_iter,
-                popsize = pop_size,
-                tol = tolerance,
-                workers = 1,
-            )
-            hyperparameters = np.array(res["x"])
-            Eval = self.log_likelihood(hyperparameters)
-            print("fvGP found hyperparameters ",hyperparameters," with likelihood ",
-                Eval," via global optimization")
-        ############################
-        ####local optimization:#####
-        ############################
-        elif method == "local":
-            hyperparameters = np.array(starting_hps)
-            print("fvGP is performing a local update of the hyper parameters.")
-            print("starting hyperparameters: ", hyperparameters)
-            print("Attempting a BFGS optimization.")
-            print("maximum number of iterations: ", max_iter)
-            print("termination tolerance: ", tolerance)
-            print("bounds: ", hp_bounds)
-            OptimumEvaluation = minimize(
-                self.log_likelihood,
-                hyperparameters,
-                method= local_optimizer,
-                jac=self.log_likelihood_gradient,
-                bounds = hp_bounds,
-                tol = tolerance,
-                callback = None,
-                options = {"maxiter": max_iter})
-
-            if OptimumEvaluation["success"] == True:
-                print(
-                    "fvGP local optimization successfully concluded with result: ",
-                    OptimumEvaluation["fun"]," at ", OptimumEvaluation["x"]
-                )
-                hyperparameters = OptimumEvaluation["x"]
-            else:
-                print("fvGP local optimization not successful.")
-        ############################
-        ####hybrid optimization:####
-        ############################
-        elif method == "hgdl":
-            print("fvGP submitted HGDL optimization")
-            print('bounds are',hp_bounds)
-            opt = HGDL(self.log_likelihood,
-                       self.log_likelihood_gradient,
-                       hp_bounds,
-                       hess = self.log_likelihood_hessian,
-                       local_optimizer = local_optimizer,
-                       global_optimizer = global_optimizer,
-                       radius = deflation_radius,
-                       num_epochs = max_iter)
-
-            obj = opt.optimize(dask_client = dask_client, x0 = np.array(starting_hps))
-            res = opt.get_final(2)
-            hyperparameters = res["x"][0]
-            opt.kill_client(obj)
-        elif method == "mcmc":
-            print("MCMC started in fvGP")
-            print('bounds are',hp_bounds)
-            res = mcmc(self.log_likelihood,hp_bounds)
-            hyperparameters = np.array(res["x"])
-        elif callable(method):
-            hyperparameters = method(self,optimization_dict)
-        else:
-            raise ValueError("No optimization mode specified in fvGP")
-        ###################################################
-        if start_log_likelihood < self.log_likelihood(hyperparameters):
-            hyperparameters = np.array(starting_hps)
-            print("fvGP: Optimization returned smaller log likelihood; resetting to old hyperparameters.")
-            print("New hyperparameters: ",
-            hyperparameters,
-            "with log likelihood: ",
-            self.log_likelihood(hyperparameters))
-        return hyperparameters
-    ##################################################################################
-    def log_likelihood(self,hyperparameters):
+    def log_likelihood_jax(self,hyperparameters):
         """
         computes the marginal log-likelihood
         input:
@@ -492,44 +395,55 @@ class GP():
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
         x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
         y = self.data_y - mean
-        sign, logdet = self.slogdet(K)
+        sign, logdet = np.linalg.slogdet(K)
         n = len(y)
         if sign == 0.0: return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
         return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
-    def log_likelihood_gradient(self, hyperparameters):
-        """
-        computes the gradient of the negative marginal log-likelihood
-        input:
-            hyper parameters
-        output:
-            gradient of the negative marginal log-likelihood (vector)
-        """
-        mean = self.mean_function(self,self.data_x,hyperparameters)
-        b,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
-        y = self.data_y - mean
-        if self.ram_economy is False:
-            dK_dH = self.dk_dh(self.data_x,self.data_x, hyperparameters)
-            K = np.array([K,] * len(hyperparameters))
-            a = self.solve(K,dK_dH)
-        bbT = np.outer(b , b.T)
-        dL_dH = np.zeros((len(hyperparameters)))
-        dL_dHm = np.zeros((len(hyperparameters)))
-        dm_dh = self.dm_dh(hyperparameters)
+    #def log_likelihood_gradient(self, hyperparameters):
+    #    """
+    #    computes the gradient of the negative marginal log-likelihood
+    #    input:
+    #        hyper parameters
+    #    output:
+    #        gradient of the negative marginal log-likelihood (vector)
+    #    """
+    #    mean = self.mean_function(self,self.data_x,hyperparameters)
+    #    b,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
+    #    y = self.data_y - mean
+    #    if self.ram_economy is False:
+    #        dK_dH = self.dk_dh(self.data_x,self.data_x, hyperparameters)
+    #        K = np.array([K,] * len(hyperparameters))
+    #        a = self.solve(K,dK_dH)
+    #    bbT = np.outer(b , b.T)
+    #    dL_dH = np.zeros((len(hyperparameters)))
+    #    dL_dHm = np.zeros((len(hyperparameters)))
+    #    dm_dh = self.dm_dh(hyperparameters)
+#
+ #       for i in range(len(hyperparameters)):
+ #           dL_dHm[i] = -dm_dh[i].T @ b
+ ##           if self.ram_economy is False: matr = a[i]
+ #           else:
+ #               dK_dH = self.dk_dh(self.data_x,self.data_x, i,hyperparameters)
+ #               matr = self.solve(K,dK_dH)
+ #           if dL_dHm[i] == 0.0:
+ #               if self.ram_economy is False: mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
+ #               else: mtrace = np.einsum('ij,ji->', bbT, dK_dH)
+ #               dL_dH[i] = - 0.5 * (mtrace - np.trace(matr))
+ #           else:
+ #               dL_dH[i] = 0.0
+ #       return dL_dH + dL_dHm
 
-        for i in range(len(hyperparameters)):
-            dL_dHm[i] = -dm_dh[i].T @ b
-            if self.ram_economy is False: matr = a[i]
-            else:
-                dK_dH = self.dk_dh(self.data_x,self.data_x, i,hyperparameters)
-                matr = self.solve(K,dK_dH)
-            if dL_dHm[i] == 0.0:
-                if self.ram_economy is False: mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
-                else: mtrace = np.einsum('ij,ji->', bbT, dK_dH)
-                dL_dH[i] = - 0.5 * (mtrace - np.trace(matr))
-            else:
-                dL_dH[i] = 0.0
-        return dL_dH + dL_dHm
+
+    def log_likelihood_gradient_jax(self, hyperparameters):
+        hyperparameters = np.array(hyperparameters, dtype=np.float64)
+        #print(grad(self.log_likelihood_jax)(hyperparameters), flush = True)
+        res = numpy.array(grad(self.log_likelihood_jax)(hyperparameters), dtype = numpy.float64).reshape(-1,1)
+        return res[:,0]
+
+    def log_likelihood_hessian_jax(self, hyperparameters):
+        hyperparameters = np.array(hyperparameters)
+        return numpy.array(jacrev(jacrev(self.log_likelihood_jax))(hyperparameters))
 
     ##################################################################################
     def log_likelihood_hessian(self, hyperparameters):
@@ -581,7 +495,8 @@ class GP():
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean):
         K = self.compute_covariance(hyperparameters, variances)
         y = values - mean
-        x = self.solve(K, y)
+        #x = self.solve(K, y)
+        x = np.linalg.solve(K, y)
         #if self.use_inv is True: x = self.K_inv @ y
         #else: x = self.solve(K, y)
         if x.ndim == 2: x = x[:,0]
@@ -704,7 +619,7 @@ class GP():
     def default_mean_function(self,gp_obj,x,hyperparameters):
         """evaluates the gp mean function at the data points """
         mean = np.zeros((len(x)))
-        mean[:] = np.mean(self.data_y)
+        mean = np.mean(self.data_y)
         return mean
     ###########################################################################
     ###########################################################################
@@ -1449,6 +1364,13 @@ class GP():
         """
         kernel = (1.0+x1.T @ x2)**p
         return p
+
+    def get_distance_matrix_robust(self,x1,x2,hps):
+        d = np.zeros((len(x1),len(x2)))
+        for i in range(x1.shape[1]):
+            d += ((x1[:,i].reshape(-1, 1) - x2[:,i])*hps[i+1])**2
+        return np.sqrt(d + 1e-16)
+
     def default_kernel(self,x1,x2,hyperparameters,obj):
         ################################################################
         ###standard anisotropic kernel in an input space with l2########
@@ -1462,12 +1384,9 @@ class GP():
         -------
         Kernel Matrix
         """
-        hps = hyperparameters
-        distance_matrix = np.zeros((len(x1),len(x2)))
-        for i in range(len(hps)-1):
-            distance_matrix += abs(np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
-        distance_matrix = np.sqrt(distance_matrix)
-        return   hps[0] *  obj.exponential_kernel(distance_matrix,1)
+        distance_matrix = self.get_distance_matrix_robust(x1,x2,hyperparameters)
+        #return   hyperparameters[0]**2 *  obj.matern_kernel_diff1(distance_matrix,1)
+        return hyperparameters[0]**2  *  np.exp(-distance_matrix)
 
     def _compute_distance_matrix_l2(self,points1,points2,hp_list):
         """computes the distance matrix for the l2 norm"""
