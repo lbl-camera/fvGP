@@ -342,7 +342,7 @@ class GPJAX():
         try:
             res = opt_obj.get_latest(1)["x"][0]
             l_n = self.log_likelihood(res)
-            l_o = self.log_likelihood(self.hyperparameters)
+            l_o = self.log_likelihood_jax(self.hyperparameters)
             if l_n - l_o < 0.000001:
                 self.hyperparameters = res
                 self.compute_prior_fvGP_pdf()

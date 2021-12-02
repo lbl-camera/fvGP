@@ -111,9 +111,9 @@ class GP():
 
         self.normalize_y = normalize_y
         self.input_dim = input_space_dim
-        self.data_x = np.array(points)
-        self.point_number = len(self.data_x)
-        self.data_y = np.array(values)
+        self.x_data = np.array(points)
+        self.point_number = len(self.x_data)
+        self.y_data = np.array(values)
         self.compute_device = compute_device
         self.ram_economy = ram_economy
         #self.gp_kernel_function_grad = gp_kernel_function_grad
@@ -127,7 +127,7 @@ class GP():
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
+            self.variances = np.ones((self.y_data.shape)) * abs(self.y_data / 100.0)
             print("CAUTION: you have not provided data variances in fvGP,")
             print("they will be set to 1 percent of the data values!")
         elif np.ndim(variances) == 2:
@@ -187,15 +187,15 @@ class GP():
             raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(values) == 2: values = values[:,0]
 
-        self.data_x = np.array(points)
-        self.point_number = len(self.data_x)
-        self.data_y = np.array(values)
+        self.x_data = np.array(points)
+        self.point_number = len(self.x_data)
+        self.y_data = np.array(values)
         if self.normalize_y is True: self._normalize_y_data()
         ##########################################
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((self.data_y.shape)) * abs(self.data_y / 100.0)
+            self.variances = np.ones((self.y_data.shape)) * abs(self.y_data / 100.0)
         elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
         elif np.ndim(variances) == 1:
@@ -260,7 +260,7 @@ class GP():
         ############################################
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
-        print("fvGP training started with ",len(self.data_x)," data points")
+        print("fvGP training started with ",len(self.x_data)," data points")
         ######################
         #####TRAINING#########
         ######################
@@ -313,7 +313,7 @@ class GP():
         if dask_client is None: dask_client = distributed.Client()
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
-        print("Async fvGP training started with ",len(self.data_x)," data points")
+        print("Async fvGP training started with ",len(self.x_data)," data points")
         ######################
         #####TRAINING#########
         ######################
@@ -488,10 +488,10 @@ class GP():
         output:
             negative marginal log-likelihood (scalar)
         """
-        mean = self.mean_function(self,self.data_x,hyperparameters)
+        mean = self.mean_function(self,self.x_data,hyperparameters)
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
-        x,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
-        y = self.data_y - mean
+        x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        y = self.y_data - mean
         sign, logdet = self.slogdet(K)
         n = len(y)
         if sign == 0.0: return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
@@ -505,11 +505,11 @@ class GP():
         output:
             gradient of the negative marginal log-likelihood (vector)
         """
-        mean = self.mean_function(self,self.data_x,hyperparameters)
-        b,K = self._compute_covariance_value_product(hyperparameters,self.data_y, self.variances, mean)
-        y = self.data_y - mean
+        mean = self.mean_function(self,self.x_data,hyperparameters)
+        b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        y = self.y_data - mean
         if self.ram_economy is False:
-            dK_dH = self.dk_dh(self.data_x,self.data_x, hyperparameters)
+            dK_dH = self.dk_dh(self.x_data,self.x_data, hyperparameters)
             K = np.array([K,] * len(hyperparameters))
             a = self.solve(K,dK_dH)
         bbT = np.outer(b , b.T)
@@ -521,7 +521,7 @@ class GP():
             dL_dHm[i] = -dm_dh[i].T @ b
             if self.ram_economy is False: matr = a[i]
             else:
-                dK_dH = self.dk_dh(self.data_x,self.data_x, i,hyperparameters)
+                dK_dH = self.dk_dh(self.x_data,self.x_data, i,hyperparameters)
                 matr = self.solve(K,dK_dH)
             if dL_dHm[i] == 0.0:
                 if self.ram_economy is False: mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
@@ -568,10 +568,10 @@ class GP():
             prior covariance
             covariance value product
         """
-        self.prior_mean_vec = self.mean_function(self,self.data_x,self.hyperparameters)
+        self.prior_mean_vec = self.mean_function(self,self.x_data,self.hyperparameters)
         cov_y,K = self._compute_covariance_value_product(
                 self.hyperparameters,
-                self.data_y,
+                self.y_data,
                 self.variances,
                 self.prior_mean_vec)
         self.prior_covariance = K
@@ -590,7 +590,7 @@ class GP():
     def compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""
         CoVariance = self.kernel(
-            self.data_x, self.data_x, hyperparameters, self)
+            self.x_data, self.x_data, hyperparameters, self)
         self.add_to_diag(CoVariance, variances)
         return CoVariance
 
@@ -704,7 +704,7 @@ class GP():
     def default_mean_function(self,gp_obj,x,hyperparameters):
         """evaluates the gp mean function at the data points """
         mean = np.zeros((len(x)))
-        mean[:] = np.mean(self.data_y)
+        mean[:] = np.mean(self.y_data)
         return mean
     ###########################################################################
     ###########################################################################
@@ -726,8 +726,8 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
         posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         return {"x": p,
@@ -750,17 +750,17 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         x1 = np.array(p)
         x2 = np.array(p)
         eps = 1e-6
         x1[:,direction] = x1[:,direction] + eps
         x2[:,direction] = x2[:,direction] - eps
         mean_der = (self.mean_function(self,x1,self.hyperparameters) - self.mean_function(self,x2,self.hyperparameters))/(2.0*eps)
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
+        k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters)
         posterior_mean_grad = mean_der + (k_g @ self.covariance_value_prod)
         return {"x": p,
                 "direction":direction,
@@ -782,9 +782,9 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
         if self.use_inv is True:
             if variance_only is True: v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.K_inv, k); S = False
@@ -826,10 +826,10 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
+        k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
         kk =  self.kernel(p, p,self.hyperparameters,self)
         x1 = np.array(p)
         x2 = np.array(p)
@@ -863,9 +863,9 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
         post_mean = self.mean_function(self,p, self.hyperparameters)
         full_gp_prior_mean = np.append(self.prior_mean_vec, post_mean)
@@ -895,11 +895,11 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.data_x, direction,self.hyperparameters).T
+        k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
         x1 = np.array(p)
         x2 = np.array(p)
         eps = 1e-6
@@ -941,7 +941,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         priors = self.gp_prior(p)
         S = priors["S(x)"]
@@ -963,7 +963,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         priors1 = self.gp_prior(p)
         priors2 = self.gp_prior_grad(p,direction)
@@ -1024,7 +1024,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         res = self.posterior_mean(p)
         gp_mean = res["f(x)"]
@@ -1060,7 +1060,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         gp_mean = self.posterior_mean(p)["f(x)"]
         gp_mean_grad = self.posterior_mean_grad(p,direction)["df/dx"]
@@ -1092,9 +1092,9 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
-        k = self.kernel(self.data_x,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
 
 
@@ -1125,7 +1125,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         e2 = self.gp_entropy_grad(p,direction)
         sig = e2
@@ -1150,7 +1150,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         res = self.posterior_mean(p)
         gp_mean = res["f(x)"]
@@ -1189,7 +1189,7 @@ class GP():
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.data_x[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         x1 = np.array(p)
         x2 = np.array(p)
@@ -1554,19 +1554,19 @@ class GP():
         return hessian
 
     def dm_dh(self,hps):
-        gr = np.empty((len(hps),len(self.data_x)))
+        gr = np.empty((len(hps),len(self.x_data)))
         for i in range(len(hps)):
             temp_hps1 = np.array(hps)
             temp_hps1[i] = temp_hps1[i] + 1e-6
             temp_hps2 = np.array(hps)
             temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.mean_function(self,self.data_x,temp_hps1)
-            b = self.mean_function(self,self.data_x,temp_hps2)
+            a = self.mean_function(self,self.x_data,temp_hps1)
+            b = self.mean_function(self,self.x_data,temp_hps2)
             gr[i] = (a-b)/2e-6
         return gr
     ##########################
     def d2m_dh2(self,hps):
-        hess = np.empty((len(hps),len(hps),len(self.data_x)))
+        hess = np.empty((len(hps),len(hps),len(self.x_data)))
         e = 1e-4
         for i in range(len(hps)):
             for j in range(i+1):
@@ -1587,10 +1587,10 @@ class GP():
                 temp_hps4[j] = temp_hps4[j] + e
 
 
-                a = self.mean_function(self,self.data_x,temp_hps1)
-                b = self.mean_function(self,self.data_x,temp_hps2)
-                c = self.mean_function(self,self.data_x,temp_hps3)
-                d = self.mean_function(self,self.data_x,temp_hps4)
+                a = self.mean_function(self,self.x_data,temp_hps1)
+                b = self.mean_function(self,self.x_data,temp_hps2)
+                c = self.mean_function(self,self.x_data,temp_hps3)
+                d = self.mean_function(self,self.x_data,temp_hps4)
                 hess[i,j] = hess[j,i] = (a - c - d + b)/(4.*e*e)
         return hess
 
@@ -1625,10 +1625,10 @@ class GP():
 
     ################################################################
     def _normalize_y_data(self):
-        mini = np.min(self.data_y)
-        self.data_y = self.data_y - mini
-        maxi = np.max(self.data_y)
-        self.data_y = self.data_y / maxi
+        mini = np.min(self.y_data)
+        self.y_data = self.y_data - mini
+        maxi = np.max(self.y_data)
+        self.y_data = self.y_data / maxi
 
 
 
