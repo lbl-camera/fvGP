@@ -56,6 +56,8 @@ class gp2Scale():
         init_hyperparameters,
         batch_size,
         variances = None,
+        entry_limit = 2e9,
+        ram_limit = 1e10,
         compute_device = "cpu",
         gp_kernel_function = None,
         gp_mean_function = None,
@@ -77,7 +79,8 @@ class gp2Scale():
         self.batch_size = batch_size
         self.num_batches = (self.point_number // self.batch_size) + 1
         self.last_batch_size= self.point_number % self.batch_size
-
+        self.entry_limit = entry_limit
+        self.ram_limit = ram_limit
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -120,7 +123,14 @@ class gp2Scale():
         ##########################################
         self.client = self._init_dask_client(covariance_dask_client)
         self.compute_prior_fvGP_pdf()
-        print("gpLG successfully initiated")
+        print("gpLG successfully initiated, here is some info about the prior covarianve matrix:")
+        print("non zero elements: ", self.SparsePriorCovariance.count_nonzero())
+        print("Size in GBits:     ", self.SparsePriorCovariance.data.nbytes)
+        print("Sparsity: ",self.SparsePriorCovariance.count_nonzero()/float(self.point_number)**2)
+        if self.point_number <= 5000:
+            print("Here is an image:")
+            plt.imshow(self.SparsePriorCovariance.toarray())
+            plt.show()
 
 
     ##################################################################################
@@ -142,20 +152,20 @@ class gp2Scale():
             covariance value product
         """
         self.prior_mean_vec = np.zeros((self.point_number)) #self.mean_function(self,self.x_data,self.hyperparameters)
-        #self.SparsePriorCovariance = sparse.csc_matrix((self.point_number, self.point_number), dtype=np.float32)
-        self.SparsePriorCovariance = sparse.eye(self.point_number, format="csc")
         cov_y,K = self._compute_covariance_value_product(
                 self.hyperparameters,
                 self.y_data,
                 self.variances,
                 self.prior_mean_vec)
-        self.prior_covariance = K
+        self.SparsePriorCovariance = K
         self.covariance_value_prod = cov_y
+        return K, cov_y
+
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean):
         K = self.compute_covariance(hyperparameters, variances)
         y = values - mean
-        x = self.solve(K, y)
+        x = self.solve(K.tocsc(), y)
         #if self.use_inv is True: x = self.K_inv @ y
         #else: x = self.solve(K, y)
         if x.ndim == 2: x = x[:,0]
@@ -163,59 +173,75 @@ class gp2Scale():
     ##################################################################################
     def compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""
+        SparsePriorCovariance = sparse.eye(self.point_number, format="lil")
         tasks = []
-        ind   = []
-        #self.SparsePriorCovariance
-        print("creating the covariance")
         for i in range(self.num_batches):
-            b = i * self.batch_size
-            e = min((i+1) * self.batch_size, self.point_number)
-            #print("i from ",b," to ", e)
-            if b == e: continue
-            batch1 = self.x_data[i * self.batch_size : e]
+            #print("(",i,") of ", self.num_batches - 1)
+            beg_i = i * self.batch_size
+            end_i = min((i+1) * self.batch_size, self.point_number)
+            if beg_i == end_i: continue
+            batch1 = self.x_data[beg_i: end_i]
             for j in range(i,self.num_batches):
-                b = j * self.batch_size
-                print("(",i,j,") of ", self.num_batches)
-                e = min((j+1) * self.batch_size, self.point_number)
-                if b == e: continue
-                #print("j from ",b ," to ", e)
-                batch2 = self.x_data[j * self.batch_size : (j+1) * self.batch_size]
-                #print(batch1)
-                #print(batch2)
-                #print("=======")
-                #input()
-                data = {"batch1":batch1,"batch2": batch2, "hps" : hyperparameters}
-                ind.append(np.array([i*self.batch_size,j*self.batch_size]))
+                beg_j = j * self.batch_size
+                end_j = min((j+1) * self.batch_size, self.point_number)
+                if beg_j == end_j: continue
+                batch2 = self.x_data[beg_j : end_j]
+                #print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j)
+                data = {"batch1":batch1,"batch2": batch2, "hps" : hyperparameters, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                 tasks.append(self.client.submit(self.kernel,data))
-                self.collect_submatrices(tasks, ind)
-        #self.add_to_diag(variances)
-        self.SparsePriorCovariance = self.SparsePriorCovariance + (sparse.eye(self.point_number, format="csc") * variances[0])
-        #plt.imshow(self.SparsePriorCovariance.toarray())
-        #plt.show()
-        if len(self.SparsePriorCovariance.data) > 0.1 * self.point_number**2:
-            print("Matrix Not Sparse, Sparsety Coefficient ", len(self.SparsePriorCovariance.data)/float(self.point_number)**2)
-        return self.SparsePriorCovariance
+                SparsePriorCovariance, tasks = self.collect_submatrices(tasks, SparsePriorCovariance)
+                if SparsePriorCovariance.count_nonzero() > self.entry_limit or SparsePriorCovariance.data.nbytes > self.ram_limit:
+                    for future in tasks: self.client.cancel(tasks); self.client.shutdown()
+                    raise Exception("Matrix is not sparse enough. We are running the risk of a total crash. exit()")
+                #else: print("Sparsity: ",SparsePriorCovariance.count_nonzero()/float(self.point_number)**2,"  ",SparsePriorCovariance.count_nonzero(),"elements of allowed ", self.entry_limit)
 
-    def collect_submatrices(self,futures, ind):
+        SparsePriorCovariance = self.collect_remaining_submatrices(tasks, SparsePriorCovariance)
+        self.client.cancel(tasks)
+        diag = sparse.eye(self.point_number, format="lil")
+        diag.setdiag(variances)
+        SparsePriorCovariance = SparsePriorCovariance + diag
+        #plt.figure(figsize = (15,15))
+        #plt.imshow(SparsePriorCovariance.toarray())
+        #plt.show()
+
+        return SparsePriorCovariance
+
+    def collect_submatrices(self,futures, SparsePriorCovariance):
         #get a part of the covariance, and fit into the sparse one, but only the vales needed
         #throw warning if too many values are not zero
-        for i in range(len(futures)):
-            if futures[i].status == "finished":
-                CoVariance_sub = futures[i].result()
+        new_futures = []
+        for future in futures:
+            if future.status == "finished":
+                #print("ggggggg", )
+                CoVariance_sub, data = future.result()
                 zero_indices = np.where(CoVariance_sub < 1e-16)
                 CoVariance_sub[zero_indices] = 0.0
-                SparseCov_sub = sparse.csc_matrix(CoVariance_sub)
-                self.SparsePriorCovariance[ind[i][0]:ind[i][0] + len(CoVariance_sub),ind[i][1]:ind[i][1] + len(CoVariance_sub[0])] = SparseCov_sub
-
-                CoVariance_sub = CoVariance_sub.T
-                SparseCov_sub = sparse.csc_matrix(CoVariance_sub)
-                self.SparsePriorCovariance[ind[i][1]:ind[i][1] + len(CoVariance_sub),ind[i][0]:ind[i][0] + len(CoVariance_sub[0])] = SparseCov_sub
-                #print("this is our matrix: ", self.SparsePriorCovariance.toarray())
-                #plt.imshow(self.SparsePriorCovariance.toarray())
+                SparseCov_sub = sparse.lil_matrix(CoVariance_sub)
+                SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
+                SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
+                #
+                #plt.imshow(SparsePriorCovariance.toarray())
                 #plt.show()
+                #
+            else: new_futures.append(future)
+
+        return SparsePriorCovariance, new_futures
+
+
+    def collect_remaining_submatrices(self, futures, SparsePriorCovariance):
+        results = self.client.gather(futures)
+        for result in results:
+            CoVariance_sub, data = result
+            zero_indices = np.where(CoVariance_sub < 1e-16)
+            CoVariance_sub[zero_indices] = 0.0
+            SparseCov_sub = sparse.lil_matrix(CoVariance_sub)
+            SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
+            SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
+        return SparsePriorCovariance
+
 
     def _init_dask_client(self,dask_client):
-        if dask_client is None: 
+        if dask_client is None:
             dask_client = distributed.Client()
             print("No dask client provided to gp2Scale. Using the local client", flush = True)
         else: print("dask client provided to HGDL", flush = True)
@@ -227,7 +253,6 @@ class gp2Scale():
         print("Host ",self.workers["host"]," has ", len(self.workers["walkers"])," workers.")
         self.number_of_walkers = len(self.workers["walkers"])
         return client
-
 
 
     def log_likelihood(self,hyperparameters):
@@ -242,10 +267,12 @@ class gp2Scale():
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
         x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
         y = self.y_data - mean
-        sign, logdet = self.slogdet(K)
+        sign, logdet = self.slogdet(K.tocsc())
         n = len(y)
-        if sign == 0.0: return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
-        return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
+        if sign == 0.0: res = (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
+        else: res = (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
+        print("Evaluating marginal log-likelihood", res)
+        return res
 
 
     def minimumSwaps(self,arr):
@@ -268,9 +295,11 @@ class gp2Scale():
         lu = splu(A)
         diagL = lu.L.diagonal()
         diagU = lu.U.diagonal()
-        logdet = np.log(diagL).sum() + np.log(diagU).sum()
+        diagL = diagL.astype(np.complex128)
+        diagU = diagU.astype(np.complex128)
+        logdet= np.real(np.nansum(np.log(diagL)) + np.nansum(np.log(diagU)))
         swap_sign = self.minimumSwaps(lu.perm_r)
-        sign = swap_sign*np.sign(diagL).prod()*np.sign(diagU).prod()
+        sign = np.sign(np.real(swap_sign*np.sign(diagL).prod()*np.sign(diagU).prod()))
         return sign, logdet
         #s,l = np.linalg.slogdet(A)
         #return s,l
@@ -354,7 +383,7 @@ class gp2Scale():
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        k = self.kernel({"batch1": self.x_data,"batch2":p,"hps" : self.hyperparameters})
+        k = self.kernel({"batch1": self.x_data,"batch2":p,"hps" : self.hyperparameters, "mode" : "post"})[0]
         A = k.T @ self.covariance_value_prod
         #posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         posterior_mean = A
@@ -425,6 +454,7 @@ class gp2Scale():
         local_optimizer,
         global_optimizer,
         deflation_radius,
+        constraints = None,
         dask_client = None):
 
         start_log_likelihood = self.log_likelihood(starting_hps)
@@ -437,6 +467,11 @@ class gp2Scale():
         ############################
         ####global optimization:##
         ############################
+        def constraint(v):
+            return np.array(np.sum(v[3:]))
+
+        nlc = NonlinearConstraint(constraint,0,10000)
+
         if method == "global":
             print("fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
             print("maximum number of iterations: ", max_iter)
@@ -449,7 +484,7 @@ class gp2Scale():
                 maxiter=max_iter,
                 popsize = pop_size,
                 tol = tolerance,
-                workers = 1,
+                workers = 1, constraints = (nlc),
             )
             hyperparameters = np.array(res["x"])
             Eval = self.log_likelihood(hyperparameters)
