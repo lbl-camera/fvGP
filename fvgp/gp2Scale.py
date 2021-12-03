@@ -140,6 +140,8 @@ class gp2Scale():
     ######################Compute#Covariance#Matrix###################################
     ##################################################################################
     ##################################################################################
+    ##################################################################################
+    ##################################################################################
     def compute_prior_fvGP_pdf(self):
         """
         This function computes the important entities, namely the prior covariance and
@@ -186,7 +188,7 @@ class gp2Scale():
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 if beg_j == end_j: continue
                 batch2 = self.x_data[beg_j : end_j]
-                #print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j)
+                if self.point_number >= 100000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j)
                 data = {"batch1":batch1,"batch2": batch2, "hps" : hyperparameters, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                 tasks.append(self.client.submit(self.kernel,data))
                 SparsePriorCovariance, tasks = self.collect_submatrices(tasks, SparsePriorCovariance)
@@ -212,7 +214,7 @@ class gp2Scale():
         new_futures = []
         for future in futures:
             if future.status == "finished":
-                #print("ggggggg", )
+                if self.point_number >= 100000: print("Future", future, " has finished its work")
                 CoVariance_sub, data = future.result()
                 zero_indices = np.where(CoVariance_sub < 1e-16)
                 CoVariance_sub[zero_indices] = 0.0
@@ -238,8 +240,16 @@ class gp2Scale():
             SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
             SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
         return SparsePriorCovariance
-
-
+    
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ######################DASK########################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
     def _init_dask_client(self,dask_client):
         if dask_client is None:
             dask_client = distributed.Client()
@@ -254,141 +264,16 @@ class gp2Scale():
         self.number_of_walkers = len(self.workers["walkers"])
         return client
 
-
-    def log_likelihood(self,hyperparameters):
-        """
-        computes the marginal log-likelihood
-        input:
-            hyper parameters
-        output:
-            negative marginal log-likelihood (scalar)
-        """
-        mean = np.zeros((self.point_number))   #self.mean_function(self,self.x_data,hyperparameters) * 0.0
-        if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
-        x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
-        y = self.y_data - mean
-        sign, logdet = self.slogdet(K.tocsc())
-        n = len(y)
-        if sign == 0.0: res = (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
-        else: res = (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
-        print("Evaluating marginal log-likelihood", res)
-        return res
-
-
-    def minimumSwaps(self,arr):
-        a = dict(enumerate(arr))
-        b = {v:k for k,v in a.items()}
-        count = 0
-        for i in a:
-            x = a[i]
-            if x!=i:
-                y = b[i]
-                a[y] = x
-                b[x] = y
-                count+=1
-        return count
-
-    def slogdet(self, A):
-        """
-        fvGPs slogdet method based on torch
-        """
-        lu = splu(A)
-        diagL = lu.L.diagonal()
-        diagU = lu.U.diagonal()
-        diagL = diagL.astype(np.complex128)
-        diagU = diagU.astype(np.complex128)
-        logdet= np.real(np.nansum(np.log(diagL)) + np.nansum(np.log(diagU)))
-        swap_sign = self.minimumSwaps(lu.perm_r)
-        sign = np.sign(np.real(swap_sign*np.sign(diagL).prod()*np.sign(diagU).prod()))
-        return sign, logdet
-        #s,l = np.linalg.slogdet(A)
-        #return s,l
-        #if self.compute_device == "cpu":
-        #    sign, logdet = torch.slogdet(A)
-        #    logdet = torch.nan_to_num(logdet)
-        #    return sign, logdet
-        #elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
-        #    sign, logdet = torch.slogdet(A)
-        #    sign = sign.cpu()
-        #    logdet = logdet.cpu()
-        #    logdet = torch.nan_to_num(logdet)
-        #    return sign, logdet
-
-    def inv(self, A):
-            B = torch.inverse(A)
-            return B
-
-    def solve(self, A, b):
-        #####for sparsity:
-        #zero_indices = np.where(A < 1e-16)
-        #A[zero_indices] = 0.0
-        #if self.is_sparse(A):
-        try:
-            x = spsolve(A,b)
-            return x
-        except Exception as e:
-            print("fvGP: Sparse solve did not work out.")
-            print("reason: ", str(e))
     ##################################################################################
-    def add_to_diag(self,Matrix, Vector):
-        d = torch.einsum("ii->i", Matrix)
-        d += Vector
-        return Matrix
-    #def is_sparse(self,A):
-    #    if float(np.count_nonzero(A))/float(len(A)**2) < 0.01: return True
-    #    else: return False
-    #def how_sparse_is(self,A):
-    #    return float(np.count_nonzero(A))/float(len(A)**2)
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ######################TRAINING####################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
 
-    def default_mean_function(self,gp_obj,x,hyperparameters):
-        """evaluates the gp mean function at the data points """
-        #, requires_grad = True
-        mean = torch.ones((len(x)), dtype = float) + torch.mean(self.y_data, dtype = float)
-        return mean
-    def get_distance_matrix_robust(self,x1,x2,hps):
-        d = np.zeros((len(x1),len(x2)))
-        for i in range(x1.shape[1]):
-            d += ((x1[:,i].reshape(-1, 1) - x2[:,i])*hps[i+1])**2
-        return np.sqrt(d + 1e-16)
-
-    def default_kernel(self,x1,x2,hyperparameters,obj):
-        ################################################################
-        ###standard anisotropic kernel in an input space with l2########
-        ################################################################
-        """
-        x1: 2d numpy array of points
-        x2: 2d numpy array of points
-        obj: object containing kernel definition
-
-        Return:
-        -------
-        Kernel Matrix
-        """
-        distance_matrix = self.get_distance_matrix_robust(x1,x2,hyperparameters)
-        #return   hyperparameters[0]**2 *  obj.matern_kernel_diff1(distance_matrix,1)
-        return hyperparameters[0]**2  *  torch.exp(-distance_matrix)
-
-    def posterior_mean(self, x_iset):
-        """
-        function to compute the posterior mean
-        input:
-        ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
-            index set which results from a cartesian product of input and output space
-        output:
-        -------
-            {"x":    the input points,
-             "f(x)": the posterior mean vector (1d numpy array)}
-        """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        k = self.kernel({"batch1": self.x_data,"batch2":p,"hps" : self.hyperparameters, "mode" : "post"})[0]
-        A = k.T @ self.covariance_value_prod
-        #posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
-        posterior_mean = A
-        return {"x": p,
-                "f(x)": posterior_mean}
 
     def train(self,
         hyperparameter_bounds,
@@ -504,4 +389,175 @@ class gp2Scale():
             "with log likelihood: ",
             self.log_likelihood(hyperparameters))
         return hyperparameters
+
+
+    def log_likelihood(self,hyperparameters):
+        """
+        computes the marginal log-likelihood
+        input:
+            hyper parameters
+        output:
+            negative marginal log-likelihood (scalar)
+        """
+        mean = np.zeros((self.point_number))   #self.mean_function(self,self.x_data,hyperparameters) * 0.0
+        if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
+        x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        y = self.y_data - mean
+        sign, logdet = self.slogdet(K.tocsc())
+        n = len(y)
+        if sign == 0.0: res = (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
+        else: res = (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
+        print("Evaluating marginal log-likelihood", res)
+        return res
+
+
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ######################LINEAR ALGEBRA##############################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+
+    def minimumSwaps(self,arr):
+        a = dict(enumerate(arr))
+        b = {v:k for k,v in a.items()}
+        count = 0
+        for i in a:
+            x = a[i]
+            if x!=i:
+                y = b[i]
+                a[y] = x
+                b[x] = y
+                count+=1
+        return count
+
+    def slogdet(self, A):
+        """
+        fvGPs slogdet method based on torch
+        """
+        lu = splu(A)
+        diagL = lu.L.diagonal()
+        diagU = lu.U.diagonal()
+        diagL = diagL.astype(np.complex128)
+        diagU = diagU.astype(np.complex128)
+        logdet= np.real(np.nansum(np.log(diagL)) + np.nansum(np.log(diagU)))
+        swap_sign = self.minimumSwaps(lu.perm_r)
+        sign = np.sign(np.real(swap_sign*np.sign(diagL).prod()*np.sign(diagU).prod()))
+        return sign, logdet
+        #s,l = np.linalg.slogdet(A)
+        #return s,l
+        #if self.compute_device == "cpu":
+        #    sign, logdet = torch.slogdet(A)
+        #    logdet = torch.nan_to_num(logdet)
+        #    return sign, logdet
+        #elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
+        #    sign, logdet = torch.slogdet(A)
+        #    sign = sign.cpu()
+        #    logdet = logdet.cpu()
+        #    logdet = torch.nan_to_num(logdet)
+        #    return sign, logdet
+
+    def inv(self, A):
+            B = torch.inverse(A)
+            return B
+
+    def solve(self, A, b):
+        #####for sparsity:
+        #zero_indices = np.where(A < 1e-16)
+        #A[zero_indices] = 0.0
+        #if self.is_sparse(A):
+        try:
+            x = spsolve(A,b)
+            return x
+        except Exception as e:
+            print("fvGP: Sparse solve did not work out.")
+            print("reason: ", str(e))
+    ##################################################################################
+    def add_to_diag(self,Matrix, Vector):
+        d = torch.einsum("ii->i", Matrix)
+        d += Vector
+        return Matrix
+    #def is_sparse(self,A):
+    #    if float(np.count_nonzero(A))/float(len(A)**2) < 0.01: return True
+    #    else: return False
+    #def how_sparse_is(self,A):
+    #    return float(np.count_nonzero(A))/float(len(A)**2)
+
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ######################gp MEAN AND  KERNEL#########################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+
+
+    def default_mean_function(self,gp_obj,x,hyperparameters):
+        """evaluates the gp mean function at the data points """
+        #, requires_grad = True
+        mean = torch.ones((len(x)), dtype = float) + torch.mean(self.y_data, dtype = float)
+        return mean
+    def get_distance_matrix_robust(self,x1,x2,hps):
+        d = np.zeros((len(x1),len(x2)))
+        for i in range(x1.shape[1]):
+            d += ((x1[:,i].reshape(-1, 1) - x2[:,i])*hps[i+1])**2
+        return np.sqrt(d + 1e-16)
+
+    def default_kernel(self,x1,x2,hyperparameters,obj):
+        ################################################################
+        ###standard anisotropic kernel in an input space with l2########
+        ################################################################
+        """
+        x1: 2d numpy array of points
+        x2: 2d numpy array of points
+        obj: object containing kernel definition
+
+        Return:
+        -------
+        Kernel Matrix
+        """
+        distance_matrix = self.get_distance_matrix_robust(x1,x2,hyperparameters)
+        #return   hyperparameters[0]**2 *  obj.matern_kernel_diff1(distance_matrix,1)
+        return hyperparameters[0]**2  *  torch.exp(-distance_matrix)
+
+
+
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ######################POSTERIOR###################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+    ##################################################################################
+
+
+    def posterior_mean(self, x_iset):
+        """
+        function to compute the posterior mean
+        input:
+        ------
+            x_iset: 2d numpy array of points, note, these are elements of the 
+            index set which results from a cartesian product of input and output space
+        output:
+        -------
+            {"x":    the input points,
+             "f(x)": the posterior mean vector (1d numpy array)}
+        """
+        p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        k = self.kernel({"batch1": self.x_data,"batch2":p,"hps" : self.hyperparameters, "mode" : "post"})[0]
+        A = k.T @ self.covariance_value_prod
+        #posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
+        posterior_mean = A
+        return {"x": p,
+                "f(x)": posterior_mean}
+
 
