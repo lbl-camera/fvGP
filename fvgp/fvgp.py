@@ -2,7 +2,6 @@
 
 import dask.distributed as distributed
 from . import __version__
-print(__version__)
 
 f"""
 Software: FVGP, version: {__version__}
