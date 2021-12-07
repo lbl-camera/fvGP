@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 
 import dask.distributed as distributed
-"""
-Software: FVGP, version: 2.3.4
+from . import __version__
+print(__version__)
+
+f"""
+Software: FVGP, version: {__version__}
 File containing the gp class
 use help() to find information about usage
 Author: Marcus Noack
@@ -71,7 +74,7 @@ class fvGP(GP):
         variances (N x n numpy array):                  variances of the values, default = array of shape of points
                                                         with 1 % of the values
         compute_device:                                 cpu/gpu, default = cpu
-        gp_kernel_function(func):                       None/function defining the 
+        gp_kernel_function(func):                       None/function defining the
                                                         kernel def name(x1,x2,hyperparameters,self), default = None
         gp_mean_function(func):                         None/a function def name(x, self), default = None
         sparse (bool):                                  default = False

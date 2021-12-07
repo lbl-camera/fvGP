@@ -1,0 +1,2 @@
+fvgp/_versioneer.py export-subst
+fvgp/_version.py export-subst
