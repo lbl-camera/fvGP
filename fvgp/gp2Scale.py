@@ -123,12 +123,13 @@ class gp2Scale():
         #compute the prior########################
         ##########################################
         self.client = self._init_dask_client(covariance_dask_client)
+        self.st = time.time()
         self.compute_prior_fvGP_pdf()
-        print("gpLG successfully initiated, here is some info about the prior covarianve matrix:")
+        print("gpLG successfully initiated, here is some info about the prior covariance matrix:")
         print("non zero elements: ", self.SparsePriorCovariance.count_nonzero())
         print("Size in GBits:     ", self.SparsePriorCovariance.data.nbytes/1000000000)
         print("Sparsity: ",self.SparsePriorCovariance.count_nonzero()/float(self.point_number)**2)
-        if self.point_number <= 5000:
+        if self.point_number <= 10000:
             print("Here is an image:")
             plt.imshow(self.SparsePriorCovariance.toarray())
             plt.show()
@@ -168,6 +169,7 @@ class gp2Scale():
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean):
         K = self.compute_covariance(hyperparameters, variances)
         print("COVARIANCE COMPUTED")
+        print("exec time:", time.time() - self.st)
         y = values - mean
         x = self.solve(K.tocsc(), y)
         return x,K
@@ -178,8 +180,8 @@ class gp2Scale():
         SparsePriorCovariance = sparse.coo_matrix((self.point_number,self.point_number))
         tasks = []
         count = 0
-        scattered_data = {"x_data":self.x_data}#, "Cov":SparsePriorCovariance}
-        scatter_future = self.client.scatter(scattered_data,workers = self.workers["worker"])
+        scatter_data = {"x_data":self.x_data}
+        scatter_future = self.client.scatter(scatter_data,workers = self.workers["worker"])
         for i in range(self.num_batches):
             beg_i = i * self.batch_size
             end_i = min((i+1) * self.batch_size, self.point_number)
@@ -191,12 +193,10 @@ class gp2Scale():
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 if beg_j == end_j: continue
                 batch2 = self.x_data[beg_j : end_j]
-                #if self.point_number >= 100000: 
-                print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker)
-                data = {"scattered_data": scatter_future, "batch1":batch1,"batch2": batch2, "hps" : hyperparameters, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
-                #fd.append(self.client.scatter(data, workers = worker))
+                if self.point_number >= 100000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker)
+                #data = {"scattered_data": scatter_future, "batch1":batch1,"batch2": batch2, "hps" : hyperparameters, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
+                data = {"scattered_data": scatter_future, "hps" : hyperparameters, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                 tasks.append(self.client.submit(kernel_function,data, workers = worker))
-                #time.sleep(1)
                 count += 1
                 #gc.collect() ##not sure if necessary
                 if len(tasks) >= self.number_of_workers: SparsePriorCovariance, tasks = self.collect_submatrices(tasks, SparsePriorCovariance)
@@ -210,9 +210,6 @@ class gp2Scale():
         diag = sparse.eye(self.point_number, format="coo")
         diag.setdiag(variances)
         SparsePriorCovariance = SparsePriorCovariance + diag
-        #plt.figure(figsize = (15,15))
-        #plt.imshow(SparsePriorCovariance.toarray())
-        #plt.show()
 
         return SparsePriorCovariance
 
@@ -225,17 +222,13 @@ class gp2Scale():
                 st = time.time()
                 if self.point_number >= 100000: print("Future", future, " has finished its work")
                 SparseCov_sub, data = future.result()
-                #SparseCov, data = future.result()
-                #if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
-                #    print("WARNING: Collected submatrix not sparse")
-                #    print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
-                #SparsePriorCovariance += SparseCov
+                if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
+                    print("WARNING: Collected submatrix not sparse")
+                    print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
                 SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, data["range_i"][0], data["range_j"][0])
-                
                 #plt.imshow(SparsePriorCovariance.toarray())
                 #plt.show()
                 #input()
-                #
             else: new_futures.append(future)
 
         return SparsePriorCovariance, new_futures
@@ -244,18 +237,14 @@ class gp2Scale():
     def collect_remaining_submatrices(self, futures, SparsePriorCovariance):
         results = self.client.gather(futures)
         for result in results:
-            #SparseCov_sub, data = result
             SparseCov_sub, data = result
-            #if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
-            #    print("WARNING: Collected submatrix not sparse")
-            #    print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
+            if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
+                print("WARNING: Collected submatrix not sparse")
+                print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
 
             SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, data["range_i"][0], data["range_j"][0])
-            #SparsePriorCovariance += SparseCov
-            #SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
-            #SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
         return SparsePriorCovariance
-    
+
     def insert(self, bg,sm, i ,j):
         if i != j:
             row = np.concatenate([bg.row,sm.row + i, sm.col + j])
@@ -264,8 +253,7 @@ class gp2Scale():
         else:
             row = np.concatenate([bg.row,sm.row + i])
             col = np.concatenate([bg.col,sm.col + j])
-            res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape )
-    
+            res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
         return res
     ##################################################################################
     ##################################################################################
@@ -611,11 +599,7 @@ def insert(bg,sm, i ,j):
 
 def kernel_function(data):
     ####here we can also ingest any other callable() kernel (can be written in data)
-    #x1 = data["batch1"]
-    #x2 = data["batch2"]
-    st = time.time()
-    #dl = len(data["scattered_data"]["x_data"])
-    #M = sparse.coo_matrix((dl,dl))
+    #st = time.time()
     x1 = data["scattered_data"]["x_data"][data["range_i"][0]:data["range_i"][1]]
     x2 = data["scattered_data"]["x_data"][data["range_j"][0]:data["range_j"][1]]
     hps= data["hps"]
@@ -630,10 +614,6 @@ def kernel_function(data):
     zero_indices = np.where(k < 1e-16)
     k[zero_indices] = 0.0
     k_sparse = sparse.coo_matrix(k)
-    #res = insert(data["scattered_data"]["Cov"],k_sparse,data["range_i"][0],data["range_j"][0])
-    #res = insert(M,k_sparse,data["range_i"][0],data["range_j"][0])
-    print("time spent in kernel: ", time.time() - st)
-
+    #print("time spent in kernel: ", time.time() - st, flush = True)
 
     return k_sparse, data
-    #return res, data
