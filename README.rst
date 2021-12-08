@@ -22,7 +22,7 @@ works, and perform publicly and display publicly, and to permit others to do so.
 
 
 * Free software: GNU General Public License v3
-* Documentation: https://www.overleaf.com/read/nrcyxxsbhvbx
+* Documentation: gpcam.lbl.gov
 
 
 Features
@@ -32,5 +32,6 @@ Features
 
 Credits
 -------
-This package used the hgdl packagae of David Perryman and Marcus Noack
+
+This package uses the hgdl packagae of David Perryman and Marcus Noack
 

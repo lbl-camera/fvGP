@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import splu
 from scipy.optimize import differential_evolution
-
+from scipy.sparse import coo_matrix
 
 
 class gp2Scale():
@@ -125,7 +125,7 @@ class gp2Scale():
         self.compute_prior_fvGP_pdf()
         print("gpLG successfully initiated, here is some info about the prior covarianve matrix:")
         print("non zero elements: ", self.SparsePriorCovariance.count_nonzero())
-        print("Size in GBits:     ", self.SparsePriorCovariance.data.nbytes)
+        print("Size in GBits:     ", self.SparsePriorCovariance.data.nbytes/1000000000)
         print("Sparsity: ",self.SparsePriorCovariance.count_nonzero()/float(self.point_number)**2)
         if self.point_number <= 5000:
             print("Here is an image:")
@@ -177,6 +177,8 @@ class gp2Scale():
         """computes the covariance matrix from the kernel"""
         SparsePriorCovariance = sparse.eye(self.point_number, format="lil")
         tasks = []
+        count = 0
+        fd = []
         for i in range(self.num_batches):
             #print("(",i,") of ", self.num_batches - 1)
             beg_i = i * self.batch_size
@@ -184,13 +186,18 @@ class gp2Scale():
             if beg_i == end_i: continue
             batch1 = self.x_data[beg_i: end_i]
             for j in range(i,self.num_batches):
+                worker = self.workers["worker"][int(count - ((count//self.number_of_workers) * self.number_of_workers))]
                 beg_j = j * self.batch_size
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 if beg_j == end_j: continue
                 batch2 = self.x_data[beg_j : end_j]
-                if self.point_number >= 100000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j)
+                #if self.point_number >= 100000: 
+                print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker)
                 data = {"batch1":batch1,"batch2": batch2, "hps" : hyperparameters, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
-                tasks.append(self.client.submit(self.kernel,data))
+                #fd.append(self.client.scatter(data, workers = worker))
+                tasks.append(self.client.submit(self.kernel,data, workers = worker))
+                time.sleep(1)
+                count += 1
                 SparsePriorCovariance, tasks = self.collect_submatrices(tasks, SparsePriorCovariance)
                 if SparsePriorCovariance.count_nonzero() > self.entry_limit or SparsePriorCovariance.data.nbytes > self.ram_limit:
                     for future in tasks: self.client.cancel(tasks); self.client.shutdown()
@@ -215,15 +222,22 @@ class gp2Scale():
         for future in futures:
             if future.status == "finished":
                 if self.point_number >= 100000: print("Future", future, " has finished its work")
+                #print("reading results ...", flush  = True)
                 CoVariance_sub, data = future.result()
+                #print("setting small stuff to zero ...")
                 zero_indices = np.where(CoVariance_sub < 1e-16)
                 CoVariance_sub[zero_indices] = 0.0
+                #print("making sub matrix sparse...")
                 SparseCov_sub = sparse.lil_matrix(CoVariance_sub)
-                SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
-                SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
+                #print("substituting...")
+                SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, data["range_i"][0], data["range_j"][0])
+                #SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
+                #SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
                 #
+                #print("done")
                 #plt.imshow(SparsePriorCovariance.toarray())
                 #plt.show()
+                #input()
                 #
             else: new_futures.append(future)
 
@@ -237,10 +251,24 @@ class gp2Scale():
             zero_indices = np.where(CoVariance_sub < 1e-16)
             CoVariance_sub[zero_indices] = 0.0
             SparseCov_sub = sparse.lil_matrix(CoVariance_sub)
-            SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
-            SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
+            SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, data["range_i"][0], data["range_j"][0])
+            #SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
+            #SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
         return SparsePriorCovariance
     
+    def insert(self, B,s, i ,j):
+        bg = B.tocoo()
+        sm = s.tocoo()
+        if i != j:
+            row = np.concatenate([bg.row,sm.row + i, sm.col + j])
+            col = np.concatenate([bg.col,sm.col + j, sm.row + i])
+            res = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = B.shape )
+        else:
+            row = np.concatenate([bg.row,sm.row + i])
+            col = np.concatenate([bg.col,sm.col + j])
+            res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = B.shape )
+
+        return res.tolil()
     ##################################################################################
     ##################################################################################
     ##################################################################################
@@ -259,9 +287,9 @@ class gp2Scale():
         worker_info = list(client.scheduler_info()["workers"].keys())
         if not worker_info: raise Exception("No workers available")
         self.workers = {"host": worker_info[0],
-                "walkers": worker_info[1:]}
-        print("Host ",self.workers["host"]," has ", len(self.workers["walkers"])," workers.")
-        self.number_of_walkers = len(self.workers["walkers"])
+                "worker": worker_info[1:]}
+        print("Host ",self.workers["host"]," has ", len(self.workers["worker"])," workers.")
+        self.number_of_workers = len(self.workers["worker"])
         return client
 
     ##################################################################################
