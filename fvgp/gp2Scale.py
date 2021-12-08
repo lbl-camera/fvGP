@@ -9,7 +9,8 @@ from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import splu
 from scipy.optimize import differential_evolution
 from scipy.sparse import coo_matrix
-
+import gc
+from scipy.sparse.linalg import eigsh
 
 class gp2Scale():
     """
@@ -168,14 +169,11 @@ class gp2Scale():
         K = self.compute_covariance(hyperparameters, variances)
         y = values - mean
         x = self.solve(K.tocsc(), y)
-        #if self.use_inv is True: x = self.K_inv @ y
-        #else: x = self.solve(K, y)
-        if x.ndim == 2: x = x[:,0]
         return x,K
     ##################################################################################
     def compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""
-        SparsePriorCovariance = sparse.eye(self.point_number, format="lil")
+        SparsePriorCovariance = sparse.eye(self.point_number, format="coo")
         tasks = []
         count = 0
         fd = []
@@ -195,10 +193,11 @@ class gp2Scale():
                 print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker)
                 data = {"batch1":batch1,"batch2": batch2, "hps" : hyperparameters, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                 #fd.append(self.client.scatter(data, workers = worker))
-                tasks.append(self.client.submit(self.kernel,data, workers = worker))
-                time.sleep(1)
+                tasks.append(self.client.submit(kernel_function,data, workers = worker))
+                #time.sleep(1)
                 count += 1
-                SparsePriorCovariance, tasks = self.collect_submatrices(tasks, SparsePriorCovariance)
+                #gc.collect() ##not sure if necessary
+                if len(tasks) >= self.number_of_workers: SparsePriorCovariance, tasks = self.collect_submatrices(tasks, SparsePriorCovariance)
                 if SparsePriorCovariance.count_nonzero() > self.entry_limit or SparsePriorCovariance.data.nbytes > self.ram_limit:
                     for future in tasks: self.client.cancel(tasks); self.client.shutdown()
                     raise Exception("Matrix is not sparse enough. We are running the risk of a total crash. exit()")
@@ -206,7 +205,7 @@ class gp2Scale():
 
         SparsePriorCovariance = self.collect_remaining_submatrices(tasks, SparsePriorCovariance)
         self.client.cancel(tasks)
-        diag = sparse.eye(self.point_number, format="lil")
+        diag = sparse.eye(self.point_number, format="coo")
         diag.setdiag(variances)
         SparsePriorCovariance = SparsePriorCovariance + diag
         #plt.figure(figsize = (15,15))
@@ -221,20 +220,19 @@ class gp2Scale():
         new_futures = []
         for future in futures:
             if future.status == "finished":
+                st = time.time()
                 if self.point_number >= 100000: print("Future", future, " has finished its work")
-                #print("reading results ...", flush  = True)
-                CoVariance_sub, data = future.result()
-                #print("setting small stuff to zero ...")
-                zero_indices = np.where(CoVariance_sub < 1e-16)
-                CoVariance_sub[zero_indices] = 0.0
-                #print("making sub matrix sparse...")
-                SparseCov_sub = sparse.lil_matrix(CoVariance_sub)
-                #print("substituting...")
+                #print("reading results ...",time.time() - st, flush  = True)
+                SparseCov_sub, data = future.result()
+                if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
+                    print("WARNING: Collected submatrix not sparse")
+                    print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
+                #print("substituting...",time.time() - st, flush  = True)
                 SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, data["range_i"][0], data["range_j"][0])
                 #SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
                 #SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
                 #
-                #print("done")
+                #print("done",time.time() - st, flush  = True)
                 #plt.imshow(SparsePriorCovariance.toarray())
                 #plt.show()
                 #input()
@@ -247,28 +245,32 @@ class gp2Scale():
     def collect_remaining_submatrices(self, futures, SparsePriorCovariance):
         results = self.client.gather(futures)
         for result in results:
-            CoVariance_sub, data = result
-            zero_indices = np.where(CoVariance_sub < 1e-16)
-            CoVariance_sub[zero_indices] = 0.0
-            SparseCov_sub = sparse.lil_matrix(CoVariance_sub)
+            SparseCov_sub, data = result
+            #zero_indices = np.where(CoVariance_sub < 1e-16)
+            #CoVariance_sub[zero_indices] = 0.0
+            #SparseCov_sub = sparse.coo_matrix(CoVariance_sub)
+            if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
+                print("WARNING: Collected submatrix not sparse")
+                print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
+
             SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, data["range_i"][0], data["range_j"][0])
             #SparsePriorCovariance[data["range_i"][0]:data["range_i"][1],data["range_j"][0]:data["range_j"][1]] = SparseCov_sub
             #SparsePriorCovariance[data["range_j"][0]:data["range_j"][1],data["range_i"][0]:data["range_i"][1]] = SparseCov_sub.transpose()
         return SparsePriorCovariance
     
-    def insert(self, B,s, i ,j):
-        bg = B.tocoo()
-        sm = s.tocoo()
+    def insert(self, bg,sm, i ,j):
+        #bg = B.tocoo()
+        #sm = s.tocoo()
         if i != j:
             row = np.concatenate([bg.row,sm.row + i, sm.col + j])
             col = np.concatenate([bg.col,sm.col + j, sm.row + i])
-            res = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = B.shape )
+            res = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
         else:
             row = np.concatenate([bg.row,sm.row + i])
             col = np.concatenate([bg.col,sm.col + j])
-            res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = B.shape )
+            res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape )
 
-        return res.tolil()
+        return res
     ##################################################################################
     ##################################################################################
     ##################################################################################
@@ -419,7 +421,7 @@ class gp2Scale():
         return hyperparameters
 
 
-    def log_likelihood(self,hyperparameters):
+    def log_likelihood(self,hyperparameters, xK = None ):
         """
         computes the marginal log-likelihood
         input:
@@ -429,13 +431,13 @@ class gp2Scale():
         """
         mean = np.zeros((self.point_number))   #self.mean_function(self,self.x_data,hyperparameters) * 0.0
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
-        x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        if xK is None: x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        else: x,K = xK[0],xK[1]
         y = self.y_data - mean
         sign, logdet = self.slogdet(K.tocsc())
         n = len(y)
         if sign == 0.0: res = (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
         else: res = (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
-        print("Evaluating marginal log-likelihood", res)
         return res
 
 
@@ -466,14 +468,19 @@ class gp2Scale():
         """
         fvGPs slogdet method based on torch
         """
-        lu = splu(A)
-        diagL = lu.L.diagonal()
-        diagU = lu.U.diagonal()
-        diagL = diagL.astype(np.complex128)
-        diagU = diagU.astype(np.complex128)
-        logdet= np.real(np.nansum(np.log(diagL)) + np.nansum(np.log(diagU)))
-        swap_sign = self.minimumSwaps(lu.perm_r)
-        sign = np.sign(np.real(swap_sign*np.sign(diagL).prod()*np.sign(diagU).prod()))
+        #lu = splu(A)
+        #diagL = lu.L.diagonal()
+        #diagU = lu.U.diagonal()
+        #diagL = diagL.astype(np.complex128)
+        #diagU = diagU.astype(np.complex128)
+        #logdet= np.real(np.nansum(np.log(diagL)) + np.nansum(np.log(diagU)))
+        #swap_sign = self.minimumSwaps(lu.perm_r)
+        #sign = np.sign(np.real(swap_sign*np.sign(diagL).prod()*np.sign(diagU).prod()))
+        eigval,eigvec = eigsh(A)
+        i0 = np.where(eigval == 0.0)
+        eigval[i0] = 1e-6
+        logdet = np.sum(np.log(eigval))
+        sign = 1.
         return sign, logdet
         #s,l = np.linalg.slogdet(A)
         #return s,l
@@ -488,26 +495,22 @@ class gp2Scale():
         #    logdet = torch.nan_to_num(logdet)
         #    return sign, logdet
 
-    def inv(self, A):
-            B = torch.inverse(A)
-            return B
-
     def solve(self, A, b):
         #####for sparsity:
         #zero_indices = np.where(A < 1e-16)
         #A[zero_indices] = 0.0
         #if self.is_sparse(A):
         try:
-            x = spsolve(A,b)
+            x,info = solve.cg(A,b)
             return x
         except Exception as e:
             print("fvGP: Sparse solve did not work out.")
             print("reason: ", str(e))
     ##################################################################################
-    def add_to_diag(self,Matrix, Vector):
-        d = torch.einsum("ii->i", Matrix)
-        d += Vector
-        return Matrix
+    #def add_to_diag(self,Matrix, Vector):
+    #    d = torch.einsum("ii->i", Matrix)
+    #    d += Vector
+    #    return Matrix
     #def is_sparse(self,A):
     #    if float(np.count_nonzero(A))/float(len(A)**2) < 0.01: return True
     #    else: return False
@@ -588,4 +591,32 @@ class gp2Scale():
         return {"x": p,
                 "f(x)": posterior_mean}
 
+def get_distance_matrix(x1,x2,hps):
+    d = np.zeros((len(x1),len(x2)))
+    for i in range(x1.shape[1]):
+        d += ((x1[:,i].reshape(-1, 1) - x2[:,i])*hps[i+1])**2
+    return np.sqrt(d)
+def f(x, hps):
+    f = np.ones((len(x)))
+    i0= np.where(hps < 0.5)
+    f[i0] = 0.0
+    return f
 
+def kernel_function(data):
+    ####here we can also ingest any other callable() kernel (can be written in data)
+    x1 = data["batch1"]
+    x2 = data["batch2"]
+    hps= data["hps"]
+    mode = data["mode"]
+    d = get_distance_matrix(x1,x2,hps)
+    hpsf = hps[3:]
+    if mode == "prior":
+        range1 = data["range_i"]
+        range2 = data["range_j"]
+        k = np.outer(f(x1, hpsf[range1[0]:range1[1]]),f(x2,hpsf[range2[0]:range2[1]])) * hps[0] * np.exp(-d**2)
+    else: k = np.outer(f(x1, hpsf[0:len(x1)]),f(x2,np.ones(len(x2)))) * hps[0] * np.exp(-d**2)
+    zero_indices = np.where(k < 1e-16)
+    k[zero_indices] = 0.0
+    k_sparse = sparse.coo_matrix(k)
+
+    return k_sparse, data
