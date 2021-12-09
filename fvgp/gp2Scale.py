@@ -14,7 +14,7 @@ from scipy.sparse.linalg import eigsh
 
 class gp2Scale():
     """
-    gp2Scale class: Provides tools for a Lagre-Scale single-task GP.
+    gp2Scale class: Provides tools for a Large-Scale single-task GP.
 
     symbols:
         N: Number of points in the data set
@@ -129,7 +129,7 @@ class gp2Scale():
         print("non zero elements: ", self.SparsePriorCovariance.count_nonzero())
         print("Size in GBits:     ", self.SparsePriorCovariance.data.nbytes/1000000000)
         print("Sparsity: ",self.SparsePriorCovariance.count_nonzero()/float(self.point_number)**2)
-        if self.point_number <= 10000:
+        if self.point_number <= 5000:
             print("Here is an image:")
             plt.imshow(self.SparsePriorCovariance.toarray())
             plt.show()
@@ -170,6 +170,9 @@ class gp2Scale():
         K = self.compute_covariance(hyperparameters, variances)
         print("COVARIANCE COMPUTED")
         print("exec time:", time.time() - self.st)
+        #eigval,eigvec = eigsh(K)
+        #print("condition number: ", np.max(eigval)/np.min(eigval))
+        #print("Sparsity: ",K.count_nonzero()/float(self.point_number)**2)
         y = values - mean
         x = self.solve(K.tocsc(), y)
         return x,K
@@ -434,73 +437,30 @@ class gp2Scale():
     ##################################################################################
     ##################################################################################
     ##################################################################################
-
-    def minimumSwaps(self,arr):
-        a = dict(enumerate(arr))
-        b = {v:k for k,v in a.items()}
-        count = 0
-        for i in a:
-            x = a[i]
-            if x!=i:
-                y = b[i]
-                a[y] = x
-                b[x] = y
-                count+=1
-        return count
-
     def slogdet(self, A):
         """
         fvGPs slogdet method based on torch
         """
-        #lu = splu(A)
-        #diagL = lu.L.diagonal()
-        #diagU = lu.U.diagonal()
-        #diagL = diagL.astype(np.complex128)
-        #diagU = diagU.astype(np.complex128)
-        #logdet= np.real(np.nansum(np.log(diagL)) + np.nansum(np.log(diagU)))
-        #swap_sign = self.minimumSwaps(lu.perm_r)
-        #sign = np.sign(np.real(swap_sign*np.sign(diagL).prod()*np.sign(diagU).prod()))
         eigval,eigvec = eigsh(A)
         i0 = np.where(eigval == 0.0)
         eigval[i0] = 1e-6
         logdet = np.sum(np.log(eigval))
         sign = 1.
         return sign, logdet
-        #s,l = np.linalg.slogdet(A)
-        #return s,l
-        #if self.compute_device == "cpu":
-        #    sign, logdet = torch.slogdet(A)
-        #    logdet = torch.nan_to_num(logdet)
-        #    return sign, logdet
-        #elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
-        #    sign, logdet = torch.slogdet(A)
-        #    sign = sign.cpu()
-        #    logdet = logdet.cpu()
-        #    logdet = torch.nan_to_num(logdet)
-        #    return sign, logdet
+
 
     def solve(self, A, b):
         #####for sparsity:
-        #zero_indices = np.where(A < 1e-16)
-        #A[zero_indices] = 0.0
-        #if self.is_sparse(A):
         try:
-            x,info = solve.cg(A,b)
-            return x
+            x,info = solve.cg(A,b, maxiter = 20)
         except Exception as e:
             print("fvGP: Sparse solve did not work out.")
             print("reason: ", str(e))
-    ##################################################################################
-    #def add_to_diag(self,Matrix, Vector):
-    #    d = torch.einsum("ii->i", Matrix)
-    #    d += Vector
-    #    return Matrix
-    #def is_sparse(self,A):
-    #    if float(np.count_nonzero(A))/float(len(A)**2) < 0.01: return True
-    #    else: return False
-    #def how_sparse_is(self,A):
-    #    return float(np.count_nonzero(A))/float(len(A)**2)
-
+            info = 1
+        if info > 0:
+            print("cg did not work out, let's do a minres")
+            x,info = solve.minres(A,b, show = True)
+        return x
     ##################################################################################
     ##################################################################################
     ##################################################################################
@@ -568,7 +528,7 @@ class gp2Scale():
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        k = self.kernel({"batch1": self.x_data,"batch2":p,"hps" : self.hyperparameters, "mode" : "post"})[0]
+        k = kernel_function({"x_data":self.x_data,"x2":p, "hps" : self.hyperparameters, "mode" : "post"})[0]
         A = k.T @ self.covariance_value_prod
         #posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         posterior_mean = A
@@ -600,17 +560,21 @@ def insert(bg,sm, i ,j):
 def kernel_function(data):
     ####here we can also ingest any other callable() kernel (can be written in data)
     #st = time.time()
-    x1 = data["scattered_data"]["x_data"][data["range_i"][0]:data["range_i"][1]]
-    x2 = data["scattered_data"]["x_data"][data["range_j"][0]:data["range_j"][1]]
     hps= data["hps"]
     mode = data["mode"]
-    d = get_distance_matrix(x1,x2,hps)
     hpsf = hps[3:]
     if mode == "prior":
+        x1 = data["scattered_data"]["x_data"][data["range_i"][0]:data["range_i"][1]]
+        x2 = data["scattered_data"]["x_data"][data["range_j"][0]:data["range_j"][1]]
+        d = get_distance_matrix(x1,x2,hps)
         range1 = data["range_i"]
         range2 = data["range_j"]
         k = np.outer(f(x1, hpsf[range1[0]:range1[1]]),f(x2,hpsf[range2[0]:range2[1]])) * hps[0] * np.exp(-d**2)
-    else: k = np.outer(f(x1, hpsf[0:len(x1)]),f(x2,np.ones(len(x2)))) * hps[0] * np.exp(-d**2)
+    else: 
+        x1 = data["x_data"]
+        x2 = data["x2"]
+        d = get_distance_matrix(x1,x2,hps)
+        k = np.outer(f(x1, hpsf[0:len(x1)]),f(x2,np.ones(len(x2)))) * hps[0] * np.exp(-d**2)
     zero_indices = np.where(k < 1e-16)
     k[zero_indices] = 0.0
     k_sparse = sparse.coo_matrix(k)
