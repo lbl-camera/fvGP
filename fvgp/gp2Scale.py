@@ -2,7 +2,6 @@ import time
 import scipy.sparse as sparse
 import scipy.sparse.linalg as solve
 import numpy as np
-from hgdl.hgdl import HGDL
 import dask.distributed as distributed
 import matplotlib.pyplot as plt
 from scipy.sparse.linalg import spsolve
@@ -183,7 +182,7 @@ class gp2Scale():
         SparsePriorCovariance = sparse.coo_matrix((self.point_number,self.point_number))
         tasks = []
         count = 0
-        scatter_data = {"x_data":self.x_data}
+        scatter_data = {"x_data":self.x_data, "hps": hyperparameters}
         scatter_future = self.client.scatter(scatter_data,workers = self.workers["worker"])
         for i in range(self.num_batches):
             beg_i = i * self.batch_size
@@ -198,12 +197,13 @@ class gp2Scale():
                 batch2 = self.x_data[beg_j : end_j]
                 if self.point_number >= 100000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker)
                 #data = {"scattered_data": scatter_future, "batch1":batch1,"batch2": batch2, "hps" : hyperparameters, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
-                data = {"scattered_data": scatter_future, "hps" : hyperparameters, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
+                data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                 tasks.append(self.client.submit(kernel_function,data, workers = worker))
                 count += 1
                 #gc.collect() ##not sure if necessary
                 if len(tasks) >= self.number_of_workers: SparsePriorCovariance, tasks = self.collect_submatrices(tasks, SparsePriorCovariance)
                 if SparsePriorCovariance.count_nonzero() > self.entry_limit or SparsePriorCovariance.data.nbytes > self.ram_limit:
+                    print("Non-zero entries in matrix:  ", SparsePriorCovariance.count_nonzero()," RAM usage in bytes: ",SparsePriorCovariance.data.nbytes)
                     for future in tasks: self.client.cancel(tasks); self.client.shutdown()
                     raise Exception("Matrix is not sparse enough. We are running the risk of a total crash. exit()")
                 #else: print("Sparsity: ",SparsePriorCovariance.count_nonzero()/float(self.point_number)**2,"  ",SparsePriorCovariance.count_nonzero(),"elements of allowed ", self.entry_limit)
@@ -271,7 +271,7 @@ class gp2Scale():
         if dask_client is None:
             dask_client = distributed.Client()
             print("No dask client provided to gp2Scale. Using the local client", flush = True)
-        else: print("dask client provided to HGDL", flush = True)
+        else: print("dask client provided to gp2Scale", flush = True)
         client = dask_client
         worker_info = list(client.scheduler_info()["workers"].keys())
         if not worker_info: raise Exception("No workers available")
@@ -560,7 +560,7 @@ def insert(bg,sm, i ,j):
 def kernel_function(data):
     ####here we can also ingest any other callable() kernel (can be written in data)
     #st = time.time()
-    hps= data["hps"]
+    hps= data["scattered_data"]["hps"]
     mode = data["mode"]
     hpsf = hps[3:]
     if mode == "prior":
