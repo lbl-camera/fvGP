@@ -224,28 +224,27 @@ class gp2Scale():
             if future.status == "finished":
                 st = time.time()
                 if self.point_number >= 100000: print("Future", future, " has finished its work")
-                SparseCov_sub, data = future.result()
+                SparseCov_sub, ranges = future.result()
                 if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
                     print("WARNING: Collected submatrix not sparse")
                     print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
-                SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, data["range_i"][0], data["range_j"][0])
+                SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, ranges[0], ranges[1])
                 #plt.imshow(SparsePriorCovariance.toarray())
                 #plt.show()
                 #input()
             else: new_futures.append(future)
-
         return SparsePriorCovariance, new_futures
 
 
     def collect_remaining_submatrices(self, futures, SparsePriorCovariance):
         results = self.client.gather(futures)
         for result in results:
-            SparseCov_sub, data = result
+            SparseCov_sub, ranges = result
             if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
                 print("WARNING: Collected submatrix not sparse")
                 print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
 
-            SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, data["range_i"][0], data["range_j"][0])
+            SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, ranges[0], ranges[1])
         return SparsePriorCovariance
 
     def insert(self, bg,sm, i ,j):
@@ -578,6 +577,5 @@ def kernel_function(data):
     zero_indices = np.where(k < 1e-16)
     k[zero_indices] = 0.0
     k_sparse = sparse.coo_matrix(k)
-    #print("time spent in kernel: ", time.time() - st, flush = True)
 
-    return k_sparse, data
+    return k_sparse, (data["range_i"][0],data["range_j"][0])
