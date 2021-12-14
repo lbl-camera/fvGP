@@ -181,6 +181,7 @@ class gp2Scale():
         #SparsePriorCovariance = sparse.eye(self.point_number, format="coo")
         SparsePriorCovariance = sparse.coo_matrix((self.point_number,self.point_number))
         tasks = []
+        finished_futures = []
         count = 0
         scatter_data = {"x_data":self.x_data, "hps": hyperparameters}
         scatter_future = self.client.scatter(scatter_data,workers = self.workers["worker"])
@@ -201,7 +202,7 @@ class gp2Scale():
                 tasks.append(self.client.submit(kernel_function,data, workers = worker))
                 count += 1
                 #gc.collect() ##not sure if necessary
-                if len(tasks) >= self.number_of_workers: SparsePriorCovariance, tasks = self.collect_submatrices(tasks, SparsePriorCovariance)
+                if len(tasks) >= self.number_of_workers: SparsePriorCovariance, finished_futures = self.collect_submatrices(tasks, finished_futures,SparsePriorCovariance)
                 if SparsePriorCovariance.count_nonzero() > self.entry_limit or SparsePriorCovariance.data.nbytes > self.ram_limit:
                     print("Non-zero entries in matrix:  ", SparsePriorCovariance.count_nonzero()," RAM usage in bytes: ",SparsePriorCovariance.data.nbytes)
                     for future in tasks: self.client.cancel(tasks); self.client.shutdown()
@@ -216,12 +217,12 @@ class gp2Scale():
 
         return SparsePriorCovariance
 
-    def collect_submatrices(self,futures, SparsePriorCovariance):
+    def collect_submatrices(self,futures, finished_futures, SparsePriorCovariance):
         #get a part of the covariance, and fit into the sparse one, but only the vales needed
         #throw warning if too many values are not zero
-        new_futures = []
+        #new_futures = []
         for future in futures:
-            if future.status == "finished":
+            if future.status == "finished" and future.key not in finished_futures:
                 st = time.time()
                 if self.point_number >= 100000: print("Future", future, " has finished its work")
                 SparseCov_sub, ranges = future.result()
@@ -229,11 +230,12 @@ class gp2Scale():
                     print("WARNING: Collected submatrix not sparse")
                     print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
                 SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, ranges[0], ranges[1])
+                finished_futures.append(future.key)
                 #plt.imshow(SparsePriorCovariance.toarray())
                 #plt.show()
                 #input()
-            else: new_futures.append(future)
-        return SparsePriorCovariance, new_futures
+            #else: new_futures.append(future)
+        return SparsePriorCovariance, finished_futures
 
 
     def collect_remaining_submatrices(self, futures, SparsePriorCovariance):
