@@ -202,7 +202,7 @@ class gp2Scale():
                     if worker_dict is not None:
                         ##this is what we do when have a worker to submit to ...
                         worker_not_found = False #print("worker found: ", worker_dict["worker"]," at index ", index)
-                        if self.point_number >= 100000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker)
+                        if self.point_number >= 100000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker_dict["worker"])
                         data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                         futures.append(self.client.submit(kernel_function,data, workers = worker_dict["worker"]))
                         worker_future_dicts[index]["active future key"] = futures[-1].key
