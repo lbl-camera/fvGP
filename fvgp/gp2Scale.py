@@ -202,7 +202,7 @@ class gp2Scale():
                     if worker_dict is not None:
                         ##this is what we do when have a worker to submit to ...
                         worker_not_found = False #print("worker found: ", worker_dict["worker"]," at index ", index)
-                        if self.point_number >= 100000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker)
+                        if self.point_number >= 100000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker_dict["worker"])
                         data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                         futures.append(self.client.submit(kernel_function,data, workers = worker_dict["worker"]))
                         worker_future_dicts[index]["active future key"] = futures[-1].key
@@ -214,8 +214,8 @@ class gp2Scale():
                         SparsePriorCovariance = self.collect_submatrices(futures, finished_futures, worker_future_dicts, SparsePriorCovariance)
                         time.sleep(0.1)
 
+                #print("Non-zero entries in matrix:  ", SparsePriorCovariance.count_nonzero()," RAM usage in bytes: ",SparsePriorCovariance.data.nbytes, flush = True)
                 if SparsePriorCovariance.count_nonzero() > self.entry_limit or SparsePriorCovariance.data.nbytes > self.ram_limit:
-                    print("Non-zero entries in matrix:  ", SparsePriorCovariance.count_nonzero()," RAM usage in bytes: ",SparsePriorCovariance.data.nbytes)
                     for future in futures: self.client.cancel(futures); self.client.shutdown()
                     raise Exception("Matrix is not sparse enough. We are running the risk of a total crash. exit()")
                 #else: print("Sparsity: ",SparsePriorCovariance.count_nonzero()/float(self.point_number)**2,"  ",SparsePriorCovariance.count_nonzero(),"elements of allowed ", self.entry_limit)
@@ -231,6 +231,7 @@ class gp2Scale():
     def collect_submatrices(self,futures, finished_futures, worker_future_dicts, SparsePriorCovariance):
         #get a part of the covariance, and fit into the sparse one, but only the values needed
         #throw warning if too many values are not zero
+        new_futures = []
         for future in futures:
             #print("futures checked: ", future.status == "finished")
             if future.status == "finished" and future.key not in finished_futures:
@@ -246,6 +247,8 @@ class gp2Scale():
                 #plt.imshow(SparsePriorCovariance.toarray())
                 #plt.show()
                 #input()
+            else: new_futures.append(future)
+        futures = new_futures
         return SparsePriorCovariance
 
     def collect_remaining_submatrices(self,futures, finished_futures, worker_future_dicts, SparsePriorCovariance):
@@ -309,6 +312,8 @@ class gp2Scale():
         self.workers = {#"host": worker_info[0],
                 "worker": worker_info[0:]}
         print("We have ", len(self.workers["worker"])," workers ready to go.")
+        print("all the workers: ",self.workers["worker"])
+        print("the scheduler: ", client.scheduler_info()["address"])
         self.number_of_workers = len(self.workers["worker"])
         return client
 
