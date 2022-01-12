@@ -11,6 +11,65 @@ from scipy.sparse import coo_matrix
 import gc
 from scipy.sparse.linalg import eigsh
 
+
+def kernel(x1,x2, hps,obj):
+    import numpy as np
+    def b(x,x0,r = 0.1, ampl = 1.0):
+        """
+        evaluates the bump function
+        x ... a point (1d numpy array)
+        x0 ... 1d numpy array of location of bump function
+        returns the bump function b(x,x0) with radius r
+        """
+        x_new = x - x0
+        d = np.linalg.norm(x_new, axis = 1)
+        a = np.zeros(d.shape)
+        a = 1.0 - (d**2/r**2)
+        i = np.where(a > 0.0)
+        bump = np.zeros(a.shape)
+        bump[i] = ampl * np.exp((-1.0/a[i])+1)
+        return bump
+
+
+    def f(x,x0, radii, amplts):
+        b1 = b(x, x0[0],r = radii[0], ampl = amplts[0])  ###x0[0] ... D-dim location of bump func 1
+        b2 = b(x, x0[1],r = radii[1], ampl = amplts[1])  ###x0[1] ... D-dim location of bump func 2
+        b3 = b(x, x0[2],r = radii[2], ampl = amplts[2])  ###x0[1] ... D-dim location of bump func 2
+        b4 = b(x, x0[3],r = radii[3], ampl = amplts[3])  ###x0[1] ... D-dim location of bump func 2
+        return b1 + b2 + b3 + b4
+
+    def g(x,x0, radii, amplts):
+        b1 = b(x, x0[0],r = radii[0], ampl = amplts[0])  ###x0[0] ... D-dim location of bump func 1
+        b2 = b(x, x0[1],r = radii[1], ampl = amplts[1])  ###x0[1] ... D-dim location of bump func 2
+        b3 = b(x, x0[2],r = radii[2], ampl = amplts[2])  ###x0[1] ... D-dim location of bump func 2
+        b4 = b(x, x0[3],r = radii[3], ampl = amplts[3])  ###x0[1] ... D-dim location of bump func 2
+        return b1 + b2 + b3 + b4
+
+
+
+    def sparse_stat_kernel(x1,x2, hps):
+        d = 0
+        for i in range(len(x1[0])):
+            d += np.subtract.outer(x1[:,i],x2[:,i])**2
+        d = np.sqrt(d)
+        d[d == 0.0] = 1e-6
+        d[d > hps] = hps
+        kernel = (np.sqrt(2.0)/(3.0*np.sqrt(np.pi)))*\
+        ((3.0*(d/hps)**2*np.log((d/hps)/(1+np.sqrt(1.0 - (d/hps)**2))))+\
+        ((2.0*(d/hps)**2+1.0)*np.sqrt(1.0-(d/hps)**2)))
+        return kernel
+
+    k = np.outer(f(x1,hps[0:4],hps[4:8],hps[8:12]),
+                 f(x2,hps[0:4],hps[4:8],hps[8:12])) + \
+        np.outer(g(x1,hps[12:16],hps[16:20],hps[20:24]),
+                 g(x2,hps[12:16],hps[16:20],hps[20:24]))
+    return k + hps[24] * sparse_stat_kernel(x1,x2, hps[25])
+
+
+
+
+
+
 class gp2Scale():
     """
     gp2Scale class: Provides tools for a Large-Scale single-task GP.
@@ -100,7 +159,7 @@ class gp2Scale():
         ##########################################
         #######define kernel and mean function####
         ##########################################
-        if callable(gp_kernel_function): self.kernel = gp_kernel_function
+        if callable(gp_kernel_function): self.kernel = gp_kernel_function#; print("kernel provided")
         #else: raise Exception("A kernel callable has to be provided!")
         #self.d_kernel_dx = self.d_gp_kernel_dx
 
@@ -121,6 +180,7 @@ class gp2Scale():
         ##########################################
         #compute the prior########################
         ##########################################
+        #print("1: ",self.kernel(self.x_data[0:10],self.x_data[0:10], self.hyperparameters, None))
         self.client = self._init_dask_client(covariance_dask_client)
         self.st = time.time()
         self.compute_prior_fvGP_pdf()
@@ -182,6 +242,8 @@ class gp2Scale():
         SparsePriorCovariance = sparse.coo_matrix((self.point_number,self.point_number))
         futures = []
         finished_futures = []
+
+        #print("2: ",self.kernel(self.x_data[0:10],self.x_data[0:10], self.hyperparameters, None))
         worker_future_dicts = [{"worker": worker, "active future key" : None} for worker in self.workers["worker"]]
         scatter_data = {"x_data":self.x_data, "hps": hyperparameters}
         scatter_future = self.client.scatter(scatter_data,workers = self.workers["worker"])
@@ -202,15 +264,13 @@ class gp2Scale():
                     if worker_dict is not None:
                         ##this is what we do when have a worker to submit to ...
                         worker_not_found = False #print("worker found: ", worker_dict["worker"]," at index ", index)
-                        if self.point_number >= 100000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker_dict["worker"])
+                        #if self.point_number >= 100000: 
+                        print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker_dict["worker"])
                         data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
+                        #data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                         futures.append(self.client.submit(kernel_function,data, workers = worker_dict["worker"]))
                         worker_future_dicts[index]["active future key"] = futures[-1].key
-                        #print("new worker future dicts list: ", worker_future_dicts)
-                        #gc.collect() ##not sure if necessary
-                        #if len(active_futures) >= self.number_of_workers: 
                     else:
-                        ##this is what we do when we ran out of workers
                         SparsePriorCovariance = self.collect_submatrices(futures, finished_futures, worker_future_dicts, SparsePriorCovariance)
                         time.sleep(0.1)
 
@@ -236,7 +296,8 @@ class gp2Scale():
             #print("futures checked: ", future.status == "finished")
             if future.status == "finished" and future.key not in finished_futures:
                 st = time.time()
-                if self.point_number >= 100000: print("Future", future, " has finished its work")
+                #if self.point_number >= 100000: 
+                print("Future", future, " has finished its work")
                 SparseCov_sub, ranges = future.result()
                 if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
                     print("WARNING: Collected submatrix not sparse")
@@ -478,8 +539,9 @@ class gp2Scale():
         fvGPs slogdet method based on torch
         """
         eigval,eigvec = eigsh(A)
-        i0 = np.where(eigval == 0.0)
-        eigval[i0] = 1e-6
+        #i0 = np.where(eigval == 0.0)
+        eigval[eigval == 0.0] = 1e-6
+        #eigval[i0] = 1e-6
         logdet = np.sum(np.log(eigval))
         sign = 1.
         return sign, logdet
@@ -576,7 +638,8 @@ def get_distance_matrix(x1,x2,hps):
     for i in range(x1.shape[1]):
         d += ((x1[:,i].reshape(-1, 1) - x2[:,i])*hps[i+1])**2
     return np.sqrt(d)
-def f(x, hps):
+
+def ff(x, hps):
     f = np.ones((len(x)))
     i0= np.where(hps < 0.5)
     f[i0] = 0.0
@@ -594,10 +657,13 @@ def insert(bg,sm, i ,j):
     return res
 
 def kernel_function(data):
-    ####here we can also ingest any other callable() kernel (can be written in data)
-    #st = time.time()
+    ####here we can also inject any other callable() kernel (can be written in data)
+    #
+    print("in the kernel", flush = True)
+    st = time.time()
     hps= data["scattered_data"]["hps"]
     mode = data["mode"]
+    #kernel = data["kernel"]
     hpsf = hps[3:]
     if mode == "prior":
         x1 = data["scattered_data"]["x_data"][data["range_i"][0]:data["range_i"][1]]
@@ -605,14 +671,19 @@ def kernel_function(data):
         d = get_distance_matrix(x1,x2,hps)
         range1 = data["range_i"]
         range2 = data["range_j"]
-        k = np.outer(f(x1, hpsf[range1[0]:range1[1]]),f(x2,hpsf[range2[0]:range2[1]])) * hps[0] * np.exp(-d**2)
+        k = kernel(x1,x2,hps, None)
+        #k = np.outer(ff(x1, hpsf[range1[0]:range1[1]]),ff(x2,hpsf[range2[0]:range2[1]])) * hps[0] * np.exp(-d**2)
     else: 
         x1 = data["x_data"]
         x2 = data["x2"]
         d = get_distance_matrix(x1,x2,hps)
-        k = np.outer(f(x1, hpsf[0:len(x1)]),f(x2,np.ones(len(x2)))) * hps[0] * np.exp(-d**2)
-    zero_indices = np.where(k < 1e-16)
-    k[zero_indices] = 0.0
+        k = kernel(x1,x2,hps, None)
+        #k = np.outer(ff(x1, hpsf[0:len(x1)]),ff(x2,np.ones(len(x2)))) * hps[0] * np.exp(-d**2)
+    #zero_indices = np.where(k < 1e-16)
+    ###is k[k<1e-6] = 0.0 better?
+    k[k<1e-16] = 0.0
+    #k[zero_indices] = 0.0
     k_sparse = sparse.coo_matrix(k)
+    print("I spent ", time.time() - st," seconds in the kernel", flush = True)
 
     return k_sparse, (data["range_i"][0],data["range_j"][0])
