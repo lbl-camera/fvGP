@@ -1172,7 +1172,6 @@ class GPJAX():
         -------
             a structure of the she shape of the distance input parameter
         """
-
         kernel = np.exp(-(distance) / (length))
         return kernel
 
