@@ -169,6 +169,9 @@ class gp2Scale():
         K = self.compute_covariance(hyperparameters, variances,client)
         print("COVARIANCE COMPUTED")
         print("exec time:", time.time() - self.st)
+        plt.imshow(K.toarray())
+        plt.show()
+
         #eigval,eigvec = eigsh(K)
         #print("condition number: ", np.max(eigval)/np.min(eigval))
         #print("Sparsity: ",K.count_nonzero()/float(self.point_number)**2)
@@ -183,6 +186,7 @@ class gp2Scale():
         SparsePriorCovariance = sparse.coo_matrix((self.point_number,self.point_number))
         futures = []           ### a list of futures
         #finished_futures = []  ### a list of keys of futures that have finished thir work
+        print("scattering data")
 
         worker_future_maps = [{"worker": worker, "active future key" : None} for worker in self.workers["worker"]]   ##a list of dicts that is used to assign workers to future keys
         scatter_data = {"x_data":self.x_data, "hps": hyperparameters, "kernel" : self.kernel} ##data that can be scattered
@@ -200,16 +204,16 @@ class gp2Scale():
                 ######submit work to specified worker if active_futures < number_of_workers
                 while True:
                     worker_dict, index = self.get_idle_worker(worker_future_maps)
-                    print("workers: ", worker_dict)
+                    #print("workers: ", worker_dict)
                     if worker_dict is not None:
                         ##this is what we do when we have a worker to submit to ...
-                        if self.point_number >= 10000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker_dict["worker"])
                         data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                         futures.append(client.submit(kernel_function,data, workers = worker_dict["worker"]))
+                        if self.point_number >= 10000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker_dict["worker"], "Future: ", futures[-1].key)
                         worker_future_maps[index]["active future key"] = futures[-1].key
                         break
                     else:
-                        print("Checking for finished futures")
+                        #print("Checking for finished futures")
                         SparsePriorCovariance, futures = self.collect_submatrices(futures, worker_future_maps, SparsePriorCovariance)
                         time.sleep(0.1)
 
@@ -231,21 +235,18 @@ class gp2Scale():
         for future in futures:
             if future.status == "finished": # and future.key not in finished_futures:
                 SparseCov_sub, ranges,ketime = future.result()
-                if self.point_number >= 10000: print("Future", future, " has finished its work in", ketime," seconds.")
-                if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
+                if self.point_number >= 10000: print("Future", future.key, " has finished its work in", ketime," seconds.")
+                if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
                     print("WARNING: Collected submatrix not sparse")
                     print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
                 SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, ranges[0], ranges[1])
                 #finished_futures.append(future.key)
                 self.free_worker(worker_future_maps, future.key)
-                #print(future.key," freed")
-                #print(worker_future_maps)
-                #print("----------------")
+                print(future.key,"   was freed")
+                print("")
+
             else: new_futures.append(future)
         futures = new_futures
-        print("all finished collected in this round")
-        print(futures)
-        #print("====================================")
         return SparsePriorCovariance, futures
 
     def collect_remaining_submatrices(self,futures, worker_future_maps, SparsePriorCovariance):
@@ -259,7 +260,7 @@ class gp2Scale():
             for future in futures:
                 if future.status == "finished": #and future.key not in finished_futures:
                     SparseCov_sub, ranges,ketime = future.result()
-                    if self.point_number >= 100000: print("Collecting remaining future", future,". Future finished in ", ketime, " seconds.")
+                    if self.point_number >= 100000: print("Collecting remaining future", future.key,". Future finished in ", ketime, " seconds.")
                     if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
                         print("WARNING: Collected submatrix not sparse")
                         print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
