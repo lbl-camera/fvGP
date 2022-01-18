@@ -200,6 +200,7 @@ class gp2Scale():
                 ######submit work to specified worker if active_futures < number_of_workers
                 while True:
                     worker_dict, index = self.get_idle_worker(worker_future_maps)
+                    print("workers: ", worker_dict)
                     if worker_dict is not None:
                         ##this is what we do when we have a worker to submit to ...
                         if self.point_number >= 10000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker_dict["worker"])
@@ -208,9 +209,8 @@ class gp2Scale():
                         worker_future_maps[index]["active future key"] = futures[-1].key
                         break
                     else:
+                        print("Checking for finished futures")
                         SparsePriorCovariance, futures = self.collect_submatrices(futures, worker_future_maps, SparsePriorCovariance)
-                        #print(futures, worker_future_maps)
-                        #print("")
                         time.sleep(0.1)
 
                 if SparsePriorCovariance.count_nonzero() > self.entry_limit or SparsePriorCovariance.data.nbytes > self.ram_limit:
@@ -243,8 +243,8 @@ class gp2Scale():
                 #print("----------------")
             else: new_futures.append(future)
         futures = new_futures
-        #print("all finished collected in this round")
-        #print(futures)
+        print("all finished collected in this round")
+        print(futures)
         #print("====================================")
         return SparsePriorCovariance, futures
 
