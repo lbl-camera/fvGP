@@ -233,7 +233,7 @@ class gp2Scale():
         #throw warning if too many values are not zero
         new_futures = []
         for future in futures:
-            if future.status == "finished": # and future.key not in finished_futures:
+            if future.status == "finished":
                 SparseCov_sub, ranges,ketime = future.result()
                 if self.point_number >= 10000: print("Future", future.key, " has finished its work in", ketime," seconds.")
                 if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
@@ -242,35 +242,16 @@ class gp2Scale():
                 SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, ranges[0], ranges[1])
                 #finished_futures.append(future.key)
                 self.free_worker(worker_future_maps, future.key)
-                print(future.key,"   was freed")
-                print("")
+                #print(future.key,"   was freed")
+                #print("")
 
             else: new_futures.append(future)
         futures = new_futures
         return SparsePriorCovariance, futures
 
     def collect_remaining_submatrices(self,futures, worker_future_maps, SparsePriorCovariance):
-        #get a part of the covariance, and fit into the sparse one, but only the values needed
-        #throw warning if too many values are not zero
-        #results_remaining = True
-        #print("finished futures: ",finished_futures)
         while futures:
-            #results_remaining = False
-            new_futures = []
-            for future in futures:
-                if future.status == "finished": #and future.key not in finished_futures:
-                    SparseCov_sub, ranges,ketime = future.result()
-                    if self.point_number >= 100000: print("Collecting remaining future", future.key,". Future finished in ", ketime, " seconds.")
-                    if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1: 
-                        print("WARNING: Collected submatrix not sparse")
-                        print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
-                    SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, ranges[0], ranges[1])
-                    #finished_futures.append(future.key)
-                    self.free_worker(worker_future_maps, future.key)
-                #elif status != "finished" and future.key not in finished_futures: results_remaining = True
-                else: new_futures.append(future)
-            futures = new_futures
-        print("No futures remaining, All Done")
+            SparsePriorCovariance, futures = self.collect_submatrices(futures,worker_future_maps, SparsePriorCovariance)
         return SparsePriorCovariance
 
     def get_idle_worker(self,worker_future_maps):
