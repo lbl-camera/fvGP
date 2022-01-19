@@ -127,7 +127,7 @@ class GP():
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((self.y_data.shape)) * abs(self.y_data / 100.0)
+            self.variances = np.ones((self.y_data.shape)) * abs(np.mean(self.y_data) / 100.0)
             print("CAUTION: you have not provided data variances in fvGP,")
             print("they will be set to 1 percent of the data values!")
         elif np.ndim(variances) == 2:
