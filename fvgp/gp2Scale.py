@@ -182,11 +182,8 @@ class gp2Scale():
 
     def compute_covariance(self, hyperparameters, variances,client):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
-        #SparsePriorCovariance = sparse.eye(self.point_number, format="coo")
         SparsePriorCovariance = sparse.coo_matrix((self.point_number,self.point_number))
         futures = []           ### a list of futures
-        #finished_futures = []  ### a list of keys of futures that have finished thir work
-        print("scattering data")
 
         worker_future_maps = [{"worker": worker, "active future key" : None} for worker in self.workers["worker"]]   ##a list of dicts that is used to assign workers to future keys
         scatter_data = {"x_data":self.x_data, "hps": hyperparameters, "kernel" : self.kernel} ##data that can be scattered
@@ -219,7 +216,7 @@ class gp2Scale():
 
                 if SparsePriorCovariance.count_nonzero() > self.entry_limit or SparsePriorCovariance.data.nbytes > self.ram_limit:
                     for future in futures: client.cancel(futures); client.shutdown()
-        print("All batches submitted, collecting ...")
+
         SparsePriorCovariance = self.collect_remaining_submatrices(futures, worker_future_maps, SparsePriorCovariance)
         client.cancel(futures)
         diag = sparse.eye(self.point_number, format="coo")
@@ -240,12 +237,9 @@ class gp2Scale():
                     print("WARNING: Collected submatrix not sparse")
                     print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
                 SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, ranges[0], ranges[1])
-                #finished_futures.append(future.key)
                 self.free_worker(worker_future_maps, future.key)
-                #print(future.key,"   was freed")
-                #print("")
-
             else: new_futures.append(future)
+
         futures = new_futures
         return SparsePriorCovariance, futures
 
