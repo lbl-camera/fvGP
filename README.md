@@ -6,10 +6,10 @@
 [![Codecov](https://img.shields.io/codecov/c/github/lbl-camera/fvGP)](https://app.codecov.io/gh/lbl-camera/fvGP)
 [![PyPI - License](https://img.shields.io/pypi/l/fvGP)](https://pypi.org/project/fvgp/)
 
-## Features
 
-* Python package for highly flexible function-valued Gaussian processes (fvGP)
-* coming soon: extreme-scale GPs, GPs tailored for HPC training
+Python package for highly flexible function-valued Gaussian processes (fvGP)
+
+coming soon: extreme-scale GPs, GPs tailored for HPC training
 
 ## Credits
 
