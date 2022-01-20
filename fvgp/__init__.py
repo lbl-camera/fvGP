@@ -2,4 +2,6 @@
 
 __author__ = """Marcus Michael Noack"""
 __email__ = 'MarcusNoack@lbl.gov'
-__version__ = '3.1.2'
+
+from . import _version
+__version__ = _version.get_versions()['version']

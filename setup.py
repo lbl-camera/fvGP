@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 from setuptools import setup, find_packages
 import sys
-#import versioneer
+import versioneer
 from os import path
 """The setup script."""
 
@@ -58,6 +58,8 @@ setup(
     packages=find_packages(include=['fvgp', 'fvgp.*']),
     test_suite='tests',
     url='https://github.com/MarcusMichaelNoack/fvgp',
-    version='3.2.7',
+    #version='3.2.7',
+    version=versioneer.get_version(),
+    cmdclass=versioneer.get_cmdclass(),
     zip_safe=False,
 )
