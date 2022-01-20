@@ -9,6 +9,7 @@ from fvgp.fvgp import fvGP
 from fvgp.fvgp import GP
 import matplotlib.pyplot as plt
 import time
+import urllib.request
 
 class TestfvGP(unittest.TestCase):
     """Tests for `fvgp` package."""
@@ -91,19 +92,17 @@ class TestfvGP(unittest.TestCase):
         print("=========================================")
         points = np.empty((N,1))
         points[:,0] = np.linspace(0,2,N) + np.random.uniform(low = -0.05, high = 0.05, size = points[:,0].shape)
-        values = func(points)[:,0]
+        values = func(points)
         print("shape of values:   ",values.shape)
         my_gp = GP(1,points,values,np.ones((2)),
                 gp_kernel_function = None,
                 compute_device = "cpu")
         opt_obj = my_gp.train_async([[100.0,200.0],[5.0,100.0]],
                 init_hyperparameters = [110.0,8.0],
-                pop_size = 20,
-                tolerance = 0.0001,
                 max_iter = 2)
         print("lets see how the hyper-parameters are changing")
         for i in range(100):
-            time.sleep(10)
+            # time.sleep(10)
             my_gp.update_hyperparameters(opt_obj)
             print("++++++++++++++++++++++++++++++++++++++++++++++++")
             print("|latest hyper parameters:| ",my_gp.hyperparameters)
@@ -120,6 +119,8 @@ class TestfvGP(unittest.TestCase):
         print("=========================================")
         print("multi-task test started ...")
         print("=========================================")
+        urllib.request.urlretrieve('https://drive.google.com/uc?export=download&id=1BMNsdv168PoxNCHsNWR_znpDswjdFxXI', 'us_topo.npy')
+
         a = np.load("us_topo.npy")
         points = a[::16,0:2]
         values = a[::16,2:3]
@@ -151,7 +152,7 @@ class TestfvGP(unittest.TestCase):
         s = np.diag(pred1_cov["S(x)"])
         plt.plot(x_input, s, label = "std", linewidth = 3.0)
         plt.fill_between(x_input[:,0], m-3.0*np.sqrt(s), m+3.0*np.sqrt(s), alpha = 0.5, label = "95% confidence interval")
-        plt.scatter(my_gp.data_x[:,0],my_gp.data_y[0:len(x_input)], label = "data",linewidth = 3.0)
+        plt.scatter(my_gp.x_data[:,0],my_gp.y_data[0:len(x_input)], label = "data",linewidth = 3.0)
         plt.legend()
         print("computing probability of the given values")
         comp_mean_vec = np.array([2.0,1.0])

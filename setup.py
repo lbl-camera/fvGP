@@ -46,6 +46,9 @@ setup(
             'fvgp=fvgp.cli:main',
         ],
     },
+    extras_require={
+        'tests': ['pytest', 'codecov', 'pytest-cov']
+    },
     install_requires=requirements,
     license="GNU General Public License v3",
     long_description=readme + '\n\n' + history,
