@@ -1,7 +1,10 @@
 # fvGP
 
-* Free software: GNU General Public License v3
-* Documentation: gpcam.lbl.gov
+[![PyPI](https://img.shields.io/pypi/v/fvGP)](https://pypi.org/project/fvgp/)
+[![Documentation Status](https://readthedocs.org/projects/gpcam/badge/?version=latest)](https://gpcam.readthedocs.io/en/latest/?badge=latest)
+[![fvGP CI](https://github.com/lbl-camera/fvGP/actions/workflows/fvGP-CI.yml/badge.svg)](https://github.com/lbl-camera/fvGP/actions/workflows/fvGP-CI.yml)
+[![Codecov](https://img.shields.io/codecov/c/github/lbl-camera/fvGP)](https://app.codecov.io/gh/lbl-camera/fvGP)
+[![PyPI - License](https://img.shields.io/pypi/l/fvGP)](https://pypi.org/project/fvgp/)
 
 ## Features
 
