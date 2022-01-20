@@ -167,12 +167,6 @@ class gp2Scale():
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean,client):
         K = self.compute_covariance(hyperparameters, variances,client)
-        print("COVARIANCE COMPUTED")
-        print("exec time:", time.time() - self.st)
-        plt.imshow(K.toarray())
-        plt.show()
-
-        #eigval,eigvec = eigsh(K)
         #print("condition number: ", np.max(eigval)/np.min(eigval))
         #print("Sparsity: ",K.count_nonzero()/float(self.point_number)**2)
         y = values - mean
@@ -210,13 +204,11 @@ class gp2Scale():
                         worker_future_maps[index]["active future key"] = futures[-1].key
                         break
                     else:
-                        #print("Checking for finished futures")
                         SparsePriorCovariance, futures = self.collect_submatrices(futures, worker_future_maps, SparsePriorCovariance)
                         time.sleep(0.1)
 
                 if SparsePriorCovariance.count_nonzero() > self.entry_limit or SparsePriorCovariance.data.nbytes > self.ram_limit:
                     for future in futures: client.cancel(futures); client.shutdown()
-
         SparsePriorCovariance = self.collect_remaining_submatrices(futures, worker_future_maps, SparsePriorCovariance)
         client.cancel(futures)
         diag = sparse.eye(self.point_number, format="coo")
@@ -239,7 +231,6 @@ class gp2Scale():
                 SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, ranges[0], ranges[1])
                 self.free_worker(worker_future_maps, future.key)
             else: new_futures.append(future)
-
         futures = new_futures
         return SparsePriorCovariance, futures
 
@@ -572,14 +563,10 @@ def insert(bg,sm, i ,j):
     return res
 
 def kernel_function(data):
-    ####here we can also inject any other callable() kernel (can be written in data)
-    #
-    #print("in the kernel", flush = True)
     st = time.time()
     hps= data["scattered_data"]["hps"]
     mode = data["mode"]
     kernel = data["scattered_data"]["kernel"]
-    hpsf = hps[3:]
     if mode == "prior":
         x1 = data["scattered_data"]["x_data"][data["range_i"][0]:data["range_i"][1]]
         x2 = data["scattered_data"]["x_data"][data["range_j"][0]:data["range_j"][1]]
@@ -587,15 +574,12 @@ def kernel_function(data):
         range1 = data["range_i"]
         range2 = data["range_j"]
         k = kernel(x1,x2,hps, None)
-        #k = np.outer(ff(x1, hpsf[range1[0]:range1[1]]),ff(x2,hpsf[range2[0]:range2[1]])) * hps[0] * np.exp(-d**2)
     else: 
         x1 = data["x_data"]
         x2 = data["x2"]
         d = get_distance_matrix(x1,x2,hps)
         k = kernel(x1,x2,hps, None)
-        #k = np.outer(ff(x1, hpsf[0:len(x1)]),ff(x2,np.ones(len(x2)))) * hps[0] * np.exp(-d**2)
     k[k<1e-16] = 0.0
     k_sparse = sparse.coo_matrix(k)
-    #print("I spent ", time.time() - st," seconds in the kernel", flush = True)
 
     return k_sparse, (data["range_i"][0],data["range_j"][0]), time.time() - st
