@@ -9,7 +9,9 @@ from scipy.sparse.linalg import splu
 from scipy.optimize import differential_evolution
 from scipy.sparse import coo_matrix
 import gc
-from scipy.sparse.linalg import eigsh
+#from scipy.sparse.linalg import eigsh
+from scipy.sparse.linalg import splu
+from scipy.sparse.linalg import spilu
 
 class gp2Scale():
     """
@@ -87,7 +89,7 @@ class gp2Scale():
         if variances is None:
             #, requires_grad = True) *
             self.variances = np.ones((self.y_data.shape)) * \
-                    abs(self.y_data / 100.0)
+                    abs(np.mean(self.y_data) / 100.0)
             print("CAUTION: you have not provided data variances in fvGP,")
             print("they will be set to 1 percent of the data values!")
         elif variances.dim() == 2:
@@ -443,14 +445,11 @@ class gp2Scale():
         """
         fvGPs slogdet method based on torch
         """
-        eigval,eigvec = eigsh(A)
-        print(np.min(eigval))
-        #i0 = np.where(eigval == 0.0)
-        eigval[eigval <= 0.0] = 1e-6
-        #eigval[i0] = 1e-6
-        logdet = np.sum(np.log(eigval))
         sign = 1.
-        return sign, logdet
+        B = spilu(A.tocsc())
+        upper_diag = abs(B.U.diagonal())
+        res = np.sum(np.log(upper_diag))
+        return sign, res
 
 
     def solve(self, A, b):
