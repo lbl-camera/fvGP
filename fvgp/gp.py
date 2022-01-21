@@ -1,35 +1,6 @@
 #!/usr/bin/env python
 
 import dask.distributed as distributed
-"""
-Software: FVGP, version: ALL
-File containing the gp class
-use help() to find information about usage
-Author: Marcus Noack
-Institution: CAMERA, Lawrence Berkeley National Laboratory
-email: MarcusNoack@lbl.gov
-This file contains the FVGP class which trains a Gaussian process and predicts
-function values.
-
-License:
-Copyright (C) 2020 Marcus Michael Noack
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-Contact: MarcusNoack@lbl.gov
-"""
-
 import matplotlib.pyplot as plt
 import numpy as np
 import math
@@ -49,41 +20,71 @@ from .gpHGDL import gpHGDL
 
 class GP():
     """
-    GP class: Provides all tool for a single-task GP.
+    This class provides all the tools for a single-task Gaussian Process (GP).
+    Use fvGP for multi task GPs. This class allows for full HPC support for training.
 
-    symbols:
-        N: Number of points in the data set
-        n: number of return values
-        dim1: number of dimension of the input space
+    Parameters
+    ----------
+    input_space_dim : int
+        Dimensionality of the input space.
+    points : np.ndarray
+        The point positions. Shape (V x D), where D is the `input_space_dim`.
+    values : np.ndarray
+        The values of the data points. Shape (V,1) pr (V).
+    init_hyperparameters : np.ndarray
+        Vector of hyperparameters used by the GP initially. The class provides methods to train hyperparameters.
+    variances : np.ndarray, optional
+        An numpy array defining the uncertainties in the data `values`. Shape (V x 1) or (V). Note: if no
+        variances are provided they will be set to `abs(np.mean(values) / 100.0`.
+    compute_device : str, optional
+        One of "cpu" or "gpu", determines how linear system solves are run. The default is "cpu".
+    gp_kernel_function : Callable, optional
+        A function that calculates the covariance between datapoints. It accepts as input x1 (a V x D array of positions),
+        x2 (a U x D array of positions), hyperparameters (a 1-D array of length D+1 for the default kernel), and a
+        `gpcam.gp_optimizer.GPOptimizer` instance. The default is a stationary anisotropic kernel
+        (`fvgp.gp.GP.default_kernel`).
+    gp_kernel_function_grad : Callable, optional
+        A function that calculates the derivative  of the covariance between datapoints with respect to the hyperparameters. 
+        If provided, it will use for local training and can speed up the calculations.
+        It accepts as input x1 (a V x D array of positions),
+        x2 (a U x D array of positions), hyperparameters (a 1-D array of length D+1 for the default kernel), and a
+        `gpcam.gp_optimizer.GPOptimizer` instance. The default is a finite difference calculation.
+    gp_mean_function : Callable, optional
+        A function that evaluates the prior mean at an input position. It accepts as input a
+        `gpcam.gp_optimizer.GPOptimizer` instance, an array of positions (of size V x D), and hyperparameters (a 1-D
+        array of length D+1 for the default kernel). The return value is a 1-D array of length V. If None is provided,
+        `fvgp.gp.GP.default_mean_function` is used.
+    gp_mean_function : Callable, optional
+        A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters. 
+        It accepts as input a
+        `gpcam.gp_optimizer.GPOptimizer` instance, an array of positions (of size V x D), and hyperparameters (a 1-D
+        array of length D+1 for the default kernel). The return value is a 1-D array of length V. If None is provided,
+        a finite difference scheme is used.
+    sparse : bool, optional
+        If True, the algorithm check for sparsity of the covariance matrix and exploits it. The default is False.
+    normalize_y : bool, optional
+        If True, the data point values will be normalized to max(initial values) = 1. The dfault is False.
+    use_inv : bool, optional
+        If True, the algorithm retains the inverse of the covariance matrix, which makes computing the posterior faster.
+        For larger problems, this use of inversion should be avoided due to computational stability. The default is
+        False.
+    ram_economy : bool, optional
+        Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
+        If True, components of the derivative of the marginal log-likelihood are calculated subsequently, leading to a slow-down
+        but much less RAM usage.
 
-    Attributes:
-        input_space_dim (int):         dim1
-        points (N x dim1 numpy array): 2d numpy array of points
-        values (N dim numpy array):    2d numpy array of values
-        init_hyperparameters:          1d numpy array (>0)
 
-    Optional Attributes:
-        variances (N dim numpy array):                  variances of the values, default = array of shape of points
-                                                        with 1 % of the values
-        compute_device:                                 cpu/gpu, default = cpu
-        gp_kernel_function(callable):                   None/function defining the 
-                                                        kernel def name(x1,x2,hyperparameters,self), 
-                                                        make sure to return a 2d numpy array, default = None uses default kernel
-        gp_mean_function(callable):                     None/function def name(gp_obj, x, hyperparameters), 
-                                                        make sure to return a 1d numpy array, default = None
-        sparse (bool):                                  default = False
-        normalize_y:                                    default = False, normalizes the values \in [0,1]
-
-    Example:
-        obj = fvGP(3,np.array([[1,2,3],[4,5,6]]),
-                         np.array([2,4]),
-                         np.array([2,3,4,5]),
-                         variances = np.array([0.01,0.02]),
-                         gp_kernel_function = kernel_function,
-                         gp_mean_function = some_mean_function
-        )
+    Attributes
+    ----------
+    x_data : np.ndarray
+        Datapoint positions
+    y_data : np.ndarray
+        Datapoint values
+    variances : np.ndarray
+        Datapoint observation variances.
+    hyperparameters : np.ndarray
+        Current hyperparameters in use.
     """
-
     def __init__(
         self,
         input_space_dim,
@@ -101,10 +102,6 @@ class GP():
         use_inv = False,
         ram_economy = True,
         ):
-        """
-        The constructor for the gp class.
-        type help(GP) for more information about attributes, methods and their parameters
-        """
         if input_space_dim != len(points[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(values) == 2: values = values[:,0]
@@ -161,8 +158,7 @@ class GP():
         ##########################################
         #compute the prior########################
         ##########################################
-        self.compute_prior_fvGP_pdf()
-        print("fvGP successfully initiated")
+        self._compute_prior_fvGP_pdf()
 
     def update_gp_data(
         self,
@@ -170,18 +166,20 @@ class GP():
         values,
         variances = None,
         ):
-
         """
         This function updates the data in the gp_class.
         The data will NOT be appended but overwritten!
         Please provide the full updated data set
 
-        Attributes:
-            points (N x dim1 numpy array): A 2d  array of points.
-            values (N)                   : A 1d  array of values.
-
-        Optional Attributes:
-            variances (N)                : variances for the values
+        Parameters
+        ----------
+        points : np.ndarray
+            The point positions. Shape (V x D), where D is the `input_space_dim`.
+        values : np.ndarray
+            The values of the data points. Shape (V,1) pr (V).
+        variances : np.ndarray, optional
+            An numpy array defining the uncertainties in the data `values`. Shape (V x 1) or (V). Note: if no
+            variances are provided they will be set to `abs(np.mean(values) / 100.0`.
         """
         if self.input_dim != len(points[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
@@ -206,28 +204,41 @@ class GP():
         ######################################
         #####transform to index set###########
         ######################################
-        self.compute_prior_fvGP_pdf()
-        print("fvGP data updated")
+        self._compute_prior_fvGP_pdf()
     ###################################################################################
     ###################################################################################
     ###################################################################################
     #################TRAINING##########################################################
     ###################################################################################
     def stop_training(self,opt_obj):
-        print("fvGP is cancelling the asynchronous training...")
-        try: opt_obj.cancel_tasks(); print("fvGP successfully cancelled the current training.")
+        """
+        This function stops the training if HGDL is used. It leaves the dask client alive.
+
+        Parameters
+        ----------
+        opt_obj : object
+            An object returned form the `fvgp.gp.GP.train_async` function.
+        """
+        try: opt_obj.cancel_tasks()#; print("fvGP successfully cancelled the current training.")
         except: print("No asynchronous training to be cancelled in fvGP, no training is running.")
     ###################################################################################
     def kill_training(self,opt_obj):
-        print("fvGP is killing asynchronous training....")
-        try: opt_obj.kill_client(); print("fvGP successfully killed the training.")
+        """
+        This function stops the training if HGDL is used, and kills the dask client. 
+
+        Parameters
+        ----------
+        opt_obj : object
+            An object returned form the `fvgp.gp.GP.train_async` function.
+        """
+
+        try: opt_obj.kill_client()#; print("fvGP successfully killed the training.")
         except: print("No asynchronous training to be killed, no training is running.")
     ###################################################################################
     def train(self,
         hyperparameter_bounds,
         init_hyperparameters = None,
         method = "global",
-        optimization_dict = None,
         pop_size = 20,
         tolerance = 0.0001,
         max_iter = 120,
@@ -235,40 +246,48 @@ class GP():
         global_optimizer = "genetic",
         deflation_radius = None,
         dask_client = None):
+
         """
-        This function finds the maximum of the log_likelihood and therefore trains the fvGP (synchronously).
-        This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and 
-        providing a dask client
+        This function finds the maximum of the marginal log_likelihood and therefore trains the GP (synchronously).
+        This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and
+        providing a dask client. The GP prior will automatically be updated with the new hyperparameters.
 
-        inputs:
-            hyperparameter_bounds (2d numpy array)
-        optional inputs:
-            init_hyperparameters (1d numpy array):  default = None (= use earlier initialization)
-            method = "global": "global"/"local"/"hgdl"/callable f(obj,optimization_dict)
-            optimization_dict = None: if optimizer is callable, the this will be passed as dict
-            pop_size = 20
-            tolerance = 0.0001
-            max_iter: default = 120
-            local_optimizer = "L-BFGS-B"  important for local and hgdl optimization
-            global_optimizer = "genetic"
-            deflation_radius = None        for hgdl
-            dask_client = None (will use local client, only for hgdl optimization)
+        Parameters
+        ----------
+        hyperparameter_bounds : np.ndarray
+            A numpy array of shape (D x 2), defining the bounds for the optimization.
+        init_hyperparameters : np.ndarray, optional
+            Initial hyperparameters used as starting location for all optimizers with local component.
+            The default is reusing the initial hyperparameters given at initialization
+        method : str or Callable, optional
+            The method used to train the hyperparameters. The default is `global` (meaning scipy's differential evolution). If a callable is provided, it should accept as input
+            a fvgp.gp object instance and return a np.ndarray of hyperparameters, shape = (V).
+        pop_size : int, optional
+            A number of individuals used for any optimizer with a global component. Default = 20.
+        tolerance : float, optional
+            Used as termination criterion for local optimizers. Default = 0.0001.
+        max_iter : int, optional
+            Maximum number of iterations for global and local optimizers. Default = 120.
+        local_optimizer : str, optional
+            Defining the local optimizer. Default = "L-BFGS-B", most scipy.opimize.minimize functions are permissible.
+        global_optimizer : str, optional
+            Defining the global optimizer. Only applicable to method = hgdl. Default = `genetic`
+        deflation_radius : float, optional
+            Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation 
+            for more info. Default = None, meaning HGDL will pick the radius.
+        dask_client : distributed.client.Client, optional
+            A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
+            `dask.distributed.Client` instance is constructed.
 
-        output:
-            None, just updates the class with the new hyperparameters
         """
         ############################################
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
-        print("fvGP training started with ",len(self.x_data)," data points")
-        ######################
-        #####TRAINING#########
-        ######################
-        self.hyperparameters = self.optimize_log_likelihood(
+
+        self.hyperparameters = self._optimize_log_likelihood(
             init_hyperparameters,
             np.array(hyperparameter_bounds),
             method,
-            optimization_dict,
             max_iter,
             pop_size,
             tolerance,
@@ -277,10 +296,8 @@ class GP():
             deflation_radius,
             dask_client
             )
-        self.compute_prior_fvGP_pdf()
-        ######################
-        ######################
-        ######################
+        self._compute_prior_fvGP_pdf()
+
     ##################################################################################
     def train_async(self,
         hyperparameter_bounds,
@@ -291,35 +308,44 @@ class GP():
         deflation_radius = None,
         dask_client = None):
         """
-        This function finds the maximum of the log_likelihood and therefore trains the 
-        GP (aynchronously) using 'hgdl'.
-        This can be done on a remote cluster/computer by providing the right dask client
+        This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
+        This can be done on a remote cluster/computer by
+        providing a dask client. This fucntion just submits the training and returns
+        an object which can be given to `fvgp.gp.update_hyperparameters`, which will automatically update the GP prior with the new hyperparameters.
 
-        inputs:
-            hyperparameter_bounds (2d list)
-        optional inputs:
-            init_hyperparameters (list):  default = None
-            max_iter: default = 120,
-            local_optimizer = "L-BFGS-B"
-            global_optimizer = "genetic"
-            deflation_radius = None
-            dask_client: True/False/dask client, default = None (will use a local client)
+        Parameters
+        ----------
+        hyperparameter_bounds : np.ndarray
+            A numpy array of shape (D x 2), defining the bounds for the optimization.
+        init_hyperparameters : np.ndarray, optional
+            Initial hyperparameters used as starting location for all optimizers with local component.
+            The default is reusing the initial hyperparameters given at initialization
+        max_iter : int, optional
+            Maximum number of epochs for HGDL. Default = 10000.
+        local_optimizer : str, optional
+            Defining the local optimizer. Default = "L-BFGS-B", most scipy.opimize.minimize functions are permissible.
+        global_optimizer : str, optional
+            Defining the global optimizer. Only applicable to method = hgdl. Default = `genetic`
+        deflation_radius : float, optional
+            Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation 
+            for more info. Default = None, meaning HGDL will pick the radius.
+        dask_client : distributed.client.Client, optional
+            A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
+            `dask.distributed.Client` instance is constructed.
 
-        output:
-            returns an optimization object that can later be queried for solutions
-            stopped and killed.
+        Return
+        ------
+        object
+            Optimization object that can be given to `fvgp.gp.update_hyperparameters` to update the prior GP.
         """
         ############################################
         if dask_client is None: dask_client = distributed.Client()
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
-        print("Async fvGP training started with ",len(self.x_data)," data points")
-        ######################
-        #####TRAINING#########
-        ######################
-        opt_obj = self.optimize_log_likelihood_async(
+
+        opt_obj = self._optimize_log_likelihood_async(
             init_hyperparameters,
-            np.array(hyperparameter_bounds),
+            hyperparameter_bounds,
             max_iter,
             local_optimizer,
             global_optimizer,
@@ -328,18 +354,33 @@ class GP():
             )
         return opt_obj
         ######################
-        ######################
-        ######################
+
     ##################################################################################
     def update_hyperparameters(self, opt_obj):
-        print("Updating the hyperparameters in fvGP...")
+        """
+        This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
+        This can be done on a remote cluster/computer by
+        providing a dask client. This fucntion just submits the training and returns
+        an object which can be given to `fvgp.gp.update_hyperparameters`, which will automatically update the GP prior with the new hyperparameters.
+
+        Parameters
+        ----------
+        object : HGDL class instance
+            HGDL class instance returned by `fvgp.gp.train_async`
+
+        Return
+        ------
+        np.ndarray
+            The current hyperparameters. 
+        """
+
         try:
             res = opt_obj.get_latest(1)["x"][0]
             l_n = self.log_likelihood(res)
             l_o = self.log_likelihood(self.hyperparameters)
             if l_n - l_o < 0.000001:
                 self.hyperparameters = res
-                self.compute_prior_fvGP_pdf()
+                self._compute_prior_fvGP_pdf()
                 print("    fvGP async hyperparameter update successful")
                 print("    Latest hyperparameters: ", self.hyperparameters)
             else:
@@ -353,7 +394,7 @@ class GP():
             print("    hyperparameters: ", self.hyperparameters)
         return self.hyperparameters
     ##################################################################################
-    def optimize_log_likelihood_async(self,
+    def _optimize_log_likelihood_async(self,
         starting_hps,
         hp_bounds,
         max_iter,
@@ -361,11 +402,13 @@ class GP():
         global_optimizer,
         deflation_radius,
         dask_client):
-        print("fvGP submitted HGDL optimization for asynchronous training")
-        print("bounds:",hp_bounds)
-        print("deflation radius: ",deflation_radius)
-        print("local optimizer: ",local_optimizer)
-        print("global optimizer: ",global_optimizer)
+
+        #print("fvGP submitted HGDL optimization for asynchronous training")
+        #print("bounds:",hp_bounds)
+        #print("deflation radius: ",deflation_radius)
+        #print("local optimizer: ",local_optimizer)
+        #print("global optimizer: ",global_optimizer)
+
         opt_obj = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
                     hp_bounds,
@@ -377,8 +420,8 @@ class GP():
         opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps))
         return opt_obj
     ##################################################################################
-    def optimize_log_likelihood(self,starting_hps,
-        hp_bounds,method,optimization_dict,max_iter,
+    def _optimize_log_likelihood(self,starting_hps,
+        hp_bounds,method,max_iter,
         pop_size,tolerance,
         local_optimizer,
         global_optimizer,
@@ -467,7 +510,7 @@ class GP():
             res = mcmc(self.log_likelihood,hp_bounds)
             hyperparameters = np.array(res["x"])
         elif callable(method):
-            hyperparameters = method(self,optimization_dict)
+            hyperparameters = method(self)
         else:
             raise ValueError("No optimization mode specified in fvGP")
         ###################################################
@@ -482,10 +525,14 @@ class GP():
     ##################################################################################
     def log_likelihood(self,hyperparameters):
         """
-        computes the marginal log-likelihood
-        input:
-            hyper parameters
-        output:
+        Function that computes the marginal log-likelihood
+
+        Parameters
+        ----------
+        hyperparameters : np.ndarray
+            Vector of hyperparameters of shape (V)
+        Return
+        ------
             negative marginal log-likelihood (scalar)
         """
         mean = self.mean_function(self,self.x_data,hyperparameters)
@@ -499,11 +546,15 @@ class GP():
     ##################################################################################
     def log_likelihood_gradient(self, hyperparameters):
         """
-        computes the gradient of the negative marginal log-likelihood
-        input:
-            hyper parameters
-        output:
-            gradient of the negative marginal log-likelihood (vector)
+        Function that computes the gradient of the marginal log-likelihood.
+
+        Parameters
+        ----------
+        hyperparameters : np.ndarray
+            Vector of hyperparameters of shape (V)
+        Return
+        ------
+            Gradient of the negative marginal log-likelihood (scalar)
         """
         mean = self.mean_function(self,self.x_data,hyperparameters)
         b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
@@ -534,11 +585,15 @@ class GP():
     ##################################################################################
     def log_likelihood_hessian(self, hyperparameters):
         """
-        computes the hessian of the negative  marginal  log-likelihood
-        input:
-            hyper parameters
-        output:
-            hessian of the negative marginal log-likelihood (matrix)
+        Function that computes the Hessian of the marginal log-likelihood.
+
+        Parameters
+        ----------
+        hyperparameters : np.ndarray
+            Vector of hyperparameters of shape (V)
+        Return
+        ------
+            Hessian of the negative marginal log-likelihood (scalar)
         """
         ##implemented as first-order approximation
         len_hyperparameters = len(hyperparameters)
@@ -557,11 +612,11 @@ class GP():
     ######################Compute#Covariance#Matrix###################################
     ##################################################################################
     ##################################################################################
-    def compute_prior_fvGP_pdf(self):
+    def _compute_prior_fvGP_pdf(self):
         """
         This function computes the important entities, namely the prior covariance and
         its product with the (values - prior_mean) and returns them and the prior mean
-        input:
+        Parameters
             none
         return:
             prior mean
@@ -579,7 +634,7 @@ class GP():
         self.covariance_value_prod = cov_y
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean):
-        K = self.compute_covariance(hyperparameters, variances)
+        K = self._compute_covariance(hyperparameters, variances)
         y = values - mean
         x = self.solve(K, y)
         #if self.use_inv is True: x = self.K_inv @ y
@@ -587,7 +642,7 @@ class GP():
         if x.ndim == 2: x = x[:,0]
         return x,K
     ##################################################################################
-    def compute_covariance(self, hyperparameters, variances):
+    def _compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""
         CoVariance = self.kernel(
             self.x_data, self.x_data, hyperparameters, self)
@@ -696,11 +751,14 @@ class GP():
         d = np.einsum("ii->i", Matrix)
         d += Vector
         return Matrix
+
     def is_sparse(self,A):
         if float(np.count_nonzero(A))/float(len(A)**2) < 0.01: return True
         else: return False
+
     def how_sparse_is(self,A):
         return float(np.count_nonzero(A))/float(len(A)**2)
+
     def default_mean_function(self,gp_obj,x,hyperparameters):
         """evaluates the gp mean function at the data points """
         mean = np.zeros((len(x)))
@@ -714,15 +772,17 @@ class GP():
     ###########################################################################
     def posterior_mean(self, x_iset):
         """
-        function to compute the posterior mean
-        input:
+        This function the posterior mean for a set of input points.
+
+        Parameters
+        ----------
+        x_iset : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+
+        Return
         ------
-            x_iset: 2d numpy array of points, note, these are elements of the 
-            index set which results from a cartesian product of input and output space
-        output:
-        -------
-            {"x":    the input points,
-             "f(x)": the posterior mean vector (1d numpy array)}
+        dict
+            {"x": the input points, "f(x)": the posterior mean at the input points}
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -735,18 +795,19 @@ class GP():
 
     def posterior_mean_grad(self, x_iset, direction):
         """
-        function to compute the gradient of the posterior mean in
-        a specified direction
-        input:
+        This function calculates the gradient of the posterior mean for a set of input points.
+
+        Parameters
+        ----------
+        x_iset : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+
+        Return
         ------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
-                    index set which results from a cartesian product of input and output space
-            direction: direction in which to compute the gradient
-        output:
-        -------
+        dict
             {"x":    the input points,
              "direction": the direction
-             "df/dx": the gradient of the posterior mean vector (1d numpy array)}
+             "df/dx": the gradient of the posterior mean vector (1-D numpy array)}
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -769,13 +830,17 @@ class GP():
     ###########################################################################
     def posterior_covariance(self, x_iset, variance_only = False):
         """
-        function to compute the posterior covariance
-        input:
+        Function to compute the posterior covariance.
+        Parameters
+        ----------
+        x_iset : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        variance_only : bool, optional
+            If True the compuation of the posterior covariance matrix is avoided which can save compute time.
+            In that case the return will only provide the variance at the input points.
+            Default = False.
+        Return
         ------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
-            index set which results from a cartesian product of input and output space
-        output:
-        -------
             {"x":    the index set points,
              "v(x)": the posterior variances (1d numpy array) for each input point,
              "S":    covariance matrix, v(x) = diag(S)}
@@ -811,17 +876,16 @@ class GP():
 
     def posterior_covariance_grad(self, x_iset,direction):
         """
-        function to compute the gradient of the posterior covariance
-        in a specified direction
-        input:
+        Function to compute the gradient of the posterior covariance.
+
+        Parameters
+        ----------
+        x_iset : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        Return
         ------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
-                    index set which results from a cartesian product of input and output space
-            direction: direction in which the gradient to compute
-        output:
-        -------
             {"x":    the index set points,
-             "dv/dx": the posterior variances (1d numpy array) for each input point,
+             "dv/dx": the gradient of the posterior variances (2-D numpy array)
              "dS/dx":    covariance matrix, v(x) = diag(S)}
         """
         p = np.array(x_iset)
@@ -848,11 +912,11 @@ class GP():
     def gp_prior(self, x_iset):
         """
         function to compute the data-informed prior
-        input:
+        Parameters
         ------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
-        output:
+        Return
         -------
             {"x": the index set points,
              "K": covariance matrix between data points
@@ -879,12 +943,12 @@ class GP():
     def gp_prior_grad(self, x_iset,direction):
         """
         function to compute the gradient of the data-informed prior
-        input:
+        Parameters
         ------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             direction: direction in which to compute the gradient
-        output:
+        Return
         -------
             {"x": the index set points,
              "K": covariance matrix between data points
@@ -930,15 +994,17 @@ class GP():
     ###########################################################################
     def gp_entropy(self, x_iset):
         """
-        function to compute the entropy of the data-informed prior
-        input:
+        Function to compute the entropy of the prior.
+
+        Parameters
+        ----------
+        x_iset : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        Return
         ------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
-                    index set which results from a cartesian product of input and output space
-        output:
-        -------
-            scalar: entropy
+            entropy : scalar
         """
+
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
@@ -951,15 +1017,17 @@ class GP():
     ###########################################################################
     def gp_entropy_grad(self, x_iset,direction):
         """
-        function to compute the gradient of the entropy of the data-informed prior
-        input:
+        Function to compute the gradient of entropy of the prior in a given direction.
+
+        Parameters
+        ----------
+        x_iset : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        direction : int
+            0 <= direction <= D - 1
+        Return
         ------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
-                    index set which results from a cartesian product of input and output space
-            direction: direction in which to compute the gradient
-        output:
-        -------
-            scalar: entropy gradient
+            entropy : scalar
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -973,10 +1041,22 @@ class GP():
     ###########################################################################
     def kl_div(self,mu1, mu2, S1, S2):
         """
-        function computing the KL divergence between two normal distributions
-        a = kl_div(mu1, mu2, S1, S2); S1, S2 are a 2d numpy arrays, matrices has to be non-singular
-        mu1, mu2 are mean vectors, given as 2d arrays
-        returns a real scalar
+        Function to compute the KL divergence between two Gaussian distributions.
+
+        Parameters
+        ----------
+        mu1 : np.ndarray
+            Mean vector of distribution 1.
+        mu1 : np.ndarray
+            Mean vector of distribution 2.
+        S1 : np.ndarray
+            Covariance matrix of distribution 1.
+        S2 : np.ndarray
+            Covariance matrix of distribution 2.
+
+        Return
+        ------
+            KL div : scalar
         """
         s1, logdet1 = self.slogdet(S1)
         s2, logdet2 = self.slogdet(S2)
@@ -1009,11 +1089,11 @@ class GP():
     def gp_kl_div(self, x_iset, comp_mean, comp_cov):
         """
         function to compute the kl divergence of a posterior at given points
-        input:
+        Parameters
         ------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
-        output:
+        Return
         -------
             {"x": the index set points,
              "gp posterior mean": ,
@@ -1042,12 +1122,12 @@ class GP():
     def gp_kl_div_grad(self, x_iset, comp_mean, comp_cov, direction):
         """
         function to compute the gradient of the kl divergence of a posterior at given points
-        input:
+        Parameters
         ------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             direction: direction in which the gradient will be computed
-        output:
+        Return
         -------
             {"x": the index set points,
              "gp posterior mean": ,
@@ -1079,11 +1159,11 @@ class GP():
     def shannon_information_gain(self, x_iset):
         """
         function to compute the shannon-information gain of data
-        input:
+        Parameters
         ------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
-        output:
+        Return
         -------
             {"x": the index set points,
              "prior entropy": prior entropy
@@ -1113,12 +1193,12 @@ class GP():
     def shannon_information_gain_grad(self, x_iset, direction):
         """
         function to compute the gradient if the shannon-information gain of data
-        input:
+        Parameters
         ------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             direction: direction in which to compute the gradient
-        output:
+        Return
         -------
             {"x": the index set points,
              "sig_grad:" shannon_information gain gradient}
@@ -1135,14 +1215,14 @@ class GP():
     def posterior_probability(self, x_iset, comp_mean, comp_cov):
         """
         function to compute the probability of an uncertain feature given the gp posterior
-        input:
+        Parameters
         ------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             comp_mean: a vector of mean values, same length as x_iset
             comp_cov: covarianve matrix, \in R^{len(x_iset)xlen(x_iset)}
 
-        output:
+        Return
         -------
             {"mu":,
              "covariance": ,
@@ -1175,7 +1255,7 @@ class GP():
     def posterior_probability_grad(self, x_iset, comp_mean, comp_cov, direction):
         """
         function to compute the gradient of the probability of an uncertain feature given the gp posterior
-        input:
+        Parameters
         ------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
@@ -1183,7 +1263,7 @@ class GP():
             comp_cov: covarianve matrix, \in R^{len(x_iset)xlen(x_iset)}
             direction: direction in which to compute the gradient
 
-        output:
+        Return
         -------
             {"probability grad":  ,}
         """

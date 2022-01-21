@@ -13,5 +13,5 @@ coming soon: extreme-scale GPs, GPs tailored for HPC training
 
 ## Credits
 
-This package uses the hgdl package of David Perryman and Marcus Noack
+This package uses the hgdl package of David Perryman and Marcus Noack.
 
