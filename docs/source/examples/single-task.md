@@ -19,8 +19,6 @@ We will be primarily concerned with regression over a single dimension output an
 See the multiple_task_test_notebook.ipynb for single dimension and multiple task example.
 The extension to multiple dimensions is straight forward.
 
-NOTE: in this example, all outputs are hidden except for the plots.
-
 ## Simple Example
 
 Simple setup and training for fvgp single task.
