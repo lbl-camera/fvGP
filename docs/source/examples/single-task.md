@@ -1,10 +1,11 @@
 ---
 jupytext:
+  formats: md:myst,ipynb
   text_representation:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.11.5
+    jupytext_version: 1.13.6
 kernelspec:
   display_name: Python 3 (ipykernel)
   language: python
@@ -28,6 +29,7 @@ Simple setup and training for fvgp single task.
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 import fvgp
 from fvgp import gp
 import numpy as np
@@ -38,22 +40,26 @@ import matplotlib.pyplot as plt
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 def test_data_function(x):
     return np.sin(0.1 * x)+np.cos(0.05 * x)
 ```
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 x_input = np.linspace(-2*np.pi, 10*np.pi,20)
 ```
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 y_output = test_data_function(x_input)
 ```
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 x_input_test = np.linspace(-2*np.pi, 10*np.pi, 100)
 ```
 
@@ -65,6 +71,7 @@ See help(gp.GP) for more information.
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 obj = gp.GP(input_space_dim = 1,
             points = x_input.reshape(-1,1),
             values = y_output.reshape(-1,1),
@@ -75,6 +82,7 @@ obj = gp.GP(input_space_dim = 1,
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 hyper_param_bounds = np.array([[0.0001, 1000000],[ 0.000001, 100]])
 ##this will block the main thread, even if you use "hgdl", another option is "global" or "local"
 print("Blocking main thread...")
@@ -87,6 +95,7 @@ print("this also killed the client")
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 post_mean= obj.posterior_mean(x_input_test.reshape(-1,1))
 ```
 
@@ -101,6 +110,7 @@ plt.legend()
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 obj = gp.GP(input_space_dim = 1,
             points = x_input.reshape(-1,1),
             values = y_output.reshape(-1,1),
@@ -110,11 +120,13 @@ obj = gp.GP(input_space_dim = 1,
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 hyper_param_bounds = np.array([[0.0001, 100], [ 0.0001, 100]])
 ```
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 async_obj = obj.train_async(hyper_param_bounds)
 ```
 
@@ -124,6 +136,7 @@ Updates hyperparameters to current optimization values
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 obj.update_hyperparameters(async_obj)
 ```
 
@@ -131,6 +144,7 @@ obj.update_hyperparameters(async_obj)
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 obj.kill_training(async_obj)
 ```
 
@@ -138,6 +152,7 @@ obj.kill_training(async_obj)
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 post_mean= obj.posterior_mean(x_input_test.reshape(-1,1))
 ```
 
@@ -151,6 +166,7 @@ plt.legend()
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 def kernel_l1(x1,x2, hp, obj):
     ################################################################
     ###standard anisotropic kernel in an input space with l1########
@@ -161,6 +177,7 @@ def kernel_l1(x1,x2, hp, obj):
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 obj = gp.GP(input_space_dim = 1,
             points = x_input.reshape(-1,1),
             values = y_output.reshape(-1,1),
@@ -173,6 +190,7 @@ obj = gp.GP(input_space_dim = 1,
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 hyper_param_bounds = np.array([[0.0001, 1000],[ 0.0001, 1000]])
 obj.train(hyper_param_bounds)
 ```
@@ -181,6 +199,7 @@ obj.train(hyper_param_bounds)
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 post_mean= obj.posterior_mean(x_input_test.reshape(-1,1))
 ```
 
@@ -196,12 +215,14 @@ NOTE: The prior mean function must return a 1d vector, e.g., (100,)
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 def example_mean(gp_obj,x,hyperparameters):
     return np.ones(len(x))
 ```
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 obj = gp.GP(input_space_dim = 1,
             points = x_input.reshape(-1,1),
             values = y_output.reshape(-1,1),
@@ -214,6 +235,7 @@ obj = gp.GP(input_space_dim = 1,
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 hyper_param_bounds = np.array([[0.0001, 1000],[ 0.0001, 1000]])
 obj.train(hyper_param_bounds)
 ```
@@ -222,6 +244,7 @@ obj.train(hyper_param_bounds)
 
 ```{code-cell} ipython3
 :tags: [remove-output]
+
 post_mean= obj.posterior_mean(x_input_test.reshape(-1,1))
 ```
 
