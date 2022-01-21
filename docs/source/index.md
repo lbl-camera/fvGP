@@ -32,7 +32,7 @@ The package has its own [API](api/overview.md) which we present and explain in t
 Note, this is not really a full tutorial since fvGP is hardly ever being used directly,
 all information provided here is just for the curious and advanced users.
 
-## More Information
+## See Also
 
 * [gpCAM](https://gpcam.readthedocs.io)
 * [HGDL](https://hgdl.readthedocs.io)
