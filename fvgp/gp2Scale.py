@@ -12,6 +12,7 @@ import gc
 #from scipy.sparse.linalg import eigsh
 from scipy.sparse.linalg import splu
 from scipy.sparse.linalg import spilu
+from .mcmc import mcmc
 
 class gp2Scale():
     """
@@ -63,7 +64,8 @@ class gp2Scale():
         compute_device = "cpu",
         gp_kernel_function = None,
         gp_mean_function = None,
-        covariance_dask_client = None
+        covariance_dask_client = None,
+        info = False
         ):
         """
         The constructor for the gp class.
@@ -83,6 +85,7 @@ class gp2Scale():
         self.last_batch_size= self.point_number % self.batch_size
         self.entry_limit = entry_limit
         self.ram_limit = ram_limit
+        self.info = info
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -124,17 +127,18 @@ class gp2Scale():
         #compute the prior########################
         ##########################################
         covariance_dask_client = self._init_dask_client(covariance_dask_client)
+        self.covariance_dask_client = covariance_dask_client
         self.st = time.time()
         self.compute_prior_fvGP_pdf(covariance_dask_client)
-        print("gpLG successfully initiated, here is some info about the prior covariance matrix:")
-        print("non zero elements: ", self.SparsePriorCovariance.count_nonzero())
-        print("Size in GBits:     ", self.SparsePriorCovariance.data.nbytes/1000000000)
-        print("Sparsity: ",self.SparsePriorCovariance.count_nonzero()/float(self.point_number)**2)
-        if self.point_number <= 5000:
-            print("Here is an image:")
-            plt.imshow(self.SparsePriorCovariance.toarray())
-            plt.show()
-
+        if self.info is True:
+            print("gpLG successfully initiated, here is some info about the prior covariance matrix:")
+            print("non zero elements: ", self.SparsePriorCovariance.count_nonzero())
+            print("Size in GBits:     ", self.SparsePriorCovariance.data.nbytes/1000000000)
+            print("Sparsity: ",self.SparsePriorCovariance.count_nonzero()/float(self.point_number)**2)
+            if self.point_number <= 5000:
+                print("Here is an image:")
+                plt.imshow(self.SparsePriorCovariance.toarray())
+                plt.show()
 
     ##################################################################################
     ##################################################################################
@@ -169,8 +173,7 @@ class gp2Scale():
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean,client):
         K = self.compute_covariance(hyperparameters, variances,client)
-        #print("condition number: ", np.max(eigval)/np.min(eigval))
-        #print("Sparsity: ",K.count_nonzero()/float(self.point_number)**2)
+        if self.info is True: print("Covariance computed with sparsity: ",K.count_nonzero()/float(self.point_number)**2)
         y = values - mean
         x = self.solve(K.tocsc(), y)
         return x,K
@@ -202,7 +205,7 @@ class gp2Scale():
                         ##this is what we do when we have a worker to submit to ...
                         data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior"}
                         futures.append(client.submit(kernel_function,data, workers = worker_dict["worker"]))
-                        if self.point_number >= 10000: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker_dict["worker"], "Future: ", futures[-1].key)
+                        if self.info is True: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", worker_dict["worker"], "Future: ", futures[-1].key)
                         worker_future_maps[index]["active future key"] = futures[-1].key
                         break
                     else:
@@ -220,13 +223,11 @@ class gp2Scale():
         return SparsePriorCovariance
 
     def collect_submatrices(self,futures, worker_future_maps, SparsePriorCovariance):
-        #get a part of the covariance, and fit into the sparse one, but only the values needed
-        #throw warning if too many values are not zero
         new_futures = []
         for future in futures:
             if future.status == "finished":
                 SparseCov_sub, ranges,ketime = future.result()
-                if self.point_number >= 10000: print("Future", future.key, " has finished its work in", ketime," seconds.")
+                if self.info is True: print("Future", future.key, " has finished its work in", ketime," seconds.")
                 if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
                     print("WARNING: Collected submatrix not sparse")
                     print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
@@ -294,8 +295,6 @@ class gp2Scale():
     ##################################################################################
     ##################################################################################
     ##################################################################################
-
-
     def train(self,
         hyperparameter_bounds,
         init_hyperparameters = None,
@@ -354,6 +353,9 @@ class gp2Scale():
         ######################
         ######################
         ######################
+
+
+
     def optimize_log_likelihood(self,starting_hps,
         hp_bounds,method,optimization_dict,max_iter,
         pop_size,tolerance,
@@ -364,55 +366,56 @@ class gp2Scale():
         dask_client = None):
 
         start_log_likelihood = self.log_likelihood(starting_hps)
-
-        print(
-            "fvGP hyperparameter tuning in progress. Old hyperparameters: ",
-            starting_hps, " with old log likelihood: ", start_log_likelihood)
-        print("method: ", method)
+        print("MCMC started in fvGP")
+        print('bounds are',hp_bounds)
+        res = mcmc(self.log_likelihood,hp_bounds, start = starting_hps)
+        hyperparameters = np.array(res["x"])
+        print("MCMC has found solution: ", hyperparameters, "with neg. marginal_likelihood ",res["f(x)"])
+        self.hyperparameters = hyperparameters
 
         ############################
         ####global optimization:##
         ############################
-        def constraint(v):
-            return np.array(np.sum(v[3:]))
+        #def constraint(v):
+        #    return np.array(np.sum(v[3:]))
 
-        nlc = NonlinearConstraint(constraint,0,10000)
+        #nlc = NonlinearConstraint(constraint,0,10000)
 
-        if method == "global":
-            print("fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
-            print("maximum number of iterations: ", max_iter)
-            print("termination tolerance: ", tolerance)
-            print("bounds: ", hp_bounds)
-            res = differential_evolution(
-                self.log_likelihood,
-                hp_bounds,
-                disp=True,
-                maxiter=max_iter,
-                popsize = pop_size,
-                tol = tolerance,
-                workers = 1, constraints = (nlc),
-            )
-            hyperparameters = np.array(res["x"])
-            Eval = self.log_likelihood(hyperparameters)
-            print("fvGP found hyperparameters ",hyperparameters," with likelihood ",
-                Eval," via global optimization")
+        #if method == "global":
+        #    print("fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
+        #    print("maximum number of iterations: ", max_iter)
+        #    print("termination tolerance: ", tolerance)
+        #    print("bounds: ", hp_bounds)
+        #    res = differential_evolution(
+        #        self.log_likelihood,
+        #        hp_bounds,
+        #        disp=True,
+        #        maxiter=max_iter,
+        #        popsize = pop_size,
+        #        tol = tolerance,
+        #        workers = 1, constraints = (nlc),
+        #    )
+        #    hyperparameters = np.array(res["x"])
+        #    Eval = self.log_likelihood(hyperparameters)
+        #    print("fvGP found hyperparameters ",hyperparameters," with likelihood ",
+        #        Eval," via global optimization")
         ############################
         ####local optimization:#####
         ############################
-        else:
-            raise ValueError("No optimization mode specified in fvGP")
+        #else:
+        #    raise ValueError("No optimization mode specified in fvGP")
         ###################################################
-        if start_log_likelihood < self.log_likelihood(hyperparameters):
-            hyperparameters = np.array(starting_hps)
-            print("fvGP: Optimization returned smaller log likelihood; resetting to old hyperparameters.")
-            print("New hyperparameters: ",
-            hyperparameters,
-            "with log likelihood: ",
-            self.log_likelihood(hyperparameters))
+        #if start_log_likelihood < self.log_likelihood(hyperparameters):
+        #    hyperparameters = np.array(starting_hps)
+        #    print("fvGP: Optimization returned smaller log likelihood; resetting to old hyperparameters.")
+        #    print("New hyperparameters: ",
+        #    hyperparameters,
+        #    "with log likelihood: ",
+        #    self.log_likelihood(hyperparameters))
         return hyperparameters
 
 
-    def log_likelihood(self,hyperparameters, xK = None ):
+    def log_likelihood(self,hyperparameters, recompute_xK = True):
         """
         computes the marginal log-likelihood
         input:
@@ -420,10 +423,12 @@ class gp2Scale():
         output:
             negative marginal log-likelihood (scalar)
         """
+        #client = detach_from_self(self.covariance_dask_client)
+        client = self.covariance_dask_client
         mean = np.zeros((self.point_number))   #self.mean_function(self,self.x_data,hyperparameters) * 0.0
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
-        if xK is None: x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
-        else: x,K = xK[0],xK[1]
+        if recompute_xK is True: x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean,client)
+        else: x,K = self.covariance_value_prod,self.self.SparsePriorCovariance
         y = self.y_data - mean
         sign, logdet = self.slogdet(K.tocsc())
         n = len(y)
@@ -457,12 +462,12 @@ class gp2Scale():
         try:
             x,info = solve.cg(A,b, maxiter = 20)
         except Exception as e:
-            print("fvGP: Sparse solve did not work out.")
-            print("reason: ", str(e))
+            #print("fvGP: Sparse solve did not work out.")
+            #print("reason: ", str(e))
             info = 1
         if info > 0:
-            print("cg did not work out, let's do a minres")
-            x,info = solve.minres(A,b, show = True)
+            #print("cg did not work out, let's do a minres")
+            x,info = solve.minres(A,b, show = self.info)
         return x
     ##################################################################################
     ##################################################################################
@@ -569,16 +574,13 @@ def kernel_function(data):
     if mode == "prior":
         x1 = data["scattered_data"]["x_data"][data["range_i"][0]:data["range_i"][1]]
         x2 = data["scattered_data"]["x_data"][data["range_j"][0]:data["range_j"][1]]
-        d = get_distance_matrix(x1,x2,hps)
         range1 = data["range_i"]
         range2 = data["range_j"]
         k = kernel(x1,x2,hps, None)
     else: 
         x1 = data["x_data"]
         x2 = data["x2"]
-        d = get_distance_matrix(x1,x2,hps)
         k = kernel(x1,x2,hps, None)
-    k[k<1e-16] = 0.0
     k_sparse = sparse.coo_matrix(k)
 
     return k_sparse, (data["range_i"][0],data["range_j"][0]), time.time() - st
