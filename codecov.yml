@@ -1,4 +1,19 @@
 ignore:
+  - "fvgp/_version.py"
+  - "setup.py"
   - "versioneer.py"
-  - "gpcam/_version.py"
 
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        paths:
+          - "fvgp"
+        informational: true
+    patch:
+      default:
+        target: auto
+        paths:
+          - "fvgp"
+        informational: true
