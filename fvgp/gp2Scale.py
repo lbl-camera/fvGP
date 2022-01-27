@@ -428,7 +428,7 @@ class gp2Scale():
         mean = np.zeros((self.point_number))   #self.mean_function(self,self.x_data,hyperparameters) * 0.0
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
         if recompute_xK is True: x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean,client)
-        else: x,K = self.covariance_value_prod,self.self.SparsePriorCovariance
+        else: x,K = self.covariance_value_prod,self.SparsePriorCovariance
         y = self.y_data - mean
         sign, logdet = self.slogdet(K.tocsc())
         n = len(y)
