@@ -368,7 +368,7 @@ class gp2Scale():
         start_log_likelihood = self.log_likelihood(starting_hps)
         print("MCMC started in fvGP")
         print('bounds are',hp_bounds)
-        res = mcmc(self.log_likelihood,hp_bounds, start = starting_hps)
+        res = mcmc(self.log_likelihood,hp_bounds,max_iter = max_iter, x0 = starting_hps)
         hyperparameters = np.array(res["x"])
         print("MCMC has found solution: ", hyperparameters, "with neg. marginal_likelihood ",res["f(x)"])
         self.hyperparameters = hyperparameters
