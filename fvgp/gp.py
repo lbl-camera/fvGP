@@ -16,7 +16,7 @@ import torch
 from functools import partial
 from hgdl.hgdl import HGDL
 
-from .gpHGDL import gpHGDL
+#from .gpHGDL import gpHGDL
 
 class GP():
     """
