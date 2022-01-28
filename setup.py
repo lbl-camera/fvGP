@@ -47,7 +47,8 @@ setup(
         ],
     },
     extras_require={
-        'tests': ['pytest', 'codecov', 'pytest-cov']
+        'tests': ['pytest', 'codecov', 'pytest-cov'],
+        'docs': ['sphinx', 'sphinx-rtd-theme', 'myst-parser', 'myst-nb', 'sphinx-panels', 'autodocs', 'jupytext']
     },
     install_requires=requirements,
     license="GNU General Public License v3",
