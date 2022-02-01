@@ -34,11 +34,12 @@ def mcmc(func,bounds, x0 = None, distr = None, max_iter = 100, ):
         new_func = func(x_new) ####call function
         max_f = max(abs(new_func),abs(old_func))
         min_f = min(abs(new_func),abs(old_func))
-        acceptance_prob = 1./(1. + np.exp(- 20.0 * (old_func-new_func)/min_f))
+        acceptance_prob = 1./(1. + np.exp(- 50.0 * (old_func-new_func)/min_f))
+        #print("old f: ",old_func, " new f: ",new_func, "acceptance probability: ",acceptance_prob)
         u = np.random.rand()
-        if u <= acceptance_prob: x.append(x_new);f.append(func(x_new))
-        else: x.append(x[counter]);f.append(func(x[counter]))
-        print("mcmc f(x): ",f[-1])
+        if u <= acceptance_prob: x.append(x_new);f.append(new_func)
+        else: x.append(x[counter]);f.append(old_func)
+        #print("mcmc f(x): ",f[-1])
         counter += 1
         if counter >= max_iter: run = False
     arg_min = np.argmin(f)
