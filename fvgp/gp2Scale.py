@@ -366,7 +366,7 @@ class gp2Scale():
         constraints = None,
         dask_client = None):
 
-        start_log_likelihood = self.log_likelihood(starting_hps, recompute_xK = False)
+        #start_log_likelihood = self.log_likelihood(starting_hps, recompute_xK = False)
         print("MCMC started in fvGP")
         print('bounds are',hp_bounds)
         res = mcmc(self.log_likelihood,hp_bounds,max_iter = max_iter, x0 = starting_hps)
