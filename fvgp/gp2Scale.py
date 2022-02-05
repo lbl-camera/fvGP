@@ -448,7 +448,7 @@ class gp2Scale():
         fvGPs slogdet method based on torch
         """
         sign = 1.
-        B = spilu(A.tocsc())
+        B = splu(A.tocsc())
         upper_diag = abs(B.U.diagonal())
         res = np.sum(np.log(upper_diag))
         return sign, res
