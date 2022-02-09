@@ -82,8 +82,10 @@ class gp2Scale():
         self.y_data = values
         self.compute_device = compute_device
         self.batch_size = batch_size
-        self.num_batches = (self.point_number // self.batch_size) + 1
-        self.last_batch_size= self.point_number % self.batch_size
+        self.num_batches = self.point_number // self.batch_size
+        last_batch_size = self.point_number % self.batch_size
+        if last_batch_size != 0: self.num_batches += 1
+
         self.entry_limit = entry_limit
         self.ram_limit = ram_limit
         self.gpus_per_worker = gpus_per_worker
@@ -189,18 +191,19 @@ class gp2Scale():
         #gpu_assignment = {}
         #for worker in idle_workers: gpu_assignment[worker] = set([i for i in range(self.gpus_per_worker)])
         #print(gpu_assignment)
+        start_time = time.time()
+        sparse_sub_cov_set = []
+        count = 0
 
         scatter_data = {"x_data":self.x_data, "hps": hyperparameters, "kernel" : self.kernel} ##data that can be scattered
         scatter_future = client.scatter(scatter_data,workers = self.workers["worker"])        ##scatter the data
         for i in range(self.num_batches):
             beg_i = i * self.batch_size
             end_i = min((i+1) * self.batch_size, self.point_number)
-            if beg_i == end_i: continue
             batch1 = self.x_data[beg_i: end_i]
             for j in range(i,self.num_batches):
                 beg_j = j * self.batch_size
                 end_j = min((j+1) * self.batch_size, self.point_number)
-                if beg_j == end_j: continue
                 batch2 = self.x_data[beg_j : end_j]
                 while True:
                     if idle_workers:
@@ -213,13 +216,11 @@ class gp2Scale():
                         break
                     else:
                         time.sleep(0.01)
-                        SparsePriorCovariance, futures = self.collect_submatrices(futures, SparsePriorCovariance, idle_workers)
+                        futures = self.collect_submatrices(futures, idle_workers, sparse_sub_cov_set)
+                count += 1
 
-                if SparsePriorCovariance.data.nbytes > self.ram_limit:
-                    for future in futures: client.cancel(futures); client.shutdown()
-
-
-        SparsePriorCovariance = self.collect_remaining_submatrices(futures, SparsePriorCovariance)
+        self.collect_remaining_submatrices(futures, idle_workers, sparse_sub_cov_set)
+        SparsePriorCovariance = self.coalesce(SparsePriorCovariance,sparse_sub_cov_set)
         client.cancel(futures)
         diag = sparse.eye(self.point_number, format="coo")
         diag.setdiag(variances)
@@ -227,7 +228,7 @@ class gp2Scale():
 
         return SparsePriorCovariance
 
-    def collect_submatrices(self,futures, SparsePriorCovariance, idle_workers):
+    def collect_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
         new_futures = []
         for future in futures:
             if future.status == "finished":
@@ -237,15 +238,35 @@ class gp2Scale():
                     print("WARNING: Collected submatrix not sparse")
                     print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
                 if idle_workers is not None: idle_workers.add(worker)
-                SparsePriorCovariance = self.insert(SparsePriorCovariance,SparseCov_sub, ranges[0], ranges[1])
+                sparse_sub_cov_set.append((SparseCov_sub, ranges[0], ranges[1]))
             else: new_futures.append(future)
         futures = new_futures
-        return SparsePriorCovariance, futures
+        return futures
 
-    def collect_remaining_submatrices(self,futures, SparsePriorCovariance):
+    def collect_remaining_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
         while futures:
-            SparsePriorCovariance, futures = self.collect_submatrices(futures, SparsePriorCovariance, None)
-        return SparsePriorCovariance
+            futures = self.collect_submatrices(futures, idle_workers, sparse_sub_cov_set)
+
+
+    def coalesce(self, bg, sparse_sub_cov_set):
+        for entry in sparse_sub_cov_set:
+            sm = entry[0]
+            i  = entry[1]
+            j  = entry[2]
+
+            if i != j:
+                row = np.concatenate([bg.row,sm.row + i, sm.col + j])
+                col = np.concatenate([bg.col,sm.col + j, sm.row + i])
+                bg = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
+            else:
+                row = np.concatenate([bg.row,sm.row + i])
+                col = np.concatenate([bg.col,sm.col + j])
+                bg = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
+                if bg.data.nbytes > self.ram_limit:
+                    for future in futures: client.cancel(futures); client.shutdown()
+                    raise Exception("RAM limit exceeded, EXIT")
+        return bg
+
 
     def insert(self, bg,sm, i ,j):
         if i != j:
