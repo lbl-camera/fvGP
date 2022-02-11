@@ -210,34 +210,33 @@ class gp2Scale():
                 beg_j = j * self.batch_size
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 batch2 = self.x_data[beg_j : end_j]
-                print("i ",i," j",j,"number of idle workers: ", len(SparsePriorCovariance.get_idle_workers().result()), flush = True)
+                #print("i ",i," j",j,"number of idle workers: ", len(SparsePriorCovariance.get_idle_workers().result()), flush = True)
                 ###try to get the gcollecting process going if that thread is not already busy
                 if not SparsePriorCovariance.thread_is_blocked().result():
-                    print("trying to get things collected",flush = True)
+                    #print("trying to get things collected",flush = True)
                     finished_futures = []
                     remaining_futures = []
                     for future in futures:
                         if future.status == "finished": finished_futures.append(future)
                         else: remaining_futures.append(future)
-                    print("length of finished futures: ",len(finished_futures)," len of remaining futures:",len(remaining_futures),flush = True)
+                    #print("length of finished futures: ",len(finished_futures)," len of remaining futures:",len(remaining_futures),flush = True)
                     actor_future.append(SparsePriorCovariance.collect_submatrices(finished_futures))
                     futures = remaining_futures
                 ####however, if we are running out of worker you have to wait for them to idle
                 while not SparsePriorCovariance.get_idle_workers().result():
-                    print("ran out of workers, have to wait until some become available ",flush = True)
-                    time.sleep(1.)
-                    print("thread_status: ", SparsePriorCovariance.thread_is_blocked().result())
+                    #print("ran out of workers, have to wait until some become available ",flush = True)
+                    time.sleep(0.01)
+                    #print("thread_status: ", SparsePriorCovariance.thread_is_blocked().result())
                     if not SparsePriorCovariance.thread_is_blocked().result():
                         finished_futures = []
                         remaining_futures = []
                         for future in futures:
-                            print(future,flush = True)
                             if future.status == "finished": finished_futures.append(future)
                             else: remaining_futures.append(future)
                         actor_future.append(SparsePriorCovariance.collect_submatrices(finished_futures))
                         futures = remaining_futures
-                        print("in while: length of finished futures: ",len(finished_futures)," len of remaining futures:",len(remaining_futures),flush = True)
-                        print("in while: newly available worker: ", SparsePriorCovariance.get_idle_workers().result())
+                        #print("in while: length of finished futures: ",len(finished_futures)," len of remaining futures:",len(remaining_futures),flush = True)
+                        #print("in while: newly available worker: ", SparsePriorCovariance.get_idle_workers().result())
 
 
 
@@ -246,9 +245,6 @@ class gp2Scale():
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
                 if self.info: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker 1", "Future: ", futures[-1].key)
                 if self.info: print("current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
-                print("",flush = True)
-                print("",flush = True)
-                print("",flush = True)
                 count += 1
 
         if self.info: print("All tasks submitted after ",time.time() - start_time,flush = True)
@@ -263,8 +259,8 @@ class gp2Scale():
         diag.setdiag(variances) ##make variance
         SparsePriorCovariance = end + diag  ##add variance
 
-        plt.imshow(SparsePriorCovariance.toarray())
-        plt.show()
+        #plt.imshow(SparsePriorCovariance.toarray())
+        #plt.show()
 
         if self.info: print("total prior covariance compute time: ", time.time() - start_time)
 
