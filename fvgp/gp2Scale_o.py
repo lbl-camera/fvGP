@@ -13,9 +13,6 @@ from scipy.sparse.linalg import splu
 from scipy.sparse.linalg import spilu
 from .mcmc import mcmc
 import torch
-from dask.distributed import Variable
-from .sparse_matrix import gp2ScaleSparseMatrix
-
 
 class gp2Scale():
     """
@@ -137,7 +134,7 @@ class gp2Scale():
         self.covariance_dask_client = covariance_dask_client
         self.st = time.time()
         self.compute_prior_fvGP_pdf(covariance_dask_client)
-        if self.info:
+        if self.info is True:
             print("gpLG successfully initiated, here is some info about the prior covariance matrix:")
             print("non zero elements: ", self.SparsePriorCovariance.count_nonzero())
             print("Size in GBits:     ", self.SparsePriorCovariance.data.nbytes/1e9)
@@ -180,7 +177,7 @@ class gp2Scale():
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean,client):
         K = self.compute_covariance(hyperparameters, variances,client)
-        if self.info: print("Covariance computed with sparsity: ",K.count_nonzero()/float(self.point_number)**2)
+        if self.info is True: print("Covariance computed with sparsity: ",K.count_nonzero()/float(self.point_number)**2)
         y = values - mean
         x = self.solve(K.tocsc(), y)
         return x,K
@@ -190,22 +187,30 @@ class gp2Scale():
         return 0.5 * Db * (Db + 1.)
 
 
+
     def compute_covariance(self, hyperparameters, variances,client):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
+        SparsePriorCovariance = sparse.coo_matrix((self.point_number,self.point_number))
         futures = []           ### a list of futures
-        compute_workers = self.workers["worker"][1:]
-        insert_worker = self.workers["worker"][0]
-        idle_workers = set(compute_workers)
+        idle_workers = set(self.workers["worker"])
         #gpu_assignment = {}
         #for worker in idle_workers: gpu_assignment[worker] = set([i for i in range(self.gpus_per_worker)])
-        sparse_sub_cov_set = []
-        count = 0
-        SparsePriorCovariance = client.submit(gp2ScaleSparseMatrix,self.point_number,actor=True, workers=insert_worker).result()# Create Actor
-        scatter_data = {"x_data":self.x_data, "hps": hyperparameters, "kernel" : self.kernel} ##data that can be scattered
-        scatter_future = client.scatter(scatter_data,workers = compute_workers)        ##scatter the data
-        f = []
-
+        #print(gpu_assignment)
         start_time = time.time()
+        sparse_sub_cov_set = []
+        start_time = time.time()
+        print("expected number of batches total: ",self.total_number_of_batches())
+        print(self.num_batches)
+
+        count = 0
+
+        scatter_data = {"x_data":self.x_data, "hps": hyperparameters, "kernel" : self.kernel} ##data that can be scattered
+        scatter_future = client.scatter(scatter_data,workers = self.workers["worker"])        ##scatter the data
+        time_to_get_workers = 0.
+        time_to_submit = 0.
+
+        future_worker_dict = {}
+
         for i in range(self.num_batches):
             beg_i = i * self.batch_size
             end_i = min((i+1) * self.batch_size, self.point_number)
@@ -214,65 +219,64 @@ class gp2Scale():
                 beg_j = j * self.batch_size
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 batch2 = self.x_data[beg_j : end_j]
-                while not idle_workers:
-                    futures = self.collect_submatrices(futures, idle_workers, sparse_sub_cov_set)
-                    time.sleep(0.01)
-                this_worker = idle_workers.pop()
-                #this_gpu = gpu_assignment[this_worker].pop()
-                #this_gpu = 0
-                data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
-                futures.append(client.submit(kernel_function, data, workers = this_worker))
-                if self.info: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", this_worker, "Future: ", futures[-1].key)
-                if sparse_sub_cov_set and not SparsePriorCovariance.get_thread_status().result():
-                    finished_futures = self.get_finished_futures(futures)
-                    f.append(SparsePriorCovariance.collect_submatrices(finished_futures))
-                    #f.append(SparsePriorCovariance.insert_many(sparse_sub_cov_set))
-                    #sparse_sub_cov_set = []
-                    finished = []
-
-                if self.info: print("current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
+                while True:
+                    if idle_workers:
+                        t = time.time()
+                        this_worker = idle_workers.pop()
+                        #this_gpu = gpu_assignment[this_worker].pop()
+                        this_gpu = 0
+                        data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
+                        futures.append(client.submit(kernel_function,data, workers = this_worker))
+                        future_worker_dict[futures[-1].key] = this_worker
+                        if self.info is True: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ", this_worker, "Future: ", futures[-1].key)
+                        break
+                    else:
+                        self.free_workers(futures, idle_workers, future_worker_dict)
+                        time.sleep(0.01)
+                futures = self.collect_submatrices(futures, idle_workers, sparse_sub_cov_set)
+                print("current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
                 count += 1
 
-        if self.info: print("All tasks submitted after ",time.time() - start_time,flush = True)
-        if self.info: print("actual number of computed batches: ", count)
-        print("time to submit",time_to_submit," time to get workers freed: ",time_to_get_workers," time to submit the insert: ",time_to_insert)
+        print("All tasks submitted after ",time.time() - start_time,flush = True)
+        print("actual number of computed batches: ", count)
+        print("time to submit",time_to_submit," time to get workers freed: ",time_to_get_workers)
 
 
-        f.result()  ##let the insertion finish
-        end = SparsePriorCovariance.get().result() ##get the current Prior Covariance
-        self.collect_remaining_submatrices(futures, idle_workers, sparse_sub_cov_set) ##let rest of futures finsish
-        SparsePriorCovariance = self.coalesce(end,sparse_sub_cov_set) ##fill them into the Prior Covariance
+        self.collect_remaining_submatrices(futures, idle_workers, sparse_sub_cov_set)
+        SparsePriorCovariance = self.coalesce(SparsePriorCovariance,sparse_sub_cov_set)
+        client.cancel(futures)
+        diag = sparse.eye(self.point_number, format="coo")
+        diag.setdiag(variances)
+        SparsePriorCovariance = SparsePriorCovariance + diag
 
-        client.cancel(futures) ##make sure allf utures are cancelled
-        diag = sparse.eye(self.point_number, format="coo") ##make variance
-        diag.setdiag(variances) ##make variance
-        SparsePriorCovariance = SparsePriorCovariance + diag  ##add variance
-
-        if self.info: print("total prior covariance compute time: ", time.time() - start_time)
+        print("cov compute time: ", time.time() - start_time)
 
         return SparsePriorCovariance
-    
-    def collect_submatrices(self,futures):
-        finished_futures = []
+
+
+    def free_workers(self,futures, idle_workers, future_worker_dict):
+
+        for future in futures:
+            if future.status == "finished": 
+                worker = future_worker_dict[future.key]
+                idle_workers.add(worker)
+
+
+    def collect_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
+        new_futures = []
         for future in futures:
             if future.status == "finished":
-                finished_futures.append(future)
-        return finished_futures
-
-
-    #def collect_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
-    #    new_futures = []
-    #    for future in futures:
-    #        if future.status == "finished":
-    #            SparseCov_sub, ranges,ketime, worker = future.result()
-    #            if self.info: print("Future", future.key, " has finished its work in", ketime," seconds.")
-    #            if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
-    #                print("WARNING: Collected submatrix not sparse; sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
-    #            idle_workers.add(worker)
-    #            sparse_sub_cov_set.append((SparseCov_sub, ranges[0], ranges[1]))
-    #        else: new_futures.append(future)
-    #    futures = new_futures
-    #    return futures
+                SparseCov_sub, ranges,ketime, worker = future.result()
+                if self.info is True: print("Future", future.key, " has finished its work in", ketime," seconds.")
+                if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
+                    print("WARNING: Collected submatrix not sparse")
+                    print("Sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
+                #if idle_workers is not None: idle_workers.add(worker)
+                sparse_sub_cov_set.append((SparseCov_sub, ranges[0], ranges[1]))
+                break
+            else: new_futures.append(future)
+        futures = new_futures
+        return futures
 
     def collect_remaining_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
         while futures:
@@ -299,16 +303,16 @@ class gp2Scale():
         return bg
 
 
-    #def insert(self, bg,sm, i ,j):
-    #    if i != j:
-    #        row = np.concatenate([bg.row,sm.row + i, sm.col + j])
-    #        col = np.concatenate([bg.col,sm.col + j, sm.row + i])
-    #        res = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
-    #    else:
-    #        row = np.concatenate([bg.row,sm.row + i])
-    #        col = np.concatenate([bg.col,sm.col + j])
-    #        res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
-    #    return res
+    def insert(self, bg,sm, i ,j):
+        if i != j:
+            row = np.concatenate([bg.row,sm.row + i, sm.col + j])
+            col = np.concatenate([bg.col,sm.col + j, sm.row + i])
+            res = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
+        else:
+            row = np.concatenate([bg.row,sm.row + i])
+            col = np.concatenate([bg.col,sm.col + j])
+            res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
+        return res
     ##################################################################################
     ##################################################################################
     ##################################################################################
@@ -592,23 +596,6 @@ class gp2Scale():
         return {"x": p,
                 "f(x)": posterior_mean}
 
-#def insert(sm_dict):
-#    sm = sm_dict["sp_matrix_tuple"][0]
-#    i  = sm_dict["sp_matrix_tuple"][1]
-#    j  = sm_dict["sp_matrix_tuple"][2]
-    #bg = sm_dict["SparsePriorCovariance"]
-#    bg = global_var.get()
-#    if i != j:
-#        row = np.concatenate([bg.row,sm.row + i, sm.col + j])
-#        col = np.concatenate([bg.col,sm.col + j, sm.row + i])
-#        res = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
-#    else:
-#        row = np.concatenate([bg.row,sm.row + i])
-#        col = np.concatenate([bg.col,sm.col + j])
-#        res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
-    #sm_dict["SparsePriorCovariance"] = res
-#    global_var.set(res)
-#    return res
 
 def kernel_function(data):
     st = time.time()

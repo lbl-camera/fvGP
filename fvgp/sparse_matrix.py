@@ -49,11 +49,10 @@ class gp2ScaleSparseMatrix:
 
     def collect_submatrices(self,futures):
         for future in futures:
-            if future.status == "finished":
-                SparseCov_sub, ranges,ketime, worker = future.result()
-                print("Future", future.key, " has finished its work in", ketime," seconds.")
-                if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
-                    print("WARNING: Collected submatrix not sparse; sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
-                self.insert((SparseCov_sub, ranges[0], ranges[1]))
+            SparseCov_sub, ranges,ketime, worker = future.result()
+            #print("Future", future.key, " has finished its work in", ketime," seconds.", flush = True)
+            #if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
+            #    print("WARNING: Collected submatrix not sparse; sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
+            self.insert(SparseCov_sub, ranges[0], ranges[1])
         return "success"
 
