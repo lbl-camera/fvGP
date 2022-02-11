@@ -34,6 +34,10 @@ class gp2ScaleSparseMatrix:
     def get_idle_worker(self):
         return self.idle_workers.pop()
 
+    def add_worker(self,worker):
+        print("adding the worker back in ..", flush = True)
+        self.idle_workers.add(worker)
+
     def insert(self, sm, i ,j):
         bg = self.sparse_covariance
         if i != j:
@@ -67,15 +71,25 @@ class gp2ScaleSparseMatrix:
 
     def collect_submatrices(self,futures):
         self.thread_blocked = True
+        #print("     trying to collect ...",flush = True)
         for future in futures:
+            #print("     future status: ", future,flush = True)
             SparseCov_sub, ranges,ketime, worker = future.result()
+            #print("     result collected ",flush = True)
+
             #if self.info: 
-            print("Future", future.key, " has finished its work in", ketime," seconds.")
-            if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
-                print("WARNING: Collected submatrix not sparse; sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
+            #print("     Future", future.key, " has finished its work in", ketime," seconds.",flush = True)
+            #if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
+            #    print("WARNING: Collected submatrix not sparse; sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
+            #self.idle_workers.add(worker)
+            #print("     added the worker back in the pool",flush = True)
+            #self.add_worker(worker)
             self.idle_workers.add(worker)
+            #print("inserting",flush = True)
             self.insert(SparseCov_sub, ranges[0], ranges[1])
+            #print("     insert done",flush = True)
         self.thread_blocked = False
-        return futures
+        #print("thread released ",flush = True)
+        return 0
 
 

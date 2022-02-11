@@ -231,12 +231,13 @@ class gp2Scale():
                         finished_futures = []
                         remaining_futures = []
                         for future in futures:
+                            print(future,flush = True)
                             if future.status == "finished": finished_futures.append(future)
                             else: remaining_futures.append(future)
                         actor_future.append(SparsePriorCovariance.collect_submatrices(finished_futures))
                         futures = remaining_futures
-                        print("cleaned up workers: length of finished futures: ",len(finished_futures)," len of remaining futures:",len(remaining_futures),flush = True)
-                        print("newly available worker: ", SparsePriorCovariance.get_idle_workers().result())
+                        print("in while: length of finished futures: ",len(finished_futures)," len of remaining futures:",len(remaining_futures),flush = True)
+                        print("in while: newly available worker: ", SparsePriorCovariance.get_idle_workers().result())
 
 
 
@@ -245,29 +246,25 @@ class gp2Scale():
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
                 if self.info: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker 1", "Future: ", futures[-1].key)
                 if self.info: print("current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
+                print("",flush = True)
+                print("",flush = True)
+                print("",flush = True)
                 count += 1
 
         if self.info: print("All tasks submitted after ",time.time() - start_time,flush = True)
         if self.info: print("actual number of computed batches: ", count)
-        
-        while futures:
-            finished_futures, futures = self.get_finished_futures(futures)
-            actor_future.append(SparsePriorCovariance.collect_submatrices(finished_futures))
-            finished_futures = []
-            time.sleep(0.1)
+        actor_future.append(SparsePriorCovariance.collect_submatrices(futures))
+        actor_future[-1].result()
 
-        client.gather(f)  ##let the insertion finish
-        end = SparsePriorCovariance.get().result() ##get the current Prior Covariance
-        #self.collect_remaining_submatrices(futures, idle_workers, sparse_sub_cov_set) ##let rest of futures finsish
-        #SparsePriorCovariance = self.coalesce(end,sparse_sub_cov_set) ##fill them into the Prior Covariance
-
+        end = SparsePriorCovariance.get_result().result() ##get the current Prior Covariance
         client.cancel(futures) ##make sure allf utures are cancelled
+        client.cancel(actor_future) ##make sure allf utures are cancelled
         diag = sparse.eye(self.point_number, format="coo") ##make variance
         diag.setdiag(variances) ##make variance
         SparsePriorCovariance = end + diag  ##add variance
 
-        #plt.imshow(SparsePriorCovariance.toarray())
-        #plt.show()
+        plt.imshow(SparsePriorCovariance.toarray())
+        plt.show()
 
         if self.info: print("total prior covariance compute time: ", time.time() - start_time)
 
