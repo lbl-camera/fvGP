@@ -21,6 +21,7 @@ class gp2ScaleSparseMatrix:
         self.sparse_covariance = sparse.coo_matrix((n,n))
         self.thread_blocked = False
         self.idle_workers = set(workers)
+        self.future_worker_assignments = {}
 
     def get_result(self):
         return self.sparse_covariance
@@ -28,15 +29,18 @@ class gp2ScaleSparseMatrix:
     def thread_is_blocked(self):
         return self.thread_blocked
 
-    def get_idle_workers(self):
-        return self.idle_workers
-
     def get_idle_worker(self):
         return self.idle_workers.pop()
 
-    def add_worker(self,worker):
-        print("adding the worker back in ..", flush = True)
-        self.idle_workers.add(worker)
+    def get_idle_workers(self):
+        return self.idle_workers
+
+    def free_worker(self, future_key):
+        self.idle_workers.add(self.future_worker_assignments[future_key])
+
+    def free_workers(self, futures):
+        for future in futures:
+            if future.status == "finished": self.free_worker(future.key)
 
     def insert(self, sm, i ,j):
         bg = self.sparse_covariance
@@ -58,38 +62,17 @@ class gp2ScaleSparseMatrix:
         self.thread_blocked = False
         return res
 
-    #def collect_submatrices(self,futures):
-    #    self.thread_blocked = True
-    #    for future in futures:
-    #        SparseCov_sub, ranges,ketime, worker = future.result()
-            #print("Future", future.key, " has finished its work in", ketime," seconds.", flush = True)
-            #if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
-            #    print("WARNING: Collected submatrix not sparse; sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
-    #        self.insert(SparseCov_sub, ranges[0], ranges[1])
-    #    self.thread_blocked = False
-    #    return self.sparse_covariance
-
-    def collect_submatrices(self,futures):
+    def get_future_results(self,futures):
         self.thread_blocked = True
-        #print("     trying to collect ...",flush = True)
+        res = []
         for future in futures:
-            #print("     future status: ", future,flush = True)
             SparseCov_sub, ranges,ketime, worker = future.result()
-            #print("     result collected ",flush = True)
-
-            #if self.info: 
-            #print("     Future", future.key, " has finished its work in", ketime," seconds.",flush = True)
-            #if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
-            #    print("WARNING: Collected submatrix not sparse; sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
-            #self.idle_workers.add(worker)
-            #print("     added the worker back in the pool",flush = True)
-            #self.add_worker(worker)
-            self.idle_workers.add(worker)
-            #print("inserting",flush = True)
-            self.insert(SparseCov_sub, ranges[0], ranges[1])
-            #print("     insert done",flush = True)
+            res.append((SparseCov_sub, ranges[0], ranges[1]))
+            del self.future_worker_assignments[future.key]
+        self.insert_many(res)
         self.thread_blocked = False
-        #print("thread released ",flush = True)
         return 0
 
+    def assign_future_2_worker(self, future_key, worker_address):
+        self.future_worker_assignments[future_key] = worker_address
 

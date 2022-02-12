@@ -210,30 +210,34 @@ class gp2Scale():
                 beg_j = j * self.batch_size
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 batch2 = self.x_data[beg_j : end_j]
+
+                ###freeing workers that are finsihed (will not call future.result())
                 while not SparsePriorCovariance.get_idle_workers().result():
-                    time.sleep(0.01)
-                    #print("thread_status: ", SparsePriorCovariance.thread_is_blocked().result())
-                    if not SparsePriorCovariance.thread_is_blocked().result():
-                        finished_futures = []
-                        remaining_futures = []
-                        for future in futures:
-                            if future.status == "finished": finished_futures.append(future)
-                            else: remaining_futures.append(future)
-                        actor_future.append(SparsePriorCovariance.collect_submatrices(finished_futures))
-                        futures = remaining_futures
+                    SparsePriorCovariance.free_workers(futures).result()
+
+                ###gather results asynchronously and insert them
+                if not SparsePriorCovariance.thread_is_blocked().result():
+                    finished_futures = []
+                    remaining_futures = []
+                    for future in futures:
+                        if future.status == "finished": finished_futures.append(future)
+                        else: remaining_futures.append(future)
+                    actor_future.append(SparsePriorCovariance.get_future_results(finished_futures))
+                    futures = remaining_futures
 
 
 
                 current_worker = SparsePriorCovariance.get_idle_worker().result()
                 data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
+                SparsePriorCovariance.assign_future_2_worker(futures[-1].key,current_worker).result()
                 if self.info: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key)
                 if self.info: print("current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
                 count += 1
 
         if self.info: print("All tasks submitted after ",time.time() - start_time,flush = True)
         if self.info: print("actual number of computed batches: ", count)
-        actor_future.append(SparsePriorCovariance.collect_submatrices(futures))
+        actor_future.append(SparsePriorCovariance.get_future_results(futures))
         actor_future[-1].result()
 
         end = SparsePriorCovariance.get_result().result() ##get the current Prior Covariance
@@ -257,12 +261,6 @@ class gp2Scale():
         futures = remaining_futures
         return finished_futures, futures
 
-    #def free_workers(self,futures, idle_workers):
-    #    for future in futures:
-    #        if future.status == "finished":
-    #            idle_workers.add(worker)
-
-
     #def collect_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
     #    new_futures = []
     #    for future in futures:
@@ -277,29 +275,29 @@ class gp2Scale():
     #    futures = new_futures
     #    return futures
 
-    def collect_remaining_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
-        while futures:
-            futures = self.collect_submatrices(futures, idle_workers, sparse_sub_cov_set)
+    #def collect_remaining_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
+    #    while futures:
+    #        futures = self.collect_submatrices(futures, idle_workers, sparse_sub_cov_set)
 
 
-    def coalesce(self, bg, sparse_sub_cov_set):
-        for entry in sparse_sub_cov_set:
-            sm = entry[0]
-            i  = entry[1]
-            j  = entry[2]
-
-            if i != j:
-                row = np.concatenate([bg.row,sm.row + i, sm.col + j])
-                col = np.concatenate([bg.col,sm.col + j, sm.row + i])
-                bg = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
-            else:
-                row = np.concatenate([bg.row,sm.row + i])
-                col = np.concatenate([bg.col,sm.col + j])
-                bg = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
-                if bg.data.nbytes > self.ram_limit:
-                    for future in futures: client.cancel(futures); client.shutdown()
-                    raise Exception("RAM limit exceeded, EXIT")
-        return bg
+    #def coalesce(self, bg, sparse_sub_cov_set):
+    #    for entry in sparse_sub_cov_set:
+    #        sm = entry[0]
+    #        i  = entry[1]
+    #        j  = entry[2]
+    
+    #        if i != j:
+    #            row = np.concatenate([bg.row,sm.row + i, sm.col + j])
+    #            col = np.concatenate([bg.col,sm.col + j, sm.row + i])
+    #            bg = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
+    #        else:
+    #            row = np.concatenate([bg.row,sm.row + i])
+    #            col = np.concatenate([bg.col,sm.col + j])
+    #            bg = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
+    #            if bg.data.nbytes > self.ram_limit:
+    #                for future in futures: client.cancel(futures); client.shutdown()
+    #                raise Exception("RAM limit exceeded, EXIT")
+    #    return bg
 
 
     #def insert(self, bg,sm, i ,j):
@@ -425,45 +423,6 @@ class gp2Scale():
         print("MCMC has found solution: ", hyperparameters, "with neg. marginal_likelihood ",res["f(x)"])
         self.hyperparameters = hyperparameters
 
-        ############################
-        ####global optimization:##
-        ############################
-        #def constraint(v):
-        #    return np.array(np.sum(v[3:]))
-
-        #nlc = NonlinearConstraint(constraint,0,10000)
-
-        #if method == "global":
-        #    print("fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
-        #    print("maximum number of iterations: ", max_iter)
-        #    print("termination tolerance: ", tolerance)
-        #    print("bounds: ", hp_bounds)
-        #    res = differential_evolution(
-        #        self.log_likelihood,
-        #        hp_bounds,
-        #        disp=True,
-        #        maxiter=max_iter,
-        #        popsize = pop_size,
-        #        tol = tolerance,
-        #        workers = 1, constraints = (nlc),
-        #    )
-        #    hyperparameters = np.array(res["x"])
-        #    Eval = self.log_likelihood(hyperparameters)
-        #    print("fvGP found hyperparameters ",hyperparameters," with likelihood ",
-        #        Eval," via global optimization")
-        ############################
-        ####local optimization:#####
-        ############################
-        #else:
-        #    raise ValueError("No optimization mode specified in fvGP")
-        ###################################################
-        #if start_log_likelihood < self.log_likelihood(hyperparameters):
-        #    hyperparameters = np.array(starting_hps)
-        #    print("fvGP: Optimization returned smaller log likelihood; resetting to old hyperparameters.")
-        #    print("New hyperparameters: ",
-        #    hyperparameters,
-        #    "with log likelihood: ",
-        #    self.log_likelihood(hyperparameters))
         return hyperparameters
 
 
@@ -594,24 +553,6 @@ class gp2Scale():
         posterior_mean = A
         return {"x": p,
                 "f(x)": posterior_mean}
-
-#def insert(sm_dict):
-#    sm = sm_dict["sp_matrix_tuple"][0]
-#    i  = sm_dict["sp_matrix_tuple"][1]
-#    j  = sm_dict["sp_matrix_tuple"][2]
-    #bg = sm_dict["SparsePriorCovariance"]
-#    bg = global_var.get()
-#    if i != j:
-#        row = np.concatenate([bg.row,sm.row + i, sm.col + j])
-#        col = np.concatenate([bg.col,sm.col + j, sm.row + i])
-#        res = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
-#    else:
-#        row = np.concatenate([bg.row,sm.row + i])
-#        col = np.concatenate([bg.col,sm.col + j])
-#        res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
-    #sm_dict["SparsePriorCovariance"] = res
-#    global_var.set(res)
-#    return res
 
 def kernel_function(data):
     st = time.time()
