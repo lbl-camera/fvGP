@@ -19,28 +19,11 @@ from dask.distributed import Variable
 class gp2ScaleSparseMatrix:
     def __init__(self,n,workers):
         self.sparse_covariance = sparse.coo_matrix((n,n))
-        self.thread_blocked = False
-        self.idle_workers = set(workers)
-        self.future_worker_assignments = {}
+        self.actor_busy = False
 
     def get_result(self):
         return self.sparse_covariance
 
-    def thread_is_blocked(self):
-        return self.thread_blocked
-
-    def get_idle_worker(self):
-        return self.idle_workers.pop()
-
-    def get_idle_workers(self):
-        return self.idle_workers
-
-    def free_worker(self, future_key):
-        self.idle_workers.add(self.future_worker_assignments[future_key])
-
-    def free_workers(self, futures):
-        for future in futures:
-            if future.status == "finished": self.free_worker(future.key)
 
     def insert(self, sm, i ,j):
         bg = self.sparse_covariance
@@ -62,17 +45,11 @@ class gp2ScaleSparseMatrix:
         self.thread_blocked = False
         return res
 
-    def get_future_results(self,futures):
-        self.thread_blocked = True
-        res = []
+    def get_future_results(self, futures):
+        #self.actor_busy = True
         for future in futures:
             SparseCov_sub, ranges,ketime, worker = future.result()
-            res.append((SparseCov_sub, ranges[0], ranges[1]))
-            del self.future_worker_assignments[future.key]
-        self.insert_many(res)
-        self.thread_blocked = False
+            print("Future ", future.key, " has finished its work in", ketime," seconds.")
+            self.insert(SparseCov_sub, ranges[0], ranges[1])
+        #self.actor_busy = False
         return 0
-
-    def assign_future_2_worker(self, future_key, worker_address):
-        self.future_worker_assignments[future_key] = worker_address
-

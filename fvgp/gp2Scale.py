@@ -15,6 +15,7 @@ from .mcmc import mcmc
 import torch
 from dask.distributed import Variable
 from .sparse_matrix import gp2ScaleSparseMatrix
+#from .sparse_matrix import UpdateSM
 
 
 class gp2Scale():
@@ -193,15 +194,22 @@ class gp2Scale():
     def compute_covariance(self, hyperparameters, variances,client):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
         futures = []           ### a list of futures
+        actor_futures = []
         compute_workers = self.workers["worker"][1:]
         actor_worker = self.workers["worker"][0]
+        self.idle_workers = set(compute_workers)
+
+        self.future_worker_assignments = {}
+        finished_futures = set()
+
+
         SparsePriorCovariance = client.submit(gp2ScaleSparseMatrix,self.point_number,compute_workers, actor=True, workers=actor_worker).result()# Create Actor
         scatter_data = {"x_data":self.x_data, "hps": hyperparameters, "kernel" : self.kernel} ##data that can be scattered
         scatter_future = client.scatter(scatter_data,workers = compute_workers)        ##scatter the data
-        
-        actor_future = []
+
         start_time = time.time()
         count = 0
+
         for i in range(self.num_batches):
             beg_i = i * self.batch_size
             end_i = min((i+1) * self.batch_size, self.point_number)
@@ -210,39 +218,39 @@ class gp2Scale():
                 beg_j = j * self.batch_size
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 batch2 = self.x_data[beg_j : end_j]
+                ##make workers available that are not actively computing
+                #print("new loop")
+                while not self.idle_workers:
+                    self.idle_workers, futures, finished_futures = self.free_workers(futures)
+                    time.sleep(0.1)
+                #print("1", flush = True)
 
-                ###freeing workers that are finsihed (will not call future.result())
-                while not SparsePriorCovariance.get_idle_workers().result():
-                    SparsePriorCovariance.free_workers(futures).result()
+                ####collect finished workers but only if actor is not busy, otherwise do it later
+                ####but make sure that we dont lose any finished workers
+                actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures))
+                finished_futures = set()
+                #print("2", flush = True)
 
-                ###gather results asynchronously and insert them
-                if not SparsePriorCovariance.thread_is_blocked().result():
-                    finished_futures = []
-                    remaining_futures = []
-                    for future in futures:
-                        if future.status == "finished": finished_futures.append(future)
-                        else: remaining_futures.append(future)
-                    actor_future.append(SparsePriorCovariance.get_future_results(finished_futures))
-                    futures = remaining_futures
-
-
-
-                current_worker = SparsePriorCovariance.get_idle_worker().result()
+                current_worker = self.get_idle_worker()
+                #print("3", flush = True)
                 data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
-                SparsePriorCovariance.assign_future_2_worker(futures[-1].key,current_worker).result()
-                if self.info: print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key)
+                #print("4", flush = True)
+                self.assign_future_2_worker(futures[-1].key,current_worker)
+                #print("5", flush = True)
+                #if self.info: 
+                #print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key)
                 if self.info: print("current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
                 count += 1
 
         if self.info: print("All tasks submitted after ",time.time() - start_time,flush = True)
         if self.info: print("actual number of computed batches: ", count)
-        actor_future.append(SparsePriorCovariance.get_future_results(futures))
-        actor_future[-1].result()
+        actor_futures.append(SparsePriorCovariance.get_future_results(futures))
+        actor_futures[-1].result()
 
         end = SparsePriorCovariance.get_result().result() ##get the current Prior Covariance
         client.cancel(futures) ##make sure allf utures are cancelled
-        client.cancel(actor_future) ##make sure allf utures are cancelled
+        client.cancel(actor_futures) ##make sure allf utures are cancelled
         diag = sparse.eye(self.point_number, format="coo") ##make variance
         diag.setdiag(variances) ##make variance
         SparsePriorCovariance = end + diag  ##add variance
@@ -250,16 +258,31 @@ class gp2Scale():
         if self.info: print("total prior covariance compute time: ", time.time() - start_time)
 
         return SparsePriorCovariance
-    
-    def get_finished_futures(self,futures):
-        finished_futures = []
+
+
+    def free_workers(self, futures):
+        free_workers = set()
+        finished_futures = set()
         remaining_futures = []
+
         for future in futures:
-            if future.status == "finished":
-                finished_futures.append(future)
+            if future.status == "finished": 
+                finished_futures.add(future)
+                free_workers.add(self.future_worker_assignments[future.key])
+                del self.future_worker_assignments[future.key]
+                finished_futures.add(future)
             else: remaining_futures.append(future)
-        futures = remaining_futures
-        return finished_futures, futures
+        return free_workers, remaining_futures, finished_futures
+
+    def assign_future_2_worker(self, future_key, worker_address):
+        self.future_worker_assignments[future_key] = worker_address
+
+    def get_idle_worker(self):
+        return self.idle_workers.pop()
+
+    def add_idle_worker(self,worker):
+        self.idle_workers.add(worker)
+
 
     #def collect_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
     #    new_futures = []
