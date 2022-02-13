@@ -202,7 +202,6 @@ class gp2Scale():
         self.future_worker_assignments = {}
         finished_futures = set()
 
-
         SparsePriorCovariance = client.submit(gp2ScaleSparseMatrix,self.point_number,compute_workers, actor=True, workers=actor_worker).result()# Create Actor
         scatter_data = {"x_data":self.x_data, "hps": hyperparameters, "kernel" : self.kernel} ##data that can be scattered
         scatter_future = client.scatter(scatter_data,workers = compute_workers)        ##scatter the data
@@ -227,8 +226,9 @@ class gp2Scale():
 
                 ####collect finished workers but only if actor is not busy, otherwise do it later
                 ####but make sure that we dont lose any finished workers
-                actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures))
-                finished_futures = set()
+                if finished_futures:
+                    actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures))
+                    finished_futures = set()
                 #print("2", flush = True)
 
                 current_worker = self.get_idle_worker()
@@ -238,9 +238,10 @@ class gp2Scale():
                 #print("4", flush = True)
                 self.assign_future_2_worker(futures[-1].key,current_worker)
                 #print("5", flush = True)
-                #if self.info: 
-                #print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key)
-                if self.info: print("current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
+                #if self.info:
+                if self.info: 
+                    print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key, flush = True)
+                    print("current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
                 count += 1
 
         if self.info: print("All tasks submitted after ",time.time() - start_time,flush = True)
