@@ -218,36 +218,39 @@ class gp2Scale():
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 batch2 = self.x_data[beg_j : end_j]
                 ##make workers available that are not actively computing
-                #print("new loop")
+                if self.info: print("submitting batch ",i,j)
                 while not self.idle_workers:
                     self.idle_workers, futures, finished_futures = self.free_workers(futures)
-                    time.sleep(0.1)
-                #print("1", flush = True)
+                    time.sleep(0.01)
+                if self.info: print("   idle workers: ", len(self.idle_workers),flush = True)
 
                 ####collect finished workers but only if actor is not busy, otherwise do it later
                 ####but make sure that we dont lose any finished workers
                 if finished_futures:
-                    actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures))
+                    #actor_futures.append(SparsePriorCovariance.get_future_results(set(finished_futures)))
+                    actor_futures = SparsePriorCovariance.get_future_results(set(finished_futures))
                     finished_futures = set()
-                #print("2", flush = True)
+                #for future in actor_futures:
+                #    if future.status == "finished": s = future.result()
 
                 current_worker = self.get_idle_worker()
-                #print("3", flush = True)
                 data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
-                #print("4", flush = True)
                 self.assign_future_2_worker(futures[-1].key,current_worker)
-                #print("5", flush = True)
-                #if self.info:
                 if self.info: 
-                    print("submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key, flush = True)
-                    print("current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
+                    print("    submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key, flush = True)
+                    print("    current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
+                    print("",flush = True)
                 count += 1
 
-        if self.info: print("All tasks submitted after ",time.time() - start_time,flush = True)
-        if self.info: print("actual number of computed batches: ", count)
-        actor_futures.append(SparsePriorCovariance.get_future_results(futures))
-        actor_futures[-1].result()
+        if self.info: 
+            print("All tasks submitted after ",time.time() - start_time,flush = True)
+            print("actual number of computed batches: ", count)
+            print("still have to gather ",len(futures)," results",flush = True)
+        #actor_futures.append(SparsePriorCovariance.get_future_results(futures))
+        actor_futures = SparsePriorCovariance.get_future_results(futures)
+        #client.gather(actor_futures)
+        actor_futures.result()
 
         end = SparsePriorCovariance.get_result().result() ##get the current Prior Covariance
         client.cancel(futures) ##make sure allf utures are cancelled

@@ -41,11 +41,11 @@ class gp2ScaleSparseMatrix:
             res = self.insert(entry[0],entry[1],entry[2])
         return res
 
-    def get_future_results(self, futures):
+    def get_future_results(self, futures, info = False):
         res = []
         for future in futures:
             SparseCov_sub, ranges, ketime, worker = future.result()
-            print("Future ", future.key, " has finished its work in", ketime," seconds.", flush = True)
-            res.append((SparseCov,ranges[0],ranges[1]))
+            if info: print("Future ", future.key, " has finished its work in", ketime," seconds.", flush = True)
+            res.append((SparseCov_sub,ranges[0],ranges[1]))
         self.insert_many(res)
         return 0
