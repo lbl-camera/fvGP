@@ -34,7 +34,7 @@ class gp2ScaleSparseMatrix:
             col = np.concatenate([bg.col,sm.col + j])
             res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
         self.sparse_covariance = res
-        return res
+        #return res
 
     def insert_many(self, list_of_3_tuples):
         for entry in list_of_3_tuples:
@@ -45,7 +45,7 @@ class gp2ScaleSparseMatrix:
         res = []
         for future in futures:
             SparseCov_sub, ranges, ketime, worker = future.result()
-            if info: print("Future ", future.key, " has finished its work in", ketime," seconds.", flush = True)
+            #if info: print("Future ", future.key, " has finished its work in", ketime," seconds.", flush = True)
             res.append((SparseCov_sub,ranges[0],ranges[1]))
         self.insert_many(res)
-        return 0
+        #return 0

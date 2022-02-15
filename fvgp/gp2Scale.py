@@ -208,6 +208,7 @@ class gp2Scale():
 
         start_time = time.time()
         count = 0
+        s = []
 
         for i in range(self.num_batches):
             beg_i = i * self.batch_size
@@ -227,12 +228,16 @@ class gp2Scale():
                 ####collect finished workers but only if actor is not busy, otherwise do it later
                 ####but make sure that we dont lose any finished workers
                 if finished_futures:
-                    #actor_futures.append(SparsePriorCovariance.get_future_results(set(finished_futures)))
-                    actor_futures = SparsePriorCovariance.get_future_results(set(finished_futures))
+                    actor_futures.append(SparsePriorCovariance.get_future_results(set(finished_futures)))
                     finished_futures = set()
-                #for future in actor_futures:
-                #    if future.status == "finished": s = future.result()
 
+                if len(actor_futures) > 200: actor_futures = actor_futures[-200:]
+                #for future in actor_futures:
+                #    print("IN ACTOR FUTURES: ",future.status, flush = True)
+                #    if future.status == "finished": 
+                #        s.append(future.result())
+                #        print("                 we are gathering actor futures", flush = True)
+                
                 current_worker = self.get_idle_worker()
                 data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
@@ -247,10 +252,9 @@ class gp2Scale():
             print("All tasks submitted after ",time.time() - start_time,flush = True)
             print("actual number of computed batches: ", count)
             print("still have to gather ",len(futures)," results",flush = True)
-        #actor_futures.append(SparsePriorCovariance.get_future_results(futures))
-        actor_futures = SparsePriorCovariance.get_future_results(futures)
-        #client.gather(actor_futures)
-        actor_futures.result()
+        
+        actor_futures.append(SparsePriorCovariance.get_future_results(futures))
+        client.gather(actor_futures[1])
 
         end = SparsePriorCovariance.get_result().result() ##get the current Prior Covariance
         client.cancel(futures) ##make sure allf utures are cancelled
@@ -288,55 +292,6 @@ class gp2Scale():
         self.idle_workers.add(worker)
 
 
-    #def collect_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
-    #    new_futures = []
-    #    for future in futures:
-    #        if future.status == "finished":
-    #            SparseCov_sub, ranges,ketime, worker = future.result()
-    #            if self.info: print("Future", future.key, " has finished its work in", ketime," seconds.")
-    #            if SparseCov_sub.count_nonzero()/float(self.batch_size)**2 > 0.1:
-    #                print("WARNING: Collected submatrix not sparse; sparsity: ", SparseCov_sub.count_nonzero()/float(self.batch_size)**2)
-    #            idle_workers.add(worker)
-    #            sparse_sub_cov_set.append((SparseCov_sub, ranges[0], ranges[1]))
-    #        else: new_futures.append(future)
-    #    futures = new_futures
-    #    return futures
-
-    #def collect_remaining_submatrices(self,futures, idle_workers, sparse_sub_cov_set):
-    #    while futures:
-    #        futures = self.collect_submatrices(futures, idle_workers, sparse_sub_cov_set)
-
-
-    #def coalesce(self, bg, sparse_sub_cov_set):
-    #    for entry in sparse_sub_cov_set:
-    #        sm = entry[0]
-    #        i  = entry[1]
-    #        j  = entry[2]
-    
-    #        if i != j:
-    #            row = np.concatenate([bg.row,sm.row + i, sm.col + j])
-    #            col = np.concatenate([bg.col,sm.col + j, sm.row + i])
-    #            bg = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
-    #        else:
-    #            row = np.concatenate([bg.row,sm.row + i])
-    #            col = np.concatenate([bg.col,sm.col + j])
-    #            bg = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
-    #            if bg.data.nbytes > self.ram_limit:
-    #                for future in futures: client.cancel(futures); client.shutdown()
-    #                raise Exception("RAM limit exceeded, EXIT")
-    #    return bg
-
-
-    #def insert(self, bg,sm, i ,j):
-    #    if i != j:
-    #        row = np.concatenate([bg.row,sm.row + i, sm.col + j])
-    #        col = np.concatenate([bg.col,sm.col + j, sm.row + i])
-    #        res = coo_matrix((np.concatenate([bg.data,sm.data,sm.data]),(row,col)), shape = bg.shape )
-    #    else:
-    #        row = np.concatenate([bg.row,sm.row + i])
-    #        col = np.concatenate([bg.col,sm.col + j])
-    #        res = coo_matrix((np.concatenate([bg.data,sm.data]),(row,col)), shape = bg.shape)
-    #    return res
     ##################################################################################
     ##################################################################################
     ##################################################################################
