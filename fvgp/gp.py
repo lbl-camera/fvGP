@@ -1397,7 +1397,7 @@ class GP():
         return kernel
 
 
-    def matern_kernel_diff2_robust(self, distance, length):
+    def matern_kernel_diff2_robust(self, distance, phi):
         """
         function for the matern kernel  2. order differentiability, This is the robust version, which means it is defined on [-infty,infty]
         instead of the usual (0,infty]
@@ -1525,23 +1525,6 @@ class GP():
         distance_matrix = np.sqrt(distance_matrix)
         return   hps[0] * obj.matern_kernel_diff1(distance_matrix,1)
 
-    def _compute_distance_matrix_l2(self,points1,points2,hp_list):
-        """computes the distance matrix for the l2 norm"""
-        distance_matrix = np.zeros((len(points2), len(points1)))
-        for i in range(len(points1[0])):
-            distance_matrix += (
-            np.abs(
-            np.subtract.outer(points2[:, i], points1[:, i]) ** 2
-            )/hp_list[i])
-        return np.sqrt(distance_matrix)
-    
-    def _compute_distance_matrix_l1(self,points1,points2):
-        """computes the distance matrix for the l1 norm"""
-        distance_matrix = (
-        np.abs(
-        np.subtract.outer(points2, points1)
-        ))
-        return distance_matrix
 
     def d_gp_kernel_dx(self, points1, points2, direction, hyperparameters):
         new_points = np.array(points1)
