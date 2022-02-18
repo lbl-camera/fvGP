@@ -38,6 +38,27 @@ class gp2ScaleSparseMatrix:
         self.sparse_covariance = res
         #return res
 
+    def imsert_many(self, list_of_3_tuples):
+        l = list_of_3_tuples
+        bg = self.sparse_covariance
+        row_list = [bg.row]
+        col_list = [bg.col]
+        data = [bg.data]
+
+        for entry in l:
+            row_list.append(entry[0].row + entry[1])
+            col_list.append(entry[0].col + entry[2])
+            data.append(entry[0].data)
+            if entry[1] != entry[2]:
+                row_list.append(entry[0].col + entry[2])
+                col_list.append(entry[0].row + entry[1])
+                data.append(entry[0].data)
+
+        res = sparse.coo_matrix((np.concatenate(data),(np.concatenate(row_list),np.concatenate(col_list))), shape = bg.shape)
+        self.sparse_covariance = res
+        return res
+
+
     def insert_many(self, list_of_3_tuples):
         for entry in list_of_3_tuples:
             res = self.insert(entry[0],entry[1],entry[2])
@@ -46,15 +67,15 @@ class gp2ScaleSparseMatrix:
     def get_future_results(self, futures, info = False):
         res = []
         ##is gather better?
-        print("Starting loop at ",time.time() - self.st, "with ",len(futures)," to be collected", flush = True)
+        #print("Starting loop at ",time.time() - self.st, "with ",len(futures)," to be collected", flush = True)
         for future in futures:
             SparseCov_sub, ranges, ketime, worker = future.result()
-            print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
+            #print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
             res.append((SparseCov_sub,ranges[0],ranges[1]))
-            print("I have read ", self.counter, "matrices", flush = True)
+            #print("I have read ", self.counter, "matrices", flush = True)
             self.counter += 1
 
-        print("Loop Done", time.time() - self.st, flush = True)
-        self.insert_many(res)
-        print("Done inserting", time.time() - self.st, flush = True)
+        #print("Loop Done", time.time() - self.st, flush = True)
+        self.imsert_many(res)
+        #print("Done inserting", time.time() - self.st, flush = True)
         return 0
