@@ -219,25 +219,23 @@ class gp2Scale():
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 batch2 = self.x_data[beg_j : end_j]
                 ##make workers available that are not actively computing
-                if self.info: print("submitting batch ",i,j)
                 while not self.idle_workers:
-                    self.idle_workers, futures, finished_futures = self.free_workers(futures)
+                    self.idle_workers, futures, finished_futures = self.free_workers(futures, finished_futures)
                     time.sleep(0.01)
-                if self.info: print("   idle workers: ", len(self.idle_workers),flush = True)
+
 
                 ####collect finished workers but only if actor is not busy, otherwise do it later
-                ####but make sure that we dont lose any finished workers
-                if finished_futures:
+                if len(finished_futures) >= 100:
                     actor_futures.append(SparsePriorCovariance.get_future_results(set(finished_futures)))
                     finished_futures = set()
 
-                if len(actor_futures) > 200: actor_futures = actor_futures[-200:]
-                #for future in actor_futures:
-                #    print("IN ACTOR FUTURES: ",future.status, flush = True)
-                #    if future.status == "finished": 
-                #        s.append(future.result())
-                #        print("                 we are gathering actor futures", flush = True)
-                
+                #get rid of the oldest actor futures
+                ##could only be done when there are enough finished_futures
+                if len(actor_futures) >= 100:
+                    result = actor_futures[0].result()
+                    actor_futures.pop(0)
+
+                #get idle worker and submit work
                 current_worker = self.get_idle_worker()
                 data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
@@ -248,17 +246,22 @@ class gp2Scale():
                     print("",flush = True)
                 count += 1
 
-        if self.info: 
+        if self.info:
             print("All tasks submitted after ",time.time() - start_time,flush = True)
             print("actual number of computed batches: ", count)
             print("still have to gather ",len(futures)," results",flush = True)
+            print("also have to gather ",len(finished_futures)," results",flush = True)
         
-        actor_futures.append(SparsePriorCovariance.get_future_results(futures))
-        client.gather(actor_futures[1])
+        actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
+        print("waiting for client.gather()",time.time() - start_time, flush = True)
+        res = client.gather(actor_futures)
 
+        print("getting the end cov matrix",time.time() - start_time, flush = True)
         end = SparsePriorCovariance.get_result().result() ##get the current Prior Covariance
+        print("cancelling stuff",time.time() - start_time, flush = True)
         client.cancel(futures) ##make sure allf utures are cancelled
         client.cancel(actor_futures) ##make sure allf utures are cancelled
+        print("get diag",time.time() - start_time, flush = True)
         diag = sparse.eye(self.point_number, format="coo") ##make variance
         diag.setdiag(variances) ##make variance
         SparsePriorCovariance = end + diag  ##add variance
@@ -268,17 +271,14 @@ class gp2Scale():
         return SparsePriorCovariance
 
 
-    def free_workers(self, futures):
+    def free_workers(self, futures, finished_futures):
         free_workers = set()
-        finished_futures = set()
         remaining_futures = []
-
         for future in futures:
             if future.status == "finished": 
                 finished_futures.add(future)
                 free_workers.add(self.future_worker_assignments[future.key])
                 del self.future_worker_assignments[future.key]
-                finished_futures.add(future)
             else: remaining_futures.append(future)
         return free_workers, remaining_futures, finished_futures
 
