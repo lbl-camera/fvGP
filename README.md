@@ -16,5 +16,5 @@ Coming soon: All those advancements for stochastic manifold learning
 
 ## Credits
 
-This package uses the hgdl package of David Perryman and Marcus Noack.
-
+This package uses the HGDL package of David Perryman and Marcus Noack, which
+is based on the [HGDN](https://www.sciencedirect.com/science/article/pii/S037704271730225X) algorithm by Noack and Funke.
