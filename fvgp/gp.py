@@ -331,8 +331,7 @@ class GP():
 
         Return
         ------
-        object
-            Optimization object that can be given to `fvgp.gp.update_hyperparameters` to update the prior GP.
+        Optimization object that can be given to `fvgp.gp.update_hyperparameters` to update the prior GP : object instance
         """
         ############################################
         if dask_client is None: dask_client = distributed.Client()
@@ -366,8 +365,7 @@ class GP():
 
         Return
         ------
-        np.ndarray
-            The current hyperparameters. 
+        The current hyperparameters : np.ndarray
         """
 
         try:
@@ -528,7 +526,7 @@ class GP():
             Vector of hyperparameters of shape (V)
         Return
         ------
-            negative marginal log-likelihood (scalar)
+        negative marginal log-likelihood : float
         """
         mean = self.mean_function(self,self.x_data,hyperparameters)
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
@@ -549,7 +547,7 @@ class GP():
             Vector of hyperparameters of shape (V)
         Return
         ------
-            Gradient of the negative marginal log-likelihood (scalar)
+        Gradient of the negative marginal log-likelihood : np.ndarray
         """
         mean = self.mean_function(self,self.x_data,hyperparameters)
         b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
@@ -588,7 +586,7 @@ class GP():
             Vector of hyperparameters of shape (V)
         Return
         ------
-            Hessian of the negative marginal log-likelihood (scalar)
+        Hessian of the negative marginal log-likelihood : np.ndarray
         """
         ##implemented as first-order approximation
         len_hyperparameters = len(hyperparameters)
@@ -761,8 +759,7 @@ class GP():
 
         Return
         ------
-        dict
-            {"x": the input points, "f(x)": the posterior mean at the input points}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -784,10 +781,7 @@ class GP():
 
         Return
         ------
-        dict
-            {"x":    the input points,
-             "direction": the direction
-             "df/dx": the gradient of the posterior mean vector (1-D numpy array)}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -821,9 +815,7 @@ class GP():
             Default = False.
         Return
         ------
-            {"x":    the index set points,
-             "v(x)": the posterior variances (1d numpy array) for each input point,
-             "S":    covariance matrix, v(x) = diag(S)}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -860,9 +852,7 @@ class GP():
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         Return
         ------
-            {"x":    the index set points,
-             "dv/dx": the gradient of the posterior variances (2-D numpy array)
-             "dS/dx":    covariance matrix, v(x) = diag(S)}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -889,17 +879,12 @@ class GP():
         """
         function to compute the data-informed prior
         Parameters
-        ------
+        ----------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
         Return
-        -------
-            {"x": the index set points,
-             "K": covariance matrix between data points
-             "k": covariance between data and requested poins,
-             "kappa": covariance matrix between requested points,
-             "prior mean": the mean of the prior
-             "S:": joint prior covariance}
+        ------
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -926,12 +911,7 @@ class GP():
             direction: direction in which to compute the gradient
         Return
         -------
-            {"x": the index set points,
-             "K": covariance matrix between data points
-             "k": covariance between data and requested poins,
-             "kappa": covariance matrix between requested points,
-             "prior mean": the mean of the prior
-             "dS/dx:": joint prior covariance}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -978,7 +958,7 @@ class GP():
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         Return
         ------
-            entropy : scalar
+        entropy : float
         """
 
         p = np.array(x_iset)
@@ -1003,7 +983,7 @@ class GP():
             0 <= direction <= D - 1
         Return
         ------
-            entropy : scalar
+        entropy : float
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -1032,7 +1012,7 @@ class GP():
 
         Return
         ------
-            KL div : scalar
+        KL div : float
         """
         s1, logdet1 = self.slogdet(S1)
         s2, logdet2 = self.slogdet(S2)
@@ -1066,17 +1046,12 @@ class GP():
         """
         function to compute the kl divergence of a posterior at given points
         Parameters
-        ------
+        ----------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
         Return
         -------
-            {"x": the index set points,
-             "gp posterior mean": ,
-             "gp posterior covariance":  ,
-             "given mean": the user-provided mean vector,
-             "given covariance":  the use_provided covariance,
-             "kl-div:": the kl div between gp pdf and given pdf}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -1099,20 +1074,13 @@ class GP():
         """
         function to compute the gradient of the kl divergence of a posterior at given points
         Parameters
-        ------
+        ----------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             direction: direction in which the gradient will be computed
         Return
         -------
-            {"x": the index set points,
-             "gp posterior mean": ,
-             "gp posterior mean grad": ,
-             "gp posterior covariance":  ,
-             "gp posterior covariance grad":  ,
-             "given mean": the user-provided mean vector,
-             "given covariance":  the use_provided covariance,
-             "kl-div grad": the grad of the kl div between gp pdf and given pdf}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -1136,15 +1104,12 @@ class GP():
         """
         function to compute the shannon-information gain of data
         Parameters
-        ------
+        ----------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
         Return
         -------
-            {"x": the index set points,
-             "prior entropy": prior entropy
-             "posterior entropy": posterior entropy
-             "sig:" shannon_information gain}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -1170,14 +1135,13 @@ class GP():
         """
         function to compute the gradient if the shannon-information gain of data
         Parameters
-        ------
+        ----------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             direction: direction in which to compute the gradient
         Return
         -------
-            {"x": the index set points,
-             "sig_grad:" shannon_information gain gradient}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -1192,7 +1156,7 @@ class GP():
         """
         function to compute the probability of an uncertain feature given the gp posterior
         Parameters
-        ------
+        ----------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             comp_mean: a vector of mean values, same length as x_iset
@@ -1200,9 +1164,7 @@ class GP():
 
         Return
         -------
-            {"mu":,
-             "covariance": ,
-             "probability":  ,
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -1232,7 +1194,7 @@ class GP():
         """
         function to compute the gradient of the probability of an uncertain feature given the gp posterior
         Parameters
-        ------
+        ----------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             comp_mean: a vector of mean values, same length as x_iset
@@ -1241,7 +1203,7 @@ class GP():
 
         Return
         -------
-            {"probability grad":  ,}
+        solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -1268,15 +1230,19 @@ class GP():
     ##################################################################################
     def squared_exponential_kernel(self, distance, length):
         """
-        function for the squared exponential kernel
+        Function for the squared exponential kernel.
+        kernel = np.exp(-(distance ** 2) / (2.0 * (length ** 2)))
 
-        Parameters:
-        -----------
-            distance (float): scalar or numpy array with distances
-            length (float):   length scale (note: set to one if length scales are accounted for by the distance matrix)
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        length : scalar
+            The length scale hyperparameters
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
         kernel = np.exp(-(distance ** 2) / (2.0 * (length ** 2)))
         return kernel
@@ -1284,16 +1250,19 @@ class GP():
 
     def squared_exponential_kernel_robust(self, distance, phi):
         """
-        function for the squared exponential kernel, This is the robust version, which means it is defined on [-infty,infty]
-        instead of the usual (0,infty]
+        Function for the squared exponential kernel (robust version)
+        kernel = np.exp(-(distance ** 2) * (phi ** 2))
 
-        Parameters:
-        -----------
-            distance (float): scalar or numpy array with distances
-            length (float):   length scale (note: set to one if length scales are accounted for by the distance matrix)
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        phi : scalar
+            The length scale hyperparameters
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
         kernel = np.exp(-(distance ** 2) * (phi ** 2))
         return kernel
@@ -1302,15 +1271,19 @@ class GP():
 
     def exponential_kernel(self, distance, length):
         """
-        function for the exponential kernel
+        Function for the exponential kernel
+        kernel = np.exp(-(distance) / (length))
 
-        Parameters:
-        -----------
-            distance (float): scalar or numpy array with distances
-            length (float):   length scale (note: set to one if length scales are accounted for by the distance matrix)
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        length : scalar
+            The length scale hyperparameters
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
 
         kernel = np.exp(-(distance) / (length))
@@ -1318,17 +1291,19 @@ class GP():
 
     def exponential_kernel_robust(self, distance, phi):
         """
-        function for the exponential kernel, This is the robust version, which means it is defined on [-infty,infty]
-        instead of the usual (0,infty]
+        Function for the exponential kernel (robust version)
+        kernel = np.exp(-(distance) * (phi**2))
 
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        phi : scalar
+            The length scale hyperparameters
 
-        Parameters:
-        -----------
-            distance (float): scalar or numpy array with distances
-            length (float):   length scale (note: set to one if length scales are accounted for by the distance matrix)
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
 
         kernel = np.exp(-(distance) * (phi**2))
@@ -1338,15 +1313,20 @@ class GP():
 
     def matern_kernel_diff1(self, distance, length):
         """
-        function for the matern kernel  1. order differentiability
+        Function for the matern kernel, order of differentiablity = 1.
+        kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
+            -(np.sqrt(3.0) * distance) / length
 
-        Parameters:
-        -----------
-            distance (float): scalar or numpy array with distances
-            length (float):   length scale (note: set to one if length scales are accounted for by the distance matrix)
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        length : scalar
+            The length scale hyperparameters
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
 
         kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
@@ -1357,17 +1337,20 @@ class GP():
 
     def matern_kernel_diff1_robust(self, distance, phi):
         """
-        function for the matern kernel  1. order differentiability, This is the robust version, which means it is defined on [-infty,infty]
-        instead of the usual (0,infty]
+        Function for the matern kernel, order of differentiablity = 1, robust version.
+        kernel = (1.0 + ((np.sqrt(3.0) * distance) * (phi**2))) * np.exp(
+            -(np.sqrt(3.0) * distance) * (phi**2))
 
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        phi : scalar
+            The length scale hyperparameters
 
-        Parameters:
-        -----------
-            distance (float): scalar or numpy array with distances
-            length (float):   length scale (note: set to one if length scales are accounted for by the distance matrix)
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
         ##1/l --> phi**2
         kernel = (1.0 + ((np.sqrt(3.0) * distance) * (phi**2))) * np.exp(
@@ -1378,15 +1361,23 @@ class GP():
 
     def matern_kernel_diff2(self, distance, length):
         """
-        function for the matern kernel  2. order differentiability
+        Function for the matern kernel, order of differentiablity = 2.
+        kernel = (
+            1.0
+            + ((np.sqrt(5.0) * distance) / (length))
+            + ((5.0 * distance ** 2) / (3.0 * length ** 2))
+        ) * np.exp(-(np.sqrt(5.0) * distance) / length)
 
-        Parameters:
-        -----------
-            distance (float): scalar or numpy array with distances
-            length (float):   length scale (note: set to one if length scales are accounted for by the distance matrix)
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        length : scalar
+            The length scale hyperparameters
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
 
         kernel = (
@@ -1399,18 +1390,25 @@ class GP():
 
     def matern_kernel_diff2_robust(self, distance, phi):
         """
-        function for the matern kernel  2. order differentiability, This is the robust version, which means it is defined on [-infty,infty]
-        instead of the usual (0,infty]
+        Function for the matern kernel, order of differentiablity = 2, robust version.
+        kernel = (
+            1.0
+            + ((np.sqrt(5.0) * distance) * (phi**2))
+            + ((5.0 * distance ** 2) * (3.0 * phi ** 4))
+        ) * np.exp(-(np.sqrt(5.0) * distance) * (phi**2))
 
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        length : scalar
+            The length scale hyperparameters
 
-        Parameters:
-        -----------
-            distance (float): scalar or numpy array with distances
-            length (float):   length scale (note: set to one if length scales are accounted for by the distance matrix)
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
+
 
         kernel = (
             1.0
@@ -1421,16 +1419,18 @@ class GP():
 
     def sparse_kernel(self, distance, radius):
         """
-        function for the sparse kernel
-        this kernel is compactly supported, which makes the covariance matrix sparse
+        Function for a compactly supported kernel.
 
-        Parameters:
-        -----------
-            distance (float): scalar or numpy array with distances
-            radius (float):   length scale (note: set to one if length scales are accounted for by the distance matrix)
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        radius : scalar
+            Radius of support.
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
 
         d = np.array(distance)
@@ -1442,81 +1442,114 @@ class GP():
         return kernel
 
     def periodic_kernel(self, distance, length, p):
-        """periodic kernel
-        Parameters:
-        -----------
-            distance: float or array containing distances
-            length (float): the length scale
-            p (float): period of the oscillation
-        Return:
-        -------
-            a structure of the she shape of the distance input parameter
         """
+        Function for a periodic kernel.
+        kernel = np.exp(-(2.0/length**2)*(np.sin(np.pi*distance/p)**2))
+
+        Parameters
+        ----------
+        distance : scalar or np.ndarray
+            Distance between a set of points.
+        length : scalar
+            Length scale.
+        p : scalar
+            Period.
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
+        """
+
         kernel = np.exp(-(2.0/length**2)*(np.sin(np.pi*distance/p)**2))
         return kernel
 
     def linear_kernel(self, x1,x2, hp1,hp2,hp3):
         """
-        function for the linear kernel in 1d
+        Function for a linear kernel.
+        kernel = hp1 + (hp2*(x1-hp3)*(x2-hp3))
 
-        Parameters:
-        -----------
-            x1 (float):  scalar position of point 1
-            x2 (float):  scalar position of point 2
-            hp1 (float): vertical offset of the linear kernel
-            hp2 (float): slope of the linear kernel
-            hp3 (float): horizontal offset of the linear kernel
-        Return:
-        -------
-            scalar
+        Parameters
+        ----------
+        x1 : float
+            Point 1.
+        x2 : float
+            Point 2.
+        hp1 : float
+            Hyperparameter.
+        hp2 : float
+            Hyperparameter.
+        hp3 : float
+            Hyperparameter.
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float
         """
         kernel = hp1 + (hp2*(x1-hp3)*(x2-hp3))
         return kernel
 
     def dot_product_kernel(self, x1,x2,hp,matrix):
         """
-        function for the dot-product kernel
+        Function for a dot-product kernel.
+        kernel = hp + x1.T @ matrix @ x2
 
-        Parameters:
-        -----------
-            x1 (2d numpy array of points):  scalar position of point 1
-            x2 (2d numpy array of points):  scalar position of point 2
-            hp (float):                     vertical offset
-            matrix (2d array of len(x1)):   a metric tensor to define the dot product
-        Return:
-        -------
-            numpy array of shape len(x1) x len(x2)
+        Parameters
+        ----------
+        x1 : np.ndarray
+            Point 1.
+        x2 : np.ndarray
+            Point 2.
+        hp : float
+            Offset hyperparameter.
+        matrix : np.ndarray
+            PSD matrix defining the inner product.
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float
         """
         kernel = hp + x1.T @ matrix @ x2
         return kernel
 
     def polynomial_kernel(self, x1, x2, p):
         """
-        function for the polynomial kernel
+        Function for a polynomial kernel.
+        kernel = (1.0+x1.T @ x2)**p
 
-        Parameters:
-        -----------
-            x1 (2d numpy array of points):  scalar position of point 1
-            x2 (2d numpy array of points):  scalar position of point 2
-            p (float):                      exponent
-        Return:
-        -------
-            numpy array of shape len(x1) x len(x2)
+        Parameters
+        ----------
+        x1 : np.ndarray
+            Point 1.
+        x2 : np.ndarray
+            Point 2.
+        p : float
+            Power hyperparameter.
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float
         """
         kernel = (1.0+x1.T @ x2)**p
         return p
     def default_kernel(self,x1,x2,hyperparameters,obj):
-        ################################################################
-        ###standard anisotropic kernel in an input space with l2########
-        ################################################################
         """
-        x1: 2d numpy array of points
-        x2: 2d numpy array of points
-        obj: object containing kernel definition
+        Function for a polynomial kernel.
+        kernel = (1.0+x1.T @ x2)**p
 
-        Return:
-        -------
-        Kernel Matrix
+        Parameters
+        ----------
+        x1 : np.ndarray
+            Numpy array of shape (U x D)
+        x2 : np.ndarray
+            Numpy array of shape (V x D)
+        hyperparameters : np.ndarray
+            Array of hyperparameters. For this kernel we need D + 1 hyperparameters
+        obj : object instance
+            GP object instance.
+
+        Return
+        ------
+        A structure of the she shape of the distance input parameter : float or np.ndarray
         """
         hps = hyperparameters
         distance_matrix = np.zeros((len(x1),len(x2)))
