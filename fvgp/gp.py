@@ -19,7 +19,8 @@ from hgdl.hgdl import HGDL
 class GP():
     """
     This class provides all the tools for a single-task Gaussian Process (GP).
-    Use fvGP for multi task GPs. This class allows for full HPC support for training.
+    Use fvGP for multi task GPs. However, the fvGP class inherits all methods from this class.
+    This class allows for full HPC support for training.
 
     Parameters
     ----------
@@ -1160,7 +1161,7 @@ class GP():
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             comp_mean: a vector of mean values, same length as x_iset
-            comp_cov: covarianve matrix, \in R^{len(x_iset)xlen(x_iset)}
+            comp_cov: covarianve matrix, in R^{len(x_iset)xlen(x_iset)}
 
         Return
         -------
@@ -1198,7 +1199,7 @@ class GP():
             x_iset: 1d or 2d numpy array of points, note, these are elements of the 
                     index set which results from a cartesian product of input and output space
             comp_mean: a vector of mean values, same length as x_iset
-            comp_cov: covarianve matrix, \in R^{len(x_iset)xlen(x_iset)}
+            comp_cov: covarianve matrix, in R^{len(x_iset)xlen(x_iset)}
             direction: direction in which to compute the gradient
 
         Return
