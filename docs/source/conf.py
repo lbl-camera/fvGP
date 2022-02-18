@@ -37,7 +37,6 @@ extensions = [
     'sphinx_panels',
     'sphinx.ext.autodoc',
     'sphinx.ext.napoleon'
-    'nbsphinx'
 ]
 
 # MyST extensions
