@@ -27,10 +27,11 @@ examples/single-task.md
 
 # fvGP - A Flexible multi-task GP engine
 
-The [gpCAM](https://gpcam.readthedocs.io) API is upstream of fvGP which is the package providing everything around Gaussian Processes.
-The package has its own [API](api/overview.md) which we present and explain in this documentation (IN PROGRESS).
-Note, this is not really a full tutorial since fvGP is hardly ever being used directly,
-all information provided here is just for the curious and advanced users.
+Welcome to the documentation of the fvGP API.
+fvGP is a next-generation Gaussian (and Gaussian-related) process engine for flexible, domain-informed and 
+HPC-ready stochastic function approximation. It is the backbone of the [gpCAM](https://gpcam.readthedocs.io) API.
+The objective of fvGP is to take care of the mathematics behind GP training and predictions but allowing the user to have
+maximum flexibilitiy in defining the GP. 
 
 ## See Also
 
