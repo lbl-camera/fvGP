@@ -1,5 +1,6 @@
 ---
 banner: _static/landing.png
+banner_height: "40vh"
 ---
 
 ```{toctree}
@@ -22,14 +23,14 @@ caption: Examples
 examples/single-task.ipynb
 ```
 
-# fvGP - A Flexible multi-task GP engine
+# fvGP - A Flexible Multi-Task GP Engine
 
 ## fvGP
 Welcome to the documentation of the fvGP API.
 fvGP is a next-generation Gaussian (and Gaussian-related) process engine for flexible, domain-informed and 
 HPC-ready stochastic function approximation. It is the backbone of the [gpCAM](https://gpcam.readthedocs.io) API.
 The objective of fvGP is to take care of the mathematics behind GP training and predictions but allow the user to have
-maximum flexibility in defining the GP. 
+maximum flexibility in defining the GP.
 
 ## See Also
 
