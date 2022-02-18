@@ -16,8 +16,9 @@ from fvgp.gp import GP
 
 class fvGP(GP):
     """
-    This class provides all the tools for a single-task Gaussian Process (GP).
-    Use fvGP for multi task GPs. This class allows for full HPC support for training.
+    This class provides all the tools for a multi-task Gaussian Process (GP).
+    This class allows for full HPC support for training. After initialization, this
+    class provides all the methods described for the GP class.
 
     Parameters
     ----------
@@ -143,9 +144,9 @@ class fvGP(GP):
         ):
 
         """
-        This function updates the data in the gp_class.
+        This function updates the data in the fvgp object instance.
         The data will NOT be appended but overwritten!
-        Please provide the full updated data set
+        Please provide the full updated data set.
 
         Parameters
         ----------

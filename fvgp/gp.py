@@ -163,9 +163,9 @@ class GP():
         variances = None,
         ):
         """
-        This function updates the data in the gp_class.
+        This function updates the data in the gp object instance.
         The data will NOT be appended but overwritten!
-        Please provide the full updated data set
+        Please provide the full updated data set.
 
         Parameters
         ----------
@@ -306,7 +306,7 @@ class GP():
         """
         This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
-        providing a dask client. This fucntion just submits the training and returns
+        providing a dask client. This function just submits the training and returns
         an object which can be given to `fvgp.gp.update_hyperparameters`, which will automatically update the GP prior with the new hyperparameters.
 
         Parameters
@@ -356,7 +356,7 @@ class GP():
         """
         This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
-        providing a dask client. This fucntion just submits the training and returns
+        providing a dask client. This function just submits the training and returns
         an object which can be given to `fvgp.gp.update_hyperparameters`, which will automatically update the GP prior with the new hyperparameters.
 
         Parameters
