@@ -11,7 +11,8 @@
 
 Python package for highly flexible function-valued Gaussian processes (fvGP)
 
-coming soon: extreme-scale GPs, GPs tailored for HPC training
+Specialties: Extreme-Scale GPs, GPs Tailored for HPC training, Advanced Kenrel Designs, Domain-Aware Stochastic Function Approximation
+Coming soon: All those advancements for stochastic manifold learning
 
 ## Credits
 
