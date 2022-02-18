@@ -10,10 +10,7 @@ caption: API
 ---
 api/overview.md
 api/GP.md
-api/gpHGDL.md
 api/fvGP.md
-api/EnsembleGP.md
-api/EnsembleFvGP.md
 ```
 
 ```{toctree}
@@ -22,7 +19,7 @@ hidden: true
 maxdepth: 2
 caption: Examples
 ---
-examples/single-task.md
+examples/single-task.ipynb
 ```
 
 # fvGP - A Flexible multi-task GP engine
