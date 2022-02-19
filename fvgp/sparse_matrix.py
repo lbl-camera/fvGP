@@ -81,3 +81,18 @@ class gp2ScaleSparseMatrix:
         self.imsert_many(res)
         print("Done inserting", time.time() - self.st, flush = True)
         return 0
+
+    def compute_LU(self):
+        A = self.sparse_covariance
+        self.LU = splu(A.tocsc())
+
+    def solve(self,x):
+        return self.LU.solve(x)
+
+    def logdet(self):
+        upper_diag = abs(self.LU.U.diagonal())
+        res = np.sum(np.log(upper_diag))
+        return res
+
+
+
