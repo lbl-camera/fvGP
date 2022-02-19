@@ -53,8 +53,10 @@ class gp2ScaleSparseMatrix:
                 row_list.append(entry[0].col + entry[2])
                 col_list.append(entry[0].row + entry[1])
                 data.append(entry[0].data)
+        rows = np.concatenate(row_list).astype(int)
+        columns = np.concatenate(col_list).astype(int)
 
-        res = sparse.coo_matrix((np.concatenate(data),(np.concatenate(row_list),np.concatenate(col_list))), shape = bg.shape)
+        res = sparse.coo_matrix((np.concatenate(data),(rows,columns)), shape = bg.shape)
         self.sparse_covariance = res
         return res
 
@@ -67,15 +69,15 @@ class gp2ScaleSparseMatrix:
     def get_future_results(self, futures, info = False):
         res = []
         ##is gather better?
-        #print("Starting loop at ",time.time() - self.st, "with ",len(futures)," to be collected", flush = True)
+        print("Starting loop at ",time.time() - self.st, "with ",len(futures)," to be collected", flush = True)
         for future in futures:
             SparseCov_sub, ranges, ketime, worker = future.result()
-            #print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
+            print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
             res.append((SparseCov_sub,ranges[0],ranges[1]))
-            #print("I have read ", self.counter, "matrices", flush = True)
+            print("I have read ", self.counter, "matrices", flush = True)
             self.counter += 1
 
-        #print("Loop Done", time.time() - self.st, flush = True)
+        print("Loop Done", time.time() - self.st, flush = True)
         self.imsert_many(res)
-        #print("Done inserting", time.time() - self.st, flush = True)
+        print("Done inserting", time.time() - self.st, flush = True)
         return 0

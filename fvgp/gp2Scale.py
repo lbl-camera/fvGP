@@ -257,6 +257,10 @@ class gp2Scale():
         res = client.gather(actor_futures)
 
         print("getting the end cov matrix",time.time() - start_time, flush = True)
+
+
+        ####THIS NEXT STEP SHOULD NEVER BE DONE, WE SHOULD KEEP THE COVARIANCE ON THE ACTOR AND CREATE AN LU OBJECT
+        ####THAT CAN BE ASKED FOR SOLVES AND LOGDETS
         end = SparsePriorCovariance.get_result().result() ##get the current Prior Covariance
         print("cancelling stuff",time.time() - start_time, flush = True)
         client.cancel(futures) ##make sure allf utures are cancelled
