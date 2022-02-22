@@ -139,13 +139,14 @@ class gp2Scale():
         self.st = time.time()
         self.compute_prior_fvGP_pdf(covariance_dask_client)
         if self.info:
+            sp = self.SparsePriorCovariance.get_result().result()
             print("gpLG successfully initiated, here is some info about the prior covariance matrix:")
-            print("non zero elements: ", self.SparsePriorCovariance.count_nonzero())
-            print("Size in GBits:     ", self.SparsePriorCovariance.data.nbytes/1e9)
-            print("Sparsity: ",self.SparsePriorCovariance.count_nonzero()/float(self.point_number)**2)
+            print("non zero elements: ", sp.count_nonzero())
+            print("Size in GBits:     ", sp.data.nbytes/1e9)
+            print("Sparsity: ",sp.count_nonzero()/float(self.point_number)**2)
             if self.point_number <= 5000:
                 print("Here is an image:")
-                plt.imshow(self.SparsePriorCovariance.toarray())
+                plt.imshow(sp.toarray())
                 plt.show()
 
     ##################################################################################
@@ -181,9 +182,11 @@ class gp2Scale():
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean,client):
         K = self.compute_covariance(hyperparameters, variances,client)
-        if self.info: print("Covariance computed with sparsity: ",K.count_nonzero()/float(self.point_number)**2)
+        #if self.info: print("Covariance computed with sparsity: ",K.count_nonzero()/float(self.point_number)**2)
         y = values - mean
-        x = self.solve(K.tocsc(), y)
+        K.compute_LU().result()
+        x = K.solve(y).result()
+        #x = self.solve(K.tocsc(), y)
         return x,K
 
     def total_number_of_batches(self):
@@ -253,23 +256,11 @@ class gp2Scale():
             print("also have to gather ",len(finished_futures)," results",flush = True)
         
         actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
-        print("waiting for client.gather()",time.time() - start_time, flush = True)
+        actor_futures.append(SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
         res = client.gather(actor_futures)
-
-        print("getting the end cov matrix",time.time() - start_time, flush = True)
-
-
-        ####THIS NEXT STEP SHOULD NEVER BE DONE, WE SHOULD KEEP THE COVARIANCE ON THE ACTOR AND CREATE AN LU OBJECT
-        ####THAT CAN BE ASKED FOR SOLVES AND LOGDETS
-        end = SparsePriorCovariance.get_result().result() ##get the current Prior Covariance
-        print("cancelling stuff",time.time() - start_time, flush = True)
-        client.cancel(futures) ##make sure allf utures are cancelled
+        actor_futures[-1].result()
+        client.cancel(futures) ##make sure all futures are cancelled
         client.cancel(actor_futures) ##make sure allf utures are cancelled
-        print("get diag",time.time() - start_time, flush = True)
-        diag = sparse.eye(self.point_number, format="coo") ##make variance
-        diag.setdiag(variances) ##make variance
-        SparsePriorCovariance = end + diag  ##add variance
-
         if self.info: print("total prior covariance compute time: ", time.time() - start_time)
 
         return SparsePriorCovariance
@@ -427,10 +418,12 @@ class gp2Scale():
         if recompute_xK is True: x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean,client)
         else: x,K = self.covariance_value_prod,self.SparsePriorCovariance
         y = self.y_data - mean
-        sign, logdet = self.slogdet(K.tocsc())
+        #sign, logdet = self.slogdet(K.tocsc())
+        logdet = self.SparsePriorCovariance.logdet().result()
         n = len(y)
-        if sign == 0.0: res = (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
-        else: res = (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
+        #if sign == 0.0: res = (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
+        #else: 
+        res = (0.5 * (y.T @ x)) + (0.5 * logdet) + (0.5 * n * np.log(2.0*np.pi))
         return res
 
 
@@ -443,29 +436,29 @@ class gp2Scale():
     ##################################################################################
     ##################################################################################
     ##################################################################################
-    def slogdet(self, A):
-        """
-        fvGPs slogdet method based on torch
-        """
-        sign = 1.
-        B = splu(A.tocsc())
-        upper_diag = abs(B.U.diagonal())
-        res = np.sum(np.log(upper_diag))
-        return sign, res
+    #def slogdet(self, A):
+    #    """
+    #    fvGPs slogdet method based on torch
+    #    """
+    #    sign = 1.
+    #    B = splu(A.tocsc())
+    #    upper_diag = abs(B.U.diagonal())
+    #    res = np.sum(np.log(upper_diag))
+    #    return sign, res
 
 
-    def solve(self, A, b):
-        #####for sparsity:
-        try:
-            x,info = solve.cg(A,b, maxiter = 20)
-        except Exception as e:
-            #print("fvGP: Sparse solve did not work out.")
-            #print("reason: ", str(e))
-            info = 1
-        if info > 0:
-            #print("cg did not work out, let's do a minres")
-            x,info = solve.minres(A,b, show = self.info)
-        return x
+    #def solve(self, A, b):
+    #    #####for sparsity:
+    #    try:
+    #        x,info = solve.cg(A,b, maxiter = 20)
+    #    except Exception as e:
+    #        #print("fvGP: Sparse solve did not work out.")
+    #        #print("reason: ", str(e))
+    #        info = 1
+    #    if info > 0:
+    #        #print("cg did not work out, let's do a minres")
+    #        x,info = solve.minres(A,b, show = self.info)
+    #    return x
     ##################################################################################
     ##################################################################################
     ##################################################################################

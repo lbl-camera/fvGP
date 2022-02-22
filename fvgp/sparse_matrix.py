@@ -18,6 +18,7 @@ from dask.distributed import Variable
 
 class gp2ScaleSparseMatrix:
     def __init__(self,n,workers):
+        self.n = n
         self.sparse_covariance = sparse.coo_matrix((n,n))
         self.st = time.time()
         self.counter = 0
@@ -68,19 +69,26 @@ class gp2ScaleSparseMatrix:
 
     def get_future_results(self, futures, info = False):
         res = []
-        ##is gather better?
-        print("Starting loop at ",time.time() - self.st, "with ",len(futures)," to be collected", flush = True)
+        info = False
+        if info: print("Starting loop at ",time.time() - self.st, "with ",len(futures)," to be collected", flush = True)
         for future in futures:
             SparseCov_sub, ranges, ketime, worker = future.result()
-            print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
+            if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
             res.append((SparseCov_sub,ranges[0],ranges[1]))
-            print("I have read ", self.counter, "matrices", flush = True)
+            if info: print("I have read ", self.counter, "matrices", flush = True)
             self.counter += 1
 
-        print("Loop Done", time.time() - self.st, flush = True)
+        if info: print("Loop Done", time.time() - self.st, flush = True)
         self.imsert_many(res)
-        print("Done inserting", time.time() - self.st, flush = True)
+        if info: print("Done inserting", time.time() - self.st, flush = True)
         return 0
+
+    def add_to_diag(self,vector):
+        diag = sparse.eye(self.n, format="coo") ##make variance
+        diag.setdiag(vector) ##make variance
+        self.sparse_covariance = self.sparse_covariance + diag  ##add variance
+        return 0
+
 
     def compute_LU(self):
         A = self.sparse_covariance
