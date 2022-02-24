@@ -184,7 +184,6 @@ class gp2Scale():
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean,client):
         K = self.compute_covariance(hyperparameters, variances,client)
-        #if self.info: print("Covariance computed with sparsity: ",K.count_nonzero()/float(self.point_number)**2)
         y = values - mean
         K.compute_LU().result()
         x = K.solve(y).result()
@@ -227,7 +226,6 @@ class gp2Scale():
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 batch2 = self.x_data[beg_j : end_j]
                 ##make workers available that are not actively computing
-                print(i,j,"idle_workers: ", idle_workers)
                 while not idle_workers:
                     idle_workers, futures, finished_futures = self.free_workers(futures, finished_futures)
                     time.sleep(0.01)
@@ -238,7 +236,6 @@ class gp2Scale():
                     finished_futures = set()
 
                 #get rid of the oldest actor futures
-                ##could only be done when there are enough finished_futures
                 #if len(actor_futures) >= 100:
                 #    result = actor_futures[0].result()
                 #    actor_futures.pop(0)
@@ -248,7 +245,7 @@ class gp2Scale():
                 data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
                 self.assign_future_2_worker(futures[-1].key,current_worker)
-                if self.info: 
+                if self.info:
                     print("    submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key)
                     print("    current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches())
                     print("")
@@ -259,13 +256,10 @@ class gp2Scale():
             print("actual number of computed batches: ", count)
             print("still have to gather ",len(futures)," results",flush = True)
             print("also have to gather ",len(finished_futures)," results",flush = True)
-        
+
         actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
         actor_futures.append(SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
         res = client.gather(actor_futures)
-        #actor_futures[-1].result()
-        #client.cancel(futures) ##make sure all futures are cancelled
-        #client.cancel(actor_futures) ##make sure all futures are cancelled
         if self.info: print("total prior covariance compute time: ", time.time() - start_time)
 
         return SparsePriorCovariance
