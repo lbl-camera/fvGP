@@ -62,7 +62,9 @@ class gp2Scale():
         values,
         init_hyperparameters,
         batch_size,
+        total_worker_count,
         variances = None,
+        worker_fraction_to_start = 0.9,
         entry_limit = 2e9,
         ram_limit = 1e10,
         compute_device = "cpu",
@@ -134,7 +136,7 @@ class gp2Scale():
         ##########################################
         #compute the prior########################
         ##########################################
-        covariance_dask_client = self._init_dask_client(covariance_dask_client)
+        covariance_dask_client, self.set_of_workers = self._init_dask_client(covariance_dask_client,total_worker_count, worker_fraction_to_start)
         self.covariance_dask_client = covariance_dask_client
         self.st = time.time()
         self.compute_prior_fvGP_pdf(covariance_dask_client)
@@ -186,7 +188,6 @@ class gp2Scale():
         y = values - mean
         K.compute_LU().result()
         x = K.solve(y).result()
-        #x = self.solve(K.tocsc(), y)
         return x,K
 
     def total_number_of_batches(self):
@@ -196,23 +197,25 @@ class gp2Scale():
 
     def compute_covariance(self, hyperparameters, variances,client):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
+        ###initialize futures
         futures = []           ### a list of futures
         actor_futures = []
-        compute_workers = self.workers["worker"][1:]
-        actor_worker = self.workers["worker"][0]
-        self.idle_workers = set(compute_workers)
-
-        self.future_worker_assignments = {}
         finished_futures = set()
-
+        ###get workers
+        actor_worker = self.worker_set.pop()
+        compute_workers = set(self.worker_set)
+        idle_workers = set(compute_workers)
+        ###future_worker_assignments
+        self.future_worker_assignments = {}
+        ###initiate actor
         SparsePriorCovariance = client.submit(gp2ScaleSparseMatrix,self.point_number,compute_workers, actor=True, workers=actor_worker).result()# Create Actor
+        ###scatter data
         scatter_data = {"x_data":self.x_data, "hps": hyperparameters, "kernel" : self.kernel} ##data that can be scattered
         scatter_future = client.scatter(scatter_data,workers = compute_workers)        ##scatter the data
-
+        ###############
         start_time = time.time()
         count = 0
         s = []
-
         for i in range(self.num_batches):
             beg_i = i * self.batch_size
             end_i = min((i+1) * self.batch_size, self.point_number)
@@ -222,8 +225,8 @@ class gp2Scale():
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 batch2 = self.x_data[beg_j : end_j]
                 ##make workers available that are not actively computing
-                while not self.idle_workers:
-                    self.idle_workers, futures, finished_futures = self.free_workers(futures, finished_futures)
+                while not idle_workers:
+                    idle_workers, futures, finished_futures = self.free_workers(futures, finished_futures)
                     time.sleep(0.01)
 
                 ####collect finished workers but only if actor is not busy, otherwise do it later
@@ -238,7 +241,7 @@ class gp2Scale():
                 #    actor_futures.pop(0)
 
                 #get idle worker and submit work
-                current_worker = self.get_idle_worker()
+                current_worker = self.get_idle_worker(idle_workers)
                 data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
                 self.assign_future_2_worker(futures[-1].key,current_worker)
@@ -279,11 +282,11 @@ class gp2Scale():
     def assign_future_2_worker(self, future_key, worker_address):
         self.future_worker_assignments[future_key] = worker_address
 
-    def get_idle_worker(self):
-        return self.idle_workers.pop()
+    def get_idle_worker(self,idle_workers):
+        return idle_workers.pop()
 
-    def add_idle_worker(self,worker):
-        self.idle_workers.add(worker)
+    #def add_idle_worker(self,worker,idle_workers):
+    #    return idle_workers.add(worker)
 
 
     ##################################################################################
@@ -295,21 +298,32 @@ class gp2Scale():
     ##################################################################################
     ##################################################################################
     ##################################################################################
-    def _init_dask_client(self,dask_client):
+    def _init_dask_client(self,dask_client, total_worker_count, worker_fraction_to_start):
         if dask_client is None:
             dask_client = distributed.Client()
             print("No dask client provided to gp2Scale. Using the local client", flush = True)
         else: print("dask client provided to gp2Scale", flush = True)
+        
         client = dask_client
+        client.wait_for_workers(n_workers=int(total_worker_count * worker_fraction_to_start))
         worker_info = list(client.scheduler_info()["workers"].keys())
+        if len(worker_info) != total_worker_count:
+            time.sleep(60)
+            worker_info = list(client.scheduler_info()["workers"].keys())
+
         if not worker_info: raise Exception("No workers available")
-        self.workers = {#"host": worker_info[0],
-                "worker": worker_info[0:]}
-        print("We have ", len(self.workers["worker"])," workers ready to go.")
-        print("all the workers: ",self.workers["worker"])
-        print("the scheduler: ", client.scheduler_info()["address"])
-        self.number_of_workers = len(self.workers["worker"])
-        return client
+        worker_set = set(worker_info[0:])
+        print("We have ", len(worker_set)," workers ready to go.")
+        print("Scheduler Address: ", client.scheduler_info()["address"])
+        return client, worker_set
+
+    #def _update_worker_set(self,client, current_worker_set):
+    #    worker_info = list(client.scheduler_info()["workers"].keys())
+    #    if not worker_info: raise Exception("No workers available")
+    #    new_worker_set = set(worker_info).difference(current_worker_set)
+    #    print("updated workers. new workers: ", new_worker_set)
+    #    return new_worker_set
+       
 
     ##################################################################################
     ##################################################################################
