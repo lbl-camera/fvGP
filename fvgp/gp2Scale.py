@@ -226,17 +226,16 @@ class gp2Scale():
                     self.idle_workers, futures, finished_futures = self.free_workers(futures, finished_futures)
                     time.sleep(0.01)
 
-
                 ####collect finished workers but only if actor is not busy, otherwise do it later
-                if len(finished_futures) >= 100:
+                if len(finished_futures) >= 1000:
                     actor_futures.append(SparsePriorCovariance.get_future_results(set(finished_futures)))
                     finished_futures = set()
 
                 #get rid of the oldest actor futures
                 ##could only be done when there are enough finished_futures
-                if len(actor_futures) >= 100:
-                    result = actor_futures[0].result()
-                    actor_futures.pop(0)
+                #if len(actor_futures) >= 100:
+                #    result = actor_futures[0].result()
+                #    actor_futures.pop(0)
 
                 #get idle worker and submit work
                 current_worker = self.get_idle_worker()
@@ -244,9 +243,9 @@ class gp2Scale():
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
                 self.assign_future_2_worker(futures[-1].key,current_worker)
                 if self.info: 
-                    print("    submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key, flush = True)
-                    print("    current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(), flush = True)
-                    print("",flush = True)
+                    print("    submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key)
+                    print("    current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches())
+                    print("")
                 count += 1
 
         if self.info:
@@ -258,9 +257,9 @@ class gp2Scale():
         actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
         actor_futures.append(SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
         res = client.gather(actor_futures)
-        actor_futures[-1].result()
-        client.cancel(futures) ##make sure all futures are cancelled
-        client.cancel(actor_futures) ##make sure allf utures are cancelled
+        #actor_futures[-1].result()
+        #client.cancel(futures) ##make sure all futures are cancelled
+        #client.cancel(actor_futures) ##make sure allf utures are cancelled
         if self.info: print("total prior covariance compute time: ", time.time() - start_time)
 
         return SparsePriorCovariance
