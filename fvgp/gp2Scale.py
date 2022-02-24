@@ -62,7 +62,7 @@ class gp2Scale():
         values,
         init_hyperparameters,
         batch_size,
-        total_worker_count,
+        target_worker_count,
         variances = None,
         worker_fraction_to_start = 0.9,
         entry_limit = 2e9,
@@ -136,7 +136,7 @@ class gp2Scale():
         ##########################################
         #compute the prior########################
         ##########################################
-        covariance_dask_client, self.set_of_workers = self._init_dask_client(covariance_dask_client,total_worker_count, worker_fraction_to_start)
+        covariance_dask_client, self.set_of_workers = self._init_dask_client(covariance_dask_client,target_worker_count, worker_fraction_to_start)
         self.covariance_dask_client = covariance_dask_client
         self.st = time.time()
         self.compute_prior_fvGP_pdf(covariance_dask_client)
@@ -202,8 +202,10 @@ class gp2Scale():
         actor_futures = []
         finished_futures = set()
         ###get workers
-        actor_worker = self.worker_set.pop()
-        compute_workers = set(self.worker_set)
+        set_of_workers = set(self.set_of_workers)
+        actor_worker = set_of_workers.pop()
+        compute_workers = set(set_of_workers)
+        print("compute_workers :",compute_workers)
         idle_workers = set(compute_workers)
         ###future_worker_assignments
         self.future_worker_assignments = {}
@@ -225,6 +227,7 @@ class gp2Scale():
                 end_j = min((j+1) * self.batch_size, self.point_number)
                 batch2 = self.x_data[beg_j : end_j]
                 ##make workers available that are not actively computing
+                print(i,j,"idle_workers: ", idle_workers)
                 while not idle_workers:
                     idle_workers, futures, finished_futures = self.free_workers(futures, finished_futures)
                     time.sleep(0.01)
@@ -262,7 +265,7 @@ class gp2Scale():
         res = client.gather(actor_futures)
         #actor_futures[-1].result()
         #client.cancel(futures) ##make sure all futures are cancelled
-        #client.cancel(actor_futures) ##make sure allf utures are cancelled
+        #client.cancel(actor_futures) ##make sure all futures are cancelled
         if self.info: print("total prior covariance compute time: ", time.time() - start_time)
 
         return SparsePriorCovariance
@@ -298,21 +301,23 @@ class gp2Scale():
     ##################################################################################
     ##################################################################################
     ##################################################################################
-    def _init_dask_client(self,dask_client, total_worker_count, worker_fraction_to_start):
+    def _init_dask_client(self,dask_client, target_worker_count, worker_fraction_to_start):
         if dask_client is None:
             dask_client = distributed.Client()
             print("No dask client provided to gp2Scale. Using the local client", flush = True)
         else: print("dask client provided to gp2Scale", flush = True)
-        
+
         client = dask_client
-        client.wait_for_workers(n_workers=int(total_worker_count * worker_fraction_to_start))
+        client.wait_for_workers(n_workers=int(target_worker_count * worker_fraction_to_start), timeout = 600)
         worker_info = list(client.scheduler_info()["workers"].keys())
-        if len(worker_info) != total_worker_count:
-            time.sleep(60)
+        stime = time.time()
+        while len(worker_info) != target_worker_count:
+            time.sleep(1)
             worker_info = list(client.scheduler_info()["workers"].keys())
+            if time.time() - stime > 60.: break
 
         if not worker_info: raise Exception("No workers available")
-        worker_set = set(worker_info[0:])
+        worker_set = set(worker_info)
         print("We have ", len(worker_set)," workers ready to go.")
         print("Scheduler Address: ", client.scheduler_info()["address"])
         return client, worker_set
@@ -427,7 +432,7 @@ class gp2Scale():
         #client = detach_from_self(self.covariance_dask_client)
         client = self.covariance_dask_client
         mean = np.zeros((self.point_number))   #self.mean_function(self,self.x_data,hyperparameters) * 0.0
-        if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
+        #if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
         if recompute_xK is True: x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean,client)
         else: x,K = self.covariance_value_prod,self.SparsePriorCovariance
         y = self.y_data - mean
