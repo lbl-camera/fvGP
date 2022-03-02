@@ -142,7 +142,7 @@ class gp2Scale():
         self.compute_prior_fvGP_pdf(covariance_dask_client)
         if self.info:
             sp = self.SparsePriorCovariance.get_result().result()
-            print("gpLG successfully initiated, here is some info about the prior covariance matrix:")
+            print("gp2Scale successfully initiated, here is some info about the prior covariance matrix:")
             print("non zero elements: ", sp.count_nonzero())
             print("Size in GBits:     ", sp.data.nbytes/1e9)
             print("Sparsity: ",sp.count_nonzero()/float(self.point_number)**2)
@@ -185,14 +185,15 @@ class gp2Scale():
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean,client):
         K = self.compute_covariance(hyperparameters, variances,client)
         y = values - mean
+        if self.info: print("Computing SuperLU and solve()")
         K.compute_LU().result()
         x = K.solve(y).result()
+        if self.info: print("Done computing SuperLU and solve()")
         return x,K
 
     def total_number_of_batches(self):
         Db = float(self.num_batches)
         return 0.5 * Db * (Db + 1.)
-
 
     def compute_covariance(self, hyperparameters, variances,client):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
@@ -204,7 +205,7 @@ class gp2Scale():
         set_of_workers = set(self.set_of_workers)
         actor_worker = set_of_workers.pop()
         compute_workers = set(set_of_workers)
-        print("compute_workers :",compute_workers)
+        print("compute_workers :", compute_workers)
         idle_workers = set(compute_workers)
         ###future_worker_assignments
         self.future_worker_assignments = {}
@@ -260,8 +261,8 @@ class gp2Scale():
         actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
         actor_futures.append(SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
         res = client.gather(actor_futures)
-        if self.info: print("total prior covariance compute time: ", time.time() - start_time)
-
+        if self.info: print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", SparsePriorCovariance.get_result().result().count_nonzero())
+        
         return SparsePriorCovariance
 
 

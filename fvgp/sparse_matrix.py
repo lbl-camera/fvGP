@@ -14,6 +14,8 @@ from scipy.sparse.linalg import spilu
 from .mcmc import mcmc
 import torch
 from dask.distributed import Variable
+#from scikits import umfpack
+#from scikits.umfpack import spsolve, splu
 
 
 class gp2ScaleSparseMatrix:
@@ -21,7 +23,7 @@ class gp2ScaleSparseMatrix:
         self.n = n
         self.sparse_covariance = sparse.coo_matrix((n,n))
         self.st = time.time()
-        self.counter = 0
+        #self.counter = 0
 
     def get_result(self):
         return self.sparse_covariance
@@ -52,17 +54,12 @@ class gp2ScaleSparseMatrix:
     def get_future_results(self, futures, info = False):
         res = []
         info = True
-        if info: print("Starting loop at ",time.time() - self.st, "with ",len(futures)," to be collected")
         for future in futures:
             SparseCov_sub, ranges, ketime, worker = future.result()
             if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st)
             res.append((SparseCov_sub,ranges[0],ranges[1]))
-            if info: print("I have read ", self.counter, "matrices")
-            self.counter += 1
 
-        if info: print("Loop Done", time.time() - self.st)
         self.imsert_many(res)
-        if info: print("Done inserting", time.time() - self.st)
         return 0
 
     def add_to_diag(self,vector):
@@ -74,7 +71,13 @@ class gp2ScaleSparseMatrix:
 
     def compute_LU(self):
         A = self.sparse_covariance
-        self.LU = splu(A.tocsc())
+        print("Matrix non-zero entries ", A.count_nonzero(),flush = True)
+        try:self.LU = splu( A.tocsc(), diag_pivot_thresh = 0.01, options = dict(SymmetricMode = True), permc_spec = "MMD_AT_PLUS_A")
+        except:
+            print("Complete SuperLU was not successful. Attempting Incomplete LU",flush = True)
+            self.LU = spilu(A.tocsc(), diag_pivot_thresh = 0.01, options = dict(SymmetricMode = True), permc_spec = "MMD_AT_PLUS_A")
+        print("L non-zero entries ", self.LU.L.count_nonzero(),flush = True)
+        print("U non-zero entries ", self.LU.U.count_nonzero(),flush = True)
         return 0
 
     def solve(self,x):

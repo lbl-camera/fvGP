@@ -39,7 +39,7 @@ def mcmc(func,bounds, x0 = None, distr = None, max_iter = 100, ):
         u = np.random.rand()
         if u <= acceptance_prob: x.append(x_new);f.append(new_func)
         else: x.append(x[counter]);f.append(old_func)
-        #print("mcmc f(x): ",f[-1])
+        print("mcmc f(x): ",f[-1])
         counter += 1
         if counter >= max_iter: run = False
     arg_min = np.argmin(f)
