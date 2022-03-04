@@ -751,7 +751,7 @@ class GP():
     ###########################################################################
     def posterior_mean(self, x_iset):
         """
-        This function the posterior mean for a set of input points.
+        This function calculates the posterior mean for a set of input points.
 
         Parameters
         ----------
