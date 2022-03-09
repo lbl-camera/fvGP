@@ -187,6 +187,7 @@ class gp2Scale():
         y = values - mean
         if self.info: print("Computing SuperLU and solve()")
         K.compute_LU().result()
+        print("LU done")
         x = K.solve(y).result()
         if self.info: print("Done computing SuperLU and solve()")
         return x,K
@@ -262,6 +263,7 @@ class gp2Scale():
         actor_futures.append(SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
         res = client.gather(actor_futures)
         if self.info: print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", SparsePriorCovariance.get_result().result().count_nonzero())
+        print("Sparsity: ",SparsePriorCovariance.get_result().result().count_nonzero()/float(self.point_number)**2)
         
         return SparsePriorCovariance
 

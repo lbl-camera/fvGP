@@ -22,12 +22,12 @@ def mcmc(func,bounds, x0 = None, distr = None, max_iter = 100, ):
     if x0 is None: x.append(np.random.uniform(low = bounds[:,0],high = bounds[:,1],size = len(bounds)))
     else: x.append(x0)
     bc = False
-    if distr == None: l = np.diag(np.abs(np.subtract(bounds[:,0],bounds[:,1]))/100.0)
+    if distr is None: l = np.diag(np.sqrt(np.abs(np.subtract(bounds[:,0],bounds[:,1])))/100.0)
     counter = 0
     new_func = 1e16
     run = True
     while run:
-        x_new = np.random.multivariate_normal(x[counter], l)
+        x_new = np.random.multivariate_normal(x[-1], l)
         x_new = project_onto_bounds(x_new,bounds)
         ##check for constraints?
         old_func = new_func

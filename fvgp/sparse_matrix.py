@@ -70,12 +70,15 @@ class gp2ScaleSparseMatrix:
 
 
     def compute_LU(self):
-        A = self.sparse_covariance
+        A = self.sparse_covariance.tocsc()
         print("Matrix non-zero entries ", A.count_nonzero(),flush = True)
-        try:self.LU = splu( A.tocsc(), diag_pivot_thresh = 0.01, options = dict(SymmetricMode = True), permc_spec = "MMD_AT_PLUS_A")
-        except:
-            print("Complete SuperLU was not successful. Attempting Incomplete LU",flush = True)
-            self.LU = spilu(A.tocsc(), diag_pivot_thresh = 0.01, options = dict(SymmetricMode = True), permc_spec = "MMD_AT_PLUS_A")
+        A_new = A.__class__(A.shape)
+        A_new.data = A.data
+        A_new.indptr = np.array(A.indptr, copy=False, dtype=np.intc)
+        A_new.indices = np.array(A.indices, copy=False, dtype=np.intc)
+        #try:
+        print("LU starting... ",flush = True)
+        self.LU = splu(A_new, diag_pivot_thresh = 1.0, options = dict(SymmetricMode = True), permc_spec = "MMD_AT_PLUS_A")
         print("L non-zero entries ", self.LU.L.count_nonzero(),flush = True)
         print("U non-zero entries ", self.LU.U.count_nonzero(),flush = True)
         return 0
