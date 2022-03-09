@@ -241,6 +241,7 @@ class GP():
         max_iter = 120,
         local_optimizer = "L-BFGS-B",
         global_optimizer = "genetic",
+        constraints = (),
         deflation_radius = None,
         dask_client = None):
 
@@ -288,6 +289,7 @@ class GP():
             max_iter,
             pop_size,
             tolerance,
+            constraints,
             local_optimizer,
             global_optimizer,
             deflation_radius,
@@ -417,7 +419,7 @@ class GP():
     ##################################################################################
     def _optimize_log_likelihood(self,starting_hps,
         hp_bounds,method,max_iter,
-        pop_size,tolerance,
+        pop_size,tolerance,constraints,
         local_optimizer,
         global_optimizer,
         deflation_radius,
@@ -445,6 +447,7 @@ class GP():
                 maxiter=max_iter,
                 popsize = pop_size,
                 tol = tolerance,
+                constraints = constraints,
                 workers = 1,
             )
             hyperparameters = np.array(res["x"])
@@ -470,6 +473,7 @@ class GP():
                 bounds = hp_bounds,
                 tol = tolerance,
                 callback = None,
+                constraints = constraints,
                 options = {"maxiter": max_iter})
 
             if OptimumEvaluation["success"] == True:
@@ -752,7 +756,7 @@ class GP():
     ###########################################################################
     def posterior_mean(self, x_iset):
         """
-        This function the posterior mean for a set of input points.
+        This function calculates the posterior mean for a set of input points.
 
         Parameters
         ----------
@@ -771,6 +775,36 @@ class GP():
         posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         return {"x": p,
                 "f(x)": posterior_mean}
+
+    def posterior_mean_constraint(self, x_iset, hyperparameters):
+        """
+        This function recalculates the posterior mean with given hyperparameters so that
+        constraints on the can be enforced.
+
+        Parameters
+        ----------
+        x_iset : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        hyperparameters : np.ndarray
+            A numpy array of new hyperparameters
+
+        Return
+        ------
+        solution dictionary : dict
+        """
+        p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        k = self.kernel(self.x_data,p,hyperparameters,self)
+        current_prior_mean_vec = self.mean_function(self,self.x_data,hyperparameters)
+        cov_y,K = self._compute_covariance_value_product(hyperparameters,self.y_data,self.variances,
+                                                         current_prior_mean_vec)
+        A = k.T @ cov_y
+        posterior_mean = self.mean_function(self,p,hyperparameters) + A
+        return {"x": p,
+                "f(x)": posterior_mean}
+
+
 
     def posterior_mean_grad(self, x_iset, direction):
         """
