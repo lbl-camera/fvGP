@@ -261,7 +261,8 @@ class gp2Scale():
 
         actor_futures.append(SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
         actor_futures.append(SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
-        res = client.gather(actor_futures)
+        client.gather(actor_futures)
+        client.gather(futures)
         if self.info: print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", SparsePriorCovariance.get_result().result().count_nonzero())
         print("Sparsity: ",SparsePriorCovariance.get_result().result().count_nonzero()/float(self.point_number)**2)
         
