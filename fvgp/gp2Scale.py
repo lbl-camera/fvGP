@@ -185,9 +185,8 @@ class gp2Scale():
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean,client):
         K = self.compute_covariance(hyperparameters, variances,client)
         y = values - mean
-        if self.info: print("Computing SuperLU and solve()")
-        K.compute_LU().result()
-        print("LU done")
+        if self.info: print("Trying to solve()")
+        success = K.compute_LU().result()
         x = K.solve(y).result()
         if self.info: print("Done computing SuperLU and solve()")
         return x,K

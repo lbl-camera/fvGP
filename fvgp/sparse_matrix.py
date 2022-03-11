@@ -23,7 +23,6 @@ class gp2ScaleSparseMatrix:
         self.n = n
         self.sparse_covariance = sparse.coo_matrix((n,n))
         self.st = time.time()
-        #self.counter = 0
 
     def get_result(self):
         return self.sparse_covariance
@@ -71,25 +70,66 @@ class gp2ScaleSparseMatrix:
 
     def compute_LU(self):
         A = self.sparse_covariance.tocsc()
-        print("Matrix non-zero entries ", A.count_nonzero(),flush = True)
         A_new = A.__class__(A.shape)
         A_new.data = A.data
         A_new.indptr = np.array(A.indptr, copy=False, dtype=np.intc)
         A_new.indices = np.array(A.indices, copy=False, dtype=np.intc)
-        #try:
-        print("LU starting... ",flush = True)
         self.LU = splu(A_new, diag_pivot_thresh = 1.0, options = dict(SymmetricMode = True), permc_spec = "MMD_AT_PLUS_A")
-        print("L non-zero entries ", self.LU.L.count_nonzero(),flush = True)
-        print("U non-zero entries ", self.LU.U.count_nonzero(),flush = True)
-        return 0
+        return True
+
 
     def solve(self,x):
-        return self.LU.solve(x)
+        success = True
+        try: r = self.LU.solve(x)
+        except: success = False
+        if success is False:
+            try:
+                r = sparse.linalg.cg(self.sparse_covariance,x)
+                success = True
+            except: pass
+        if success is False:
+            try:
+                r = sparse.linalg.cgs(self.sparse_covariance,x)
+                success = True
+            except: pass
+        if success is False:
+            try:
+                r = sparse.linalg.minres(self.sparse_covariance,x)
+                success = True
+            except: raise Exception("No solve method was successful. EXIT")
+
+        return r
 
     def logdet(self):
-        upper_diag = abs(self.LU.U.diagonal())
-        res = np.sum(np.log(upper_diag))
-        return res
+        success = True
+        try:
+            upper_diag = abs(self.LU.U.diagonal())
+            r = np.sum(np.log(upper_diag))
+        except: success = False
+        if success is False:
+            try: r = self.random_logdet(self.sparse_covariance)
+            except: raise Exception("No logdet() method was successful, EXIT")
+        return r
 
-
+    def random_logdet(self, A,eps = 10.0,delta = 0.1,m = 100):
+        #from: https://www.boutsidis.org/Boutsidis_LAA2017.pdf
+        A = sparse.csc_matrix(A)
+        N = A.shape[0]
+        alpha = 7.0 * sparse.linalg.eigsh(A,k=1,tol=0.1, return_eigenvectors=False)[0]
+        A.data = A.data / alpha
+        diag = sparse.eye(N, format="csc")
+        C = sparse.csc_matrix(diag - A)
+        p = int(20.0 * np.log(2./delta)/eps**2)+1
+        gamma = np.zeros((p,m))
+        for i in range(p):
+            print(i," of ",p)
+            g = np.random.normal(0, 1., size = N)
+            v = C @ g
+            gamma[i,1] = g.T @ v
+            for k in range(2,m):
+                v = C @ v
+                gamma[i,k] = g.T @ v
+        s = np.sum(gamma, axis = 0) / float(p)
+        s = s[1:] / np.arange(1,len(s))
+        return N * np.log(alpha) - np.sum(s)
 
