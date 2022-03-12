@@ -1,5 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from loguru import logger
+
 
 def out_of_bounds(x,bounds):
     for i in range(len(x)):
@@ -40,7 +42,7 @@ def mcmc(func,bounds, start = None, l = None, max_iter = 100):
         u = np.random.rand()
         if u <= acceptance_prob: x.append(x_new);f.append(func(x_new))
         else: x.append(x[counter]);f.append(func(x[counter]))
-        print("mcmc f(x): ",f[-1])
+        logger.debug("mcmc f(x):{}",f[-1])
         counter += 1
         #if len(f) > 200 and np.sqrt(np.var(f[-100:])) < np.mean(f[-100])/1000.0: success = True;break
         #if len(f) > 10000: success = False; break
@@ -48,6 +50,6 @@ def mcmc(func,bounds, start = None, l = None, max_iter = 100):
     #plt.plot(f)
     #plt.show()
     arg_min = np.argmin(f)
-    print("mcmc res: ",f[arg_min]," at ",x[arg_min])
+    logger.debug(f"mcmc res: {f[arg_min]} at {x[arg_min]}")
     return {"f(x)": f[arg_min],"x":x[arg_min],"success":success,"distribution": f}
 

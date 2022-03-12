@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 import dask.distributed as distributed
+from loguru import logger
+
 from . import __version__
 
 import matplotlib.pyplot as plt
@@ -49,10 +51,10 @@ class fvGP(GP):
         `gpcam.gp_optimizer.GPOptimizer` instance. The default is a stationary anisotropic kernel
         (`fvgp.gp.GP.default_kernel`).
     gp_kernel_function_grad : Callable, optional
-        A function that calculates the derivative  of the covariance between datapoints with respect to the hyperparameters. 
+        A function that calculates the derivative  of the covariance between datapoints with respect to the hyperparameters.
         If provided, it will be used for local training and can speed up the calculations.
         It accepts as input x1 (a V x D array of positions),
-        x2 (a U x D array of positions) and hyperparameters (a 1-D array of length D+1 for the default kernel). 
+        x2 (a U x D array of positions) and hyperparameters (a 1-D array of length D+1 for the default kernel).
         The default is a finite difference calculation.
         If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and the output
         is a numpy array of shape (V x U).
@@ -64,7 +66,7 @@ class fvGP(GP):
         array of length D+1 for the default kernel). The return value is a 1-D array of length V. If None is provided,
         `fvgp.gp.GP.default_mean_function` is used.
     gp_mean_function_grad : Callable, optional
-        A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters. 
+        A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters.
         It accepts as input hyperparameters (a 1-D
         array of length D+1 for the default kernel). The return value is a 2-D array of shape (D x len(hyperparameters)). If None is provided,
         a finite difference scheme is used.
@@ -117,7 +119,7 @@ class fvGP(GP):
             self.value_positions = np.array(value_positions)
         if variances is None:
             self.variances = np.ones((self.y_data.shape)) * abs(self.y_data / 100.0)
-            print("CAUTION: fvGP reports that you have not provided data variances, they will set to be 1 percent of the data values!")
+            logger.warning("fvGP reports that you have not provided data variances, they will set to be 1 percent of the data values!")
         else:
             self.variances = np.array(variances)
 
