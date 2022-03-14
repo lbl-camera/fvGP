@@ -186,7 +186,8 @@ class gp2Scale():
         K = self.compute_covariance(hyperparameters, variances,client)
         y = values - mean
         if self.info: print("Trying to solve()")
-        success = K.compute_LU().result()
+        try: success = K.compute_LU().result(timeout=600)
+        except: pass
         x = K.solve(y).result()
         if self.info: print("Done computing SuperLU and solve()")
         return x,K
