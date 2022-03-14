@@ -1,20 +1,21 @@
 #!/usr/bin/env python
+import inspect
+import time
+import itertools
+from functools import partial
+import math
 
 import dask.distributed as distributed
 import matplotlib.pyplot as plt
 import numpy as np
-import math
 from scipy.optimize import differential_evolution
 from scipy.optimize import minimize
-from .mcmc import mcmc
-
-import itertools
-import time
+from loguru import logger
 import torch
-from functools import partial
+
+from .mcmc import mcmc
 from hgdl.hgdl import HGDL
 
-#from .gpHGDL import gpHGDL
 
 class GP():
     """
@@ -43,10 +44,10 @@ class GP():
         `gpcam.gp_optimizer.GPOptimizer` instance. The default is a stationary anisotropic kernel
         (`fvgp.gp.GP.default_kernel`).
     gp_kernel_function_grad : Callable, optional
-        A function that calculates the derivative  of the covariance between datapoints with respect to the hyperparameters. 
+        A function that calculates the derivative  of the covariance between datapoints with respect to the hyperparameters.
         If provided, it will be used for local training and can speed up the calculations.
         It accepts as input x1 (a V x D array of positions),
-        x2 (a U x D array of positions) and hyperparameters (a 1-D array of length D+1 for the default kernel). 
+        x2 (a U x D array of positions) and hyperparameters (a 1-D array of length D+1 for the default kernel).
         The default is a finite difference calculation.
         If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and the output
         is a numpy array of shape (V x U).
@@ -58,7 +59,7 @@ class GP():
         array of length D+1 for the default kernel). The return value is a 1-D array of length V. If None is provided,
         `fvgp.gp.GP.default_mean_function` is used.
     gp_mean_function_grad : Callable, optional
-        A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters. 
+        A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters.
         It accepts as input hyperparameters (a 1-D
         array of length D+1 for the default kernel). The return value is a 2-D array of shape (D x len(hyperparameters)). If None is provided,
         a finite difference scheme is used.
@@ -122,8 +123,8 @@ class GP():
         ##########################################
         if variances is None:
             self.variances = np.ones((self.y_data.shape)) * abs(np.mean(self.y_data) / 100.0)
-            print("CAUTION: you have not provided data variances in fvGP,")
-            print("they will be set to 1 percent of the data values!")
+            logger.warning("CAUTION: you have not provided data variances in fvGP, "
+                           "they will be set to 1 percent of the data values!")
         elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
         elif np.ndim(variances) == 1:
@@ -216,12 +217,15 @@ class GP():
         opt_obj : object
             An object returned form the `fvgp.gp.GP.train_async` function.
         """
-        try: opt_obj.cancel_tasks()#; print("fvGP successfully cancelled the current training.")
-        except: print("No asynchronous training to be cancelled in fvGP, no training is running.")
+        try:
+            opt_obj.cancel_tasks()
+            logger.debug("fvGP successfully cancelled the current training.")
+        except:
+            raise RuntimeError("No asynchronous training to be cancelled in fvGP, no training is running.")
     ###################################################################################
     def kill_training(self,opt_obj):
         """
-        This function stops the training if HGDL is used, and kills the dask client. 
+        This function stops the training if HGDL is used, and kills the dask client.
 
         Parameters
         ----------
@@ -229,8 +233,11 @@ class GP():
             An object returned form the `fvgp.gp.GP.train_async` function.
         """
 
-        try: opt_obj.kill_client()#; print("fvGP successfully killed the training.")
-        except: print("No asynchronous training to be killed, no training is running.")
+        try:
+            opt_obj.kill_client()
+            logger.debug("fvGP successfully killed the training.")
+        except:
+            raise RuntimeError("No asynchronous training to be killed, no training is running.")
     ###################################################################################
     def train(self,
         hyperparameter_bounds,
@@ -270,7 +277,7 @@ class GP():
         global_optimizer : str, optional
             Defining the global optimizer. Only applicable to method = hgdl. Default = `genetic`
         deflation_radius : float, optional
-            Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation 
+            Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation
             for more info. Default = None, meaning HGDL will pick the radius.
         dask_client : distributed.client.Client, optional
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
@@ -324,7 +331,7 @@ class GP():
         global_optimizer : str, optional
             Defining the global optimizer. Only applicable to method = hgdl. Default = `genetic`
         deflation_radius : float, optional
-            Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation 
+            Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation
             for more info. Default = None, meaning HGDL will pick the radius.
         dask_client : distributed.client.Client, optional
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
@@ -376,16 +383,16 @@ class GP():
             if l_n - l_o < 0.000001:
                 self.hyperparameters = res
                 self._compute_prior_fvGP_pdf()
-                print("    fvGP async hyperparameter update successful")
-                print("    Latest hyperparameters: ", self.hyperparameters)
+                logger.debug("    fvGP async hyperparameter update successful")
+                logger.debug("    Latest hyperparameters: {}", self.hyperparameters)
             else:
-                print("    The update was attempted but the new hyperparameters led to a lower likelihood, so I kept the old ones")
-                print("Old likelihood: ", -l_o, " at ", self.hyperparameters)
-                print("New likelihood: ", -l_n, " at ", res)
+                logger.debug("    The update was attempted but the new hyperparameters led to a lower likelihood, so I kept the old ones")
+                logger.debug(f"Old likelihood: {-l_o} at {self.hyperparameters}")
+                logger.debug(f"New likelihood: {-l_n} at {res}")
         except Exception as e:
-            print("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
-            print("    That probably means you are not optimizing them asynchronously")
-            print("    hyperparameters: ", self.hyperparameters)
+            logger.debug("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
+            logger.debug("    That probably means you are not optimizing them asynchronously")
+            logger.debug("    hyperparameters: {}", self.hyperparameters)
         return self.hyperparameters
     ##################################################################################
     def _optimize_log_likelihood_async(self,
@@ -424,23 +431,22 @@ class GP():
 
         start_log_likelihood = self.log_likelihood(starting_hps)
 
-        print(
+        logger.debug(
             "fvGP hyperparameter tuning in progress. Old hyperparameters: ",
             starting_hps, " with old log likelihood: ", start_log_likelihood)
-        print("method: ", method)
+        logger.debug("method: ", method)
 
         ############################
         ####global optimization:##
         ############################
         if method == "global":
-            print("fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
-            print("maximum number of iterations: ", max_iter)
-            print("termination tolerance: ", tolerance)
-            print("bounds: ", hp_bounds)
+            logger.debug("fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
+            logger.debug("maximum number of iterations: {}", max_iter)
+            logger.debug("termination tolerance: {}", tolerance)
+            logger.debug("bounds: {}", hp_bounds)
             res = differential_evolution(
                 self.log_likelihood,
                 hp_bounds,
-                disp=True,
                 maxiter=max_iter,
                 popsize = pop_size,
                 tol = tolerance,
@@ -448,19 +454,18 @@ class GP():
             )
             hyperparameters = np.array(res["x"])
             Eval = self.log_likelihood(hyperparameters)
-            print("fvGP found hyperparameters ",hyperparameters," with likelihood ",
-                Eval," via global optimization")
+            logger.debug(f"fvGP found hyperparameters {hyperparameters} with likelihood {Eval} via global optimization")
         ############################
         ####local optimization:#####
         ############################
         elif method == "local":
             hyperparameters = np.array(starting_hps)
-            print("fvGP is performing a local update of the hyper parameters.")
-            print("starting hyperparameters: ", hyperparameters)
-            print("Attempting a BFGS optimization.")
-            print("maximum number of iterations: ", max_iter)
-            print("termination tolerance: ", tolerance)
-            print("bounds: ", hp_bounds)
+            logger.debug("fvGP is performing a local update of the hyper parameters.")
+            logger.debug("starting hyperparameters: {}", hyperparameters)
+            logger.debug("Attempting a BFGS optimization.")
+            logger.debug("maximum number of iterations: {}", max_iter)
+            logger.debug("termination tolerance: {}", tolerance)
+            logger.debug("bounds: {}", hp_bounds)
             OptimumEvaluation = minimize(
                 self.log_likelihood,
                 hyperparameters,
@@ -472,19 +477,17 @@ class GP():
                 options = {"maxiter": max_iter})
 
             if OptimumEvaluation["success"] == True:
-                print(
-                    "fvGP local optimization successfully concluded with result: ",
-                    OptimumEvaluation["fun"]," at ", OptimumEvaluation["x"]
-                )
+                logger.debug(f"fvGP local optimization successfully concluded with result: "
+                             f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
                 hyperparameters = OptimumEvaluation["x"]
             else:
-                print("fvGP local optimization not successful.")
+                logger.debug("fvGP local optimization not successful.")
         ############################
         ####hybrid optimization:####
         ############################
         elif method == "hgdl":
-            print("fvGP submitted HGDL optimization")
-            print('bounds are',hp_bounds)
+            logger.debug("fvGP submitted HGDL optimization")
+            logger.debug('bounds are',hp_bounds)
             opt = HGDL(self.log_likelihood,
                        self.log_likelihood_gradient,
                        hp_bounds,
@@ -499,8 +502,8 @@ class GP():
             hyperparameters = res["x"][0]
             opt.kill_client(obj)
         elif method == "mcmc":
-            print("MCMC started in fvGP")
-            print('bounds are',hp_bounds)
+            logger.debug("MCMC started in fvGP")
+            logger.debug('bounds are {}', hp_bounds)
             res = mcmc(self.log_likelihood,hp_bounds)
             hyperparameters = np.array(res["x"])
         elif callable(method):
@@ -510,11 +513,8 @@ class GP():
         ###################################################
         if start_log_likelihood < self.log_likelihood(hyperparameters):
             hyperparameters = np.array(starting_hps)
-            print("fvGP: Optimization returned smaller log likelihood; resetting to old hyperparameters.")
-            print("New hyperparameters: ",
-            hyperparameters,
-            "with log likelihood: ",
-            self.log_likelihood(hyperparameters))
+            logger.debug("fvGP optimization returned smaller log likelihood; resetting to old hyperparameters.")
+            logger.debug(f"New hyperparameters: {hyperparameters} with log likelihood: {self.log_likelihood(hyperparameters)}")
         return hyperparameters
     ##################################################################################
     def log_likelihood(self,hyperparameters):
@@ -682,14 +682,13 @@ class GP():
                 return x.numpy()
             except Exception as e:
                 try:
-                    print("fvGP: except statement invoked: torch.solve() on cpu did not work")
-                    print("reason: ", str(e))
+                    logger.error("torch.solve() on cpu did not work")
+                    logger.error("reason: ", str(e))
                     #x, qr = torch.lstsq(b,A)
                     x, qr = torch.linalg.lstsq(A,b)
                 except Exception as e:
-                    print("fvGP: except statement 2 invoked: torch.solve() and torch.lstsq() on cpu did not work")
-                    print("falling back to numpy.lstsq()")
-                    print("reason: ", str(e))
+                    logger.error("torch.solve() and torch.lstsq() on cpu did not work; falling back to numpy.lstsq()")
+                    logger.error("reason: {}", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
                     return x
             return x.numpy()
@@ -699,15 +698,14 @@ class GP():
             try:
                 x = torch.linalg.solve(A, b)
             except Exception as e:
-                print("fvGP: except statement invoked: torch.solve() on gpu did not work")
-                print("reason: ", str(e))
+                logger.error("torch.solve() on gpu did not work")
+                logger.error("reason: ", str(e))
                 try:
                     #x, qr = torch.lstsq(b,A)
                     x = torch.linalg.lstsq(A,b)
                 except Exception as e:
-                    print("fvGP: except statement 2 invoked: torch.solve() and torch.lstsq() on gpu did not work")
-                    print("falling back to numpy.lstsq()")
-                    print("reason: ", str(e))
+                    logger.error("torch.solve() and torch.lstsq() on gpu did not work; falling back to numpy.lstsq()")
+                    logger.error("reason: ", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
                     return x
             return x.cpu().numpy()
@@ -832,10 +830,11 @@ class GP():
             S = kk - (k_cov_prod.T @ k)
             v = np.array(np.diag(S))
         if np.any(v < -0.001):
-            print("WARNING in fvGP: CAUTION, negative variances encountered. That normally means that the model is unstable.")
-            print("Rethink the kernel definitions, add more noise to the data,")
-            print("or double check the hyperparameter optimization bounds. This will not ")
-            print("terminate the algorithm, but expect anomalies.")
+            logger.warning(inspect.cleandoc("""#
+            Negative variances encountered. That normally means that the model is unstable.
+            Rethink the kernel definitions, add more noise to the data,
+            or double check the hyperparameter optimization bounds. This will not
+            terminate the algorithm, but expect anomalies."""))
             v[v<0.0] = 0.0
             if S is not False: S = np.fill_diagonal(S,v)
 
@@ -881,7 +880,7 @@ class GP():
         function to compute the data-informed prior
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
         Return
         ------
@@ -1022,7 +1021,7 @@ class GP():
         x2 = self.solve(S2,mu)
         dim = len(mu)
         kld = 0.5 * (np.trace(x1) + (x2.T @ mu) - dim + ((s2*logdet2)-(s1*logdet1)))
-        if kld < -1e-4: print("fvGP: Negative KL divergence encountered")
+        if kld < -1e-4: logger.debug("Negative KL divergence encountered")
         return kld
     ###########################################################################
     def kl_div_grad(self,mu1,dmu1dx, mu2, S1, dS1dx, S2):
@@ -1040,7 +1039,7 @@ class GP():
         x3 = self.solve(S2,-dmu1dx)
         dim = len(mu)
         kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2 @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
-        if kld < -1e-4: print("In fvGP: Negative KL divergence encountered")
+        if kld < -1e-4: logger.debug("Negative KL divergence encountered")
         return kld
     ###########################################################################
     def gp_kl_div(self, x_iset, comp_mean, comp_cov):
@@ -1048,7 +1047,7 @@ class GP():
         function to compute the kl divergence of a posterior at given points
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
         Return
         -------
@@ -1076,7 +1075,7 @@ class GP():
         function to compute the gradient of the kl divergence of a posterior at given points
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             direction: direction in which the gradient will be computed
         Return
@@ -1106,7 +1105,7 @@ class GP():
         function to compute the shannon-information gain of data
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
         Return
         -------
@@ -1137,7 +1136,7 @@ class GP():
         function to compute the gradient if the shannon-information gain of data
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             direction: direction in which to compute the gradient
         Return
@@ -1158,7 +1157,7 @@ class GP():
         function to compute the probability of an uncertain feature given the gp posterior
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             comp_mean: a vector of mean values, same length as x_iset
             comp_cov: covarianve matrix, in R^{len(x_iset)xlen(x_iset)}
@@ -1188,7 +1187,7 @@ class GP():
         ln_p = (C + 0.5 * logdet1) - (np.log((2.0*np.pi)**(dim/2.0)) + (0.5*(logdet2 + logdet3)))
         return {"mu": mu,
                 "covariance": cov,
-                "probability": 
+                "probability":
                 np.exp(ln_p)
                 }
     def posterior_probability_grad(self, x_iset, comp_mean, comp_cov, direction):
@@ -1196,7 +1195,7 @@ class GP():
         function to compute the gradient of the probability of an uncertain feature given the gp posterior
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the 
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             comp_mean: a vector of mean values, same length as x_iset
             comp_cov: covarianve matrix, in R^{len(x_iset)xlen(x_iset)}

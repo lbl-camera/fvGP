@@ -9,3 +9,4 @@ distributed >= 2021.6.2
 hgdl >= 1.4.6
 notebook
 plotly
+loguru
