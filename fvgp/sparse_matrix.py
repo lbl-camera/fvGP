@@ -19,13 +19,17 @@ from dask.distributed import Variable
 
 
 class gp2ScaleSparseMatrix:
-    def __init__(self,n,workers):
+    def __init__(self,n):
         self.n = n
         self.sparse_covariance = sparse.coo_matrix((n,n))
         self.st = time.time()
 
     def get_result(self):
         return self.sparse_covariance
+
+    def reset_prior(self):
+        self.sparse_covariance = sparse.coo_matrix((self.n,self.n))
+        return 0
 
     def imsert_many(self, list_of_3_tuples):
         l = list_of_3_tuples
@@ -48,11 +52,11 @@ class gp2ScaleSparseMatrix:
 
         res = sparse.coo_matrix((np.concatenate(data),(rows,columns)), shape = bg.shape)
         self.sparse_covariance = res
-        return res
+        return 0
 
     def get_future_results(self, futures, info = False):
         res = []
-        info = True
+        info = False
         for future in futures:
             SparseCov_sub, ranges, ketime, worker = future.result()
             if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st)
@@ -74,7 +78,7 @@ class gp2ScaleSparseMatrix:
         A_new.data = A.data
         A_new.indptr = np.array(A.indptr, copy=False, dtype=np.intc)
         A_new.indices = np.array(A.indices, copy=False, dtype=np.intc)
-        self.LU = splu(A_new, diag_pivot_thresh = 1.0, options = dict(SymmetricMode = True), permc_spec = "MMD_AT_PLUS_A")
+        self.LU = splu(A_new, diag_pivot_thresh = 0.01, options = dict(SymmetricMode = True), permc_spec = "MMD_AT_PLUS_A")
         return True
 
 
@@ -84,17 +88,17 @@ class gp2ScaleSparseMatrix:
         except: success = False
         if success is False:
             try:
-                r = sparse.linalg.cg(self.sparse_covariance,x)
+                r,info = sparse.linalg.cg(self.sparse_covariance,x)
                 success = True
             except: pass
         if success is False:
             try:
-                r = sparse.linalg.cgs(self.sparse_covariance,x)
+                r, info = sparse.linalg.cgs(self.sparse_covariance,x)
                 success = True
             except: pass
         if success is False:
             try:
-                r = sparse.linalg.minres(self.sparse_covariance,x)
+                r,info = sparse.linalg.minres(self.sparse_covariance,x)
                 success = True
             except: raise Exception("No solve method was successful. EXIT")
 

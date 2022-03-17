@@ -22,7 +22,7 @@ def mcmc(func,bounds, x0 = None, distr = None, max_iter = 100, ):
     if x0 is None: x.append(np.random.uniform(low = bounds[:,0],high = bounds[:,1],size = len(bounds)))
     else: x.append(x0)
     bc = False
-    if distr is None: l = np.diag((np.abs(np.subtract(bounds[:,0],bounds[:,1])))/100.0)**2
+    if distr is None: l = np.diag((np.abs(np.subtract(bounds[:,0],bounds[:,1])))/20.0)**2
     counter = 0
     new_func = 1e16
     run = True
@@ -39,7 +39,7 @@ def mcmc(func,bounds, x0 = None, distr = None, max_iter = 100, ):
         u = np.random.rand()
         if u <= acceptance_prob: x.append(x_new);f.append(new_func)
         else: x.append(x[counter]);f.append(old_func)
-        print("mcmc f(x): ",f[-1])
+        print("mcmc f(x): ",f[-1], " at ", x[-1][0:3])
         counter += 1
         if counter >= max_iter: run = False
     arg_min = np.argmin(f)
