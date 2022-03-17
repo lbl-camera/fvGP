@@ -174,6 +174,7 @@ class gp2Scale():
         self.covariance_value_prod = cov_y
 
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean, client):
+        np.save("latest_hps", hyperparameters)
         self.compute_covariance(self.x_data,self.x_data,hyperparameters, variances,client)
         y = values - mean
         #try: success = self.SparsePriorCovariance.compute_LU().result(timeout=self.LUtimeout)
