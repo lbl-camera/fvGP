@@ -270,6 +270,9 @@ class GP():
             Defining the local optimizer. Default = "L-BFGS-B", most scipy.opimize.minimize functions are permissible.
         global_optimizer : str, optional
             Defining the global optimizer. Only applicable to method = hgdl. Default = `genetic`
+        constraints : tuple of object instances, optional
+            Equality and inequality constraints for the optimization. If the optimizer is ``hgdl'' see ``hgdl.readthedocs.io''.
+            If the optimizer is a scipy optimizer, see scipy documentation.
         deflation_radius : float, optional
             Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation 
             for more info. Default = None, meaning HGDL will pick the radius.
@@ -304,6 +307,7 @@ class GP():
         max_iter = 10000,
         local_optimizer = "L-BFGS-B",
         global_optimizer = "genetic",
+        constraints = (),
         deflation_radius = None,
         dask_client = None):
         """
@@ -325,6 +329,8 @@ class GP():
             Defining the local optimizer. Default = "L-BFGS-B", most scipy.opimize.minimize functions are permissible.
         global_optimizer : str, optional
             Defining the global optimizer. Only applicable to method = hgdl. Default = `genetic`
+        constraints : tuple of hgdl.NonLinearConstraint instances, optional
+            Equality and inequality constraints for the optimization. See ``hgdl.readthedocs.io''
         deflation_radius : float, optional
             Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation 
             for more info. Default = None, meaning HGDL will pick the radius.
@@ -345,6 +351,7 @@ class GP():
             init_hyperparameters,
             hyperparameter_bounds,
             max_iter,
+            constraints,
             local_optimizer,
             global_optimizer,
             deflation_radius,
@@ -372,7 +379,7 @@ class GP():
         """
 
         try:
-            res = opt_obj.get_latest(1)["x"][0]
+            res = opt_obj.get_latest()["x"][0]
             l_n = self.log_likelihood(res)
             l_o = self.log_likelihood(self.hyperparameters)
             if l_n - l_o < 0.000001:
@@ -395,6 +402,7 @@ class GP():
         starting_hps,
         hp_bounds,
         max_iter,
+        constraints,
         local_optimizer,
         global_optimizer,
         deflation_radius,
@@ -413,8 +421,8 @@ class GP():
                     local_optimizer = local_optimizer,
                     global_optimizer = global_optimizer,
                     radius = deflation_radius,
-                    num_epochs = max_iter)
-        opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps))
+                    num_epochs = max_iter, constraints = constraints)
+        opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
         return opt_obj
     ##################################################################################
     def _optimize_log_likelihood(self,starting_hps,
@@ -497,12 +505,13 @@ class GP():
                        local_optimizer = local_optimizer,
                        global_optimizer = global_optimizer,
                        radius = deflation_radius,
-                       num_epochs = max_iter)
+                       num_epochs = max_iter,
+                       constraints = constraints)
 
-            obj = opt.optimize(dask_client = dask_client, x0 = np.array(starting_hps))
-            res = opt.get_final(2)
+            obj = opt.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
+            res = opt.get_final()
             hyperparameters = res["x"][0]
-            opt.kill_client(obj)
+            opt.kill_client()
         elif method == "mcmc":
             print("MCMC started in fvGP")
             print('bounds are',hp_bounds)
@@ -779,7 +788,7 @@ class GP():
     def posterior_mean_constraint(self, x_iset, hyperparameters):
         """
         This function recalculates the posterior mean with given hyperparameters so that
-        constraints on the can be enforced.
+        constraints can be enforced.
 
         Parameters
         ----------
@@ -806,7 +815,7 @@ class GP():
 
 
 
-    def posterior_mean_grad(self, x_iset, direction):
+    def posterior_mean_grad(self, x_iset, direction = None):
         """
         This function calculates the gradient of the posterior mean for a set of input points.
 
@@ -824,15 +833,26 @@ class GP():
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        x1 = np.array(p)
-        x2 = np.array(p)
+        f = self.mean_function(self,p,self.hyperparameters)
         eps = 1e-6
-        x1[:,direction] = x1[:,direction] + eps
-        x2[:,direction] = x2[:,direction] - eps
-        mean_der = (self.mean_function(self,x1,self.hyperparameters) - self.mean_function(self,x2,self.hyperparameters))/(2.0*eps)
-        k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters)
-        posterior_mean_grad = mean_der + (k_g @ self.covariance_value_prod)
+        if direction:
+            x1 = np.array(p)
+            x1[:,direction] = x1[:,direction] + eps
+            mean_der = (self.mean_function(self,x1,self.hyperparameters) - f)/eps
+            k = self.kernel(self.x_data,p,self.hyperparameters,self)
+            k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters)
+            posterior_mean_grad = mean_der + (k_g @ self.covariance_value_prod)
+        else:
+            posterior_mean_grad = np.zeros((p.shape))
+            for direction in range(len(p[0])):
+                x1 = np.array(p)
+                x1[:,direction] = x1[:,direction] + eps
+                mean_der = (self.mean_function(self,x1,self.hyperparameters) - f)/eps
+                k = self.kernel(self.x_data,p,self.hyperparameters,self)
+                k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters)
+                posterior_mean_grad[:,direction] = mean_der + (k_g @ self.covariance_value_prod)
+            direction = "ALL"
+
         return {"x": p,
                 "direction":direction,
                 "df/dx": posterior_mean_grad}
