@@ -26,23 +26,24 @@ class Test_fvGP(unittest.TestCase):
     def test_single_task_init_basic(self):
         my_gp1 = GP(input_dim, x_data, y_data, np.array([1, 1, 1, 1, 1, 1]))
         my_gp1.update_gp_data(x_data, y_data)
-        my_gp1.posterior_mean(x_pred)
-        my_gp1.posterior_mean_grad(x_pred,0)
-        my_gp1.posterior_covariance(x_pred)
-        my_gp1.posterior_covariance_grad(x_pred,0)
-        my_gp1.gp_entropy(x_pred)
-        my_gp1.shannon_information_gain(x_pred)
-        my_gp1.squared_exponential_kernel(1,1)
-        my_gp1.squared_exponential_kernel_robust(1,1)
-        my_gp1.exponential_kernel(1,1)
-        my_gp1.exponential_kernel_robust(1,1)
-        my_gp1.matern_kernel_diff1(1,1)
-        my_gp1.matern_kernel_diff1_robust(1,1)
-        my_gp1.matern_kernel_diff2(1,1)
-        my_gp1.matern_kernel_diff2_robust(1,1)
-        my_gp1.sparse_kernel(1,1)
-        my_gp1.periodic_kernel(1,1,1)
-        my_gp1.default_kernel(x_data,x_data,np.array([1,1,1,1,1,1]),my_gp1)
+        res = my_gp1.posterior_mean(x_pred)
+        res = my_gp1.posterior_mean_grad(x_pred,0)
+        res = my_gp1.posterior_mean_grad(x_pred)
+        res = my_gp1.posterior_covariance(x_pred)
+        res = my_gp1.posterior_covariance_grad(x_pred,0)
+        res = my_gp1.gp_entropy(x_pred)
+        res = my_gp1.shannon_information_gain(x_pred)
+        res = my_gp1.squared_exponential_kernel(1,1)
+        res = my_gp1.squared_exponential_kernel_robust(1,1)
+        res = my_gp1.exponential_kernel(1,1)
+        res = my_gp1.exponential_kernel_robust(1,1)
+        res = my_gp1.matern_kernel_diff1(1,1)
+        res = my_gp1.matern_kernel_diff1_robust(1,1)
+        res = my_gp1.matern_kernel_diff2(1,1)
+        res = my_gp1.matern_kernel_diff2_robust(1,1)
+        res = my_gp1.sparse_kernel(1,1)
+        res = my_gp1.periodic_kernel(1,1,1)
+        res = my_gp1.default_kernel(x_data,x_data,np.array([1,1,1,1,1,1]),my_gp1)
 
     def test_single_task_init_advanced(self):
         my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),variances=np.zeros(y_data.shape) + 0.01,
@@ -60,7 +61,7 @@ class Test_fvGP(unittest.TestCase):
 
 
         my_gp2.train(np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "hgdl", tolerance = 0.001,max_iter = 3, deflation_radius = 0.001)
+                method = "hgdl", tolerance = 0.001, max_iter = 3, deflation_radius = 0.001)
 
 
     def test_train_hgdl_async(self):
