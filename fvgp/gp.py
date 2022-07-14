@@ -832,7 +832,7 @@ class GP():
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
         f = self.mean_function(self,p,self.hyperparameters)
         eps = 1e-6
-        if direction:
+        if direction is not None:
             x1 = np.array(p)
             x1[:,direction] = x1[:,direction] + eps
             mean_der = (self.mean_function(self,x1,self.hyperparameters) - f)/eps
@@ -896,7 +896,7 @@ class GP():
                 "v(x)": v,
                 "S(x)": S}
 
-    def posterior_covariance_grad(self, x_iset,direction):
+    def posterior_covariance_grad(self, x_iset, direction = None):
         """
         Function to compute the gradient of the posterior covariance.
 
@@ -913,20 +913,35 @@ class GP():
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
-        kk =  self.kernel(p, p,self.hyperparameters,self)
-        x1 = np.array(p)
-        x2 = np.array(p)
-        eps = 1e-6
-        x1[:,direction] = x1[:,direction] + eps
-        x2[:,direction] = x2[:,direction] - eps
-        kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-self.kernel(x2, x2,self.hyperparameters,self)) /(2.0*eps)
         k_covariance_prod = self.solve(self.prior_covariance,k)
-        k_g_covariance_prod = self.solve(self.prior_covariance,k_g)
-        a = kk_g - ((k_covariance_prod.T @ k_g) + (k_g_covariance_prod.T @ k))
-        return {"x": p,
+        if direction is not None:
+            k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
+            kk =  self.kernel(p, p,self.hyperparameters,self)
+            x1 = np.array(p)
+            x2 = np.array(p)
+            eps = 1e-6
+            x1[:,direction] = x1[:,direction] + eps
+            kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-\
+                    self.kernel(x2, x2,self.hyperparameters,self)) /eps
+            a = kk_g - (2.0 * k_g.T @ k_covariance_prod)
+            return {"x": p,
                 "dv/dx": np.diag(a),
                 "dS/dx": a}
+        else:
+            grad_v = np.zeros((len(p),len(p[0])))
+            for direction in range(len(p[0])):
+                k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
+                kk =  self.kernel(p, p,self.hyperparameters,self)
+                x1 = np.array(p)
+                x2 = np.array(p)
+                eps = 1e-6
+                x1[:,direction] = x1[:,direction] + eps
+                kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-\
+                    self.kernel(x2, x2,self.hyperparameters,self)) /eps
+                grad_v[:,direction] = np.diag(kk_g - (2.0 * k_g.T @ k_covariance_prod))
+            return {"x": p,
+                    "dv/dx": grad_v}
+
 
     ###########################################################################
     def gp_prior(self, x_iset):
