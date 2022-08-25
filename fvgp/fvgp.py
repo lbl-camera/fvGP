@@ -61,9 +61,9 @@ class fvGP(GP):
         If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and the output is
         a numpy array of shape (len(hyperparameters) x U x V)
     gp_mean_function : Callable, optional
-        A function that evaluates the prior mean at an input position. It accepts as input a
-        `gpcam.gp_optimizer.GPOptimizer` instance, an array of positions (of size V x D), and hyperparameters (a 1-D
-        array of length D+1 for the default kernel). The return value is a 1-D array of length V. If None is provided,
+        A function that evaluates the prior mean at an input position. It accepts as input 
+        an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
+        and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 1-D array of length V. If None is provided,
         `fvgp.gp.GP.default_mean_function` is used.
     gp_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters.

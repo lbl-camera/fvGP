@@ -54,9 +54,9 @@ class GP():
         If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and the output is
         a numpy array of shape (len(hyperparameters) x U x V)
     gp_mean_function : Callable, optional
-        A function that evaluates the prior mean at an input position. It accepts as input a
-        `gpcam.gp_optimizer.GPOptimizer` instance, an array of positions (of size V x D), and hyperparameters (a 1-D
-        array of length D+1 for the default kernel). The return value is a 1-D array of length V. If None is provided,
+        A function that evaluates the prior mean at an input position. It accepts as input 
+        an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
+        and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 1-D array of length V. If None is provided,
         `fvgp.gp.GP.default_mean_function` is used.
     gp_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters.
@@ -142,13 +142,13 @@ class GP():
         self.gp_mean_function = gp_mean_function
         if  callable(gp_mean_function): self.mean_function = gp_mean_function
         else: self.mean_function = self.default_mean_function
+        if callable(gp_mean_function_grad): self.dm_dh = gp_mean_function_grad
 
         if callable(gp_kernel_function_grad): self.dk_dh = gp_kernel_function_grad
         else:
             if self.ram_economy is True: self.dk_dh = self.gp_kernel_derivative
             else: self.dk_dh = self.gp_kernel_gradient
 
-        if callable(gp_mean_function_grad): self.dm_dh = gp_mean_function_grad
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
@@ -384,24 +384,31 @@ class GP():
         ------
         The current hyperparameters : np.ndarray
         """
-
+        success = False
         try:
-            res = opt_obj.get_latest()["x"][0]
-            l_n = self.log_likelihood(res)
-            l_o = self.log_likelihood(self.hyperparameters)
-            if l_n - l_o < 0.000001:
-                self.hyperparameters = res
-                self._compute_prior_fvGP_pdf()
-                logger.debug("    fvGP async hyperparameter update successful")
-                logger.debug("    Latest hyperparameters: {}", self.hyperparameters)
-            else:
-                logger.debug("    The update was attempted but the new hyperparameters led to a lower likelihood, so I kept the old ones")
-                logger.debug(f"Old likelihood: {-l_o} at {self.hyperparameters}")
-                logger.debug(f"New likelihood: {-l_n} at {res}")
-        except Exception as e:
-            logger.debug("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
-            logger.debug("    That probably means you are not optimizing them asynchronously")
-            logger.debug("    hyperparameters: {}", self.hyperparameters)
+            res = opt_obj.get_latest()["x"]
+            success = True
+        except:
+            logger.debug("      The optimizer object could not be queried")
+            logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
+        if success is True:
+            try:
+                res = res[0]
+                l_n = self.log_likelihood(res)
+                l_o = self.log_likelihood(self.hyperparameters)
+                if l_n - l_o < 0.000001:
+                    self.hyperparameters = res
+                    self._compute_prior_fvGP_pdf()
+                    logger.debug("    fvGP async hyperparameter update successful")
+                    logger.debug("    Latest hyperparameters: {}", self.hyperparameters)
+                else:
+                    logger.debug("    The update was attempted but the new hyperparameters led to a lower likelihood, so I kept the old ones")
+                    logger.debug(f"Old likelihood: {-l_o} at {self.hyperparameters}")
+                    logger.debug(f"New likelihood: {-l_n} at {res}")
+            except Exception as e:
+                logger.debug("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
+                logger.debug("    hyperparameters: {}", self.hyperparameters)
+
         return self.hyperparameters
     ##################################################################################
     def _optimize_log_likelihood_async(self,
@@ -419,6 +426,7 @@ class GP():
         #print("deflation radius: ",deflation_radius)
         #print("local optimizer: ",local_optimizer)
         #print("global optimizer: ",global_optimizer)
+        logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: ", starting_hps)
 
         opt_obj = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
@@ -542,7 +550,7 @@ class GP():
         ------
         negative marginal log-likelihood : float
         """
-        mean = self.mean_function(self,self.x_data,hyperparameters)
+        mean = self.mean_function(self.x_data,hyperparameters,self)
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
         x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
         y = self.y_data - mean
@@ -563,7 +571,7 @@ class GP():
         ------
         Gradient of the negative marginal log-likelihood : np.ndarray
         """
-        mean = self.mean_function(self,self.x_data,hyperparameters)
+        mean = self.mean_function(self.x_data,hyperparameters,self)
         b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
         y = self.y_data - mean
         if self.ram_economy is False:
@@ -587,6 +595,8 @@ class GP():
                 dL_dH[i] = - 0.5 * (mtrace - np.trace(matr))
             else:
                 dL_dH[i] = 0.0
+
+        logger.debug("gradient norm: {}",np.linalg.norm(dL_dH + dL_dHm))
         return dL_dH + dL_dHm
 
     ##################################################################################
@@ -630,7 +640,7 @@ class GP():
             prior covariance
             covariance value product
         """
-        self.prior_mean_vec = self.mean_function(self,self.x_data,self.hyperparameters)
+        self.prior_mean_vec = self.mean_function(self.x_data,self.hyperparameters,self)
         cov_y,K = self._compute_covariance_value_product(
                 self.hyperparameters,
                 self.y_data,
@@ -749,7 +759,7 @@ class GP():
     def _how_sparse_is(self,A):
         return float(np.count_nonzero(A))/float(len(A)**2)
 
-    def default_mean_function(self,gp_obj,x,hyperparameters):
+    def default_mean_function(self,x,hyperparameters,gp_obj):
         """evaluates the gp mean function at the data points """
         mean = np.zeros((len(x)))
         mean[:] = np.mean(self.y_data)
@@ -778,7 +788,7 @@ class GP():
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
-        posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
+        posterior_mean = self.mean_function(p,self.hyperparameters,self) + A
         return {"x": p,
                 "f(x)": posterior_mean}
 
@@ -802,11 +812,11 @@ class GP():
         if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
         k = self.kernel(self.x_data,p,hyperparameters,self)
-        current_prior_mean_vec = self.mean_function(self,self.x_data,hyperparameters)
+        current_prior_mean_vec = self.mean_function(self.x_data,hyperparameters,self)
         cov_y,K = self._compute_covariance_value_product(hyperparameters,self.y_data,self.variances,
                                                          current_prior_mean_vec)
         A = k.T @ cov_y
-        posterior_mean = self.mean_function(self,p,hyperparameters) + A
+        posterior_mean = self.mean_function(p,hyperparameters,self) + A
         return {"x": p,
                 "f(x)": posterior_mean}
 
@@ -830,12 +840,12 @@ class GP():
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
 
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        f = self.mean_function(self,p,self.hyperparameters)
+        f = self.mean_function(p,self.hyperparameters,self)
         eps = 1e-6
         if direction is not None:
             x1 = np.array(p)
             x1[:,direction] = x1[:,direction] + eps
-            mean_der = (self.mean_function(self,x1,self.hyperparameters) - f)/eps
+            mean_der = (self.mean_function(x1,self.hyperparameters,self) - f)/eps
             k = self.kernel(self.x_data,p,self.hyperparameters,self)
             k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters)
             posterior_mean_grad = mean_der + (k_g @ self.covariance_value_prod)
@@ -844,7 +854,7 @@ class GP():
             for direction in range(len(p[0])):
                 x1 = np.array(p)
                 x1[:,direction] = x1[:,direction] + eps
-                mean_der = (self.mean_function(self,x1,self.hyperparameters) - f)/eps
+                mean_der = (self.mean_function(x1,self.hyperparameters,self) - f)/eps
                 k = self.kernel(self.x_data,p,self.hyperparameters,self)
                 k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters)
                 posterior_mean_grad[:,direction] = mean_der + (k_g @ self.covariance_value_prod)
@@ -961,7 +971,7 @@ class GP():
 
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
-        post_mean = self.mean_function(self,p, self.hyperparameters)
+        post_mean = self.mean_function(p, self.hyperparameters,self)
         full_gp_prior_mean = np.append(self.prior_mean_vec, post_mean)
         return  {"x": p,
                  "K": self.prior_covariance,
@@ -995,8 +1005,8 @@ class GP():
         x1[:,direction] = x1[:,direction] + eps
         x2[:,direction] = x2[:,direction] - eps
         kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-self.kernel(x2, x2,self.hyperparameters,self)) /(2.0*eps)
-        post_mean = self.mean_function(self,p, self.hyperparameters)
-        mean_der = (self.mean_function(self,x1,self.hyperparameters) - self.mean_function(self,x2,self.hyperparameters))/(2.0*eps)
+        post_mean = self.mean_function(p, self.hyperparameters,self)
+        mean_der = (self.mean_function(x1,self.hyperparameters,self) - self.mean_function(x2,self.hyperparameters,self))/(2.0*eps)
         full_gp_prior_mean_grad = np.append(np.zeros((self.prior_mean_vec.shape)), mean_der)
         prior_cov_grad = np.zeros(self.prior_covariance.shape)
         return  {"x": p,
@@ -1701,8 +1711,8 @@ class GP():
             temp_hps1[i] = temp_hps1[i] + 1e-6
             temp_hps2 = np.array(hps)
             temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.mean_function(self,self.x_data,temp_hps1)
-            b = self.mean_function(self,self.x_data,temp_hps2)
+            a = self.mean_function(self.x_data,temp_hps1,self)
+            b = self.mean_function(self.x_data,temp_hps2,self)
             gr[i] = (a-b)/2e-6
         return gr
     ##########################
@@ -1728,10 +1738,10 @@ class GP():
                 temp_hps4[j] = temp_hps4[j] + e
 
 
-                a = self.mean_function(self,self.x_data,temp_hps1)
-                b = self.mean_function(self,self.x_data,temp_hps2)
-                c = self.mean_function(self,self.x_data,temp_hps3)
-                d = self.mean_function(self,self.x_data,temp_hps4)
+                a = self.mean_function(self.x_data,temp_hps1,self)
+                b = self.mean_function(self.x_data,temp_hps2,self)
+                c = self.mean_function(self.x_data,temp_hps3,self)
+                d = self.mean_function(self.x_data,temp_hps4,self)
                 hess[i,j] = hess[j,i] = (a - c - d + b)/(4.*e*e)
         return hess
 
