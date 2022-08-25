@@ -886,9 +886,13 @@ class GP():
 
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
-        if self.use_inv is True:
-            if variance_only is True: v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.K_inv, k); S = False
-            if variance_only is False:  S = kk - (k.T @ self.K_inv @ k); v = np.array(np.diag(S))
+        if self.use_inv:
+            if variance_only:
+                S = False
+                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.K_inv, k)
+            else:
+                S = kk - (k.T @ self.K_inv @ k)
+                v = np.array(np.diag(S))
         else:
             k_cov_prod = self.solve(self.prior_covariance,k)
             S = kk - (k_cov_prod.T @ k)
@@ -900,7 +904,8 @@ class GP():
             or double check the hyperparameter optimization bounds. This will not
             terminate the algorithm, but expect anomalies."""))
             v[v<0.0] = 0.0
-            if S is not False: S = np.fill_diagonal(S,v)
+            if not variance_only:
+                np.fill_diagonal(S, v)
 
         return {"x": p,
                 "v(x)": v,
