@@ -39,7 +39,7 @@ class GP():
     compute_device : str, optional
         One of "cpu" or "gpu", determines how linear system solves are run. The default is "cpu".
     gp_kernel_function : Callable, optional
-        A function that calculates the covariance between datapoints. It accepts as input x1 (a V x D array of positions),
+        A function that calculates the covariance between data points. It accepts as input x1 (a V x D array of positions),
         x2 (a U x D array of positions), hyperparameters (a 1-D array of length D+1 for the default kernel), and a
         `gpcam.gp_optimizer.GPOptimizer` instance. The default is a stationary anisotropic kernel
         (`fvgp.gp.GP.default_kernel`).
@@ -52,7 +52,7 @@ class GP():
         If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and the output
         is a numpy array of shape (V x U).
         If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and the output is
-        a numpy array of shape (len(hyperparameters) x U x V)
+        a numpy array of shape (len(hyperparameters) x U x V). See 'ram_economy'.
     gp_mean_function : Callable, optional
         A function that evaluates the prior mean at an input position. It accepts as input 
         an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
@@ -73,7 +73,12 @@ class GP():
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
         If True, components of the derivative of the marginal log-likelihood are calculated subsequently, leading to a slow-down
-        but much less RAM usage.
+        but much less RAM usage. If the derivative of the kernel with respect to the hyperparameters (gp_kernel_function_grad) is 
+        going to be provided, it has to be tailored: for ram_economy=True it should be of the form f(points1, points2, direction, hyperparameters)
+        and return a 2-D numpy array of shape V x V.
+        If ram_economy=False, the function should be of the form f(points1, points2, hyperparameters) and return a numpy array of shape
+        H x V x V, where H is the number of hyperparameters. V is the number of points. CAUTION: This array will be stored and is very large.
+
 
 
     Attributes
@@ -615,7 +620,7 @@ class GP():
         ##implemented as first-order approximation
         len_hyperparameters = len(hyperparameters)
         d2L_dmdh = np.zeros((len_hyperparameters,len_hyperparameters))
-        epsilon = 1e-5
+        epsilon = 1e-6
         grad_at_hps = self.log_likelihood_gradient(hyperparameters)
         for i in range(len_hyperparameters):
             hps_temp = np.array(hyperparameters)
