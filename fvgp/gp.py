@@ -60,8 +60,8 @@ class GP():
         `fvgp.gp.GP.default_mean_function` is used.
     gp_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters.
-        It accepts as input hyperparameters (a 1-D
-        array of length D+1 for the default kernel). The return value is a 2-D array of shape (D x len(hyperparameters)). If None is provided,
+        It accepts as input an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
+        and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 2-D array of shape (len(hyperparameters) x V). If None is provided,
         a finite difference scheme is used.
     normalize_y : bool, optional
         If True, the data point values will be normalized to max(initial values) = 1. The dfault is False.
@@ -137,22 +137,24 @@ class GP():
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
         if (self.variances < 0.0).any(): raise Exception("Negative measurement variances communicated to fvgp.")
-        ##########################################
-        #######define kernel and mean function####
-        ##########################################
+        ###########################################
+        #######define kernel and mean functions####
+        ###########################################
         if callable(gp_kernel_function): self.kernel = gp_kernel_function
         else: self.kernel = self.default_kernel
         self.d_kernel_dx = self.d_gp_kernel_dx
-
-        self.gp_mean_function = gp_mean_function
-        if  callable(gp_mean_function): self.mean_function = gp_mean_function
-        else: self.mean_function = self.default_mean_function
-        if callable(gp_mean_function_grad): self.dm_dh = gp_mean_function_grad
 
         if callable(gp_kernel_function_grad): self.dk_dh = gp_kernel_function_grad
         else:
             if self.ram_economy is True: self.dk_dh = self.gp_kernel_derivative
             else: self.dk_dh = self.gp_kernel_gradient
+
+
+        if  callable(gp_mean_function): self.mean_function = gp_mean_function
+        else: self.mean_function = self.default_mean_function
+
+        if callable(gp_mean_function_grad): self.dm_dh = gp_mean_function_grad
+
 
         ##########################################
         #######prepare hyper parameters###########
@@ -495,6 +497,7 @@ class GP():
                 hyperparameters,
                 method= local_optimizer,
                 jac=self.log_likelihood_gradient,
+                hess = self.log_likelihood_hessian,
                 bounds = hp_bounds,
                 tol = tolerance,
                 callback = None,
@@ -580,19 +583,22 @@ class GP():
         b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
         y = self.y_data - mean
         if self.ram_economy is False:
-            dK_dH = self.dk_dh(self.x_data,self.x_data, hyperparameters)
+            try: dK_dH = self.dk_dh(self.x_data,self.x_data, hyperparameters,self)
+            except: raise Exception("The gradient evaluation dK/dh was not successful. \n That normally means the combination of ram_economy and definition of the gradient function is wrong.")
             K = np.array([K,] * len(hyperparameters))
             a = self.solve(K,dK_dH)
         bbT = np.outer(b , b.T)
         dL_dH = np.zeros((len(hyperparameters)))
         dL_dHm = np.zeros((len(hyperparameters)))
-        dm_dh = self.dm_dh(hyperparameters)
+        dm_dh = self.dm_dh(self.x_data,hyperparameters,self)
+
 
         for i in range(len(hyperparameters)):
             dL_dHm[i] = -dm_dh[i].T @ b
             if self.ram_economy is False: matr = a[i]
             else:
-                dK_dH = self.dk_dh(self.x_data,self.x_data, i,hyperparameters)
+                try: dK_dH = self.dk_dh(self.x_data,self.x_data, i,hyperparameters, self)
+                except: raise Exception("The gradient evaluation dK/dh was not successful. \n That normally means the combination of ram_economy and definition of the gradient function is wrong.")
                 matr = self.solve(K,dK_dH)
             if dL_dHm[i] == 0.0:
                 if self.ram_economy is False: mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
@@ -627,6 +633,18 @@ class GP():
             hps_temp[i] = hps_temp[i] + epsilon
             d2L_dmdh[i,i:] = ((self.log_likelihood_gradient(hps_temp) - grad_at_hps)/epsilon)[i:]
         return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
+
+    def test_log_likelihood_gradient(self,hyperparameters):
+        thps = np.array(hyperparameters)
+        grad = np.empty((len(thps)))
+        eps = 1e-4
+        for i in range(len(thps)):
+            thps_aux = np.array(thps)
+            thps_aux[i] = thps_aux[i] + eps
+            grad[i] = (self.log_likelihood(thps_aux) - self.log_likelihood(thps))/eps
+        analytical = self.log_likelihood_gradient(thps)
+        if np.linalg.norm(grad-analytical) > 1e-4: print("Gradient possibly wrong")
+        return grad, analytical
     ##################################################################################
     ##################################################################################
     ##################################################################################
@@ -1220,6 +1238,35 @@ class GP():
                 "posterior entropy": e2,
                 "sig":sig}
     ###########################################################################
+    def shannon_information_gain_vec(self, x_iset):
+        """
+        function to compute the shannon-information gain of data
+        Parameters
+        ----------
+            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+                    index set which results from a cartesian product of input and output space
+        Return
+        -------
+        solution dictionary : dict
+        """
+        p = np.array(x_iset)
+        if p.ndim == 1: p = np.array([p])
+        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+
+        k = self.kernel(self.x_data,p,self.hyperparameters,self)
+        kk = self.kernel(p, p,self.hyperparameters,self)
+
+        full_gp_covariances = np.empty((len(p),len(self.prior_covariance)+1,len(self.prior_covariance)+1))
+        for i in range(len(p)): full_gp_covariances[i] = np.block([[self.prior_covariance,k[:,i].reshape(-1,1)],[k[:,i].reshape(1,-1),kk[i,i]]])
+        e1 = self.entropy(self.prior_covariance)
+        e2 = self.entropy(full_gp_covariances)
+        sig = (e2 - e1)
+        return {"x": p,
+                "prior entropy" : e1,
+                "posterior entropy": e2,
+                "sig(x)":sig}
+
+    ###########################################################################
     def shannon_information_gain_grad(self, x_iset, direction):
         """
         function to compute the gradient if the shannon-information gain of data
@@ -1620,6 +1667,7 @@ class GP():
         """
         kernel = (1.0+x1.T @ x2)**p
         return p
+
     def default_kernel(self,x1,x2,hyperparameters,obj):
         """
         Function for a polynomial kernel.
@@ -1647,7 +1695,10 @@ class GP():
         distance_matrix = np.sqrt(distance_matrix)
         return   hps[0] * obj.matern_kernel_diff1(distance_matrix,1)
 
-
+    ##################################################################################
+    ##################################################################################
+    ###################Kernel and Mean Function Derivatives###########################
+    ##################################################################################
     def d_gp_kernel_dx(self, points1, points2, direction, hyperparameters):
         new_points = np.array(points1)
         epsilon = 1e-6
@@ -1668,14 +1719,14 @@ class GP():
         derivative = ( a - b )/(2.0*epsilon)
         return derivative
 
-    def gp_kernel_gradient(self, points1, points2, hyperparameters):
+    def gp_kernel_gradient(self, points1, points2, hyperparameters, obj):
         gradient = np.empty((len(hyperparameters), len(points1),len(points2)))
         for direction in range(len(hyperparameters)):
             gradient[direction] = self.d_gp_kernel_dh(points1, points2, direction, hyperparameters)
         return gradient
 
 
-    def gp_kernel_derivative(self, points1, points2, direction, hyperparameters):
+    def gp_kernel_derivative(self, points1, points2, direction, hyperparameters, obj):
         #gradient = np.empty((len(hyperparameters), len(points1),len(points2)))
         derivative = self.d_gp_kernel_dh(points1, points2, direction, hyperparameters)
         return derivative
@@ -1714,20 +1765,20 @@ class GP():
                 hessian[i,j] = hessian[j,i] = self.d2_gp_kernel_dh2(points1, points2, i,j, hyperparameters)
         return hessian
 
-    def dm_dh(self,hps):
-        gr = np.empty((len(hps),len(self.x_data)))
+    def dm_dh(self,x,hps,gp_obj):
+        gr = np.empty((len(hps),len(x)))
         for i in range(len(hps)):
             temp_hps1 = np.array(hps)
             temp_hps1[i] = temp_hps1[i] + 1e-6
             temp_hps2 = np.array(hps)
             temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.mean_function(self.x_data,temp_hps1,self)
-            b = self.mean_function(self.x_data,temp_hps2,self)
+            a = self.mean_function(x,temp_hps1,self)
+            b = self.mean_function(x,temp_hps2,self)
             gr[i] = (a-b)/2e-6
         return gr
     ##########################
-    def d2m_dh2(self,hps):
-        hess = np.empty((len(hps),len(hps),len(self.x_data)))
+    def d2m_dh2(self,x,hyperparameters,gp_obj):
+        hess = np.empty((len(hps),len(hps),len(x)))
         e = 1e-4
         for i in range(len(hps)):
             for j in range(i+1):
@@ -1748,10 +1799,10 @@ class GP():
                 temp_hps4[j] = temp_hps4[j] + e
 
 
-                a = self.mean_function(self.x_data,temp_hps1,self)
-                b = self.mean_function(self.x_data,temp_hps2,self)
-                c = self.mean_function(self.x_data,temp_hps3,self)
-                d = self.mean_function(self.x_data,temp_hps4,self)
+                a = self.mean_function(x,temp_hps1,self)
+                b = self.mean_function(x,temp_hps2,self)
+                c = self.mean_function(x,temp_hps3,self)
+                d = self.mean_function(x,temp_hps4,self)
                 hess[i,j] = hess[j,i] = (a - c - d + b)/(4.*e*e)
         return hess
 
