@@ -730,12 +730,11 @@ class GP():
                 try:
                     logger.error("torch.solve() on cpu did not work")
                     logger.error("reason: ", str(e))
-                    #x, qr = torch.lstsq(b,A)
                     x, res, rank, s = torch.linalg.lstsq(A,b)
                 except Exception as e:
                     logger.error("torch.solve() and torch.lstsq() on cpu did not work; falling back to numpy.linalg.lstsq()")
                     logger.error("reason: {}", str(e))
-                    x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
+                    x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy(),rcond=None)
                     return x
             return x.numpy()
         elif self.compute_device == "gpu" or A.ndim < 3:
@@ -747,12 +746,11 @@ class GP():
                 logger.error("torch.solve() on gpu did not work")
                 logger.error("reason: ", str(e))
                 try:
-                    #x, qr = torch.lstsq(b,A)
                     x = torch.linalg.lstsq(A,b)
                 except Exception as e:
                     logger.error("torch.solve() and torch.lstsq() on gpu did not work; falling back to numpy.linalg.lstsq()")
                     logger.error("reason: ", str(e))
-                    x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
+                    x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy(),rcond=None)
                     return x
             return x.cpu().numpy()
         elif self.compute_device == "multi-gpu":
