@@ -127,9 +127,9 @@ class GP():
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((self.y_data.shape)) * abs(np.mean(self.y_data) / 100.0)
+            self.variances = np.ones((self.y_data.shape)) * (np.mean(abs(self.y_data)) / 100.0)
             logger.warning("CAUTION: you have not provided data variances in fvGP, "
-                           "they will be set to 1 percent of the data values!")
+                           "they will be set to 1 percent of the |data values|!")
         elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
         elif np.ndim(variances) == 1:
@@ -198,7 +198,7 @@ class GP():
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((self.y_data.shape)) * abs(self.y_data / 100.0)
+            self.variances = np.ones((self.y_data.shape)) * (np.mean(abs(self.y_data)) / 100.0)
         elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
         elif np.ndim(variances) == 1:
@@ -525,7 +525,7 @@ class GP():
                        radius = deflation_radius,
                        num_epochs = max_iter,
                        constraints = constraints)
-
+            print("gfdsdd: ", np.array(starting_hps).reshape(1,-1))
             obj = opt.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
             res = opt.get_final()
             hyperparameters = res["x"][0]
@@ -731,9 +731,9 @@ class GP():
                     logger.error("torch.solve() on cpu did not work")
                     logger.error("reason: ", str(e))
                     #x, qr = torch.lstsq(b,A)
-                    x, qr = torch.linalg.lstsq(A,b)
+                    x, res, rank, s = torch.linalg.lstsq(A,b)
                 except Exception as e:
-                    logger.error("torch.solve() and torch.lstsq() on cpu did not work; falling back to numpy.lstsq()")
+                    logger.error("torch.solve() and torch.lstsq() on cpu did not work; falling back to numpy.linalg.lstsq()")
                     logger.error("reason: {}", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
                     return x
@@ -750,7 +750,7 @@ class GP():
                     #x, qr = torch.lstsq(b,A)
                     x = torch.linalg.lstsq(A,b)
                 except Exception as e:
-                    logger.error("torch.solve() and torch.lstsq() on gpu did not work; falling back to numpy.lstsq()")
+                    logger.error("torch.solve() and torch.lstsq() on gpu did not work; falling back to numpy.linalg.lstsq()")
                     logger.error("reason: ", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy())
                     return x
