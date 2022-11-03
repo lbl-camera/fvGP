@@ -525,7 +525,6 @@ class GP():
                        radius = deflation_radius,
                        num_epochs = max_iter,
                        constraints = constraints)
-            print("gfdsdd: ", np.array(starting_hps).reshape(1,-1))
             obj = opt.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
             res = opt.get_final()
             hyperparameters = res["x"][0]
@@ -727,12 +726,12 @@ class GP():
                 x = torch.linalg.solve(A,b)
                 return x.numpy()
             except Exception as e:
+                logger.error("torch.linalg.solve() on cpu did not work")
+                logger.error("reason: ", str(e))
                 try:
-                    logger.error("torch.solve() on cpu did not work")
-                    logger.error("reason: ", str(e))
                     x, res, rank, s = torch.linalg.lstsq(A,b)
                 except Exception as e:
-                    logger.error("torch.solve() and torch.lstsq() on cpu did not work; falling back to numpy.linalg.lstsq()")
+                    logger.error("torch.linalg.solve() and torch.linalg.lstsq() on cpu did not work; falling back to numpy.linalg.lstsq()")
                     logger.error("reason: {}", str(e))
                     x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy(),rcond=None)
                     return x
