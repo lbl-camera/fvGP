@@ -394,11 +394,11 @@ class gp2Scale():
         print('bounds are',hp_bounds)
         res = mcmc(self.log_likelihood,hp_bounds,max_iter = max_iter, x0 = starting_hps)
         hyperparameters = np.array(res["x"])
-        print("MCMC has found solution: ", hyperparameters, "with neg. marginal_likelihood ",res["f(x)"])
+        self.mcmc_info = res
+        print("MCMC has found solution: ", hyperparameters, "with log marginal_likelihood ",res["f(x)"])
         self.hyperparameters = hyperparameters
 
         return hyperparameters
-
 
     def log_likelihood(self,hyperparameters = None):
         """
@@ -419,9 +419,8 @@ class gp2Scale():
         y = self.y_data - mean
         logdet = self.SparsePriorCovariance.logdet().result()
         n = len(y)
-        res = (0.5 * (y.T @ x)) + (0.5 * logdet) + (0.5 * n * np.log(2.0*np.pi))
+        res = -(0.5 * (y.T @ x)) - (0.5 * logdet) - (0.5 * n * np.log(2.0*np.pi))
         return res
-
 
     ##################################################################################
     ##################################################################################

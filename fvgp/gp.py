@@ -64,7 +64,7 @@ class GP():
         and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 2-D array of shape (len(hyperparameters) x V). If None is provided,
         a finite difference scheme is used.
     normalize_y : bool, optional
-        If True, the data point values will be normalized to max(initial values) = 1. The dfault is False.
+        If True, the data point values will be normalized to max(initial values) = 1. The default is False.
     use_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance matrix after each training or update of the dataset,
         which makes computing the posterior covariance faster.
@@ -433,7 +433,7 @@ class GP():
         #print("deflation radius: ",deflation_radius)
         #print("local optimizer: ",local_optimizer)
         #print("global optimizer: ",global_optimizer)
-        logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: ", starting_hps)
+        logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: {}", starting_hps)
 
         opt_obj = HGDL(self.log_likelihood,
                     self.log_likelihood_gradient,
@@ -443,7 +443,9 @@ class GP():
                     global_optimizer = global_optimizer,
                     radius = deflation_radius,
                     num_epochs = max_iter, constraints = constraints)
+        logger.debug("HGDL successfully initialized. Calling optimize()")
         opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
+        logger.debug("optimize() called")
         return opt_obj
     ##################################################################################
     def _optimize_log_likelihood(self,starting_hps,
@@ -578,6 +580,7 @@ class GP():
         ------
         Gradient of the negative marginal log-likelihood : np.ndarray
         """
+        logger.debug("log-likelihood gradient is being evaluated...")
         mean = self.mean_function(self.x_data,hyperparameters,self)
         b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
         y = self.y_data - mean
