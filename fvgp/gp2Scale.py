@@ -97,9 +97,9 @@ class gp2Scale():
                     abs(np.mean(self.y_data) / 100.0)
             print("CAUTION: you have not provided data variances in fvGP,")
             print("they will be set to 1 percent of the data values!")
-        elif variances.dim() == 2:
+        elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
-        elif variances.dim() == 1:
+        elif np.ndim(variances) == 1:
             self.variances = np.array(variances)#, requires_grad = True)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")

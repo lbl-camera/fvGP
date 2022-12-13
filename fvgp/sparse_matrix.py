@@ -126,7 +126,6 @@ class gp2ScaleSparseMatrix:
         p = int(20.0 * np.log(2./delta)/eps**2)+1
         gamma = np.zeros((p,m))
         for i in range(p):
-            print(i," of ",p)
             g = np.random.normal(0, 1., size = N)
             v = C @ g
             gamma[i,1] = g.T @ v
