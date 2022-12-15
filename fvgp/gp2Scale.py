@@ -249,11 +249,15 @@ class gp2Scale():
         actor_futures.append(self.SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
         #clean up
         actor_futures[-1].result()
+        self.covariance_dask_client.cancel(actor_futures)
+        self.covariance_dask_client.cancel(futures)
+        del futures
+        del actor_futures
+
         #########
         if self.info: 
             print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().count_nonzero())
             print("Sparsity: ",self.SparsePriorCovariance.get_result().result().count_nonzero()/float(self.point_number)**2)
-        #client.run(gc.collect)
 
 
     def free_workers(self, futures, finished_futures):
@@ -272,10 +276,6 @@ class gp2Scale():
 
     def get_idle_worker(self,idle_workers):
         return idle_workers.pop()
-
-    #def add_idle_worker(self,worker,idle_workers):
-    #    return idle_workers.add(worker)
-
 
     ##################################################################################
     ##################################################################################
@@ -300,14 +300,6 @@ class gp2Scale():
         print("Actor on", actor_worker)
         print("Scheduler Address: ", dask_client.scheduler_info()["address"])
         return dask_client, compute_worker_set,actor_worker
-
-    #def _update_worker_set(self,client, current_worker_set):
-    #    worker_info = list(client.scheduler_info()["workers"].keys())
-    #    if not worker_info: raise Exception("No workers available")
-    #    new_worker_set = set(worker_info).difference(current_worker_set)
-    #    print("updated workers. new workers: ", new_worker_set)
-    #    return new_worker_set
-       
 
     ##################################################################################
     ##################################################################################
@@ -411,7 +403,6 @@ class gp2Scale():
         client = self.covariance_dask_client
         mean = np.zeros((self.point_number))   #self.mean_function(self,self.x_data,hyperparameters) * 0.0
         #if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
-        #if recompute_xK is True:
         if hyperparameters is None: x,K = self.covariance_value_prod,self.SparsePriorCovariance
         else:
             self.SparsePriorCovariance.reset_prior().result()
@@ -422,39 +413,6 @@ class gp2Scale():
         res = -(0.5 * (y.T @ x)) - (0.5 * logdet) - (0.5 * n * np.log(2.0*np.pi))
         return res
 
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    ######################LINEAR ALGEBRA##############################################
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    #def slogdet(self, A):
-    #    """
-    #    fvGPs slogdet method based on torch
-    #    """
-    #    sign = 1.
-    #    B = splu(A.tocsc())
-    #    upper_diag = abs(B.U.diagonal())
-    #    res = np.sum(np.log(upper_diag))
-    #    return sign, res
-
-
-    #def solve(self, A, b):
-    #    #####for sparsity:
-    #    try:
-    #        x,info = solve.cg(A,b, maxiter = 20)
-    #    except Exception as e:
-    #        #print("fvGP: Sparse solve did not work out.")
-    #        #print("reason: ", str(e))
-    #        info = 1
-    #    if info > 0:
-    #        #print("cg did not work out, let's do a minres")
-    #        x,info = solve.minres(A,b, show = self.info)
-    #    return x
-    ##################################################################################
     ##################################################################################
     ##################################################################################
     ##################################################################################

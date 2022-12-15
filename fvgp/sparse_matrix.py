@@ -32,7 +32,7 @@ class gp2ScaleSparseMatrix:
         self.sparse_covariance = sparse.coo_matrix((self.n,self.n))
         return 0
 
-    def imsert_many(self, list_of_3_tuples):
+    def insert_many(self, list_of_3_tuples):
         l = list_of_3_tuples
         bg = self.sparse_covariance
         row_list = [bg.row]
@@ -63,7 +63,7 @@ class gp2ScaleSparseMatrix:
             if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st)
             res.append((SparseCov_sub,ranges[0],ranges[1]))
 
-        self.imsert_many(res)
+        self.insert_many(res)
         return 0
 
     def add_to_diag(self,vector):
