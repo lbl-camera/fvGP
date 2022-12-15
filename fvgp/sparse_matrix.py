@@ -101,7 +101,6 @@ class gp2ScaleSparseMatrix:
                 r,info = sparse.linalg.minres(self.sparse_covariance,x)
                 success = True
             except: raise Exception("No solve method was successful. EXIT")
-
         return r
 
     def logdet(self):
@@ -115,11 +114,11 @@ class gp2ScaleSparseMatrix:
             except: raise Exception("No logdet() method was successful, EXIT")
         return r
 
-    def random_logdet(self, A,eps = 10.0,delta = 0.1,m = 100):
+    def random_logdet(self, A,eps = 0.50, delta = 0.01,m = 100):
         #from: https://www.boutsidis.org/Boutsidis_LAA2017.pdf
         A = sparse.csc_matrix(A)
         N = A.shape[0]
-        alpha = 7.0 * sparse.linalg.eigsh(A,k=1,tol=0.1, return_eigenvectors=False)[0]
+        alpha = 7.0 * sparse.linalg.eigsh(A,k=1,tol=0.0000001, return_eigenvectors=False)[0]
         A.data = A.data / alpha
         diag = sparse.eye(N, format="csc")
         C = sparse.csc_matrix(diag - A)
