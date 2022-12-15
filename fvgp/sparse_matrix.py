@@ -14,6 +14,7 @@ from scipy.sparse.linalg import spilu
 from .mcmc import mcmc
 import torch
 from dask.distributed import Variable
+import math
 #from scikits import umfpack
 #from scikits.umfpack import spsolve, splu
 
@@ -122,7 +123,7 @@ class gp2ScaleSparseMatrix:
         A.data = A.data / alpha
         diag = sparse.eye(N, format="csc")
         C = sparse.csc_matrix(diag - A)
-        p = int(20.0 * np.log(2./delta)/eps**2)+1
+        p = math.ceil(20.0 * np.log(2./delta)/eps**2)
         gamma = np.zeros((p,m))
         for i in range(p):
             g = np.random.normal(0, 1., size = N)
