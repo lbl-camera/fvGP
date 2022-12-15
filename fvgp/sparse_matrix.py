@@ -128,11 +128,11 @@ class gp2ScaleSparseMatrix:
         for i in range(p):
             g = np.random.normal(0, 1., size = N)
             v = C @ g
-            gamma[i,1] = g.T @ v
+            gamma[i,0] = g.T @ v
             for k in range(1,m):
                 v = C @ v
                 gamma[i,k] = g.T @ v
         s = np.sum(gamma, axis = 0) / float(p)
-        s = s[1:] / np.arange(1,len(s))
+        s = s / np.arange(1,len(s)+1)
         return N * np.log(alpha) - np.sum(s)
 
