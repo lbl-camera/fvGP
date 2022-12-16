@@ -157,6 +157,9 @@ class gp2Scale():
         ###initiate actor that is a future contain the covariance and methods
         self.SparsePriorCovariance = covariance_dask_client.submit(gp2ScaleSparseMatrix,self.point_number, actor=True, workers=self.actor_worker).result()# Create Actor
         self.covariance_dask_client = covariance_dask_client
+        scatter_data = {"x1_data":self.x_data, "x2_data":self.x_data} ##data that can be scattered
+        self.scatter_future = covariance_dask_client.scatter(scatter_data,workers = self.compute_worker_set)               ##scatter the data
+
         self.st = time.time()
         self.compute_prior_fvGP_pdf(covariance_dask_client)
         if self.info:
@@ -224,8 +227,6 @@ class gp2Scale():
         ###future_worker_assignments
         self.future_worker_assignments = {}
         ###scatter data
-        #scatter_data = {"x1_data":x1, "x2_data":x2} ##data that can be scattered
-        #scatter_future = client.scatter(scatter_data,workers = compute_workers)               ##scatter the data
         #print("scatter future: ", scatter_future["hps"].result(), flush = True)
         ###############
         start_time = time.time()
@@ -257,9 +258,7 @@ class gp2Scale():
 
                 #get idle worker and submit work
                 current_worker = self.get_idle_worker(idle_workers)
-                #data = {"scattered_data": scatter_future,"hps": hyperparameters,"x1_data":x1, "x2_data":x2, "kernel" :self.kernel,  "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
-                data = {"hps": hyperparameters,"x1_data":x1, "x2_data":x2, "kernel" :self.kernel,  "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
-                #data = {"scattered_data": scatter_future, "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
+                data = {"scattered_data": self.scatter_future,"hps": hyperparameters, "kernel" :self.kernel,  "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
                 self.assign_future_2_worker(futures[-1].key,current_worker)
                 #if self.info:
@@ -270,12 +269,11 @@ class gp2Scale():
 
         if self.info:
             print("All tasks submitted after ",time.time() - start_time,flush = True)
-            print("actual number of computed batches: ", count)
-            print("still have to gather ",len(futures)," results",flush = True)
-            print("also have to gather ",len(finished_futures)," results",flush = True)
+            print("number of computed batches: ", count)
 
         actor_futures.append(self.SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
-        actor_futures[-1].result()
+        #actor_futures[-1].result()
+        client.gather(actor_futures)
         actor_futures.append(self.SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
         actor_futures[-1].result()
         #clean up
@@ -500,10 +498,10 @@ def kernel_function(data):
     kernel = data["kernel"]
     worker = distributed.get_worker()
     if mode == "prior":
-        #x1 = data["scattered_data"]["x1_data"][data["range_i"][0]:data["range_i"][1]]
-        x1 = data["x1_data"][data["range_i"][0]:data["range_i"][1]]
-        #x2 = data["scattered_data"]["x2_data"][data["range_j"][0]:data["range_j"][1]]
-        x2 = data["x2_data"][data["range_j"][0]:data["range_j"][1]]
+        x1 = data["scattered_data"]["x1_data"][data["range_i"][0]:data["range_i"][1]]
+        #x1 = data["x1_data"][data["range_i"][0]:data["range_i"][1]]
+        x2 = data["scattered_data"]["x2_data"][data["range_j"][0]:data["range_j"][1]]
+        #x2 = data["x2_data"][data["range_j"][0]:data["range_j"][1]]
         range1 = data["range_i"]
         range2 = data["range_j"]
         k = kernel(x1,x2,hps)
