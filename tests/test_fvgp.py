@@ -80,6 +80,6 @@ class Test_fvGP(unittest.TestCase):
         y_data[:,0] = np.sin(np.linalg.norm(x_data, axis=1))
         y_data[:,1] = np.cos(np.linalg.norm(x_data, axis=1))
 
-        my_fvgp = fvGP(input_dim,1,2, x_data, y_data, np.array([1, 1, 1, 1, 1, 1]))
-        my_fvgp.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
+        my_fvgp = fvGP(input_dim,1,2, x_data, y_data, np.array([1, 1, 1, 1, 1, 1,1]))
+        my_fvgp.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
                 method = "global", pop_size = 10, tolerance = 0.001,max_iter = 5,deflation_radius = 1.)
