@@ -467,8 +467,6 @@ class gp2Scale():
     ##################################################################################
     ##################################################################################
     ##################################################################################
-
-
     def posterior_mean(self, x_iset):
         """
         function to compute the posterior mean
@@ -484,7 +482,10 @@ class gp2Scale():
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        k = kernel_function({"x_data":self.x_data,"x2":p, "hps" : self.hyperparameters, "mode" : "post"})[0]
+        #k = kernel_function({"x_data":self.x_data,"x2":p, "hps" : self.hyperparameters,"kernel" :self.kernel, "mode" : "post"})[0]
+        k = self.kernel(self.x_data,p,self.hyperparameters)
+        #print(k.shape)
+        #print(np.sum(k))
         A = k.T @ self.covariance_value_prod
         #posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         posterior_mean = A

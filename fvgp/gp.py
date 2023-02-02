@@ -47,11 +47,14 @@ class GP():
         A function that calculates the derivative  of the covariance between datapoints with respect to the hyperparameters.
         If provided, it will be used for local training and can speed up the calculations.
         It accepts as input x1 (a V x D array of positions),
-        x2 (a U x D array of positions) and hyperparameters (a 1-D array of length D+1 for the default kernel).
+        x2 (a U x D array of positions), hyperparameters (a 1-D array of length D+1 for the default kernel), and a
+        `gpcam.gp_optimizer.GPOptimizer` instance.
         The default is a finite difference calculation.
-        If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and the output
+        If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and a
+        `gpcam.gp_optimizer.GPOptimizer` instance, and the output
         is a numpy array of shape (V x U).
-        If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and the output is
+        If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and a
+        `gpcam.gp_optimizer.GPOptimizer` instance, and the output is
         a numpy array of shape (len(hyperparameters) x U x V). See 'ram_economy'.
     gp_mean_function : Callable, optional
         A function that evaluates the prior mean at an input position. It accepts as input 
@@ -107,6 +110,7 @@ class GP():
         normalize_y = False,
         use_inv = False,
         ram_economy = True,
+        non_stat_params = None,
         ):
         if input_space_dim != len(points[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
@@ -141,7 +145,8 @@ class GP():
         #######define kernel and mean functions####
         ###########################################
         if callable(gp_kernel_function): self.kernel = gp_kernel_function
-        else: self.kernel = self.default_kernel
+        elif gp_kernel_function is None: self.kernel = self.default_kernel
+        else: raise Exception("No kernel function specified")
         self.d_kernel_dx = self.d_gp_kernel_dx
 
         if callable(gp_kernel_function_grad): self.dk_dh = gp_kernel_function_grad
@@ -587,7 +592,7 @@ class GP():
         y = self.y_data - mean
         if self.ram_economy is False:
             try: dK_dH = self.dk_dh(self.x_data,self.x_data, hyperparameters,self)
-            except: raise Exception("The gradient evaluation dK/dh was not successful. \n That normally means the combination of ram_economy and definition of the gradient function is wrong.")
+            except Exception as e: raise Exception("The gradient evaluation dK/dh was not successful. \n That normally means the combination of ram_economy and definition of the gradient function is wrong. ",str(e))
             K = np.array([K,] * len(hyperparameters))
             a = self.solve(K,dK_dH)
         bbT = np.outer(b , b.T)
@@ -1379,7 +1384,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
         kernel = np.exp(-(distance ** 2) / (2.0 * (length ** 2)))
         return kernel
@@ -1399,7 +1404,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
         kernel = np.exp(-(distance ** 2) * (phi ** 2))
         return kernel
@@ -1420,7 +1425,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
 
         kernel = np.exp(-(distance) / (length))
@@ -1440,7 +1445,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
 
         kernel = np.exp(-(distance) * (phi**2))
@@ -1463,7 +1468,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
 
         kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
@@ -1487,7 +1492,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
         ##1/l --> phi**2
         kernel = (1.0 + ((np.sqrt(3.0) * distance) * (phi**2))) * np.exp(
@@ -1514,7 +1519,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
 
         kernel = (
@@ -1543,7 +1548,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
 
 
@@ -1567,7 +1572,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
 
         d = np.array(distance)
@@ -1594,7 +1599,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
 
         kernel = np.exp(-(2.0/length**2)*(np.sin(np.pi*distance/p)**2))
@@ -1620,7 +1625,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float
+        A structure of the shape of the distance input parameter : float
         """
         kernel = hp1 + (hp2*(x1-hp3)*(x2-hp3))
         return kernel
@@ -1643,7 +1648,7 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float
+        A structure of the shape of the distance input parameter : float
         """
         kernel = hp + x1.T @ matrix @ x2
         return kernel
@@ -1664,15 +1669,14 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float
+        A structure of the shape of the distance input parameter : float
         """
         kernel = (1.0+x1.T @ x2)**p
         return p
 
     def default_kernel(self,x1,x2,hyperparameters,obj):
         """
-        Function for a polynomial kernel.
-        kernel = (1.0+x1.T @ x2)**p
+        Function for the default kernel, a Matern kernel of first-order differentiability.
 
         Parameters
         ----------
@@ -1687,14 +1691,76 @@ class GP():
 
         Return
         ------
-        A structure of the she shape of the distance input parameter : float or np.ndarray
+        A structure of the shape of the distance input parameter : float or np.ndarray
         """
         hps = hyperparameters
         distance_matrix = np.zeros((len(x1),len(x2)))
-        for i in range(len(hps)-1):
+        for i in range(len(x1[0])):
             distance_matrix += abs(np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
         distance_matrix = np.sqrt(distance_matrix)
         return   hps[0] * obj.matern_kernel_diff1(distance_matrix,1)
+
+    def non_stat_kernel(self,x1,x2,x0,w,l):
+        """
+        Non-stationary kernel.
+        kernel = g(x1) g(x2)
+
+        Parameters
+        ----------
+        x1 : np.ndarray
+            Numpy array of shape (U x D)
+        x2 : np.ndarray
+            Numpy array of shape (V x D)
+        x0 : np.array
+            Numpy array of the basis function locations
+        hyperparameters : np.ndarray
+            Array of hyperparameters. For this kernel we need D + 1 hyperparameters
+
+        Return
+        ------
+        A structure of the shape of the distance input parameter : float or np.ndarray
+        """
+        non_stat = np.outer(self._g(x1,x0,w,l),self._g(x2,x0,w,l))
+        return non_stat
+    
+    def log_likelihood_gradient_test(self,hps):
+        eps = 1e-6
+        print("finite difference gradient:")
+        for i in range(len(hps)):
+            hps_a = np.array(hps)
+            hps_a[i] = hps_a[i] + eps
+            print((self.log_likelihood(hps_a) - self.log_likelihood(hps))/eps)
+        print("analytical gradient: ")
+        print(self.log_likelihood_gradient(hps))
+
+
+    def non_stat_kernel_gradient(self,x1,x2,x0,w,l):
+        dkdw = np.einsum('ij,k->ijk', self._dgdw(x1,x0,w,l), self._g(x2,x0,w,l)) + np.einsum('ij,k->ikj', self._dgdw(x2,x0,w,l), self._g(x1,x0,w,l))
+        dkdl =  np.outer(self._dgdl(x1,x0,w,l), self._g(x2,x0,w,l)) + np.outer(self._dgdl(x2,x0,w,l), self._g(x1,x0,w,l)).T
+        res = np.empty((len(w)+1,len(x1),len(x2)))
+        res[0:len(w)] = dkdw
+        res[-1] = dkdl
+        return res
+
+    def _get_distance_matrix(self,x1,x2):
+        d = np.zeros((len(x1),len(x2)))
+        for i in range(x1.shape[1]): d += (x1[:,i].reshape(-1, 1) - x2[:,i])**2
+        return np.sqrt(d)
+
+    def _g(self,x,x0,w,l):
+        d = self._get_distance_matrix(x,x0)
+        e = np.exp( -(d**2) / l)
+        return  np.sum(w * e,axis = 1)
+
+    def _dgdw(self,x,x0,w,l):
+        d = self._get_distance_matrix(x,x0)
+        e = np.exp( -(d**2) / l).T
+        return e
+
+    def _dgdl(self,x,x0,w,l):
+        d = self._get_distance_matrix(x,x0)
+        e = np.exp( -(d**2) / l)
+        return np.sum(w * e * (d**2 / l**2), axis = 1)
 
     ##################################################################################
     ##################################################################################

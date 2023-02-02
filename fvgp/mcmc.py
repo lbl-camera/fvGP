@@ -22,7 +22,7 @@ def mcmc(func,bounds, x0 = None, distr = None, max_iter = 1000, ):
     f = []
     if x0 is None: x.append(np.random.uniform(low = bounds[:,0],high = bounds[:,1],size = len(bounds)))
     else: x.append(x0)
-    if distr is None: l = np.diag((np.abs(np.subtract(bounds[:,0],bounds[:,1])))/1000.0)**2
+    if distr is None: l = np.diag((np.abs(np.subtract(bounds[:,0],bounds[:,1])))/10.0)**2
     counter = 0
     current_func = func(x0)
     f.append(current_func)
@@ -33,9 +33,11 @@ def mcmc(func,bounds, x0 = None, distr = None, max_iter = 1000, ):
         ##check for constraints?
         proposal_func = func(x_proposal) ####call function
         acceptance_prob = proposal_func - current_func ##these are already logs
-        u = np.log(np.random.rand())
+        uu = np.random.rand()
+        u = np.log(uu)
         print("iteration: ", counter,"current f: ",current_func, " prop f: ",proposal_func,flush = True)
-        print("acceptance prob: ",acceptance_prob,"u: ", u,flush = True)
+        #print("acceptance prob: ",acceptance_prob,"u: ", u,flush = True)
+        print("proposed x: ", x_proposal, "current x: ", x[-1], flush = True)
         if u < acceptance_prob:
             x.append(x_proposal)
             f.append(proposal_func)
