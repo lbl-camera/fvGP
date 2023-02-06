@@ -42,6 +42,77 @@ def sparse_stat_kernel_robust(x1,x2, hps):
     ((2.0*(d*hps[1]**2)**2 + 1.0) * np.sqrt(1.0-(d*hps[1]**2)**2)))
     return (hps[0]**2) * kernel
 
+def kernel_gpu(x1,x2, hps):
+
+    def b(x,x0, r, ampl, device):
+        """
+        evaluates the bump function
+        x ... a point (1d numpy array)
+        x0 ... 1d numpy array of location of bump function
+        returns the bump function b(x,x0) with radius r
+        """
+        x_new = x - x0
+        d = torch.linalg.norm(x_new, axis = 1)
+        a = torch.zeros(d.shape).to(device, dtype = torch.float32)
+        a = 1.0 - (d**2/r**2)
+        i = torch.where(a > 0.0)
+        bump = torch.zeros(a.shape).to(device, dtype = torch.float32)
+        e = torch.exp((-1.0/a[i])+1).to(device, dtype = torch.float32)
+        bump[i] = ampl * e
+        return bump
+
+
+    def f(x,x0, radii, amplts, device):
+        b1 = b(x, x0[0:3], radii[0], amplts[0], device)  ###x0[0] ... D-dim location of bump func 1
+        b2 = b(x, x0[3:6], radii[1], amplts[1], device)  ###x0[1] ... D-dim location of bump func 2
+        b3 = b(x, x0[6:9], radii[2], amplts[2], device)  ###x0[1] ... D-dim location of bump func 2
+        b4 = b(x, x0[9:12],radii[3], amplts[3], device)  ###x0[1] ... D-dim location of bump func 2
+        return b1 + b2 + b3 + b4
+
+    def g(x,x0, radii, amplts,device):
+        b1 = b(x, x0[0:3], radii[0], amplts[0], device)  ###x0[0] ... D-dim location of bump func 1
+        b2 = b(x, x0[3:6], radii[1], amplts[1], device)  ###x0[1] ... D-dim location of bump func 2
+        b3 = b(x, x0[6:9], radii[2], amplts[2], device)  ###x0[1] ... D-dim location of bump func 2
+        b4 = b(x, x0[9:12],radii[3], amplts[3], device)  ###x0[1] ... D-dim location of bump func 2
+        return b1 + b2 + b3 + b4
+
+    def get_distance_matrix(x1,x2,device):
+        d = torch.zeros((len(x1),len(x2))).to(device, dtype = torch.float32)
+        for i in range(x1.shape[1]):
+            d += ((x1[:,i].reshape(-1, 1) - x2[:,i]))**2
+        return torch.sqrt(d)
+
+    def sparse_stat_kernel(x1,x2, hps,device):
+        d = get_distance_matrix(x1,x2,device)
+        d[d == 0.0] = 1e-6
+        d[d > hps] = hps
+
+        d_hps = d/hps
+        d_hpss= d_hps**2
+        sq = torch.sqrt(1.0 - d_hpss)
+
+
+        kernel = (torch.sqrt(torch.tensor(2.0))/(3.0*torch.sqrt(torch.tensor(3.141592653))))*\
+        ((3.0*d_hpss * torch.log((d_hps)/(1+sq)))+\
+        ((2.0*d_hpss + 1.0)*sq))
+        return kernel
+
+
+    def ks_gpu(x1,x2,hps,cuda_device):
+        k1 = torch.outer(f(x1,hps[0:12],hps[12:16],hps[16:20],cuda_device),
+                         f(x2,hps[0:12],hps[12:16],hps[16:20],cuda_device)) + \
+             torch.outer(g(x1,hps[20:32],hps[32:36],hps[36:40],cuda_device),
+                         g(x2,hps[20:32],hps[32:36],hps[36:40],cuda_device))
+        k2 = sparse_stat_kernel(x1,x2, hps[41],cuda_device)
+        return k1 + hps[40]*k2
+
+    cuda_device = torch.device("cuda:0")
+    x1_dev = torch.from_numpy(x1).to(cuda_device, dtype = torch.float32)
+    x2_dev = torch.from_numpy(x2).to(cuda_device, dtype = torch.float32)
+    hps_dev = torch.from_numpy(hps).to(cuda_device, dtype = torch.float32)
+    ksparse = ks_gpu(x1_dev,x2_dev,hps_dev,cuda_device).cpu().numpy()
+    return ksparse
+
 
 ############################################################
 ############################################################
@@ -202,7 +273,6 @@ class gp2Scale():
         self.covariance_value_prod = cov_y
 
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean, client):
-        np.save("latest_hps", hyperparameters)
         self.compute_covariance(self.x_data,self.x_data,hyperparameters, variances,client)
         y = values - mean
         #try: success = self.SparsePriorCovariance.compute_LU().result(timeout=self.LUtimeout)
@@ -391,6 +461,7 @@ class gp2Scale():
             )
         print("computing the prior")
         self.compute_prior_fvGP_pdf(self.covariance_dask_client)
+        np.save("latest_hps", hyperparameters)
         ######################
         ######################
         ######################

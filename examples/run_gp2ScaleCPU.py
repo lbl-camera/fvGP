@@ -33,55 +33,6 @@ def client_is_ready(ip, n_workers):
         if counter > 20: print("getting the client is taking a long time: ", counter * 5, "seconds", flush = True)
 
 
-def kernel(x1,x2, hps,obj):
-    def b(x,x0,r = 0.1, ampl = 1.0):
-        """
-        evaluates the bump function
-        x ... a point (1d numpy array)
-        x0 ... 1d numpy array of location of bump function
-        returns the bump function b(x,x0) with radius r
-        """
-        x_new = x - x0
-        d = np.linalg.norm(x_new, axis = 1)
-        a = np.zeros(d.shape)
-        a = 1.0 - (d**2/r**2)
-        i = np.where(a > 0.0)
-        bump = np.zeros(a.shape)
-        bump[i] = ampl * np.exp((-1.0/a[i])+1)
-        return bump
-
-
-    def f(x,x0, radii, amplts):
-        b1 = b(x, x0[0:3],r = radii[0], ampl = amplts[0])  ###x0[0] ... D-dim location of bump func 1
-        b2 = b(x, x0[3:6],r = radii[1], ampl = amplts[1])  ###x0[1] ... D-dim location of bump func 2
-        b3 = b(x, x0[6:9],r = radii[2], ampl = amplts[2])  ###x0[1] ... D-dim location of bump func 2
-        b4 = b(x, x0[9:12],r = radii[3], ampl = amplts[3])  ###x0[1] ... D-dim location of bump func 2
-        return b1 + b2 + b3 + b4
-
-    def g(x,x0, radii, amplts):
-        b1 = b(x, x0[0:3],r = radii[0], ampl = amplts[0])  ###x0[0] ... D-dim location of bump func 1
-        b2 = b(x, x0[3:6],r = radii[1], ampl = amplts[1])  ###x0[1] ... D-dim location of bump func 2
-        b3 = b(x, x0[6:9],r = radii[2], ampl = amplts[2])  ###x0[1] ... D-dim location of bump func 2
-        b4 = b(x, x0[9:12],r = radii[3], ampl = amplts[3])  ###x0[1] ... D-dim location of bump func 2
-        return b1 + b2 + b3 + b4
-    def sparse_stat_kernel(x1,x2, hps):
-        d = 0
-        for i in range(len(x1[0])):
-            d += np.subtract.outer(x1[:,i],x2[:,i])**2
-        d = np.sqrt(d)
-        d[d == 0.0] = 1e-6
-        d[d > hps] = hps
-        kernel = (np.sqrt(2.0)/(3.0*np.sqrt(np.pi)))*\
-        ((3.0*(d/hps)**2*np.log((d/hps)/(1+np.sqrt(1.0 - (d/hps)**2))))+\
-        ((2.0*(d/hps)**2+1.0)*np.sqrt(1.0-(d/hps)**2)))
-
-        return kernel
-
-    k = np.outer(f(x1,hps[0:12],hps[12:16],hps[16:20]),
-                 f(x2,hps[0:12],hps[12:16],hps[16:20])) + \
-        np.outer(g(x1,hps[20:32],hps[32:36],hps[36:40]),
-                 g(x2,hps[20:32],hps[32:36],hps[36:40]))
-    return k + hps[40] * sparse_stat_kernel(x1,x2, hps[41])
 
 def normalize(v):
     v = v - np.min(v)

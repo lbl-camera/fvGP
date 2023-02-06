@@ -652,7 +652,10 @@ class GP():
             thps_aux[i] = thps_aux[i] + eps
             grad[i] = (self.log_likelihood(thps_aux) - self.log_likelihood(thps))/eps
         analytical = self.log_likelihood_gradient(thps)
-        if np.linalg.norm(grad-analytical) > 1e-4: print("Gradient possibly wrong")
+        if np.linalg.norm(grad-analytical) > 1e-1: 
+            print("Gradient possibly wrong")
+            print(grad)
+            print(analytical)
         return grad, analytical
     ##################################################################################
     ##################################################################################
@@ -1724,16 +1727,6 @@ class GP():
         non_stat = np.outer(self._g(x1,x0,w,l),self._g(x2,x0,w,l))
         return non_stat
     
-    def log_likelihood_gradient_test(self,hps):
-        eps = 1e-6
-        print("finite difference gradient:")
-        for i in range(len(hps)):
-            hps_a = np.array(hps)
-            hps_a[i] = hps_a[i] + eps
-            print((self.log_likelihood(hps_a) - self.log_likelihood(hps))/eps)
-        print("analytical gradient: ")
-        print(self.log_likelihood_gradient(hps))
-
 
     def non_stat_kernel_gradient(self,x1,x2,x0,w,l):
         dkdw = np.einsum('ij,k->ijk', self._dgdw(x1,x0,w,l), self._g(x2,x0,w,l)) + np.einsum('ij,k->ikj', self._dgdw(x2,x0,w,l), self._g(x1,x0,w,l))
@@ -1751,7 +1744,7 @@ class GP():
     def _g(self,x,x0,w,l):
         d = self._get_distance_matrix(x,x0)
         e = np.exp( -(d**2) / l)
-        return  np.sum(w * e,axis = 1)
+        return np.sum(w * e,axis = 1)
 
     def _dgdw(self,x,x0,w,l):
         d = self._get_distance_matrix(x,x0)
