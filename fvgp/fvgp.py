@@ -79,6 +79,9 @@ class fvGP(GP):
         False. Note, the training will always use a linear solve instead of the inverse for stability reasons.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
+    args : user defined, optional
+        These optional arguments will be available as attribute in kernel and mean function definitions.
+
 
     """
     def __init__(
@@ -98,13 +101,15 @@ class fvGP(GP):
         gp_mean_function_grad = None,
         normalize_y = False,
         use_inv = False,
-        ram_economy = True
+        ram_economy = True,
+        args = None,
         ):
 
         self.x_data = np.array(points)
         self.y_data = np.array(values)
         self.input_space_dim = input_space_dim
         self.point_number, self.output_num, self.output_dim = len(points), output_number, output_space_dim
+        if args: self.args = args
         ###check the output dims
         if np.ndim(values) == 1:
             raise ValueError("the output number is 1, you can use GP for single-task GPs")

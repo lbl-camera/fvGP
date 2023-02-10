@@ -125,38 +125,46 @@ def kernel_gpu(x1,x2, hps):
 
 class gp2Scale():
     """
-    gp2Scale class: Provides tools for a Large-Scale single-task GP.
+    This class allows the user to scale GPs up to millions of datapoints. There is full high-performance-computing
+    support through DASK.
+    
+    Parameters
+    ----------
+    input_space_dim : int
+        Dimensionality of the input space.
+    points : np.ndarray
+        The point positions. Shape (V x D), where D is the `input_space_dim`.
+    values : np.ndarray
+        The values of the data points. Shape (V,output_number).
+    init_hyperparameters : np.ndarray
+        Vector of hyperparameters used by the GP initially. The class provides methods to train hyperparameters.
+    batch_size : int
+        The covariance is divided into batches of the defined size for distributed computing.
+    variances : np.ndarray, optional
+        An numpy array defining the uncertainties in the data `values`. Shape (V x 1) or (V). Note: if no
+        variances are provided they will be set to `abs(np.mean(values) / 100.0`.
+    limit_workers : int, optional
+        If given as integer only the workers up to the limit will be used.
+    LUtimeout : int, optional (future release)
+        Controls the timeout for the LU decomposition.
+    gp_kernel_function : Callable, optional
+        A function that calculates the covariance between datapoints. It accepts as input x1 (a V x D array of positions),
+        x2 (a U x D array of positions), hyperparameters (a 1-D array of length D+1 for the default kernel), and a
+        `gpcam.gp_optimizer.GPOptimizer` instance. The default is a stationary anisotropic kernel
+        (`fvgp.gp.GP.default_kernel`).
+    gp_mean_function : Callable, optional
+        A function that evaluates the prior mean at an input position. It accepts as input 
+        an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
+        and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 1-D array of length V. If None is provided,
+        `fvgp.gp.GP.default_mean_function` is used.
+        a finite difference scheme is used.
+    covariance_dask_client : dask.distributed.client, optional
+        The client used for the covariance computation. If none is provided a local client will be used.
+    info : bool, optional
+        Controls the output of the algorithm for tests. The default is False
+    args : user defined, optional
+        These optional arguments will be available as attribute in kernel and mean function definitions.
 
-    symbols:
-        N: Number of points in the data set
-        n: number of return values
-        dim1: number of dimension of the input space
-
-    Attributes:
-        input_space_dim (int):         dim1
-        points (N x dim1 numpy array): 2d numpy array of points
-        values (N dim numpy array):    2d numpy array of values
-        init_hyperparameters:          1d numpy array (>0)
-
-    Optional Attributes:
-        variances (N dim numpy array):                  variances of the values, default = array of shape of points
-                                                        with 1 % of the values
-        gp_kernel_function(callable):                   None/function defining the 
-                                                        kernel def name(x1,x2,hyperparameters,self), 
-                                                        make sure to return a 2d numpy array, default = None uses default kernel
-        gp_mean_function(callable):                     None/function def name(gp_obj, x, hyperparameters), 
-                                                        make sure to return a 1d numpy array, default = None
-        sparse (bool):                                  default = False
-        normalize_y:                                    default = False, normalizes the values \in [0,1]
-
-    Example:
-        obj = fvGP(3,np.array([[1,2,3],[4,5,6]]),
-                         np.array([2,4]),
-                         np.array([2,3,4,5]),
-                         variances = np.array([0.01,0.02]),
-                         gp_kernel_function = kernel_function,
-                         gp_mean_function = some_mean_function
-        )
     """
 
     def __init__(
@@ -172,7 +180,8 @@ class gp2Scale():
         gp_kernel_function = sparse_stat_kernel,
         gp_mean_function = None,
         covariance_dask_client = None,
-        info = False
+        info = False,
+        args = None,
         ):
         """
         The constructor for the gp class.
@@ -191,6 +200,7 @@ class gp2Scale():
         self.limit_workers = limit_workers
         self.info = info
         self.LUtimeout = LUtimeout
+        if args: self.args = args
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -461,7 +471,7 @@ class gp2Scale():
             )
         print("computing the prior")
         self.compute_prior_fvGP_pdf(self.covariance_dask_client)
-        np.save("latest_hps", hyperparameters)
+        np.save("latest_hps", self.hyperparameters)
         ######################
         ######################
         ######################
@@ -485,7 +495,6 @@ class gp2Scale():
         self.mcmc_info = res
         print("MCMC has found solution: ", hyperparameters, "with log marginal_likelihood ",res["f(x)"])
         self.hyperparameters = hyperparameters
-
         return hyperparameters
 
     def log_likelihood(self,hyperparameters = None):
@@ -553,10 +562,7 @@ class gp2Scale():
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        #k = kernel_function({"x_data":self.x_data,"x2":p, "hps" : self.hyperparameters,"kernel" :self.kernel, "mode" : "post"})[0]
         k = self.kernel(self.x_data,p,self.hyperparameters)
-        #print(k.shape)
-        #print(np.sum(k))
         A = k.T @ self.covariance_value_prod
         #posterior_mean = self.mean_function(self,p,self.hyperparameters) + A
         posterior_mean = A

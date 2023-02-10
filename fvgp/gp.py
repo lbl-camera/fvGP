@@ -81,6 +81,8 @@ class GP():
         and return a 2-D numpy array of shape V x V.
         If ram_economy=False, the function should be of the form f(points1, points2, hyperparameters) and return a numpy array of shape
         H x V x V, where H is the number of hyperparameters. V is the number of points. CAUTION: This array will be stored and is very large.
+    args : user defined, optional
+        These optional arguments will be available as attribute in kernel and mean function definitions.
 
 
 
@@ -110,7 +112,7 @@ class GP():
         normalize_y = False,
         use_inv = False,
         ram_economy = True,
-        non_stat_params = None,
+        args = None,
         ):
         if input_space_dim != len(points[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
@@ -123,6 +125,7 @@ class GP():
         self.y_data = np.array(values)
         self.compute_device = compute_device
         self.ram_economy = ram_economy
+        if args: self.args = args
 
         self.use_inv = use_inv
         self.K_inv = None
@@ -646,16 +649,21 @@ class GP():
     def test_log_likelihood_gradient(self,hyperparameters):
         thps = np.array(hyperparameters)
         grad = np.empty((len(thps)))
-        eps = 1e-4
+        eps = 1e-6
         for i in range(len(thps)):
             thps_aux = np.array(thps)
             thps_aux[i] = thps_aux[i] + eps
             grad[i] = (self.log_likelihood(thps_aux) - self.log_likelihood(thps))/eps
         analytical = self.log_likelihood_gradient(thps)
-        if np.linalg.norm(grad-analytical) > 1e-1: 
+        if np.linalg.norm(grad-analytical) > np.linalg.norm(grad)/100.0:
             print("Gradient possibly wrong")
             print(grad)
             print(analytical)
+        else:
+            print("Gradient correct")
+            print(grad)
+            print(analytical)
+
         return grad, analytical
     ##################################################################################
     ##################################################################################
@@ -1762,7 +1770,7 @@ class GP():
     ##################################################################################
     def d_gp_kernel_dx(self, points1, points2, direction, hyperparameters):
         new_points = np.array(points1)
-        epsilon = 1e-6
+        epsilon = 1e-8
         new_points[:,direction] += epsilon
         a = self.kernel(new_points, points2, hyperparameters,self)
         b = self.kernel(points1,    points2, hyperparameters,self)
@@ -1772,7 +1780,7 @@ class GP():
     def d_gp_kernel_dh(self, points1, points2, direction, hyperparameters):
         new_hyperparameters1 = np.array(hyperparameters)
         new_hyperparameters2 = np.array(hyperparameters)
-        epsilon = 1e-6
+        epsilon = 1e-8
         new_hyperparameters1[direction] += epsilon
         new_hyperparameters2[direction] -= epsilon
         a = self.kernel(points1, points2, new_hyperparameters1,self)

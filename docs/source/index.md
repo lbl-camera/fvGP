@@ -24,6 +24,7 @@ caption: Examples
 ---
 examples/single_task_test_notebook.ipynb
 examples/multi_task_test_notebook.ipynb
+examples/NoNStat.ipynb
 ```
 
 # fvGP - A Flexible Multi-Task GP Engine
