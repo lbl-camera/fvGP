@@ -81,8 +81,6 @@ class GP():
         and return a 2-D numpy array of shape V x V.
         If ram_economy=False, the function should be of the form f(points1, points2, hyperparameters) and return a numpy array of shape
         H x V x V, where H is the number of hyperparameters. V is the number of points. CAUTION: This array will be stored and is very large.
-    args : user defined, optional
-        These optional arguments will be available as attribute in kernel and mean function definitions.
 
 
 
@@ -125,7 +123,6 @@ class GP():
         self.y_data = np.array(values)
         self.compute_device = compute_device
         self.ram_economy = ram_economy
-        if args: self.args = args
 
         self.use_inv = use_inv
         self.K_inv = None
@@ -301,7 +298,6 @@ class GP():
         dask_client : distributed.client.Client, optional
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
-
         """
         ############################################
         if init_hyperparameters is None:
@@ -537,14 +533,15 @@ class GP():
                        constraints = constraints)
             obj = opt.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
             res = opt.get_final()
-            print("fbfs ",res)
             hyperparameters = res["x"][0]
             opt.kill_client()
         elif method == "mcmc":
             logger.debug("MCMC started in fvGP")
             logger.debug('bounds are {}', hp_bounds)
-            res = mcmc(self.log_likelihood,hp_bounds)
-            hyperparameters = np.array(res["x"])
+            def likelihood_wrapper(x):
+                return -self.log_likelihood(x)
+            res = mcmc(likelihood_wrapper,hp_bounds, x0 = starting_hps, max_iter = max_iter)
+            hyperparameters = np.array(res["distribution mean"])
         elif callable(method):
             hyperparameters = method(self)
         else:
