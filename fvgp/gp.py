@@ -27,15 +27,15 @@ class GP():
     ----------
     input_space_dim : int
         Dimensionality of the input space.
-    points : np.ndarray
+    x_data : np.ndarray
         The point positions. Shape (V x D), where D is the `input_space_dim`.
-    values : np.ndarray
+    y_data : np.ndarray
         The values of the data points. Shape (V,1) or (V).
     init_hyperparameters : np.ndarray
         Vector of hyperparameters used by the GP initially. The class provides methods to train hyperparameters.
     variances : np.ndarray, optional
-        An numpy array defining the uncertainties in the data `values`. Shape (V x 1) or (V). Note: if no
-        variances are provided they will be set to `abs(np.mean(values) / 100.0`.
+        An numpy array defining the uncertainties in the data `y_data`. Shape (V x 1) or (V). Note: if no
+        variances are provided they will be set to `abs(np.mean(y_data) / 100.0`.
     compute_device : str, optional
         One of "cpu" or "gpu", determines how linear system solves are run. The default is "cpu".
     gp_kernel_function : Callable, optional
@@ -98,8 +98,8 @@ class GP():
     def __init__(
         self,
         input_space_dim,
-        points,
-        values,
+        x_data,
+        y_data,
         init_hyperparameters,
         variances = None,
         compute_device = "cpu",
@@ -112,15 +112,15 @@ class GP():
         ram_economy = True,
         args = None,
         ):
-        if input_space_dim != len(points[0]):
+        if input_space_dim != len(x_data[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
-        if np.ndim(values) == 2: values = values[:,0]
+        if np.ndim(y_data) == 2: y_data = y_data[:,0]
 
         self.normalize_y = normalize_y
         self.input_dim = input_space_dim
-        self.x_data = np.array(points)
+        self.x_data = x_data
         self.point_number = len(self.x_data)
-        self.y_data = np.array(values)
+        self.y_data = y_data
         self.compute_device = compute_device
         self.ram_economy = ram_economy
 
@@ -172,8 +172,8 @@ class GP():
 
     def update_gp_data(
         self,
-        points,
-        values,
+        x_data,
+        y_data,
         variances = None,
         ):
         """
@@ -183,21 +183,21 @@ class GP():
 
         Parameters
         ----------
-        points : np.ndarray
+        x_data : np.ndarray
             The point positions. Shape (V x D), where D is the `input_space_dim`.
-        values : np.ndarray
+        y_data : np.ndarray
             The values of the data points. Shape (V,1) or (V).
         variances : np.ndarray, optional
-            An numpy array defining the uncertainties in the data `values`. Shape (V x 1) or (V). Note: if no
-            variances are provided they will be set to `abs(np.mean(values) / 100.0`.
+            An numpy array defining the uncertainties in the data `y_data`. Shape (V x 1) or (V). Note: if no
+            variances are provided they will be set to `abs(np.mean(y_data) / 100.0`.
         """
-        if self.input_dim != len(points[0]):
+        if self.input_dim != len(x_data[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
-        if np.ndim(values) == 2: values = values[:,0]
+        if np.ndim(y_data) == 2: y_data = y_data[:,0]
 
-        self.x_data = np.array(points)
+        self.x_data = x_data
         self.point_number = len(self.x_data)
-        self.y_data = np.array(values)
+        self.y_data = y_data
         if self.normalize_y is True: self._normalize_y_data()
         ##########################################
         #######prepare variances##################
@@ -219,37 +219,6 @@ class GP():
     ###################################################################################
     ###################################################################################
     #################TRAINING##########################################################
-    ###################################################################################
-    def stop_training(self,opt_obj):
-        """
-        This function stops the training if HGDL is used. It leaves the dask client alive.
-
-        Parameters
-        ----------
-        opt_obj : object
-            An object returned form the `fvgp.gp.GP.train_async` function.
-        """
-        try:
-            opt_obj.cancel_tasks()
-            logger.debug("fvGP successfully cancelled the current training.")
-        except:
-            raise RuntimeError("No asynchronous training to be cancelled in fvGP, no training is running.")
-    ###################################################################################
-    def kill_training(self,opt_obj):
-        """
-        This function stops the training if HGDL is used, and kills the dask client.
-
-        Parameters
-        ----------
-        opt_obj : object
-            An object returned form the `fvgp.gp.GP.train_async` function.
-        """
-
-        try:
-            opt_obj.kill_client()
-            logger.debug("fvGP successfully killed the training.")
-        except:
-            raise RuntimeError("No asynchronous training to be killed, no training is running.")
     ###################################################################################
     def train(self,
         hyperparameter_bounds,
@@ -277,7 +246,8 @@ class GP():
             Initial hyperparameters used as starting location for all optimizers with local component.
             The default is reusing the initial hyperparameters given at initialization
         method : str or Callable, optional
-            The method used to train the hyperparameters. The default is `global` (meaning scipy's differential evolution). If a callable is provided, it should accept as input
+            The method used to train the hyperparameters. The optiona are `'global'`, `'local'`, `'hgdl'`, and `'mcmc'`.
+            The default is `'global'` (meaning scipy's differential evolution). If a callable is provided, it should accept as input
             a fvgp.gp object instance and return a np.ndarray of hyperparameters, shape = (V).
         pop_size : int, optional
             A number of individuals used for any optimizer with a global component. Default = 20.
@@ -360,7 +330,6 @@ class GP():
         ------
         Optimization object that can be given to `fvgp.gp.update_hyperparameters` to update the prior GP : object instance
         """
-        ############################################
         if dask_client is None: dask_client = distributed.Client()
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
@@ -376,7 +345,38 @@ class GP():
             dask_client
             )
         return opt_obj
-        ######################
+
+    ##################################################################################
+    def stop_training(self,opt_obj):
+        """
+        This function stops the training if HGDL is used. It leaves the dask client alive.
+
+        Parameters
+        ----------
+        opt_obj : object
+            An object returned form the `fvgp.gp.GP.train_async` function.
+        """
+        try:
+            opt_obj.cancel_tasks()
+            logger.debug("fvGP successfully cancelled the current training.")
+        except:
+            raise RuntimeError("No asynchronous training to be cancelled in fvGP, no training is running.")
+    ###################################################################################
+    def kill_training(self,opt_obj):
+        """
+        This function stops the training if HGDL is used, and kills the dask client.
+
+        Parameters
+        ----------
+        opt_obj : object
+            An object returned form the `fvgp.gp.GP.train_async` function.
+        """
+
+        try:
+            opt_obj.kill_client()
+            logger.debug("fvGP successfully killed the training.")
+        except:
+            raise RuntimeError("No asynchronous training to be killed, no training is running.")
 
     ##################################################################################
     def update_hyperparameters(self, opt_obj):
@@ -405,8 +405,8 @@ class GP():
         if success is True:
             try:
                 res = res[0]
-                l_n = self.log_likelihood(res)
-                l_o = self.log_likelihood(self.hyperparameters)
+                l_n = self.neg_log_likelihood(res)
+                l_o = self.neg_log_likelihood(self.hyperparameters)
                 if l_n - l_o < 0.000001:
                     self.hyperparameters = res
                     self._compute_prior_fvGP_pdf()
@@ -432,17 +432,12 @@ class GP():
         deflation_radius,
         dask_client):
 
-        #print("fvGP submitted HGDL optimization for asynchronous training")
-        #print("bounds:",hp_bounds)
-        #print("deflation radius: ",deflation_radius)
-        #print("local optimizer: ",local_optimizer)
-        #print("global optimizer: ",global_optimizer)
         logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: {}", starting_hps)
 
-        opt_obj = HGDL(self.log_likelihood,
-                    self.log_likelihood_gradient,
+        opt_obj = HGDL(self.neg_log_likelihood,
+                    self.neg_log_likelihood_gradient,
                     hp_bounds,
-                    hess = self.log_likelihood_hessian,
+                    hess = self.neg_log_likelihood_hessian,
                     local_optimizer = local_optimizer,
                     global_optimizer = global_optimizer,
                     radius = deflation_radius,
@@ -460,7 +455,7 @@ class GP():
         deflation_radius,
         dask_client = None):
 
-        start_log_likelihood = self.log_likelihood(starting_hps)
+        start_log_likelihood = self.neg_log_likelihood(starting_hps)
 
         logger.debug(
             "fvGP hyperparameter tuning in progress. Old hyperparameters: ",
@@ -476,7 +471,7 @@ class GP():
             logger.debug("termination tolerance: {}", tolerance)
             logger.debug("bounds: {}", hp_bounds)
             res = differential_evolution(
-                self.log_likelihood,
+                self.neg_log_likelihood,
                 hp_bounds,
                 maxiter=max_iter,
                 popsize = pop_size,
@@ -485,7 +480,7 @@ class GP():
                 workers = 1,
             )
             hyperparameters = np.array(res["x"])
-            Eval = self.log_likelihood(hyperparameters)
+            Eval = self.neg_log_likelihood(hyperparameters)
             logger.debug(f"fvGP found hyperparameters {hyperparameters} with likelihood {Eval} via global optimization")
         ############################
         ####local optimization:#####
@@ -499,11 +494,11 @@ class GP():
             logger.debug("termination tolerance: {}", tolerance)
             logger.debug("bounds: {}", hp_bounds)
             OptimumEvaluation = minimize(
-                self.log_likelihood,
+                self.neg_log_likelihood,
                 hyperparameters,
                 method= local_optimizer,
-                jac=self.log_likelihood_gradient,
-                hess = self.log_likelihood_hessian,
+                jac=self.neg_log_likelihood_gradient,
+                hess = self.neg_log_likelihood_hessian,
                 bounds = hp_bounds,
                 tol = tolerance,
                 callback = None,
@@ -522,10 +517,10 @@ class GP():
         elif method == "hgdl":
             logger.debug("fvGP submitted HGDL optimization")
             logger.debug('bounds are',hp_bounds)
-            opt = HGDL(self.log_likelihood,
-                       self.log_likelihood_gradient,
+            opt = HGDL(self.neg_log_likelihood,
+                       self.neg_log_likelihood_gradient,
                        hp_bounds,
-                       hess = self.log_likelihood_hessian,
+                       hess = self.neg_log_likelihood_hessian,
                        local_optimizer = local_optimizer,
                        global_optimizer = global_optimizer,
                        radius = deflation_radius,
@@ -538,16 +533,14 @@ class GP():
         elif method == "mcmc":
             logger.debug("MCMC started in fvGP")
             logger.debug('bounds are {}', hp_bounds)
-            def likelihood_wrapper(x):
-                return -self.log_likelihood(x)
-            res = mcmc(likelihood_wrapper,hp_bounds, x0 = starting_hps, max_iter = max_iter)
+            res = mcmc(self.log_likelihood,hp_bounds, x0 = starting_hps, max_iter = max_iter)
             hyperparameters = np.array(res["distribution mean"])
         elif callable(method):
             hyperparameters = method(self)
         else:
             raise ValueError("No optimization mode specified in fvGP")
         ###################################################
-        if start_log_likelihood < self.log_likelihood(hyperparameters):
+        if start_log_likelihood < self.neg_log_likelihood(hyperparameters):
             hyperparameters = np.array(starting_hps)
             logger.debug("fvGP optimization returned smaller log likelihood; resetting to old hyperparameters.")
             logger.debug(f"New hyperparameters: {hyperparameters} with log likelihood: {self.log_likelihood(hyperparameters)}")
@@ -571,11 +564,30 @@ class GP():
         y = self.y_data - mean
         sign, logdet = self.slogdet(K)
         n = len(y)
-        #if sign == 0.0: return (0.5 * (y.T @ x)) + (0.5 * n * np.log(2.0*np.pi))
-        #return (0.5 * (y.T @ x)) + (0.5 * sign * logdet) + (0.5 * n * np.log(2.0*np.pi))
+        return -(0.5 * (y.T @ x)) - (0.5 * logdet) - (0.5 * n * np.log(2.0*np.pi))
+    ##################################################################################
+
+    def neg_log_likelihood(self,hyperparameters):
+        """
+        Function that computes the marginal log-likelihood
+
+        Parameters
+        ----------
+        hyperparameters : np.ndarray
+            Vector of hyperparameters of shape (V)
+        Return
+        ------
+        negative marginal log-likelihood : float
+        """
+        mean = self.mean_function(self.x_data,hyperparameters,self)
+        if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
+        x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        y = self.y_data - mean
+        sign, logdet = self.slogdet(K)
+        n = len(y)
         return (0.5 * (y.T @ x)) + (0.5 * logdet) + (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
-    def log_likelihood_gradient(self, hyperparameters):
+    def neg_log_likelihood_gradient(self, hyperparameters):
         """
         Function that computes the gradient of the marginal log-likelihood.
 
@@ -620,7 +632,7 @@ class GP():
         return dL_dH + dL_dHm
 
     ##################################################################################
-    def log_likelihood_hessian(self, hyperparameters):
+    def neg_log_likelihood_hessian(self, hyperparameters):
         """
         Function that computes the Hessian of the marginal log-likelihood.
 
@@ -636,11 +648,11 @@ class GP():
         len_hyperparameters = len(hyperparameters)
         d2L_dmdh = np.zeros((len_hyperparameters,len_hyperparameters))
         epsilon = 1e-6
-        grad_at_hps = self.log_likelihood_gradient(hyperparameters)
+        grad_at_hps = self.neg_log_likelihood_gradient(hyperparameters)
         for i in range(len_hyperparameters):
             hps_temp = np.array(hyperparameters)
             hps_temp[i] = hps_temp[i] + epsilon
-            d2L_dmdh[i,i:] = ((self.log_likelihood_gradient(hps_temp) - grad_at_hps)/epsilon)[i:]
+            d2L_dmdh[i,i:] = ((self.neg_log_likelihood_gradient(hps_temp) - grad_at_hps)/epsilon)[i:]
         return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
 
     def test_log_likelihood_gradient(self,hyperparameters):
@@ -672,7 +684,7 @@ class GP():
     def _compute_prior_fvGP_pdf(self):
         """
         This function computes the important entities, namely the prior covariance and
-        its product with the (values - prior_mean) and returns them and the prior mean
+        its product with the (y_data - prior_mean) and returns them and the prior mean
         Parameters
             none
         return:
@@ -824,6 +836,7 @@ class GP():
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p) == len(self.x_data): raise Warning("The number of prediction points and data points coincide which can lead to instabilities when user-defined kernels are used.")
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
         posterior_mean = self.mean_function(p,self.hyperparameters,self) + A
@@ -921,6 +934,7 @@ class GP():
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
         if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        if len(p) == len(self.x_data): raise Warning("The number of prediction points and data points coincide which can lead to instabilities when user-defined kernels are used.")
 
         k = self.kernel(self.x_data,p,self.hyperparameters,self)
         kk = self.kernel(p, p,self.hyperparameters,self)
@@ -1146,34 +1160,38 @@ class GP():
         if kld < -1e-4: logger.debug("Negative KL divergence encountered")
         return kld
     ###########################################################################
-    def kl_div_grad(self,mu1,dmu1dx, mu2, S1, dS1dx, S2):
-        """
-        function comuting the gradient of the KL divergence between two normal distributions
-        when the gradients of the mean and covariance are given
-        a = kl_div(mu1, dmudx,mu2, S1, dS1dx, S2); S1, S2 are a 2d numpy arrays, matrices has to be non-singular
-        mu1, mu2 are mean vectors, given as 2d arrays
-        """
-        s1, logdet1 = self.slogdet(S1)
-        s2, logdet2 = self.slogdet(S2)
-        x1 = self.solve(S2,dS1dx)
-        mu = np.subtract(mu2,mu1)
-        x2 = self.solve(S2,mu)
-        x3 = self.solve(S2,-dmu1dx)
-        dim = len(mu)
-        kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2 @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
-        if kld < -1e-4: logger.debug("Negative KL divergence encountered")
-        return kld
+    #def kl_div_grad(self,mu1,dmu1dx, mu2, S1, dS1dx, S2):
+    #    """
+    #    function comuting the gradient of the KL divergence between two normal distributions
+    #    when the gradients of the mean and covariance are given
+    #    a = kl_div(mu1, dmudx,mu2, S1, dS1dx, S2); S1, S2 are a 2d numpy arrays, matrices has to be non-singular
+    #    mu1, mu2 are mean vectors, given as 2d arrays
+    #    """
+    #    s1, logdet1 = self.slogdet(S1)
+    #    s2, logdet2 = self.slogdet(S2)
+    #    x1 = self.solve(S2,dS1dx)
+    #    mu = np.subtract(mu2,mu1)
+    #    x2 = self.solve(S2,mu)
+    #    x3 = self.solve(S2,-dmu1dx)
+    #    dim = len(mu)
+    #    kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2 @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
+    #    if kld < -1e-4: logger.debug("Negative KL divergence encountered")
+    #    return kld
     ###########################################################################
     def gp_kl_div(self, x_iset, comp_mean, comp_cov):
         """
         function to compute the kl divergence of a posterior at given points
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+            x_iset : 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
+            comp_mean : np.array
+                Comparison mean vector for KL divergence. len(comp_mean) = len(x_iset)
+            comp_cov : np.array
+                Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_iset),len(x_iset))
         Return
         -------
-        solution dictionary : dict
+            solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -1199,10 +1217,14 @@ class GP():
         ----------
             x_iset: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
+            comp_mean : np.array
+                Comparison mean vector for KL divergence. len(comp_mean) = len(x_iset)
+            comp_cov : np.array
+                Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_iset),len(x_iset))
             direction: direction in which the gradient will be computed
         Return
         -------
-        solution dictionary : dict
+            solution dictionary : dict
         """
         p = np.array(x_iset)
         if p.ndim == 1: p = np.array([p])
@@ -1722,8 +1744,10 @@ class GP():
             Numpy array of shape (V x D)
         x0 : np.array
             Numpy array of the basis function locations
-        hyperparameters : np.ndarray
-            Array of hyperparameters. For this kernel we need D + 1 hyperparameters
+        w : np.ndarray
+            1d np.array of weights. len(w) = len(x0)
+        l : float
+            Width measure of the basis functions.
 
         Return
         ------
@@ -1797,40 +1821,6 @@ class GP():
         derivative = self.d_gp_kernel_dh(points1, points2, direction, hyperparameters)
         return derivative
 
-    def d2_gp_kernel_dh2(self, points1, points2, direction1, direction2, hyperparameters):
-        ###things to consider when things go south with the Hessian:
-        ###make sure the epsilon is appropriate, not too large, not too small, 1e-3 seems alright
-        epsilon = 1e-3
-        new_hyperparameters1 = np.array(hyperparameters)
-        new_hyperparameters2 = np.array(hyperparameters)
-        new_hyperparameters3 = np.array(hyperparameters)
-        new_hyperparameters4 = np.array(hyperparameters)
-
-        new_hyperparameters1[direction1] = new_hyperparameters1[direction1] + epsilon
-        new_hyperparameters1[direction2] = new_hyperparameters1[direction2] + epsilon
-
-        new_hyperparameters2[direction1] = new_hyperparameters2[direction1] + epsilon
-        new_hyperparameters2[direction2] = new_hyperparameters2[direction2] - epsilon
-
-        new_hyperparameters3[direction1] = new_hyperparameters3[direction1] - epsilon
-        new_hyperparameters3[direction2] = new_hyperparameters3[direction2] + epsilon
-
-        new_hyperparameters4[direction1] = new_hyperparameters4[direction1] - epsilon
-        new_hyperparameters4[direction2] = new_hyperparameters4[direction2] - epsilon
-
-        return (self.kernel(points1,points2,new_hyperparameters1,self) \
-              - self.kernel(points1,points2,new_hyperparameters2,self) \
-              - self.kernel(points1,points2,new_hyperparameters3,self) \
-              + self.kernel(points1,points2,new_hyperparameters4,self))\
-              / (4.0*(epsilon**2))
-#    @profile
-    def hessian_gp_kernel(self, points1, points2, hyperparameters):
-        hessian = np.zeros((len(hyperparameters),len(hyperparameters), len(points1),len(points2)))
-        for i in range(len(hyperparameters)):
-            for j in range(i+1):
-                hessian[i,j] = hessian[j,i] = self.d2_gp_kernel_dh2(points1, points2, i,j, hyperparameters)
-        return hessian
-
     def dm_dh(self,x,hps,gp_obj):
         gr = np.empty((len(hps),len(x)))
         for i in range(len(hps)):
@@ -1843,65 +1833,7 @@ class GP():
             gr[i] = (a-b)/2e-6
         return gr
     ##########################
-    def d2m_dh2(self,x,hyperparameters,gp_obj):
-        hess = np.empty((len(hps),len(hps),len(x)))
-        e = 1e-4
-        for i in range(len(hps)):
-            for j in range(i+1):
-                temp_hps1 = np.array(hps)
-                temp_hps2 = np.array(hps)
-                temp_hps3 = np.array(hps)
-                temp_hps4 = np.array(hps)
-                temp_hps1[i] = temp_hps1[i] + e
-                temp_hps1[j] = temp_hps1[j] + e
 
-                temp_hps2[i] = temp_hps2[i] - e
-                temp_hps2[j] = temp_hps2[j] - e
-
-                temp_hps3[i] = temp_hps3[i] + e
-                temp_hps3[j] = temp_hps3[j] - e
-
-                temp_hps4[i] = temp_hps4[i] - e
-                temp_hps4[j] = temp_hps4[j] + e
-
-
-                a = self.mean_function(x,temp_hps1,self)
-                b = self.mean_function(x,temp_hps2,self)
-                c = self.mean_function(x,temp_hps3,self)
-                d = self.mean_function(x,temp_hps4,self)
-                hess[i,j] = hess[j,i] = (a - c - d + b)/(4.*e*e)
-        return hess
-
-    def d2f_dx2(self,hps,func):
-        hess = np.empty((len(hps),len(hps)))
-        e = 1e-4
-        for i in range(len(hps)):
-            for j in range(i+1):
-                temp_hps1 = np.array(hps)
-                temp_hps2 = np.array(hps)
-                temp_hps3 = np.array(hps)
-                temp_hps4 = np.array(hps)
-                temp_hps1[i] = temp_hps1[i] + e
-                temp_hps1[j] = temp_hps1[j] + e
-
-                temp_hps2[i] = temp_hps2[i] - e
-                temp_hps2[j] = temp_hps2[j] - e
-
-                temp_hps3[i] = temp_hps3[i] + e
-                temp_hps3[j] = temp_hps3[j] - e
-
-                temp_hps4[i] = temp_hps4[i] - e
-                temp_hps4[j] = temp_hps4[j] + e
-
-
-                a = func(temp_hps1)
-                b = func(temp_hps2)
-                c = func(temp_hps3)
-                d = func(temp_hps4)
-                hess[i,j] = hess[j,i] = (a - c - d + b)/(4.*e*e)
-        return hess
-
-    ################################################################
     def _normalize_y_data(self):
         mini = np.min(self.y_data)
         self.y_data = self.y_data - mini
