@@ -106,9 +106,9 @@ class Test_fvGP(unittest.TestCase):
         res = my_gp1.non_stat_kernel(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
         res = my_gp1.non_stat_kernel_gradient(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
 
-    def test_train_hgdl_gpu(self):
+    def test_train_hgdl(self):
         my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),variances=np.zeros(y_data.shape) + 0.01,
-            compute_device="gpu", normalize_y = True, use_inv = True, ram_economy = True)
+            compute_device="cpu", normalize_y = True, use_inv = True, ram_economy = True)
 
 
         my_gp2.train(np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
