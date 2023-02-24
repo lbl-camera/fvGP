@@ -181,7 +181,6 @@ class gp2Scale():
         gp_mean_function = None,
         covariance_dask_client = None,
         info = False,
-        args = None,
         ):
         """
         The constructor for the gp class.
@@ -200,7 +199,6 @@ class gp2Scale():
         self.limit_workers = limit_workers
         self.info = info
         self.LUtimeout = LUtimeout
-        if args: self.args = args
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -230,7 +228,7 @@ class gp2Scale():
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        self.hyperparameters = np.array(init_hyperparameters) #,requires_grad = True)
+        self.hyperparameters = np.array(init_hyperparameters)
         ##########################################
         #compute the prior########################
         ##########################################

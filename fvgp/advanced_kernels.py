@@ -85,26 +85,23 @@ def sparse_stat_kernel_gpu(x1,x2, hps,device):
 
 
 def ks_gpu(x1,x2,hps,cuda_device):
-    k1 = torch.outer(f(x1,hps[0:12],hps[12:16],hps[16:20],cuda_device),
-                        f(x2,hps[0:12],hps[12:16],hps[16:20],cuda_device)) + \
-            torch.outer(g(x1,hps[20:32],hps[32:36],hps[36:40],cuda_device),
-                        g(x2,hps[20:32],hps[32:36],hps[36:40],cuda_device))
+    k1 = torch.outer(f_gpu(x1,hps[0:12],hps[12:16],hps[16:20],cuda_device),
+                     f_gpu(x2,hps[0:12],hps[12:16],hps[16:20],cuda_device)) + \
+         torch.outer(g_gpu(x1,hps[20:32],hps[32:36],hps[36:40],cuda_device),
+                     g_gpu(x2,hps[20:32],hps[32:36],hps[36:40],cuda_device))
     k2 = sparse_stat_kernel_gpu(x1,x2, hps[41],cuda_device)
     return k1 + hps[40]*k2
 
-def kernel_gpu(x1,x2, hps, info = None):
+def kernel_gpu(x1,x2, hps):
     cuda_device = torch.device("cuda:0")
     x1_dev = torch.from_numpy(x1).to(cuda_device, dtype = torch.float32)
     x2_dev = torch.from_numpy(x2).to(cuda_device, dtype = torch.float32)
     hps_dev = torch.from_numpy(hps).to(cuda_device, dtype = torch.float32)
     ksparse = ks_gpu(x1_dev,x2_dev,hps_dev,cuda_device).cpu().numpy()
     return ksparse
-
-
 ###################################
 ######gp2Scale CPU kernels#########
 ###################################
-
 def b_cpu(x,x0,r = 0.1, ampl = 1.0):
     """
     evaluates the bump function
@@ -121,7 +118,6 @@ def b_cpu(x,x0,r = 0.1, ampl = 1.0):
     bump[i] = ampl * np.exp((-1.0/a[i])+1)
     return bump
 
-
 def f_cpu(x,x0, radii, amplts):
     b1 = b_cpu(x, x0[0:3],r = radii[0], ampl = amplts[0])  ###x0[0] ... D-dim location of bump func 1
     b2 = b_cpu(x, x0[3:6],r = radii[1], ampl = amplts[1])  ###x0[1] ... D-dim location of bump func 2
@@ -135,6 +131,7 @@ def g_cpu(x,x0, radii, amplts):
     b3 = b_cpu(x, x0[6:9],r = radii[2], ampl = amplts[2])  ###x0[1] ... D-dim location of bump func 2
     b4 = b_cpu(x, x0[9:12],r = radii[3], ampl = amplts[3])  ###x0[1] ... D-dim location of bump func 2
     return b1 + b2 + b3 + b4
+
 def sparse_stat_kernel_cpu(x1,x2, hps):
     d = 0
     for i in range(len(x1[0])): d += np.subtract.outer(x1[:,i],x2[:,i])**2
@@ -147,12 +144,12 @@ def sparse_stat_kernel_cpu(x1,x2, hps):
     return kernel
 
 
-def kernel_cpu(x1,x2, hps,info = None):
-        k = np.outer(f_cpu(x1,hps[0:12],hps[12:16],hps[16:20]),
+def kernel_cpu(x1,x2, hps):
+    k = np.outer(f_cpu(x1,hps[0:12],hps[12:16],hps[16:20]),
                  f_cpu(x2,hps[0:12],hps[12:16],hps[16:20])) + \
-        np.outer(g_cpu(x1,hps[20:32],hps[32:36],hps[36:40]),
+                 np.outer(g_cpu(x1,hps[20:32],hps[32:36],hps[36:40]),
                  g_cpu(x2,hps[20:32],hps[32:36],hps[36:40]))
-    return k + hps[40] * sparse_stat_kernel(x1,x2, hps[41])
+    return k + hps[40] * sparse_stat_kernel_cpu(x1,x2, hps[41])
 
 
 ############################################################

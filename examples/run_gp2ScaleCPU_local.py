@@ -13,30 +13,11 @@ import sys
 from dask.distributed import performance_report
 from fvgp.advanced_kernels import kernel_cpu
 
-def normalize(v):
-    v = v - np.min(v)
-    v = v/np.max(v)
-    return v
-
-
 
 def main():
-
-    start_time = time.time()
-    print("inputs to the run script: ",sys.argv, flush = True)
-    print("port: ", str(sys.argv[1]), flush = True)
-    client = Client(str(sys.argv[1]))
-    client.wait_for_workers(int(sys.argv[2]))
-    print("Client is ready", flush = True)
-    print(datetime.datetime.now().isoformat())
-    print("client received: ", client, flush = True)
-
-    print("Everything is ready to call gp2Scale after ", time.time() - start_time, flush = True)
-
-
-
+    client = Client()
     input_dim = 3
-    N = 20000
+    N = 10000
     x_data = np.random.rand(N,input_dim)
     y_data = np.sin(np.linalg.norm(x_data,axis = 1) * 5.0)
     hps_n = 42
@@ -103,18 +84,15 @@ def main():
     print("INITIALIZED")
     st = time.time()
 
-
-    my_gp = gp2Scale(input_dim, x_data, y_data, init_hps, 10000,
-                         gp_kernel_function = kernel_cpu, info = True,
-                         covariance_dask_client = client)
-
-
+    my_gp = gp2Scale(input_dim, x_data, y_data, init_hps, 1000,
+                        gp_kernel_function = kernel_cpu, info = True,
+                        covariance_dask_client = client)
     print("initialization done after: ",time.time() - st," seconds")
     print("===============")
     print("Log Likelihood: ", my_gp.log_likelihood(my_gp.hyperparameters))
     print("all done after: ",time.time() - st," seconds")
 
-    my_gp.train(hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
+    my_gp.train(hps_bounds, max_iter = 5, init_hyperparameters = init_hps)
 
 
 if __name__ == '__main__':
