@@ -220,7 +220,7 @@ class Test_fvGP(unittest.TestCase):
         st = time.time()
 
         my_gp = gp2Scale(input_dim, x_data, y_data, init_hps, 1000,
-                            gp_kernel_function = kernel_cpu, info = True,
+                            gp_kernel_function = kernel_cpu, info = False,
                             covariance_dask_client = client)
         print("initialization done after: ",time.time() - st," seconds")
         print("===============")
@@ -228,5 +228,8 @@ class Test_fvGP(unittest.TestCase):
         print("all done after: ",time.time() - st," seconds")
 
         my_gp.train(hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
+        my_gp.posterior_mean(np.random.rand(2,3))
+        my_gp.posterior_covariance(np.random.rand(2,3), umfpack = False)
+
 
 

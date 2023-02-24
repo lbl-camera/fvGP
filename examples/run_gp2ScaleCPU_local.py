@@ -92,7 +92,9 @@ def main():
     print("Log Likelihood: ", my_gp.log_likelihood(my_gp.hyperparameters))
     print("all done after: ",time.time() - st," seconds")
 
-    my_gp.train(hps_bounds, max_iter = 5, init_hyperparameters = init_hps)
+    my_gp.train(hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
+    my_gp.posterior_mean(np.random.rand(2,3))
+    my_gp.posterior_covariance(np.random.rand(2,3))
 
 
 if __name__ == '__main__':
