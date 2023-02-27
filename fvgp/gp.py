@@ -662,7 +662,7 @@ class GP():
             thps_aux = np.array(thps)
             thps_aux[i] = thps_aux[i] + eps
             grad[i] = (self.log_likelihood(thps_aux) - self.log_likelihood(thps))/eps
-        analytical = self.log_likelihood_gradient(thps)
+        analytical = -self.neg_log_likelihood_gradient(thps)
         if np.linalg.norm(grad-analytical) > np.linalg.norm(grad)/100.0:
             print("Gradient possibly wrong")
             print(grad)
