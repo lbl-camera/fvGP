@@ -36,7 +36,6 @@ x_pred = np.random.rand(10, input_dim)
 
 class Test_fvGP(unittest.TestCase):
     """Tests for `fvgp` package."""
-
     def test_single_task_init_basic(self):
         my_gp1 = GP(input_dim, x_data, y_data, np.array([1, 1, 1, 1, 1, 1]))
         my_gp1.update_gp_data(x_data, y_data, variances = np.ones((y_data.shape)) * 0.01)
@@ -75,7 +74,7 @@ class Test_fvGP(unittest.TestCase):
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
                 method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 5,deflation_radius = 1.)
 
-        res = my_gp1.posterior_mean(np.random.rand(10,len(x_data[0])))
+        res = my_gp1.posterior_mean(np.random.rand(len(x_data),len(x_data[0])))
         res = my_gp1.posterior_mean_grad(np.random.rand(10,len(x_data[0])))
         res = my_gp1.posterior_mean_constraint(np.random.rand(10,len(x_data[0])), my_gp1.hyperparameters)
         res = my_gp1.posterior_covariance(np.random.rand(10,len(x_data[0])))
@@ -230,6 +229,4 @@ class Test_fvGP(unittest.TestCase):
         my_gp.train(hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
         my_gp.posterior_mean(np.random.rand(2,3))
         my_gp.posterior_covariance(np.random.rand(2,3), umfpack = False)
-
-
 

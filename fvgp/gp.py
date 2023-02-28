@@ -819,37 +819,36 @@ class GP():
     ###############################gp prediction###############################
     ###########################################################################
     ###########################################################################
-    def posterior_mean(self, x_iset):
+    def posterior_mean(self, x_pred):
         """
         This function calculates the posterior mean for a set of input points.
 
         Parameters
         ----------
-        x_iset : np.ndarray
+        x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
 
         Return
         ------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        if len(p) == len(self.x_data): raise Warning("The number of prediction points and data points coincide which can lead to instabilities when user-defined kernels are used.")
-        k = self.kernel(self.x_data,p,self.hyperparameters,self)
+
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         A = k.T @ self.covariance_value_prod
-        posterior_mean = self.mean_function(p,self.hyperparameters,self) + A
-        return {"x": p,
+        posterior_mean = self.mean_function(x_pred,self.hyperparameters,self) + A
+        return {"x": x_pred,
                 "f(x)": posterior_mean}
 
-    def posterior_mean_constraint(self, x_iset, hyperparameters):
+    def posterior_mean_constraint(self, x_pred, hyperparameters):
         """
         This function recalculates the posterior mean with given hyperparameters so that
         constraints can be enforced.
 
         Parameters
         ----------
-        x_iset : np.ndarray
+        x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         hyperparameters : np.ndarray
             A numpy array of new hyperparameters
@@ -858,69 +857,68 @@ class GP():
         ------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        k = self.kernel(self.x_data,p,hyperparameters,self)
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
+
+        k = self.kernel(self.x_data,x_pred,hyperparameters,self)
         current_prior_mean_vec = self.mean_function(self.x_data,hyperparameters,self)
         cov_y,K = self._compute_covariance_value_product(hyperparameters,self.y_data,self.variances,
                                                          current_prior_mean_vec)
         A = k.T @ cov_y
-        posterior_mean = self.mean_function(p,hyperparameters,self) + A
-        return {"x": p,
+        posterior_mean = self.mean_function(x_pred,hyperparameters,self) + A
+        return {"x": x_pred,
                 "f(x)": posterior_mean}
 
 
 
-    def posterior_mean_grad(self, x_iset, direction = None):
+    def posterior_mean_grad(self, x_pred, direction = None):
         """
         This function calculates the gradient of the posterior mean for a set of input points.
 
         Parameters
         ----------
-        x_iset : np.ndarray
+        x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
 
         Return
         ------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        f = self.mean_function(p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        f = self.mean_function(x_pred,self.hyperparameters,self)
         eps = 1e-6
         if direction is not None:
-            x1 = np.array(p)
+            x1 = np.array(x_pred)
             x1[:,direction] = x1[:,direction] + eps
             mean_der = (self.mean_function(x1,self.hyperparameters,self) - f)/eps
-            k = self.kernel(self.x_data,p,self.hyperparameters,self)
-            k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters)
+            k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+            k_g = self.d_kernel_dx(x_pred,self.x_data, direction,self.hyperparameters)
             posterior_mean_grad = mean_der + (k_g @ self.covariance_value_prod)
         else:
-            posterior_mean_grad = np.zeros((p.shape))
-            for direction in range(len(p[0])):
-                x1 = np.array(p)
+            posterior_mean_grad = np.zeros((x_pred.shape))
+            for direction in range(len(x_pred[0])):
+                x1 = np.array(x_pred)
                 x1[:,direction] = x1[:,direction] + eps
                 mean_der = (self.mean_function(x1,self.hyperparameters,self) - f)/eps
-                k = self.kernel(self.x_data,p,self.hyperparameters,self)
-                k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters)
+                k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+                k_g = self.d_kernel_dx(x_pred,self.x_data, direction,self.hyperparameters)
                 posterior_mean_grad[:,direction] = mean_der + (k_g @ self.covariance_value_prod)
             direction = "ALL"
 
-        return {"x": p,
+        return {"x": x_pred,
                 "direction":direction,
                 "df/dx": posterior_mean_grad}
 
     ###########################################################################
-    def posterior_covariance(self, x_iset, variance_only = False):
+    def posterior_covariance(self, x_pred, variance_only = False):
         """
         Function to compute the posterior covariance.
         Parameters
         ----------
-        x_iset : np.ndarray
+        x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         variance_only : bool, optional
             If True the compuation of the posterior covariance matrix is avoided which can save compute time.
@@ -930,13 +928,11 @@ class GP():
         ------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
-        if len(p) == len(self.x_data): raise Warning("The number of prediction points and data points coincide which can lead to instabilities when user-defined kernels are used.")
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        kk = self.kernel(p, p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
         if self.use_inv:
             if variance_only:
                 S = False
@@ -958,114 +954,111 @@ class GP():
             if not variance_only:
                 np.fill_diagonal(S, v)
 
-        return {"x": p,
+        return {"x": x_pred,
                 "v(x)": v,
                 "S(x)": S}
 
-    def posterior_covariance_grad(self, x_iset, direction = None):
+    def posterior_covariance_grad(self, x_pred, direction = None):
         """
         Function to compute the gradient of the posterior covariance.
 
         Parameters
         ----------
-        x_iset : np.ndarray
+        x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         Return
         ------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        k = self.kernel(self.x_data,p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         k_covariance_prod = self.solve(self.prior_covariance,k)
         if direction is not None:
-            k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
-            kk =  self.kernel(p, p,self.hyperparameters,self)
-            x1 = np.array(p)
-            x2 = np.array(p)
+            k_g = self.d_kernel_dx(x_pred,self.x_data, direction,self.hyperparameters).T
+            kk =  self.kernel(x_pred, x_pred,self.hyperparameters,self)
+            x1 = np.array(x_pred)
+            x2 = np.array(x_pred)
             eps = 1e-6
             x1[:,direction] = x1[:,direction] + eps
             kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-\
                     self.kernel(x2, x2,self.hyperparameters,self)) /eps
             a = kk_g - (2.0 * k_g.T @ k_covariance_prod)
-            return {"x": p,
+            return {"x": x_pred,
                 "dv/dx": np.diag(a),
                 "dS/dx": a}
         else:
-            grad_v = np.zeros((len(p),len(p[0])))
-            for direction in range(len(p[0])):
-                k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
-                kk =  self.kernel(p, p,self.hyperparameters,self)
-                x1 = np.array(p)
-                x2 = np.array(p)
+            grad_v = np.zeros((len(x_pred),len(x_pred[0])))
+            for direction in range(len(x_pred[0])):
+                k_g = self.d_kernel_dx(x_pred,self.x_data, direction,self.hyperparameters).T
+                kk =  self.kernel(x_pred, x_pred,self.hyperparameters,self)
+                x1 = np.array(x_pred)
+                x2 = np.array(x_pred)
                 eps = 1e-6
                 x1[:,direction] = x1[:,direction] + eps
                 kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-\
                     self.kernel(x2, x2,self.hyperparameters,self)) /eps
                 grad_v[:,direction] = np.diag(kk_g - (2.0 * k_g.T @ k_covariance_prod))
-            return {"x": p,
+            return {"x": x_pred,
                     "dv/dx": grad_v}
 
 
     ###########################################################################
-    def gp_prior(self, x_iset):
+    def gp_prior(self, x_pred):
         """
         function to compute the data-informed prior
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+            x_pred: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
         Return
         ------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        kk = self.kernel(p, p,self.hyperparameters,self)
-        post_mean = self.mean_function(p, self.hyperparameters,self)
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
+        post_mean = self.mean_function(x_pred, self.hyperparameters,self)
         full_gp_prior_mean = np.append(self.prior_mean_vec, post_mean)
-        return  {"x": p,
+        return  {"x": x_pred,
                  "K": self.prior_covariance,
                  "k": k,
                  "kappa": kk,
                  "prior mean": full_gp_prior_mean,
                  "S(x)": np.block([[self.prior_covariance, k],[k.T, kk]])}
     ###########################################################################
-    def gp_prior_grad(self, x_iset,direction):
+    def gp_prior_grad(self, x_pred,direction):
         """
         function to compute the gradient of the data-informed prior
         Parameters
         ------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+            x_pred: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             direction: direction in which to compute the gradient
         Return
         -------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        kk = self.kernel(p, p,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(p,self.x_data, direction,self.hyperparameters).T
-        x1 = np.array(p)
-        x2 = np.array(p)
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
+        k_g = self.d_kernel_dx(x_pred,self.x_data, direction,self.hyperparameters).T
+        x1 = np.array(x_pred)
+        x2 = np.array(x_pred)
         eps = 1e-6
         x1[:,direction] = x1[:,direction] + eps
         x2[:,direction] = x2[:,direction] - eps
         kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-self.kernel(x2, x2,self.hyperparameters,self)) /(2.0*eps)
-        post_mean = self.mean_function(p, self.hyperparameters,self)
+        post_mean = self.mean_function(x_pred, self.hyperparameters,self)
         mean_der = (self.mean_function(x1,self.hyperparameters,self) - self.mean_function(x2,self.hyperparameters,self))/(2.0*eps)
         full_gp_prior_mean_grad = np.append(np.zeros((self.prior_mean_vec.shape)), mean_der)
         prior_cov_grad = np.zeros(self.prior_covariance.shape)
-        return  {"x": p,
+        return  {"x": x_pred,
                  "K": self.prior_covariance,
                  "dk/dx": k_g,
                  "d kappa/dx": kk_g,
@@ -1083,36 +1076,34 @@ class GP():
         s, logdet = self.slogdet(S)
         return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * s * logdet)
     ###########################################################################
-    def gp_entropy(self, x_iset):
+    def gp_entropy(self, x_pred):
         """
         Function to compute the entropy of the prior.
 
         Parameters
         ----------
-        x_iset : np.ndarray
+        x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         Return
         ------
         entropy : float
         """
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
-
-        priors = self.gp_prior(p)
+        priors = self.gp_prior(x_pred)
         S = priors["S(x)"]
         dim  = len(S[0])
         s, logdet = self.slogdet(S)
         return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * s * logdet)
     ###########################################################################
-    def gp_entropy_grad(self, x_iset,direction):
+    def gp_entropy_grad(self, x_pred,direction):
         """
         Function to compute the gradient of entropy of the prior in a given direction.
 
         Parameters
         ----------
-        x_iset : np.ndarray
+        x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         direction : int
             0 <= direction <= D - 1
@@ -1120,12 +1111,11 @@ class GP():
         ------
         entropy : float
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        priors1 = self.gp_prior(p)
-        priors2 = self.gp_prior_grad(p,direction)
+        priors1 = self.gp_prior(x_pred)
+        priors2 = self.gp_prior_grad(x_pred,direction)
         S1 = priors1["S(x)"]
         S2 = priors2["dS/dx"]
         return 0.5 * np.trace(np.linalg.inv(S1) @ S2)
@@ -1177,30 +1167,29 @@ class GP():
     #    if kld < -1e-4: logger.debug("Negative KL divergence encountered")
     #    return kld
     ###########################################################################
-    def gp_kl_div(self, x_iset, comp_mean, comp_cov):
+    def gp_kl_div(self, x_pred, comp_mean, comp_cov):
         """
         function to compute the kl divergence of a posterior at given points
         Parameters
         ----------
-            x_iset : 1d or 2d numpy array of points, note, these are elements of the
+            x_pred : 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             comp_mean : np.array
-                Comparison mean vector for KL divergence. len(comp_mean) = len(x_iset)
+                Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
             comp_cov : np.array
-                Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_iset),len(x_iset))
+                Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
         Return
         -------
             solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        res = self.posterior_mean(p)
+        res = self.posterior_mean(x_pred)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_iset)["S(x)"]
+        gp_cov = self.posterior_covariance(x_pred)["S(x)"]
 
-        return {"x": p,
+        return {"x": x_pred,
                 "gp posterior mean" : gp_mean,
                 "gp posterior covariance": gp_cov,
                 "given mean": comp_mean,
@@ -1209,32 +1198,31 @@ class GP():
 
 
     ###########################################################################
-    def gp_kl_div_grad(self, x_iset, comp_mean, comp_cov, direction):
+    def gp_kl_div_grad(self, x_pred, comp_mean, comp_cov, direction):
         """
         function to compute the gradient of the kl divergence of a posterior at given points
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+            x_pred: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             comp_mean : np.array
-                Comparison mean vector for KL divergence. len(comp_mean) = len(x_iset)
+                Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
             comp_cov : np.array
-                Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_iset),len(x_iset))
+                Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
             direction: direction in which the gradient will be computed
         Return
         -------
             solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        gp_mean = self.posterior_mean(p)["f(x)"]
-        gp_mean_grad = self.posterior_mean_grad(p,direction)["df/dx"]
-        gp_cov  = self.posterior_covariance(p)["S(x)"]
-        gp_cov_grad  = self.posterior_covariance_grad(p,direction)["dS/dx"]
+        gp_mean = self.posterior_mean(x_pred)["f(x)"]
+        gp_mean_grad = self.posterior_mean_grad(x_pred,direction)["df/dx"]
+        gp_cov  = self.posterior_covariance(x_pred)["S(x)"]
+        gp_cov_grad  = self.posterior_covariance_grad(x_pred,direction)["dS/dx"]
 
-        return {"x": p,
+        return {"x": x_pred,
                 "gp posterior mean" : gp_mean,
                 "gp posterior mean grad" : gp_mean_grad,
                 "gp posterior covariance": gp_cov,
@@ -1243,23 +1231,22 @@ class GP():
                 "given covariance": comp_cov,
                 "kl-div grad": self.kl_div_grad(gp_mean, gp_mean_grad,comp_mean, gp_cov, gp_cov_grad, comp_cov)}
     ###########################################################################
-    def shannon_information_gain(self, x_iset):
+    def shannon_information_gain(self, x_pred):
         """
         function to compute the shannon-information gain of data
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+            x_pred: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
         Return
         -------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        kk = self.kernel(p, p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
 
 
         full_gp_covariances = \
@@ -1269,82 +1256,79 @@ class GP():
         e1 = self.entropy(self.prior_covariance)
         e2 = self.entropy(full_gp_covariances)
         sig = (e2 - e1)
-        return {"x": p,
+        return {"x": x_pred,
                 "prior entropy" : e1,
                 "posterior entropy": e2,
                 "sig":sig}
     ###########################################################################
-    def shannon_information_gain_vec(self, x_iset):
+    def shannon_information_gain_vec(self, x_pred):
         """
         function to compute the shannon-information gain of data
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+            x_pred: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
         Return
         -------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        k = self.kernel(self.x_data,p,self.hyperparameters,self)
-        kk = self.kernel(p, p,self.hyperparameters,self)
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
 
-        full_gp_covariances = np.empty((len(p),len(self.prior_covariance)+1,len(self.prior_covariance)+1))
-        for i in range(len(p)): full_gp_covariances[i] = np.block([[self.prior_covariance,k[:,i].reshape(-1,1)],[k[:,i].reshape(1,-1),kk[i,i]]])
+        full_gp_covariances = np.empty((len(x_pred),len(self.prior_covariance)+1,len(self.prior_covariance)+1))
+        for i in range(len(x_pred)): full_gp_covariances[i] = np.block([[self.prior_covariance,k[:,i].reshape(-1,1)],[k[:,i].reshape(1,-1),kk[i,i]]])
         e1 = self.entropy(self.prior_covariance)
         e2 = self.entropy(full_gp_covariances)
         sig = (e2 - e1)
-        return {"x": p,
+        return {"x": x_pred,
                 "prior entropy" : e1,
                 "posterior entropy": e2,
                 "sig(x)":sig}
 
     ###########################################################################
-    def shannon_information_gain_grad(self, x_iset, direction):
+    def shannon_information_gain_grad(self, x_pred, direction):
         """
         function to compute the gradient if the shannon-information gain of data
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+            x_pred: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
             direction: direction in which to compute the gradient
         Return
         -------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        e2 = self.gp_entropy_grad(p,direction)
+        e2 = self.gp_entropy_grad(x_pred,direction)
         sig = e2
-        return {"x": p,
+        return {"x": x_pred,
                 "sig grad":sig}
     ###########################################################################
-    def posterior_probability(self, x_iset, comp_mean, comp_cov):
+    def posterior_probability(self, x_pred, comp_mean, comp_cov):
         """
         function to compute the probability of an uncertain feature given the gp posterior
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+            x_pred: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
-            comp_mean: a vector of mean values, same length as x_iset
-            comp_cov: covarianve matrix, in R^{len(x_iset)xlen(x_iset)}
+            comp_mean: a vector of mean values, same length as x_pred
+            comp_cov: covarianve matrix, in R^{len(x_pred)xlen(x_pred)}
 
         Return
         -------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        res = self.posterior_mean(p)
+        res = self.posterior_mean(x_pred)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(p)["S(x)"]
+        gp_cov = self.posterior_covariance(x_pred)["S(x)"]
         gp_cov_inv = np.linalg.inv(gp_cov)
         comp_cov_inv = np.linalg.inv(comp_cov)
         cov = np.linalg.inv(gp_cov_inv + comp_cov_inv)
@@ -1362,27 +1346,26 @@ class GP():
                 "probability":
                 np.exp(ln_p)
                 }
-    def posterior_probability_grad(self, x_iset, comp_mean, comp_cov, direction):
+    def posterior_probability_grad(self, x_pred, comp_mean, comp_cov, direction):
         """
         function to compute the gradient of the probability of an uncertain feature given the gp posterior
         Parameters
         ----------
-            x_iset: 1d or 2d numpy array of points, note, these are elements of the
+            x_pred: 1d or 2d numpy array of points, note, these are elements of the
                     index set which results from a cartesian product of input and output space
-            comp_mean: a vector of mean values, same length as x_iset
-            comp_cov: covarianve matrix, in R^{len(x_iset)xlen(x_iset)}
+            comp_mean: a vector of mean values, same length as x_pred
+            comp_cov: covarianve matrix, in R^{len(x_pred)xlen(x_pred)}
             direction: direction in which to compute the gradient
 
         Return
         -------
         solution dictionary : dict
         """
-        p = np.array(x_iset)
-        if p.ndim == 1: p = np.array([p])
-        if len(p[0]) != len(self.x_data[0]): p = np.column_stack([p,np.zeros((len(p)))])
+        try: x_pred = x_pred.reshape(-1,self.input_dim)
+        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        x1 = np.array(p)
-        x2 = np.array(p)
+        x1 = np.array(x_pred)
+        x2 = np.array(x_pred)
         x1[:,direction] = x1[:,direction] + 1e-6
         x2[:,direction] = x2[:,direction] - 1e-6
 
