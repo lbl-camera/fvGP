@@ -109,7 +109,7 @@ class fvGP(GP):
         self.y_data = np.array(values)
         self.input_space_dim = input_space_dim
         self.point_number, self.output_num, self.output_dim = len(points), output_number, output_space_dim
-        if args: self.args = args
+        self.args = args
         ###check the output dims
         if np.ndim(values) == 1:
             raise ValueError("the output number is 1, you can use GP for single-task GPs")

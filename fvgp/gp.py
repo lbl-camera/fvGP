@@ -110,6 +110,7 @@ class GP():
         normalize_y = False,
         use_inv = False,
         ram_economy = True,
+        args = None
         ):
         if input_space_dim != len(x_data[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
@@ -122,6 +123,7 @@ class GP():
         self.y_data = y_data
         self.compute_device = compute_device
         self.ram_economy = ram_economy
+        self.args = args
 
         self.use_inv = use_inv
         self.K_inv = None

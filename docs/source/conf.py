@@ -22,7 +22,7 @@ from fvgp import _version
 project = 'fvGP'
 copyright = '2021, Marcus Michael Noack'
 author = 'Marcus Michael Noack'
-
+version = _version.get_versions()['version']
 # The full version, including alpha/beta/rc tags
 release = _version.get_versions()['version']
 
