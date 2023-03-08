@@ -81,6 +81,8 @@ class GP():
         and return a 2-D numpy array of shape V x V.
         If ram_economy=False, the function should be of the form f(points1, points2, hyperparameters) and return a numpy array of shape
         H x V x V, where H is the number of hyperparameters. V is the number of points. CAUTION: This array will be stored and is very large.
+    args : any, optional
+        args will be a class attribute and therefore available to kernel and and prior mean functions.
 
 
 

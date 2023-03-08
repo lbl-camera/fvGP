@@ -79,9 +79,8 @@ class fvGP(GP):
         False. Note, the training will always use a linear solve instead of the inverse for stability reasons.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
-    args : user defined, optional
-        These optional arguments will be available as attribute in kernel and mean function definitions.
-
+    args : any, optional
+        args will be a class attribute and therefore available to kernel and and prior mean functions.
 
     """
     def __init__(
