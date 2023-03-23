@@ -9,7 +9,6 @@ from scipy.sparse.linalg import splu
 from scipy.optimize import differential_evolution
 from scipy.sparse import coo_matrix
 import gc
-from scipy.sparse.linalg import splu
 from scipy.sparse.linalg import spilu
 from .mcmc import mcmc
 import torch
@@ -90,12 +89,12 @@ class gp2ScaleSparseMatrix:
         if success is False:
             try:
                 r,info = sparse.linalg.cg(self.sparse_covariance,x)
-                success = True
+                if info == 0: success = True
             except: pass
         if success is False:
             try:
                 r, info = sparse.linalg.cgs(self.sparse_covariance,x)
-                success = True
+                if info == 0: success = True
             except: pass
         if success is False:
             try:
@@ -136,3 +135,8 @@ class gp2ScaleSparseMatrix:
         s = s / np.arange(1,len(s)+1)
         return N * np.log(alpha) - np.sum(s)
 
+    def traceKXX(self,X):
+        res = np.empty(X.shape)
+        for i in range(X.shape[1]): res[:,i] = self.solve(X[:,i])
+        tr = np.sum(X * res)
+        return tr
