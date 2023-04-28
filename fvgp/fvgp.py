@@ -61,9 +61,9 @@ class fvGP(GP):
         If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and the output is
         a numpy array of shape (len(hyperparameters) x U x V)
     gp_mean_function : Callable, optional
-        A function that evaluates the prior mean at an input position. It accepts as input a
-        `gpcam.gp_optimizer.GPOptimizer` instance, an array of positions (of size V x D), and hyperparameters (a 1-D
-        array of length D+1 for the default kernel). The return value is a 1-D array of length V. If None is provided,
+        A function that evaluates the prior mean at an input position. It accepts as input 
+        an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
+        and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 1-D array of length V. If None is provided,
         `fvgp.gp.GP.default_mean_function` is used.
     gp_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters.
@@ -79,6 +79,8 @@ class fvGP(GP):
         False. Note, the training will always use a linear solve instead of the inverse for stability reasons.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
+    args : any, optional
+        args will be a class attribute and therefore available to kernel and and prior mean functions.
 
     """
     def __init__(
@@ -98,13 +100,15 @@ class fvGP(GP):
         gp_mean_function_grad = None,
         normalize_y = False,
         use_inv = False,
-        ram_economy = True
+        ram_economy = True,
+        args = None,
         ):
 
         self.x_data = np.array(points)
         self.y_data = np.array(values)
         self.input_space_dim = input_space_dim
         self.point_number, self.output_num, self.output_dim = len(points), output_number, output_space_dim
+        self.args = args
         ###check the output dims
         if np.ndim(values) == 1:
             raise ValueError("the output number is 1, you can use GP for single-task GPs")
