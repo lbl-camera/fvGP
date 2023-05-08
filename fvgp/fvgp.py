@@ -162,7 +162,8 @@ class fvGP(GP):
             The values of the data points. Shape (V,output_number).
         value_positions : np.ndarray, optional
             A 3-D numpy array of shape (U x output_number x output_dim), so that for each measurement position, the outputs
-            are clearly defined by their positions in the output space. The default is np.array([[0],[1],[2],[3],...,[output_number - 1]]) for each
+            are clearly defined by their positions in the output space. 
+            The default is np.array([[0],[1],[2],[3],...,[output_number - 1]]) for each
             point in the input space. The default is only permissible if output_dim is 1.
         variances : np.ndarray, optional
             An numpy array defining the uncertainties in the data `values`. Shape (V x 1) or (V). Note: if no
