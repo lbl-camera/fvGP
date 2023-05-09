@@ -75,3 +75,5 @@ html_theme_options = dict(
 )
 
 autodoc_member_order = 'bysource'
+
+autoclass_content = 'both'
