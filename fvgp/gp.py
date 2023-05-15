@@ -37,7 +37,7 @@ class GP():
         An numpy array defining the uncertainties in the data `y_data`. Shape (V x 1) or (V). Note: if no
         variances are provided they will be set to `abs(np.mean(y_data) / 100.0`.
     compute_device : str, optional
-        One of "cpu" or "gpu", determines how linear system solves are run. The default is "cpu".
+        One of "cpu", "numpy" or "gpu", determines how linear system solves are run. The default is "cpu".
     gp_kernel_function : Callable, optional
         A function that calculates the covariance between data points. It accepts as input x1 (a V x D array of positions),
         x2 (a U x D array of positions), hyperparameters (a 1-D array of length D+1 for the default kernel), and a
@@ -57,7 +57,7 @@ class GP():
         `gpcam.gp_optimizer.GPOptimizer` instance, and the output is
         a numpy array of shape (len(hyperparameters) x U x V). See 'ram_economy'.
     gp_mean_function : Callable, optional
-        A function that evaluates the prior mean at an input position. It accepts as input 
+        A function that evaluates the prior mean at an input position. It accepts as input
         an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
         and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 1-D array of length V. If None is provided,
         `fvgp.gp.GP.default_mean_function` is used.
@@ -76,7 +76,7 @@ class GP():
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
         If True, components of the derivative of the marginal log-likelihood are calculated subsequently, leading to a slow-down
-        but much less RAM usage. If the derivative of the kernel with respect to the hyperparameters (gp_kernel_function_grad) is 
+        but much less RAM usage. If the derivative of the kernel with respect to the hyperparameters (gp_kernel_function_grad) is
         going to be provided, it has to be tailored: for ram_economy=True it should be of the form f(points1, points2, direction, hyperparameters)
         and return a 2-D numpy array of shape V x V.
         If ram_economy=False, the function should be of the form f(points1, points2, hyperparameters) and return a numpy array of shape
@@ -725,7 +725,10 @@ class GP():
         """
         #s,l = np.linalg.slogdet(A)
         #return s,l
-        if self.compute_device == "cpu":
+        if self.compute_device == "numpy":
+            s,l = np.linalg.slogdet(A)
+            return s,l
+        elif self.compute_device == "cpu":
             A = torch.from_numpy(A)
             sign, logdet = torch.slogdet(A)
             sign = sign.numpy()
@@ -763,12 +766,14 @@ class GP():
                 logger.error("reason: ", str(e))
                 try:
                     x, res, rank, s = torch.linalg.lstsq(A,b)
+                    return x.numpy()
                 except Exception as e:
                     logger.error("torch.linalg.solve() and torch.linalg.lstsq() on cpu did not work; falling back to numpy.linalg.lstsq()")
                     logger.error("reason: {}", str(e))
-                    x,res,rank,s = np.linalg.lstsq(A.numpy(),b.numpy(),rcond=None)
-                    return x
-            return x.numpy()
+                    self.compute_device = 'numpy'
+        if self.compute_device == 'numpy':
+            x, res, rank, s = np.linalg.lstsq(A.numpy(), b.numpy(), rcond=None)
+            return x
         elif self.compute_device == "gpu" or A.ndim < 3:
             A = torch.from_numpy(A).cuda()
             b = torch.from_numpy(b).cuda()
@@ -1741,7 +1746,7 @@ class GP():
         """
         non_stat = np.outer(self._g(x1,x0,w,l),self._g(x2,x0,w,l))
         return non_stat
-    
+
 
     def non_stat_kernel_gradient(self,x1,x2,x0,w,l):
         dkdw = np.einsum('ij,k->ijk', self._dgdw(x1,x0,w,l), self._g(x2,x0,w,l)) + np.einsum('ij,k->ikj', self._dgdw(x2,x0,w,l), self._g(x1,x0,w,l))
