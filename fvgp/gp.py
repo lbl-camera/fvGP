@@ -772,7 +772,7 @@ class GP():
                     logger.error("reason: {}", str(e))
                     self.compute_device = 'numpy'
         if self.compute_device == 'numpy':
-            x, res, rank, s = np.linalg.lstsq(A.numpy(), b.numpy(), rcond=None)
+            x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
             return x
         elif self.compute_device == "gpu" or A.ndim < 3:
             A = torch.from_numpy(A).cuda()
