@@ -109,6 +109,7 @@ class GP():
         gp_kernel_function_grad = None,
         gp_mean_function = None,
         gp_mean_function_grad = None,
+        fixed_rank = None,
         normalize_y = False,
         use_inv = False,
         ram_economy = True,
@@ -126,6 +127,7 @@ class GP():
         self.compute_device = compute_device
         self.ram_economy = ram_economy
         self.args = args
+        self.fixed_rank = fixed_rank
 
         self.use_inv = use_inv
         self.K_inv = None
@@ -696,14 +698,19 @@ class GP():
             covariance value product
         """
         self.prior_mean_vec = self.mean_function(self.x_data,self.hyperparameters,self)
-        cov_y,K = self._compute_covariance_value_product(
+
+        if self.use_inv is True:
+            K = self._compute_covariance(hyperparameters, variances)
+            self.K_inv = self.inv(K)
+            self.covariance_value_prod = self.K_inv @ (self.y_data - self.prior_mean_vector)
+        else:
+            cov_y,K = self._compute_covariance_value_product(
                 self.hyperparameters,
                 self.y_data,
                 self.variances,
                 self.prior_mean_vec)
+            self.covariance_value_prod = cov_y
         self.prior_covariance = K
-        if self.use_inv is True: self.K_inv = self.inv(K)
-        self.covariance_value_prod = cov_y
     ##################################################################################
     def _compute_covariance_value_product(self, hyperparameters,values, variances, mean):
         K = self._compute_covariance(hyperparameters, variances)
@@ -718,7 +725,7 @@ class GP():
             self.x_data, self.x_data, hyperparameters, self)
         self.add_to_diag(CoVariance, variances)
         return CoVariance
-
+    ##################################################################################
     def slogdet(self, A):
         """
         fvGPs slogdet method based on torch
