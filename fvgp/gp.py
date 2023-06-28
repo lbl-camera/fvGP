@@ -4,7 +4,7 @@ import time
 import itertools
 from functools import partial
 import math
-import warning
+import warnings
 
 import dask.distributed as distributed
 import matplotlib.pyplot as plt
@@ -17,7 +17,7 @@ try:
     import torch
     DEFAULT_COMPUTE_DEVICE = "cpu"
 except ImportError:
-    warning.warn("The pytorch package is not installed. For improved performance with fvgp and gpCAM, install pytorch.")
+    warnings.warn("The pytorch package is not installed. For improved performance with fvgp and gpCAM, install pytorch.")
     DEFAULT_COMPUTE_DEVICE = "numpy"
 
 from .mcmc import mcmc
