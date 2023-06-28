@@ -4,6 +4,7 @@ import time
 import itertools
 from functools import partial
 import math
+import warning
 
 import dask.distributed as distributed
 import matplotlib.pyplot as plt
@@ -11,7 +12,13 @@ import numpy as np
 from scipy.optimize import differential_evolution
 from scipy.optimize import minimize
 from loguru import logger
-import torch
+
+try:
+    import torch
+    DEFAULT_COMPUTE_DEVICE = "cpu"
+except ImportError:
+    warning.warn("The pytorch package is not installed. For improved performance with fvgp and gpCAM, install pytorch.")
+    DEFAULT_COMPUTE_DEVICE = "numpy"
 
 from .mcmc import mcmc
 from hgdl.hgdl import HGDL
@@ -104,7 +111,7 @@ class GP():
         y_data,
         init_hyperparameters,
         variances = None,
-        compute_device = "cpu",
+        compute_device = DEFAULT_COMPUTE_DEVICE,
         gp_kernel_function = None,
         gp_kernel_function_grad = None,
         gp_mean_function = None,

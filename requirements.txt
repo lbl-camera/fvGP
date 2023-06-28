@@ -1,6 +1,5 @@
 wheel
 versioneer
-torch >= 1.9.0
 scipy
 numpy
 matplotlib

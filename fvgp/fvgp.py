@@ -11,7 +11,6 @@ import math
 
 import itertools
 import time
-import torch
 from functools import partial
 from fvgp.gp import GP
 
@@ -61,7 +60,7 @@ class fvGP(GP):
         If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and the output is
         a numpy array of shape (len(hyperparameters) x U x V)
     gp_mean_function : Callable, optional
-        A function that evaluates the prior mean at an input position. It accepts as input 
+        A function that evaluates the prior mean at an input position. It accepts as input
         an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
         and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 1-D array of length V. If None is provided,
         `fvgp.gp.GP.default_mean_function` is used.
@@ -162,7 +161,7 @@ class fvGP(GP):
             The values of the data points. Shape (V,output_number).
         value_positions : np.ndarray, optional
             A 3-D numpy array of shape (U x output_number x output_dim), so that for each measurement position, the outputs
-            are clearly defined by their positions in the output space. 
+            are clearly defined by their positions in the output space.
             The default is np.array([[0],[1],[2],[3],...,[output_number - 1]]) for each
             point in the input space. The default is only permissible if output_dim is 1.
         variances : np.ndarray, optional
