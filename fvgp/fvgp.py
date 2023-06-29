@@ -2,16 +2,12 @@
 
 import dask.distributed as distributed
 from loguru import logger
-
 from . import __version__
-
 import matplotlib.pyplot as plt
 import numpy as np
 import math
-
 import itertools
 import time
-import torch
 from functools import partial
 from fvgp.gp import GP
 
@@ -110,10 +106,8 @@ class fvGP(GP):
         self.point_number, self.output_num, self.output_dim = len(points), output_number, output_space_dim
         self.args = args
         ###check the output dims
-        if np.ndim(values) == 1:
-            raise ValueError("the output number is 1, you can use GP for single-task GPs")
-        if output_number != len(values[0]):
-            raise ValueError("the output number is not in agreement with the data values given")
+        if np.ndim(values) == 1: raise ValueError("the output number is 1, you can use GP for single-task GPs")
+        if output_number != len(values[0]): raise ValueError("the output number is not in agreement with the data values given")
         if output_space_dim == 1 and isinstance(value_positions, np.ndarray) == False:
             self.value_positions = self.compute_standard_value_positions()
         elif self.output_dim > 1 and isinstance(value_positions, np.ndarray) == False:
@@ -133,7 +127,7 @@ class fvGP(GP):
         self.point_number = len(self.x_data)
 
         ####init GP
-        GP.__init__(self,self.iset_dim, self.x_data,self.y_data,init_hyperparameters,
+        super().__init__(self,self.iset_dim, self.x_data,self.y_data,init_hyperparameters,
                 variances = self.variances,compute_device = compute_device,
                 gp_kernel_function = gp_kernel_function, gp_mean_function = gp_mean_function,
                 gp_kernel_function_grad = gp_kernel_function_grad, gp_mean_function_grad = gp_mean_function_grad,
@@ -218,3 +212,61 @@ class fvGP(GP):
 
     def _multi_task_kernel1(self):
         return 0
+
+    def _cartesian_product(x1,x2):
+        r = []
+        for i in range(len(x)):
+            for j in range(len(t[i])):
+                r.append(np.append(x[i],t[i,j]))
+        return np.asarray(r)
+
+    def posterior_mean(self, x_pred, x_task):
+        """
+        This function calculates the posterior mean for a set of input points and tasks.
+
+        Parameters
+        ----------
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        x_task : np.ndarray
+            A numpy array of shape (V x T x Td), where T is the number of outputs (output_number) and Td is the dimensionality of the output space (output_dim).
+        Example: Let's consider a 2-dim input space and a 3d output space of two tasks. In that case, a possible input would be
+        x_pred = np.array([[0,0],[1,1],])
+        x_task = np.array([[[4 ,5 ,6], [7 ,8 ,9]],
+                           [[10,20,30],[40,50,60]]])
+        which will be transformed to a new array
+        [[ 0  0  4  5  6]
+        [ 0  0  7  8  9]
+        [ 1  1 10 20 30]
+        [ 1  1 40 50 60]]
+        of inputs.
+
+        Return
+        ------
+        solution dictionary : dict
+        """
+        new_x = self._cartesian_product(x_pred,x_task)
+        return super().posterior_mean(new_x)
+
+
+    ###########################################################################
+    def posterior_covariance(self, x_pred, x_task, variance_only = False):
+        """
+        Function to compute the posterior covariance.
+        Parameters
+        ----------
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        variance_only : bool, optional
+            If True the compuation of the posterior covariance matrix is avoided which can save compute time.
+            In that case the return will only provide the variance at the input points.
+            Default = False.
+        Return
+        ------
+        solution dictionary : dict
+        """
+        new_x = self._cartesian_product(x_pred,x_task)
+        return super().posterior_covariance(new_x)
+
+
+

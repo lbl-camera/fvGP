@@ -11,7 +11,6 @@ from scipy.sparse import coo_matrix
 import gc
 from scipy.sparse.linalg import spilu
 from .mcmc import mcmc
-import torch
 from dask.distributed import Variable
 import math
 #from scikits import umfpack

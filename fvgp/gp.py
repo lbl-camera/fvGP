@@ -10,12 +10,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import differential_evolution
 from scipy.optimize import minimize
+from scipy.linalg import cho_factor, cho_solve
 from loguru import logger
-import torch
-
 from .mcmc import mcmc
 from hgdl.hgdl import HGDL
-
 
 class GP():
     """
@@ -113,12 +111,19 @@ class GP():
         normalize_y = False,
         use_inv = False,
         ram_economy = True,
+        linear_algebra_engine = "numpy",
         args = None
         ):
-        if input_space_dim != len(x_data[0]):
-            raise ValueError("input space dimensions are not in agreement with the point positions given")
+        if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
+        if input_space_dim != len(x_data[0]): raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(y_data) == 2: y_data = y_data[:,0]
+        if compute_device == "gpu" and linear_algebra_engine == "numpy":
+            raise Exception("GPU computing needs linear_algebra_engine = 'pytorch'")
+        if linear_algebra_engine == "pytorch":
+            try: import torch
+            except: raise Exception("You have specified pytorch as your linear algebra engine. In that case, it has to be installed manually.")
 
+        self.linear_algebra_engine = linear_algebra_engine
         self.normalize_y = normalize_y
         self.input_dim = input_space_dim
         self.x_data = x_data
@@ -173,7 +178,9 @@ class GP():
         ##########################################
         #compute the prior########################
         ##########################################
-        self._compute_prior_fvGP_pdf()
+        #self._compute_prior_fvGP_pdf()
+        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.chol_tuple = self._compute_GPprior(self.x_data, init_hyperparameters, self.variances)
+
 
     def update_gp_data(
         self,
@@ -219,7 +226,9 @@ class GP():
         ######################################
         #####transform to index set###########
         ######################################
-        self._compute_prior_fvGP_pdf()
+        #self._compute_prior_fvGP_pdf()
+        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.chol_tuple = self._compute_GPprior(self.x_data, init_hyperparameters, self.variances)
+
     ###################################################################################
     ###################################################################################
     ###################################################################################
@@ -291,8 +300,9 @@ class GP():
             deflation_radius,
             dask_client
             )
-        self._compute_prior_fvGP_pdf()
-
+        #self._compute_prior_fvGP_pdf()
+        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.chol_tuple = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
+        self.K_inv = np.linalg.inv(self.prior_covariance)
     ##################################################################################
     def train_async(self,
         hyperparameter_bounds,
@@ -346,7 +356,6 @@ class GP():
             constraints,
             local_optimizer,
             global_optimizer,
-            deflation_radius,
             dask_client
             )
         return opt_obj
@@ -402,19 +411,19 @@ class GP():
         """
         success = False
         try:
-            res = opt_obj.get_latest()["x"]
+            res = opt_obj.get_latest()[0]["x"]
             success = True
         except:
             logger.debug("      The optimizer object could not be queried")
             logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
         if success is True:
             try:
-                res = res[0]
                 l_n = self.neg_log_likelihood(res)
                 l_o = self.neg_log_likelihood(self.hyperparameters)
                 if l_n - l_o < 0.000001:
                     self.hyperparameters = res
-                    self._compute_prior_fvGP_pdf()
+                    #self._compute_prior_fvGP_pdf()
+                    self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.chol_tuple = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
                     logger.debug("    fvGP async hyperparameter update successful")
                     logger.debug("    Latest hyperparameters: {}", self.hyperparameters)
                 else:
@@ -434,19 +443,18 @@ class GP():
         constraints,
         local_optimizer,
         global_optimizer,
-        deflation_radius,
         dask_client):
 
         logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: {}", starting_hps)
-
         opt_obj = HGDL(self.neg_log_likelihood,
                     self.neg_log_likelihood_gradient,
                     hp_bounds,
                     hess = self.neg_log_likelihood_hessian,
                     local_optimizer = local_optimizer,
                     global_optimizer = global_optimizer,
-                    radius = deflation_radius,
-                    num_epochs = max_iter, constraints = constraints)
+                    num_epochs = max_iter, 
+                    constraints = constraints)
+
         logger.debug("HGDL successfully initialized. Calling optimize()")
         opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
         logger.debug("optimize() called")
@@ -565,11 +573,12 @@ class GP():
         """
         mean = self.mean_function(self.x_data,hyperparameters,self)
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
-        x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
-        y = self.y_data - mean
-        sign, logdet = self.slogdet(K)
-        n = len(y)
-        return -(0.5 * (y.T @ x)) - (0.5 * logdet) - (0.5 * n * np.log(2.0*np.pi))
+        K,  KinvY, logdet, CL = self._compute_GPprior(self.x_data, hyperparameters, self.variances)
+        #y = self.y_data - mean
+        #sign, logdet = self.slogdet(K)
+        #n = len(y)
+        n = len(self.y_data)
+        return -(0.5 * ((self.y_data - mean).T @ KinvY)) - (0.5 * logdet) - (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
 
     def neg_log_likelihood(self,hyperparameters):
@@ -584,13 +593,7 @@ class GP():
         ------
         negative marginal log-likelihood : float
         """
-        mean = self.mean_function(self.x_data,hyperparameters,self)
-        if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
-        x,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
-        y = self.y_data - mean
-        sign, logdet = self.slogdet(K)
-        n = len(y)
-        return (0.5 * (y.T @ x)) + (0.5 * logdet) + (0.5 * n * np.log(2.0*np.pi))
+        return -self.log_likelihood(hyperparameters)
     ##################################################################################
     def neg_log_likelihood_gradient(self, hyperparameters):
         """
@@ -606,7 +609,8 @@ class GP():
         """
         logger.debug("log-likelihood gradient is being evaluated...")
         mean = self.mean_function(self.x_data,hyperparameters,self)
-        b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        #b,K = self._compute_covariance_value_product(hyperparameters,self.y_data, self.variances, mean)
+        K,  b, logdet, CL = self._compute_GPprior(self.x_data, hyperparameters, self.variances)
         y = self.y_data - mean
         if self.ram_economy is False:
             try: dK_dH = self.dk_dh(self.x_data,self.x_data, hyperparameters,self)
@@ -625,7 +629,10 @@ class GP():
             else:
                 try: dK_dH = self.dk_dh(self.x_data,self.x_data, i,hyperparameters, self)
                 except: raise Exception("The gradient evaluation dK/dh was not successful. \n That normally means the combination of ram_economy and definition of the gradient function is wrong.")
-                matr = self.solve(K,dK_dH)
+                #matr = self.solve(K,dK_dH)
+                #print(matr)
+                matr = np.linalg.solve(K,dK_dH)
+                #print(matr)
             if dL_dHm[i] == 0.0:
                 if self.ram_economy is False: mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
                 else: mtrace = np.einsum('ij,ji->', bbT, dK_dH)
@@ -686,71 +693,90 @@ class GP():
     ######################Compute#Covariance#Matrix###################################
     ##################################################################################
     ##################################################################################
-    def _compute_prior_fvGP_pdf(self):
-        """
-        This function computes the important entities, namely the prior covariance and
-        its product with the (y_data - prior_mean) and returns them and the prior mean
-        Parameters
-            none
-        return:
-            prior mean
-            prior covariance
-            covariance value product
-        """
+    def _compute_GPprior(self, x_data, hyperparameters, variances):
         self.prior_mean_vec = self.mean_function(self.x_data,self.hyperparameters,self)
-
-        if self.use_inv is True:
-            K = self._compute_covariance(hyperparameters, variances)
-            self.K_inv = self.inv(K)
-            self.covariance_value_prod = self.K_inv @ (self.y_data - self.prior_mean_vector)
-        else:
-            cov_y,K = self._compute_covariance_value_product(
-                self.hyperparameters,
-                self.y_data,
-                self.variances,
-                self.prior_mean_vec)
-            self.covariance_value_prod = cov_y
-        self.prior_covariance = K
-    ##################################################################################
-    def _compute_covariance_value_product(self, hyperparameters,values, variances, mean):
         K = self._compute_covariance(hyperparameters, variances)
-        y = values - mean
-        x = self.solve(K, y)
-        if x.ndim == 2: x = x[:,0]
-        return x,K
+        #x = self.solve(K, y-mean)
+        c, l = cho_factor(K)
+        KinvY = cho_solve((c, l), self.y_data - self.prior_mean_vec)
+        upper_diag = abs(c.diagonal())
+        logdet = 2.0 * np.sum(np.log(upper_diag))
+        return K, KinvY, logdet, (c,l)
+
+
+    #def _compute_prior_fvGP_pdf(self):
+    #    self.prior_mean_vec = self.mean_function(self.x_data,self.hyperparameters,self)
+    #
+    #    if self.use_inv is True:
+    #        K = self._compute_covariance(hyperparameters, variances)
+    #        self.K_inv = self.inv(K)
+    #        self.covariance_value_prod = self.K_inv @ (self.y_data - self.prior_mean_vector)
+    #    else:
+    #        cov_y,K,logdet = self._compute_covariance_value_product(
+    #            self.hyperparameters,
+    #            self.y_data,
+    #            self.variances,
+    #            self.prior_mean_vec)
+    #        self.covariance_value_prod = cov_y
+    #    self.prior_covariance = K
+    ##################################################################################
+    #def _compute_covariance_value_product(self, hyperparameters,values, variances, mean):
+    #    K = self._compute_covariance(hyperparameters, variances)
+    #    y = values - mean
+    #    #x = self.solve(K, y)
+    #    u, l = cho_factor(K)
+    #    x = cho_solve((u, l), y)
+    #    upper_diag = abs(u.diagonal())
+    #    logdet = 2.0 * np.sum(np.log(upper_diag))
+    #    if x.ndim == 2: x = x[:,0]
+    #    return x,K,logdet
     ##################################################################################
     def _compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""
         CoVariance = self.kernel(
             self.x_data, self.x_data, hyperparameters, self)
-        self.add_to_diag(CoVariance, variances)
+        self._add_to_diag(CoVariance, variances)
         return CoVariance
     ##################################################################################
-    def slogdet(self, A):
-        """
-        fvGPs slogdet method based on torch
-        """
-        #s,l = np.linalg.slogdet(A)
-        #return s,l
-        if self.compute_device == "cpu":
-            A = torch.from_numpy(A)
-            sign, logdet = torch.slogdet(A)
-            sign = sign.numpy()
-            logdet = logdet.numpy()
-            logdet = np.nan_to_num(logdet)
-            return sign, logdet
-        elif self.compute_device == "gpu" or self.compute_device == "multi-gpu":
-            A = torch.from_numpy(A).cuda()
-            sign, logdet = torch.slogdet(A)
-            sign = sign.cpu().numpy()
-            logdet = logdet.cpu().numpy()
-            logdet = np.nan_to_num(logdet)
-            return sign, logdet
+    def _add_to_diag(self,Matrix, Vector):
+        d = np.einsum("ii->i", Matrix)
+        d += Vector
+        return Matrix
+    ##################################################################################
+    #def slogdet(self, A):
+    #    """
+    #    fvGPs slogdet method based on torch or numpy
+    #    """
+    #    #s,l = np.linalg.slogdet(A)
+    #    #return s,l
+    #    if self.compute_device == "cpu" and self.linear_algebra_engine == "pytorch":
+    #        import torch
+    #        A = torch.from_numpy(A)
+    #        sign, logdet = torch.slogdet(A)
+    #        sign = sign.numpy()
+    #        logdet = logdet.numpy()
+    #        logdet = np.nan_to_num(logdet)
+    #        return sign, logdet
+    #    elif self.linear_algebra_engine == "pytorch" and (self.compute_device == "gpu" or self.compute_device == "multi-gpu"):
+    #        import torch
+    #        A = torch.from_numpy(A).cuda()
+    #        sign, logdet = torch.slogdet(A)
+    #        sign = sign.cpu().numpy()
+    #        logdet = logdet.cpu().numpy()
+    #        logdet = np.nan_to_num(logdet)
+    #        return sign, logdet
+    #    else:
+    #        sign, logdet = np.linalg.slogdet(A)
+    #        return sign, logdet
 
-    def inv(self, A):
-            A = torch.from_numpy(A)
-            B = torch.inverse(A)
-            return B.numpy()
+    #def inv(self, A):
+    #    if self.linear_algebra_engine == "pytorch":
+    #        import torch
+    #        A = torch.from_numpy(A)
+    #        B = torch.inverse(A)
+    #        return B.numpy()
+    #    else:
+    #        return numpy.linalg.inv(A)
 
     def solve(self, A, b):
         """
@@ -759,6 +785,11 @@ class GP():
         #x = np.linalg.solve(A,b)
         #return x
         if b.ndim == 1: b = np.expand_dims(b,axis = 1)
+        if self.linear_algebra_engine == "numpy":
+            try: x = np.linalg.solve(A,b)
+            except: x,res,rank,s = np.linalg.lstsq(A,b,rcond=None)
+            return x
+        import torch
         if self.compute_device == "cpu":
             A = torch.from_numpy(A)
             b = torch.from_numpy(b)
@@ -807,10 +838,6 @@ class GP():
                 total = np.append(total, results[i].cpu().numpy(), 0)
             return total
     ##################################################################################
-    def add_to_diag(self,Matrix, Vector):
-        d = np.einsum("ii->i", Matrix)
-        d += Vector
-        return Matrix
 
     def _is_sparse(self,A):
         if float(np.count_nonzero(A))/float(len(A)**2) < 0.01: return True
@@ -944,7 +971,7 @@ class GP():
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
-        if self.use_inv:
+        if self.K_inv is not None:
             if variance_only:
                 S = False
                 v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.K_inv, k)
@@ -1159,24 +1186,6 @@ class GP():
         kld = 0.5 * (np.trace(x1) + (x2.T @ mu) - dim + ((s2*logdet2)-(s1*logdet1)))
         if kld < -1e-4: logger.debug("Negative KL divergence encountered")
         return kld
-    ###########################################################################
-    #def kl_div_grad(self,mu1,dmu1dx, mu2, S1, dS1dx, S2):
-    #    """
-    #    function comuting the gradient of the KL divergence between two normal distributions
-    #    when the gradients of the mean and covariance are given
-    #    a = kl_div(mu1, dmudx,mu2, S1, dS1dx, S2); S1, S2 are a 2d numpy arrays, matrices has to be non-singular
-    #    mu1, mu2 are mean vectors, given as 2d arrays
-    #    """
-    #    s1, logdet1 = self.slogdet(S1)
-    #    s2, logdet2 = self.slogdet(S2)
-    #    x1 = self.solve(S2,dS1dx)
-    #    mu = np.subtract(mu2,mu1)
-    #    x2 = self.solve(S2,mu)
-    #    x3 = self.solve(S2,-dmu1dx)
-    #    dim = len(mu)
-    #    kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2 @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
-    #    if kld < -1e-4: logger.debug("Negative KL divergence encountered")
-    #    return kld
     ###########################################################################
     def gp_kl_div(self, x_pred, comp_mean, comp_cov):
         """
