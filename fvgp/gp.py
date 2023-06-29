@@ -745,7 +745,7 @@ class GP():
         return Matrix
     ##################################################################################
     def slogdet(self, A):
-        s, logdet = self.slogdet(A)
+        s, logdet = np.linalg.slogdet(A)
         return abs(logdet)
     #    """
     #    fvGPs slogdet method based on torch or numpy
