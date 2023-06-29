@@ -744,7 +744,9 @@ class GP():
         d += Vector
         return Matrix
     ##################################################################################
-    #def slogdet(self, A):
+    def slogdet(self, A):
+        s, logdet = self.slogdet(A)
+        return abs(logdet)
     #    """
     #    fvGPs slogdet method based on torch or numpy
     #    """
