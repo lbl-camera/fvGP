@@ -1114,8 +1114,8 @@ class GP():
         res = entropy(S); S is a 2d numpy array, matrix has to be non-singular
         """
         dim  = len(S[0])
-        s, logdet = self.slogdet(S)
-        return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * abs(logdet))
+        logdet = self.slogdet(S)
+        return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * logdet)
     ###########################################################################
     def gp_entropy(self, x_pred):
         """
