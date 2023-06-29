@@ -135,7 +135,7 @@ class GP():
         self.fixed_rank = fixed_rank
 
         self.use_inv = use_inv
-        self.K_inv = None
+        self.Kinv = None
         if self.normalize_y is True: self._normalize_y_data()
         ##########################################
         #######prepare variances##################
@@ -180,7 +180,7 @@ class GP():
         ##########################################
         #self._compute_prior_fvGP_pdf()
         self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.chol_tuple = self._compute_GPprior(self.x_data, init_hyperparameters, self.variances)
-
+        self.Kinv = np.linalg.inv(self.prior_covariance)
 
     def update_gp_data(
         self,
@@ -302,7 +302,7 @@ class GP():
             )
         #self._compute_prior_fvGP_pdf()
         self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.chol_tuple = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
-        self.K_inv = np.linalg.inv(self.prior_covariance)
+        self.Kinv = np.linalg.inv(self.prior_covariance)
     ##################################################################################
     def train_async(self,
         hyperparameter_bounds,
@@ -424,6 +424,7 @@ class GP():
                     self.hyperparameters = res
                     #self._compute_prior_fvGP_pdf()
                     self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.chol_tuple = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
+                    self.Kinv = np.linalg.inv(self.prior_covariance)
                     logger.debug("    fvGP async hyperparameter update successful")
                     logger.debug("    Latest hyperparameters: {}", self.hyperparameters)
                 else:
@@ -709,8 +710,8 @@ class GP():
     #
     #    if self.use_inv is True:
     #        K = self._compute_covariance(hyperparameters, variances)
-    #        self.K_inv = self.inv(K)
-    #        self.covariance_value_prod = self.K_inv @ (self.y_data - self.prior_mean_vector)
+    #        self.Kinv = self.inv(K)
+    #        self.covariance_value_prod = self.Kinv @ (self.y_data - self.prior_mean_vector)
     #    else:
     #        cov_y,K,logdet = self._compute_covariance_value_product(
     #            self.hyperparameters,
@@ -971,12 +972,12 @@ class GP():
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
-        if self.K_inv is not None:
+        if self.Kinv is not None:
             if variance_only:
                 S = False
-                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.K_inv, k)
+                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.Kinv, k)
             else:
-                S = kk - (k.T @ self.K_inv @ k)
+                S = kk - (k.T @ self.Kinv @ k)
                 v = np.array(np.diag(S))
         else:
             k_cov_prod = self.solve(self.prior_covariance,k)
@@ -1112,7 +1113,7 @@ class GP():
         """
         dim  = len(S[0])
         s, logdet = self.slogdet(S)
-        return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * s * logdet)
+        return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * abs(logdet))
     ###########################################################################
     def gp_entropy(self, x_pred):
         """
