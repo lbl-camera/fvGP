@@ -125,11 +125,10 @@ class GP():
         if np.ndim(y_data) == 2: y_data = y_data[:,0]
         if compute_device == "gpu" and linear_algebra_engine == "numpy":
             raise Exception("GPU computing needs linear_algebra_engine = 'pytorch'")
-        if linear_algebra_engine == "pytorch":
+        if compute_device == 'gpu':
             try: import torch
-            except: raise Exception("You have specified pytorch as your linear algebra engine. In that case, it has to be installed manually.")
+            except: raise Exception("You have specified the gpu as your compute device. You need to install pytorch manually for this to work.")
 
-        self.linear_algebra_engine = linear_algebra_engine
         self.normalize_y = normalize_y
         self.input_dim = input_space_dim
         self.x_data = x_data
@@ -141,10 +140,7 @@ class GP():
         self.sparse_mode = sparse_mode
         self.store_inv = store_inv
         if self.sparse_mode and gp_kernel_function is None:
-                warnings.warn("You have chosen to activate sparse mode. Great! \n 
-                It is still the responsibility of the user to define a compactly supported kenrel function, \n
-                and I know you did not. \n
-                One option is use the predefined obj.wendland kernel as your own kernel callable.")
+                warnings.warn("You have chosen to activate sparse mode. Great! \n It is still the responsibility of the user to define a compactly supported kenrel function, \n and I know you did not. \n One option is use the predefined obj.wendland kernel as your own kernel callable.")
 
         #self.use_inv = use_inv
         self.Kinv = None
@@ -803,7 +799,7 @@ class GP():
     def _inv(self, A):
         if self.compute_device == "cpu":
             return numpy.linalg.inv(A)
-        else self.compute_device == "gpu":
+        elif self.compute_device == "gpu":
             import torch
             A = torch.from_numpy(A)
             B = torch.inverse(A)
