@@ -17,7 +17,10 @@ def project_onto_bounds(x,bounds):
         if x[i] > bounds[i,1]: x[i] = bounds[i,1]
     return x
 
-
+def in_bounds(v,bounds):
+    for i in range(len(v)): 
+        if v[i] < bounds[i,0] or v[i] > bounds[i,1]: return False
+    return True
 
 
 def prior_func(theta,bounds):

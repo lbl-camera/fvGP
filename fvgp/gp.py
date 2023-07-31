@@ -68,6 +68,8 @@ class GP():
         a finite difference scheme is used.
     normalize_y : bool, optional
         If True, the data point values will be normalized to max(initial values) = 1. The default is False.
+    normalize_x : bool, optional
+        Normalize domain to [0,1]^inpit_space_dim, default = False
     store_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance matrix after each training or update of the dataset,
         which makes computing the posterior covariance faster.
@@ -116,6 +118,7 @@ class GP():
         gp_mean_function_grad = None,
         sparse_mode = True,
         normalize_y = False,
+        normalize_x = False,
         store_inv = True,
         ram_economy = True,
         args = None
@@ -123,8 +126,7 @@ class GP():
         if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
         if input_space_dim != len(x_data[0]): raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(y_data) == 2: y_data = y_data[:,0]
-        if compute_device == "gpu" and linear_algebra_engine == "numpy":
-            raise Exception("GPU computing needs linear_algebra_engine = 'pytorch'")
+        if compute_device == "gpu": raise Exception("GPU computing needs linear_algebra_engine = 'pytorch'")
         if compute_device == 'gpu':
             try: import torch
             except: raise Exception("You have specified the gpu as your compute device. You need to install pytorch manually for this to work.")
@@ -139,12 +141,17 @@ class GP():
         self.args = args
         self.sparse_mode = sparse_mode
         self.store_inv = store_inv
-        if self.sparse_mode and gp_kernel_function is None:
-                warnings.warn("You have chosen to activate sparse mode. Great! \n It is still the responsibility of the user to define a compactly supported kenrel function, \n and I know you did not. \n One option is use the predefined obj.wendland kernel as your own kernel callable.")
+        if self.sparse_mode and self.store_inv:
+            warnings.warn("sparse_mode and store_inv enabled but they should not be used together. I'll set store_inv = False.")
+            self.store_inv = False
+        if self.sparse_mode and not callable(gp_kernel_function):
+                warnings.warn("You have chosen to activate sparse mode. Great! \n But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.")
+                gp_kernel_function = self.wendland_anisotropic
 
-        #self.use_inv = use_inv
+
         self.Kinv = None
-        if self.normalize_y is True: self._normalize_y_data()
+        if self.normalize_y: self._normalize_y_data()
+        if self.normalize_x: self._normalize_x_data()
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -186,8 +193,7 @@ class GP():
         ##########################################
         #compute the prior########################
         ##########################################
-        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj = self._compute_GPprior(self.x_data, init_hyperparameters, self.variances)
-        if not self.sparse_mode and self.store_inv: self.Kinv = self._inv(self.prior_covariance)
+        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj, self.Kinv  = self._compute_GPprior(self.x_data, init_hyperparameters, self.variances)
 
     def update_gp_data(
         self,
@@ -217,7 +223,9 @@ class GP():
         self.x_data = x_data
         self.point_number = len(self.x_data)
         self.y_data = y_data
-        if self.normalize_y is True: self._normalize_y_data()
+        if self.normalize_y: self._normalize_y_data()
+        if self.normalize_x: self._normalize_x_data()
+
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -233,8 +241,7 @@ class GP():
         ######################################
         #####transform to index set###########
         ######################################
-        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj = self._compute_GPprior(self.x_data, init_hyperparameters, self.variances)
-        if not self.sparse_mode and self.store_inv: self.Kinv = self._inv(self.prior_covariance)
+        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj, self.Kinv  = self._compute_GPprior(self.x_data, init_hyperparameters, self.variances)
 
     ###################################################################################
     ###################################################################################
@@ -251,7 +258,6 @@ class GP():
         local_optimizer = "L-BFGS-B",
         global_optimizer = "genetic",
         constraints = (),
-        deflation_radius = None,
         dask_client = None):
 
         """
@@ -269,7 +275,8 @@ class GP():
         method : str or Callable, optional
             The method used to train the hyperparameters. The optiona are `'global'`, `'local'`, `'hgdl'`, and `'mcmc'`.
             The default is `'global'` (meaning scipy's differential evolution). If a callable is provided, it should accept as input
-            a fvgp.gp object instance and return a np.ndarray of hyperparameters, shape = (V).
+            a fvgp.gp object instance and return a np.ndarray of hyperparameters, shape = (V). If method = "mcmc", 
+            the attribute gp.GP.mcmc_info is available and contains convergence and disttibution information.
         pop_size : int, optional
             A number of individuals used for any optimizer with a global component. Default = 20.
         tolerance : float, optional
@@ -283,9 +290,6 @@ class GP():
         constraints : tuple of object instances, optional
             Equality and inequality constraints for the optimization. If the optimizer is ``hgdl'' see ``hgdl.readthedocs.io''.
             If the optimizer is a scipy optimizer, see scipy documentation.
-        deflation_radius : float, optional
-            Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation
-            for more info. Default = None, meaning HGDL will pick the radius.
         dask_client : distributed.client.Client, optional
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
@@ -304,11 +308,9 @@ class GP():
             constraints,
             local_optimizer,
             global_optimizer,
-            deflation_radius,
             dask_client
             )
-        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
-        if not self.sparse_mode and self.store_inv: self.Kinv = self._inv(self.prior_covariance)
+        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj, self.Kinv = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
     ##################################################################################
     def train_async(self,
         hyperparameter_bounds,
@@ -317,7 +319,6 @@ class GP():
         local_optimizer = "L-BFGS-B",
         global_optimizer = "genetic",
         constraints = (),
-        deflation_radius = None,
         dask_client = None):
         """
         This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
@@ -340,9 +341,6 @@ class GP():
             Defining the global optimizer. Only applicable to method = hgdl. Default = `genetic`
         constraints : tuple of hgdl.NonLinearConstraint instances, optional
             Equality and inequality constraints for the optimization. See ``hgdl.readthedocs.io''
-        deflation_radius : float, optional
-            Deflation radius for the HGDL optimization. Please refer to the HGDL package documentation
-            for more info. Default = None, meaning HGDL will pick the radius.
         dask_client : distributed.client.Client, optional
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
@@ -428,8 +426,7 @@ class GP():
                 l_o = self.neg_log_likelihood(self.hyperparameters)
                 if l_n - l_o < 0.000001:
                     self.hyperparameters = res
-                    self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
-                    if not self.sparse_mode and self.store_inv: self.Kinv = self._inv(self.prior_covariance)
+                    self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj, self.Kinv = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
                     logger.debug("    fvGP async hyperparameter update successful")
                     logger.debug("    Latest hyperparameters: {}", self.hyperparameters)
                 else:
@@ -452,7 +449,7 @@ class GP():
             A 1-d numpy array of hyperparameters.
         """
         self.hyperparameters = np.array(hps)
-        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
+        self.prior_covariance, self.covariance_value_prod, self.covariance_logdet, self.factorization_obj, self.Kinv = self._compute_GPprior(self.x_data, self.hyperparameters, self.variances)
     ##################################################################################
     def get_hyperparameters(self):
         """
@@ -507,15 +504,19 @@ class GP():
         logger.debug("optimize() called")
         return opt_obj
     ##################################################################################
-    def _optimize_log_likelihood(self,starting_hps,
-        hp_bounds,method,max_iter,
-        pop_size,tolerance,constraints,
-        local_optimizer,
-        global_optimizer,
-        deflation_radius,
-        dask_client = None):
+    def _optimize_log_likelihood(self,
+            starting_hps,
+            hp_bounds,
+            method,
+            max_iter,
+            pop_size,
+            tolerance,
+            constraints,
+            local_optimizer,
+            global_optimizer,
+            dask_client = None):
 
-        start_log_likelihood = self.neg_log_likelihood(starting_hps)
+        start_log_likelihood = self.log_likelihood(starting_hps)
 
         logger.debug(
             "fvGP hyperparameter tuning in progress. Old hyperparameters: ",
@@ -595,15 +596,15 @@ class GP():
             logger.debug('bounds are {}', hp_bounds)
             res = mcmc(self.log_likelihood,hp_bounds, x0 = starting_hps, n_updates = max_iter)
             hyperparameters = np.array(res["distribution mean"])
+            self.mcmc_info = res
         elif callable(method):
             hyperparameters = method(self)
         else:
             raise ValueError("No optimization mode specified in fvGP")
         ###################################################
-        if start_log_likelihood < self.neg_log_likelihood(hyperparameters):
-            hyperparameters = np.array(starting_hps)
-            logger.debug("fvGP optimization returned smaller log likelihood; resetting to old hyperparameters.")
+        if start_log_likelihood > self.log_likelihood(hyperparameters):
             logger.debug(f"New hyperparameters: {hyperparameters} with log likelihood: {self.log_likelihood(hyperparameters)}")
+            warnings.warn("New hyperparameters returned worse likelihood")
         return hyperparameters
     ##################################################################################
     def log_likelihood(self,hyperparameters):
@@ -738,21 +739,25 @@ class GP():
         self.prior_mean_vec = self.mean_function(self.x_data,self.hyperparameters,self)
         K = self._compute_covariance(hyperparameters, variances) ###could be done in batches for RAM
         if self.sparse_mode and self._is_sparse(K):
+            #print("Sparsity detected: ", self._how_sparse_is(K), "hps: ", hyperparameters)
             K = csc_matrix(K)
             LU = splu(K)
             KinvY = LU.solve(self.y_data - self.prior_mean_vec)
             upper_diag = abs(LU.U.diagonal())
             logdet = np.sum(np.log(upper_diag))
             factorization_obj = LU
-
+            Kinv = None
         else:
+            #if self.sparse_mode: print("Sparse mode enabled but no sparsity detected", self._how_sparse_is(K), "hps: ", hyperparameters)
             c, l = cho_factor(K)
             KinvY = cho_solve((c, l), self.y_data - self.prior_mean_vec)
             upper_diag = abs(c.diagonal())
             logdet = 2.0 * np.sum(np.log(upper_diag))
             factorization_obj = (c,l)
+            if self.store_inv: Kinv = self._inv(self.prior_covariance)
+            else: Kinv = None
 
-        return K, KinvY, logdet, factorization_obj
+        return K, KinvY, logdet, factorization_obj, Kinv
 
     def _compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""
@@ -798,14 +803,14 @@ class GP():
 
     def _inv(self, A):
         if self.compute_device == "cpu":
-            return numpy.linalg.inv(A)
+            return np.linalg.inv(A)
         elif self.compute_device == "gpu":
             import torch
             A = torch.from_numpy(A)
             B = torch.inverse(A)
             return B.numpy()
         else:
-            return numpy.linalg.inv(A)
+            return np.linalg.inv(A)
 
     def _solve(self, A, b):
         """
@@ -1746,6 +1751,16 @@ class GP():
         distance_matrix = np.sqrt(distance_matrix)
         return   hps[0] * obj.matern_kernel_diff1(distance_matrix,1)
 
+
+    def wendland_anisotropic(self,x1,x2, hps, obj):
+        distance_matrix = np.zeros((len(x1),len(x2)))
+        for i in range(len(x1[0])): distance_matrix += abs(np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
+        d = np.sqrt(distance_matrix)
+        d[d > 1.] = 1.
+        kernel = (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
+        return kernel
+
+
     def non_stat_kernel(self,x1,x2,x0,w,l):
         """
         Non-stationary kernel.
@@ -1855,7 +1870,25 @@ class GP():
         maxi = np.max(self.y_data)
         self.y_data = self.y_data / maxi
 
+    def _normalize(data):
+        data = data - np.min(data)
+        data = data/np.max(data)
+        return data
 
+    def _normalize_x_data(self):
+        for i in range(len(self.x_data[0])):
+            self.x_data[:,i] = self._normalize(self.x_data[:,i])
+
+    def _cartesian_prod(x,y):
+        """
+        Input x,y have to be 2d numpy arrays
+        The return is the cartesian product of the two sets
+        """
+        res = []
+        for i in range(len(y)):
+            for j in range(len(x)):
+                res.append(np.append(x[j],y[i]))
+        return np.array(res)
 
 ####################################################################################
 ####################################################################################
