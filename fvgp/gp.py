@@ -132,6 +132,7 @@ class GP():
             except: raise Exception("You have specified the gpu as your compute device. You need to install pytorch manually for this to work.")
 
         self.normalize_y = normalize_y
+        self.normalize_x = normalize_x
         self.input_dim = input_space_dim
         self.x_data = x_data
         self.point_number = len(self.x_data)
