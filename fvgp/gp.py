@@ -17,6 +17,13 @@ from loguru import logger
 from .mcmc import mcmc
 from hgdl.hgdl import HGDL
 
+
+
+#TODO:
+#  multi task posterior with x_out = None
+#  transform x_pred when normalization is used
+
+
 class GP():
     """
     This class provides all the tools for a single-task Gaussian Process (GP).
@@ -622,7 +629,7 @@ class GP():
         """
         mean = self.mean_function(self.x_data,hyperparameters,self)
         if mean.ndim > 1: raise Exception("Your mean function did not return a 1d numpy array!")
-        K,  KinvY, logdet, FO = self._compute_GPprior(self.x_data, hyperparameters, self.variances)
+        K,  KinvY, logdet, FO, Kinv = self._compute_GPprior(self.x_data, hyperparameters, self.variances)
         n = len(self.y_data)
         return -(0.5 * ((self.y_data - mean).T @ KinvY)) - (0.5 * logdet) - (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
@@ -655,7 +662,7 @@ class GP():
         """
         logger.debug("log-likelihood gradient is being evaluated...")
         mean = self.mean_function(self.x_data,hyperparameters,self)
-        K,  b, logdet, FO = self._compute_GPprior(self.x_data, hyperparameters, self.variances)
+        K,  b, logdet, FO, Kinv = self._compute_GPprior(self.x_data, hyperparameters, self.variances)
         y = self.y_data - mean
         if self.ram_economy is False:
             try: dK_dH = self.dk_dh(self.x_data,self.x_data, hyperparameters,self)
