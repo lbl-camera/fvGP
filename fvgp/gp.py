@@ -20,8 +20,10 @@ from hgdl.hgdl import HGDL
 
 
 #TODO:
-#  multi task posterior with x_out = None
-#  Use LU or chol factors for prediction
+#   use new noise function everywhere
+#   self.dm_dh id mostly not defined but it's running ???
+#   check ALL docs
+#   change and run all test scripts
 
 
 class GP():
@@ -162,30 +164,11 @@ class GP():
 
 
         self.Kinv = None
-        ##########################################
-        #######prepare variances##################
-        ##########################################
-        if variances is None:
-            self.variances = np.ones((self.y_data.shape)) * (np.mean(abs(self.y_data)) / 100.0)
-            logger.warning("CAUTION: you have not provided data variances in fvGP, "
-                           "they will be set to 1 percent of the |data values|!")
-        elif np.ndim(variances) == 2:
-            self.variances = variances[:,0]
-        elif np.ndim(variances) == 1:
-            self.variances = np.array(variances)
-        else:
-            raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
-        if (self.variances < 0.0).any(): raise Exception("Negative measurement variances communicated to fvgp.")
-
-        #########################################
-        ###########normalization#################
-        #########################################
-        if self.normalize_y:
-            self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
-            self.variances = (1./(self.y_max-self.y_min)**2) * self.variances
         ###########################################
         #######define kernel, mean and noise#######
         ###########################################
+        if callable(gp_noise_function): self.noise_function = gp_noise_function
+        else: self.noise_function = self._default_noise_function
         self.noise_function = gp_noise_function
         self.noise_function_grad = gp_noise_function_grad
         if callable(gp_kernel_function): self.kernel = gp_kernel_function
@@ -203,6 +186,28 @@ class GP():
         else: self.mean_function = self._default_mean_function
 
         if callable(gp_mean_function_grad): self.dm_dh = gp_mean_function_grad
+        ##########################################
+        #######prepare variances##################
+        ##########################################
+        if variances is None:
+            self.variances = self.noise_function(self.x_data, hyperparameters,self)
+            logger.warning("CAUTION: you have not provided data variances in fvGP, "
+                           "they will be set to 1 percent of the |data values|!")
+        elif np.ndim(variances) == 2:
+            self.variances = variances[:,0]
+        elif np.ndim(variances) == 1:
+            self.variances = variances
+        else:
+            raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
+        if (self.variances < 0.0).any(): raise Exception("Negative measurement variances communicated to fvgp.")
+
+        #########################################
+        ###########normalization#################
+        #########################################
+        if self.normalize_y:
+            self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
+            self.variances = (1./(self.y_max-self.y_min)**2) * self.variances
+
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
@@ -247,7 +252,9 @@ class GP():
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = np.ones((self.y_data.shape)) * (np.mean(abs(self.y_data)) / 100.0)
+            self.variances = self.noise_function(self.x_data, hyperparameters,self)
+            logger.warning("CAUTION: you have not provided data variances in fvGP, "
+                           "they will be set to 1 percent of the |data values|!")
         elif np.ndim(variances) == 2:
             self.variances = variances[:,0]
         elif np.ndim(variances) == 1:
@@ -771,6 +778,7 @@ class GP():
     ##################################################################################
     def _compute_GPprior(self, x_data, hyperparameters, variances, calc_inv = False):
         self.prior_mean_vec = self.mean_function(self.x_data,self.hyperparameters,self)
+        if callable(self.noise_function): variances = self.noise_function(self.x_data, self.hyperparameters,self)
         K = self._compute_covariance(hyperparameters, variances) ###could be done in batches for RAM
         if self.sparse_mode and self._is_sparse(K):
             #print("Sparsity detected: ", self._how_sparse_is(K), "hps: ", hyperparameters)
@@ -796,7 +804,6 @@ class GP():
     def _compute_covariance(self, hyperparameters, variances):
         """computes the covariance matrix from the kernel"""
         CoVariance = self.kernel(self.x_data, self.x_data, hyperparameters, self)
-        if callable(self.noise_function): variances = self.noise_function(self.x_data)
         self._add_to_diag(CoVariance, variances)
         return CoVariance
     ##################################################################################
@@ -810,7 +817,7 @@ class GP():
             LU = self.factorization_obj[1]
             return LU.solve(b)
         if self.factorization_obj[0] == "Chol":
-            c,l = self.factorization_obj[1], self.factorization_obj[1]
+            c,l = self.factorization_obj[1], self.factorization_obj[2]
             return cho_solve((c, l), b)
 
     def _logdet(self, A, factorization_obj = None):
@@ -914,6 +921,10 @@ class GP():
         mean = np.zeros((len(x)))
         mean[:] = np.mean(self.y_data)
         return mean
+
+    def _default_noise_function(self, x, hyperparameters, gp_obj):
+        return np.ones((self.y_data.shape)) * (np.mean(abs(self.y_data)) / 100.0)
+
     ###########################################################################
     ###########################################################################
     ###########################################################################
