@@ -130,7 +130,7 @@ class GP():
         gp_noise_function_grad = None,
         gp_mean_function = None,
         gp_mean_function_grad = None,
-        sparse_mode = True,
+        sparse_mode = False,
         normalize_y = False,
         store_inv = True,
         ram_economy = True,
@@ -169,7 +169,6 @@ class GP():
         ###########################################
         if callable(gp_noise_function): self.noise_function = gp_noise_function
         else: self.noise_function = self._default_noise_function
-        self.noise_function = gp_noise_function
         self.noise_function_grad = gp_noise_function_grad
         if callable(gp_kernel_function): self.kernel = gp_kernel_function
         elif gp_kernel_function is None: self.kernel = self.default_kernel
@@ -190,7 +189,7 @@ class GP():
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = self.noise_function(self.x_data, hyperparameters,self)
+            self.variances = self.noise_function(self.x_data, init_hyperparameters,self)
             logger.warning("CAUTION: you have not provided data variances in fvGP, "
                            "they will be set to 1 percent of the |data values|!")
         elif np.ndim(variances) == 2:
@@ -252,7 +251,7 @@ class GP():
         #######prepare variances##################
         ##########################################
         if variances is None:
-            self.variances = self.noise_function(self.x_data, hyperparameters,self)
+            self.variances = self.noise_function(self.x_data, self.hyperparameters,self)
             logger.warning("CAUTION: you have not provided data variances in fvGP, "
                            "they will be set to 1 percent of the |data values|!")
         elif np.ndim(variances) == 2:
