@@ -795,7 +795,7 @@ class GP():
             KinvY = cho_solve((c, l), self.y_data - self.prior_mean_vec)
             upper_diag = abs(c.diagonal())
             logdet = 2.0 * np.sum(np.log(upper_diag))
-            if calc_inv: Kinv = self._inv(self.K)
+            if calc_inv: Kinv = self._inv(K)
             else: Kinv = None
 
         return K, KinvY, logdet, factorization_obj, Kinv
