@@ -147,7 +147,7 @@ class GP():
         sparse_mode = False,
         normalize_y = False,
         store_inv = True,
-        ram_economy = True,
+        ram_economy = False,
         args = None
         ):
         ########################################
@@ -186,8 +186,12 @@ class GP():
         if callable(gp_noise_function): self.noise_function = gp_noise_function
         else: self.noise_function = self._default_noise_function
         if callable(gp_noise_function_grad): self.noise_function_grad = gp_noise_function_grad
-        elif gp_noise_function_grad == "finite difference": self.noise_function_grad = self._finitediff_dnoise_dh
-        else: self.noise_function_grad = self._default_dnoise_dh
+        elif gp_noise_function_grad == "finite difference":
+            if self.ram_economy is True: self.noise_function_grad = self._finitediff_dnoise_dh_econ
+            else: self.noise_function_grad = self._finitediff_dnoise_dh
+        else:
+            if self.ram_economy is True: self.noise_function_grad = self._default_dnoise_dh_econ
+            else: self.noise_function_grad = self._default_dnoise_dh
 
         if callable(gp_kernel_function): self.kernel = gp_kernel_function
         elif gp_kernel_function is None: self.kernel = self.default_kernel
@@ -208,7 +212,7 @@ class GP():
         ##########################################
         if noise_variances is None:
             ##noise covariances are always a square matrix
-            self.noise_covariances = self.noise_function(self.x_data, init_hyperparameters,self)
+            self.noise_covariances = self.noise_function(self.x_data, self.x_data, init_hyperparameters,self)
             if np.ndim(self.noise_covariances) == 1: raise Exception("Your noise function did not return a square matrix, it should though, the noise can be correlated.")
             elif self.noise_covariances.shape[0] != self.noise_covariances.shape[1]: raise Exception("Your noise function return is not a square matrix")
         elif np.ndim(noise_variances) == 2:
@@ -271,7 +275,7 @@ class GP():
         ##########################################
         if noise_variances is None:
             ##noise covariances are always a square matrix
-            self.noise_covariances = self.noise_function(self.x_data, self.hyperparameters,self)
+            self.noise_covariances = self.noise_function(self.x_data, self.x_data, self.hyperparameters,self)
         elif np.ndim(noise_variances) == 2:
             if any(noise_variances <= 0.0): raise Exception("Negative or zero measurement variances communicated to fvgp or derived from the data.")
             self.noise_covariances = np.diag(noise_variances[:,0])
@@ -682,13 +686,12 @@ class GP():
             Vector of hyperparameters of shape (V)
         Return
         ------
-        negative marginal log-likelihood : float
+            marginal log-likelihood : float
         """
         K, KV,  KVinvY, KVlogdet, FO, KVinv, mean = self._compute_GPprior(self.x_data, hyperparameters, self.noise_covariances, calc_inv = False)
         n = len(self.y_data)
         return -(0.5 * ((self.y_data - mean).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
-
     def neg_log_likelihood(self,hyperparameters):
         """
         Function that computes the marginal log-likelihood
@@ -699,7 +702,7 @@ class GP():
             Vector of hyperparameters of shape (V)
         Return
         ------
-        negative marginal log-likelihood : float
+            negative marginal log-likelihood : float
         """
         return -self.log_likelihood(hyperparameters)
     ##################################################################################
@@ -720,8 +723,8 @@ class GP():
         b = KVinvY
         y = self.y_data - mean
         if self.ram_economy is False:
-            try: dK_dH = self.dk_dh(self.x_data,self.x_data, hyperparameters,self)
-            except Exception as e: raise Exception("The gradient evaluation dK/dh was not successful. \n That normally means the combination of ram_economy and definition of the gradient function is wrong. ",str(e))
+            try: dK_dH = self.dk_dh(self.x_data,self.x_data, hyperparameters,self) + self.noise_function_grad(self.x_data,self.x_data, hyperparameters,self)
+            except Exception as e: raise Exception("The gradient evaluation dK/dh + dNoise/dh was not successful. \n That normally means the combination of ram_economy and definition of the gradient function is wrong. ",str(e))
             KV = np.array([KV,] * len(hyperparameters))
             a = self._solve(KV,dK_dH)
         bbT = np.outer(b , b.T)
@@ -734,8 +737,8 @@ class GP():
             dL_dHm[i] = -dm_dh[i].T @ b
             if self.ram_economy is False: matr = a[i]
             else:
-                try: dK_dH = self.dk_dh(self.x_data,self.x_data, i,hyperparameters, self)
-                except: raise Exception("The gradient evaluation dK/dh was not successful. \n That normally means the combination of ram_economy and definition of the gradient function is wrong.")
+                try: dK_dH = self.dk_dh(self.x_data,self.x_data, i,hyperparameters, self) + self.noise_function_grad(self.x_data,self.x_data, i,hyperparameters,self)
+                except: raise Exception("The gradient evaluation dK/dh + dNoise/dh was not successful. \n That normally means the combination of ram_economy and definition of the gradient function is wrong.")
                 matr = np.linalg.solve(KV,dK_dH)
             if dL_dHm[i] == 0.0:
                 if self.ram_economy is False: mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
@@ -1961,7 +1964,6 @@ class GP():
             gradient[direction] = self.dkernel_dh(points1, points2, direction, hyperparameters)
         return gradient
 
-
     def gp_kernel_derivative(self, points1, points2, direction, hyperparameters, obj):
         #gradient = np.empty((len(hyperparameters), len(points1),len(points2)))
         derivative = self.dkernel_dh(points1, points2, direction, hyperparameters)
@@ -1971,8 +1973,11 @@ class GP():
         gr = np.zeros((len(hps),len(x)))
         return gr
 
-    def _default_dnoise_dh(self,h,hps,gp_obj):
-        gr = np.zeros((len(hyperparameters), len(points1),len(points2)))
+    def _default_dnoise_dh(self,x1,x2,hps,gp_obj):
+        gr = np.zeros((len(hps), len(x1),len(x2)))
+        return gr
+    def _default_dnoise_dh_econ(self,x1,x2,i,hps,gp_obj):
+        gr = np.zeros((len(x1),len(x2)))
         return gr
 
 
@@ -1989,18 +1994,28 @@ class GP():
         return gr
 
     ##########################
-    def _finitediff_dnoise_dh(self,x,hps,gp_obj):
-        gr = np.zeros((len(hyperparameters), len(points1),len(points2)))
+    def _finitediff_dnoise_dh(self,x1,x2,hps,gp_obj):
+        gr = np.zeros((len(hps), len(x1),len(x2)))
         for i in range(len(hps)):
             temp_hps1 = np.array(hps)
             temp_hps1[i] = temp_hps1[i] + 1e-6
             temp_hps2 = np.array(hps)
             temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.noise_function(x,temp_hps1,self)
-            b = self.noise_function(x,temp_hps2,self)
+            a = self.noise_function(x1,x2,temp_hps1,self)
+            b = self.noise_function(x1,x2,temp_hps2,self)
             gr[i] = (a-b)/2e-6
         return gr
     ##########################
+    def _finitediff_dnoise_dh_econ(self,x1,x2,i,hps,gp_obj):
+        temp_hps1 = np.array(hps)
+        temp_hps1[i] = temp_hps1[i] + 1e-6
+        temp_hps2 = np.array(hps)
+        temp_hps2[i] = temp_hps2[i] - 1e-6
+        a = self.noise_function(x1,x2,temp_hps1,self)
+        b = self.noise_function(x1,x2,temp_hps2,self)
+        gr = (a-b)/2e-6
+        return gr
+
 
 
     def _normalize(self,data):
