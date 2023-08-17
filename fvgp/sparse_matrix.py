@@ -3,19 +3,17 @@ import scipy.sparse as sparse
 import scipy.sparse.linalg as solve
 import numpy as np
 import dask.distributed as distributed
-import matplotlib.pyplot as plt
 from scipy.sparse.linalg import spsolve
 from scipy.sparse.linalg import splu
 from scipy.optimize import differential_evolution
 from scipy.sparse import coo_matrix
 import gc
+from scipy.sparse.linalg import splu
 from scipy.sparse.linalg import spilu
 from .mcmc import mcmc
+import torch
 from dask.distributed import Variable
 import math
-#from scikits import umfpack
-#from scikits.umfpack import spsolve, splu
-
 
 class gp2ScaleSparseMatrix:
     def __init__(self,n):
@@ -113,11 +111,11 @@ class gp2ScaleSparseMatrix:
             except: raise Exception("No logdet() method was successful, EXIT")
         return r
 
-    def random_logdet(self, A,eps = 0.50, delta = 0.01,m = 100):
+    def random_logdet(self, A,eps = 0.50, delta = 0.01,m = 10):
         #from: https://www.boutsidis.org/Boutsidis_LAA2017.pdf
         A = sparse.csc_matrix(A)
         N = A.shape[0]
-        alpha = 7.0 * sparse.linalg.eigsh(A,k=1,tol=0.0000001, return_eigenvectors=False)[0]
+        alpha = 7.0 * sparse.linalg.eigsh(A,k=1,tol=0.0001, return_eigenvectors=False)[0]
         A.data = A.data / alpha
         diag = sparse.eye(N, format="csc")
         C = sparse.csc_matrix(diag - A)

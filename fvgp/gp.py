@@ -32,7 +32,7 @@ class GP():
     
     V ... number of input points
     D ... input space dimensionality
-    N ... arbitrary intergers (N1, N2,...)
+    N ... arbitrary integers (N1, N2,...)
 
     Parameters
     ----------
@@ -64,7 +64,7 @@ class GP():
         data points. It is a function of the form k(x1,x2,hyperparameters, obj).
         The input x1 is a N1 x D array of positions, x2 is a N2 x D
         array of positions, the hyperparameters argument 
-        is a 1-D array of length D+1 for the default kernel and of a different
+        is a 1d array of length D+1 for the default kernel and of a different
         user-defined length for other kernels
         obj is an `fvgp.gp.GP` instance. The default is a stationary anisotropic kernel
         (`fvgp.gp.GP.default_kernel`) which performs automatic relevance determination (ARD).
@@ -74,7 +74,7 @@ class GP():
         If provided, it will be used for local training (optimization) and can speed up the calculations.
         It accepts as input x1 (a N1 x D array of positions),
         x2 (a N2 x D array of positions), 
-        hyperparameters (a 1-D array of length D+1 for the default kernel), and a
+        hyperparameters (a 1d array of length D+1 for the default kernel), and a
         `fvgp.gp.GP` instance. The default is a finite difference calculation.
         If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and a
         `fvgp.gp.GP` instance, and the output
@@ -85,11 +85,11 @@ class GP():
     gp_mean_function : Callable, optional
         A function that evaluates the prior mean at a set of input position. It accepts as input
         an array of positions (of shape N1 x D), hyperparameters (a 1d array of length D+1 for the default kernel)
-        and a `fvgp.gp.GP` instance. The return value is a 1-D array of length N1. If None is provided,
+        and a `fvgp.gp.GP` instance. The return value is a 1d array of length N1. If None is provided,
         `fvgp.gp.GP._default_mean_function` is used.
     gp_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the ``gp_mean_function'' at a set of input positions with respect to the hyperparameters.
-        It accepts as input an array of positions (of size N1 x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
+        It accepts as input an array of positions (of size N1 x D), hyperparameters (a 1d array of length D+1 for the default kernel)
         and a `fvgp.gp.GP` instance. The return value is a 2d array of shape (len(hyperparameters) x N1). If None is provided, either
         zeros are returned since the default mean function does not depend on hyperparametes, or a finite-difference approximation
         is used if ``gp_mean_function'' is provided.
@@ -98,31 +98,28 @@ class GP():
         positive symmetric definite matrix of shape(len(x),len(x)).
     gp_noise_function_grad : Callable, optional
         A function that evaluates the gradient of the ``gp_noise_function'' at an input position with respect to the hyperparameters.
-        It accepts as input an array of positions (of size N x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
+        It accepts as input an array of positions (of size N x D), hyperparameters (a 1d array of length D+1 for the default kernel)
         and a `fvgp.gp.GP` instance. The return value is a 3-D array of shape (len(hyperparameters) x N x N). If None is provided, either
         zeros are returned since the default noise function does not dpeend on hyperparametes. If ``gp_noise_function'' is provided but no gradient function,
         a finite-difference approximation will be used.
-
     normalize_y : bool, optional
-        If True, the data point values will be normalized to max(initial values) = 1. The default is False.
-    normalize_x : bool, optional
-        Normalize domain to [0,1]^inpit_space_dim, default = False
+        If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0. The default is False.
     store_inv : bool, optional
-        If True, the algorithm calculates and stores the inverse of the covariance matrix after each training or update of the dataset,
+        If True, the algorithm calculates and stores the inverse of the covariance matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster.
         For larger problems (>2000 data points), the use of inversion should be avoided due to computational instability and costs. The default is
-        False. Note, the training will always use Cholesky or LU decomposition instead of the inverse for stability reasons. Storing the inverse is
+        True. Note, the training will always use Cholesky or LU decomposition instead of the inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
         If True, components of the derivative of the marginal log-likelihood are calculated subsequently, leading to a slow-down
-        but much less RAM usage. If the derivative of the kernel with respect to the hyperparameters (gp_kernel_function_grad) is 
-        going to be provided, it has to be tailored: for ram_economy=True it should be of the form f(points1, points2, direction, hyperparameters)
-        and return a 2-D numpy array of shape V x V.
+        but much less RAM usage. If the derivative of the kernel with respect to the hyperparameters (gp_kernel_function_grad) is
+        going to be provided, it has to be tailored: for ram_economy=True it should be of the form f(x1, x2, direction, hyperparameters)
+        and return a 2d numpy array of shape len(x1) x len(x2).
         If ram_economy=False, the function should be of the form f(points1, points2, hyperparameters) and return a numpy array of shape
-        H x V x V, where H is the number of hyperparameters. V is the number of points. CAUTION: This array will be stored and is very large.
+        H x len(x1) x len(x2), where H is the number of hyperparameters. CAUTION: This array will be stored and is very large.
     args : any, optional
-        args will be a class attribute and therefore available to kernel and and prior mean functions.
+        args will be a class attribute and therefore available to kernel, noise and prior mean functions.
 
 
 
@@ -176,7 +173,7 @@ class GP():
 
 
         self.normalize_y = normalize_y
-        self.input_dim = input_space_dim
+        self.input_space_dim = input_space_dim
         self.x_data = x_data
         self.point_number = len(self.x_data)
         self.y_data = y_data
@@ -186,10 +183,10 @@ class GP():
         self.sparse_mode = sparse_mode
         self.store_inv = store_inv
         if self.sparse_mode and self.store_inv:
-            warnings.warn("sparse_mode and store_inv enabled but they should not be used together. I'll set store_inv = False.")
+            warnings.warn("sparse_mode and store_inv enabled but they should not be used together. I'll set store_inv = False.", stacklevel=2)
             self.store_inv = False
         if self.sparse_mode and not callable(gp_kernel_function):
-                warnings.warn("You have chosen to activate sparse mode. Great! \n But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.")
+                warnings.warn("You have chosen to activate sparse mode. Great! \n But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.", stacklevel=2)
                 gp_kernel_function = self.wendland_anisotropic
 
         self.KVinv = None
@@ -199,7 +196,9 @@ class GP():
         ###########################################
         if callable(gp_noise_function): self.noise_function = gp_noise_function
         elif noise_variances is not None: self.noise_function = None
-        else: raise Exception("No noise noise function or measurement noise provided. Please provide one of them.")
+        else:
+            warnings.warn("No noise function or measurement noise provided. Noise variances will be set to 1% of mean(y_data).", stacklevel=2)
+            self.noise_function = self._default_noise_function
         if noise_variances is not None and callable(gp_noise_function): raise Exception("Noise function and measurement noise provided. Only one should be given.")
         if callable(gp_noise_function_grad): self.noise_function_grad = gp_noise_function_grad
         elif callable(gp_noise_function):
@@ -278,7 +277,7 @@ class GP():
             will be set to `abs(np.mean(y_data) / 100.0`.
         """
         if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
-        if self.input_dim != len(x_data[0]):
+        if self.input_space_dim != len(x_data[0]):
             raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(y_data) == 2: y_data = y_data[:,0]
 
@@ -395,7 +394,7 @@ class GP():
         constraints = (),
         dask_client = None):
         """
-        This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
+        This function asynchronously finds the maximum of the log marginal likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
         providing a dask client. This function just submits the training and returns
         an object which can be given to `fvgp.gp.update_hyperparameters`, which will automatically update the GP prior with the new hyperparameters.
@@ -998,15 +997,14 @@ class GP():
         ------
         solution dictionary : {}
         """
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
-
-        if hyperparameters:
+        if hyperparameters is not None:
             hps = self.hyperparameters
-            K,  KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
+            K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
         else:
             hps = self.hyperparameters
             KVinvY = self.KVinvY
@@ -1014,6 +1012,7 @@ class GP():
         k = self.kernel(self.x_data,x_pred,hps,self)
         A = k.T @ KVinvY
         posterior_mean = self.mean_function(x_pred,hps,self) + A
+
 
         return {"x": x_pred,
                 "f(x)": posterior_mean}
@@ -1039,16 +1038,15 @@ class GP():
         solution dictionary : dict
         """
 
-        if hyperparameters: 
+        if hyperparameters is not None:
             hps = self.hyperparameters
-            K,  KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
+            K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
         else:
             hps = self.hyperparameters
             KVinvY = self.KVinvY
-
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,hps,self)
         f = self.mean_function(x_pred,hps,self)
@@ -1094,10 +1092,9 @@ class GP():
         solution dictionary : dict
         """
 
-
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1138,9 +1135,9 @@ class GP():
         ------
         solution dictionary : dict
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         k_covariance_prod = self._KVsolve(k)
@@ -1188,9 +1185,9 @@ class GP():
         ------
         solution dictionary : dict
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1215,9 +1212,9 @@ class GP():
         -------
         solution dictionary : dict
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1262,9 +1259,9 @@ class GP():
         ------
         entropy : float
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         priors = self.gp_prior(x_pred)
         S = priors["S(x)"]
@@ -1286,9 +1283,9 @@ class GP():
         ------
         entropy : float
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         priors1 = self.gp_prior(x_pred)
         priors2 = self.gp_prior_grad(x_pred,direction)
@@ -1340,9 +1337,9 @@ class GP():
         -------
             solution dictionary : dict
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         res = self.posterior_mean(x_pred)
         gp_mean = res["f(x)"]
@@ -1373,9 +1370,9 @@ class GP():
         -------
             solution dictionary : dict
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         gp_mean = self.posterior_mean(x_pred)["f(x)"]
         gp_mean_grad = self.posterior_mean_grad(x_pred,direction)["df/dx"]
@@ -1404,9 +1401,9 @@ class GP():
         -------
         solution dictionary : dict
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1436,9 +1433,9 @@ class GP():
         -------
         solution dictionary : {}
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1468,9 +1465,9 @@ class GP():
         -------
         solution dictionary : {}
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         e2 = self.gp_entropy_grad(x_pred,direction)
         sig = e2
@@ -1491,9 +1488,9 @@ class GP():
         -------
         solution dictionary : {}
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         res = self.posterior_mean(x_pred)
         gp_mean = res["f(x)"]
@@ -1530,9 +1527,9 @@ class GP():
         -------
         solution dictionary : {}
         """
-        try: x_pred = x_pred.reshape(-1,self.input_dim)
-        except: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out: x_pred = self._cartesian_product(x_pred,x_out)
+        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         x1 = np.array(x_pred)
         x2 = np.array(x_pred)
@@ -2056,7 +2053,7 @@ class GP():
             new_x_pred[:,i] = (x_pred[:,i] - x_min[i]) / (x_max[i] - x_min[i])
         return new_x_pred
 
-    def _cartesian_prod(self,x,y):
+    def _cartesian_product(self,x,y):
         """
         Input x,y have to be 2d numpy arrays
         The return is the cartesian product of the two sets

@@ -2,7 +2,6 @@ import time
 import numpy as np
 import torch
 
-
 ###################################
 ######gp2Scale GPU kernels#########
 ###################################
@@ -68,6 +67,18 @@ def get_distance_matrix_gpu(x1,x2,device):
         d += ((x1[:,i].reshape(-1, 1) - x2[:,i]))**2
     return torch.sqrt(d)
 
+
+def wendland_gpu(x1,x2, radius,device):
+    d = get_distance_matrix_gpu(x1,x2,device)
+    #d[d == 0.0] = 1e-16
+    d[d > radius] = radius
+    r = radius
+    a = d/r
+    kernel = (1.-a)**8 * (35.*a**3 + 25.*a**2 + 8.*a + 1.)
+    return kernel
+
+
+
 def sparse_stat_kernel_gpu(x1,x2, hps,device):
     d = get_distance_matrix_gpu(x1,x2,device)
     d[d == 0.0] = 1e-6
@@ -83,14 +94,24 @@ def sparse_stat_kernel_gpu(x1,x2, hps,device):
     ((2.0*d_hpss + 1.0)*sq))
     return kernel
 
-
-def ks_gpu(x1,x2,hps,cuda_device):
+def ks_gpu1(x1,x2,hps,cuda_device):
     k1 = torch.outer(f_gpu(x1,hps[0:12],hps[12:16],hps[16:20],cuda_device),
                      f_gpu(x2,hps[0:12],hps[12:16],hps[16:20],cuda_device)) + \
          torch.outer(g_gpu(x1,hps[20:32],hps[32:36],hps[36:40],cuda_device),
                      g_gpu(x2,hps[20:32],hps[32:36],hps[36:40],cuda_device))
     k2 = sparse_stat_kernel_gpu(x1,x2, hps[41],cuda_device)
     return k1 + hps[40]*k2
+
+def ks_gpu_wend(x1,x2,hps,cuda_device):
+    #k1 = torch.outer(f_gpu(x1,hps[0:12],hps[12:16],hps[16:20],cuda_device),
+    #                 f_gpu(x2,hps[0:12],hps[12:16],hps[16:20],cuda_device)) + \
+    #     torch.outer(g_gpu(x1,hps[20:32],hps[32:36],hps[36:40],cuda_device),
+    #                 g_gpu(x2,hps[20:32],hps[32:36],hps[36:40],cuda_device))
+    #k2 = sparse_stat_kernel_gpu(x1,x2, hps[41],cuda_device)
+    k2 = wendland_gpu(x1,x2, hps[1],cuda_device)
+    #return k1 + hps[0]*k2
+    return hps[0] * k2
+
 
 def kernel_gpu(x1,x2, hps):
     cuda_device = torch.device("cuda:0")
@@ -160,4 +181,35 @@ def kernel_cpu(x1,x2, hps):
 ############################################################
 ############################################################
 
-
+import torch
+from torch import nn
+class Network(nn.Module):
+    def __init__(self, dim, layer_width):
+        super().__init__()
+        
+        # Inputs to hidden layer linear transformation
+        self.layer1 = nn.Linear(dim, layer_width)
+        self.layer2 = nn.Linear(layer_width, layer_width)
+        self.layer3 = nn.Linear(layer_width, dim)
+        #nn.init.kaiming_uniform_(self.layer1.weight, nonlinearity="relu")
+        
+    def forward(self, x):
+        x = torch.Tensor(x)
+        x = torch.nn.functional.relu(self.layer1(x))
+        x = torch.nn.functional.relu(self.layer2(x))
+        x = torch.nn.functional.relu(self.layer3(x))
+        return x.detach().numpy()
+    
+    def set_weights(self,w1,w2,w3):
+        with torch.no_grad(): self.layer1.weight = nn.Parameter(torch.from_numpy(w1).float())
+        with torch.no_grad(): self.layer2.weight = nn.Parameter(torch.from_numpy(w2).float())
+        with torch.no_grad(): self.layer3.weight = nn.Parameter(torch.from_numpy(w3).float())
+    def set_biases(self,b1,b2,b3):
+        with torch.no_grad(): self.layer1.bias = nn.Parameter(torch.from_numpy(b1).float())
+        with torch.no_grad(): self.layer2.bias = nn.Parameter(torch.from_numpy(b2).float())
+        with torch.no_grad(): self.layer3.bias = nn.Parameter(torch.from_numpy(b3).float())
+        
+    def get_weights(self):
+        return self.layer1.weight, self.layer2.weight, self.layer3.weight
+    def get_biases(self):
+        return self.layer1.bias, self.layer2.bias, self.layer3.bias

@@ -10,6 +10,11 @@ import itertools
 import time
 from functools import partial
 from fvgp.gp import GP
+from fvgp.advanced_kernels import Network
+
+#TODO:
+#   default kernel
+#   adapt docs based on default kernel
 
 
 class fvGP(GP):
@@ -17,129 +22,240 @@ class fvGP(GP):
     This class provides all the tools for a multi-task Gaussian Process (GP).
     This class allows for full HPC support for training. After initialization, this
     class provides all the methods described for the GP class.
+    
+    V ... number of input points
+    Di... input space dimensionality
+    Do... output space dimensionality
+    No... number of outputs
+    N ... arbitrary integers (N1, N2,...)
+
+
+    The main logic of fvGP is that any multi-task GP is just a single-task GP
+    over a Cartesian product space of input and output space, as long as the kernel
+    is flexible enough, so prepare to work on your kernel. This is the best 
+    way to give the user optimal control and power. At various instances, for instances
+    prior-mean function, noise function, and kernel function definitions, you will
+    see that the input ``x'' is defined over this combined space. 
+    For example, if your input space is a Euclidean 2d space and your output
+    is labelled [[0],[1]], the input to the mean, kernel, and noise function might be
+    x = 
+    [[0.2, 0.3,0],[0.9,0.6,0],
+     [0.2, 0.3,1],[0.9,0.6,1]]
+    This has to be understood and taken into account when customizing fvGP for multi-task
+    use.
 
     Parameters
     ----------
     input_space_dim : int
-        Dimensionality of the input space.
+        Dimensionality of the input space (D).
     output_space_dim : int
-        Integer specifying the number of dimensions of the output space. Most often 1.
+        Integer specifying the number of dimensions of the output space. Most often 1. This is not the number of outputs/tasks.
+        For instance, a spectrum as output at each input is itslef a function over a 1d space but has many outputs.
     output_number : int
         Number of output values.
-    points : np.ndarray
-        The point positions. Shape (V x D), where D is the `input_space_dim`.
-    values : np.ndarray
-        The values of the data points. Shape (V,output_number).
-    init_hyperparameters : np.ndarray
-        Vector of hyperparameters used by the GP initially. The class provides methods to train hyperparameters.
-    value_positions : np.ndarray, optional
+    x_data : np.ndarray
+        The input point positions. Shape (V x D), where D is the `input_space_dim`.
+    y_data : np.ndarray
+        The values of the data points. Shape (V,No).
+    init_hyperparameters : np.ndarray, optional
+        Vector of hyperparameters used by the GP initially.
+        This class provides methods to train hyperparameters.
+        The default is an array of ones, with a shape appropriate
+        for the default kernel (D + 1), which is an anisotropic Matern
+        kernel with automatic relevance determination (ARD).
+    output_positions : np.ndarray, optional
         A 3-D numpy array of shape (U x output_number x output_dim), so that for each measurement position, the outputs
         are clearly defined by their positions in the output space. The default is np.array([[0],[1],[2],[3],...,[output_number - 1]]) for each
         point in the input space. The default is only permissible if output_dim is 1.
-    variances : np.ndarray, optional
-        An numpy array defining the uncertainties in the data `values`. Shape (V x 1) or (V). Note: if no
-        variances are provided they will be set to `abs(np.mean(values) / 100.0`.
+    noise_variances : np.ndarray, optional
+        An numpy array defining the uncertainties/noise in the data
+        `y_data` in form of a point-wise variance. Shape (len(y_data), 1) or (len(y_data)).
+        Note: if no noise_variances are provided here, the gp_noise_function
+        callable will be used; if the callable is not provided, the noise variances
+        will be set to `abs(np.mean(y_data) / 100.0`. If
+        noise covariances are required, also make use of the gp_noise_function.
     compute_device : str, optional
         One of "cpu" or "gpu", determines how linear system solves are run. The default is "cpu".
+        For "gpu", pytoch has to be installed manually.
     gp_kernel_function : Callable, optional
-        A function that calculates the covariance between datapoints. It accepts as input x1 (a V x D array of positions),
-        x2 (a U x D array of positions), hyperparameters (a 1-D array of length D+1 for the default kernel), and a
-        `gpcam.gp_optimizer.GPOptimizer` instance. The default is a stationary anisotropic kernel
-        (`fvgp.gp.GP.default_kernel`).
+        A symmetric positive semi-definite covariance function (a kernel) 
+        that calculates the covariance between
+        data points. It is a function of the form k(x1,x2,hyperparameters, obj).
+        The input x1 is a N1 x D array of positions, x2 is a N2 x D
+        array of positions, the hyperparameters argument 
+        is a 1d array of length D+1 for the default kernel and of a different
+        user-defined length for other kernels
+        obj is an `fvgp.gp.GP` instance. The default is a stationary anisotropic kernel
+        (`fvgp.gp.GP.default_kernel`) which performs automatic relevance determination (ARD).
+        The output is a covariance matrix, an N1 x N2 numpy array.
+    gp_deep_kernel_layer_width : int, optional
+        If no kernel is provided, fvGP will use a deep kernel of depth 2 and width gp_deep_kernel_layer_width.
+        If a user defined kernel is provided this parameter is irrelevant. The default is 5.
     gp_kernel_function_grad : Callable, optional
-        A function that calculates the derivative  of the covariance between datapoints with respect to the hyperparameters.
-        If provided, it will be used for local training and can speed up the calculations.
-        It accepts as input x1 (a V x D array of positions),
-        x2 (a U x D array of positions) and hyperparameters (a 1-D array of length D+1 for the default kernel).
-        The default is a finite difference calculation.
-        If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and the output
+        A function that calculates the derivative of the ``gp_kernel_function'' with respect to the hyperparameters.
+        If provided, it will be used for local training (optimization) and can speed up the calculations.
+        It accepts as input x1 (a N1 x D array of positions),
+        x2 (a N2 x D array of positions), 
+        hyperparameters (a 1d array of length D+1 for the default kernel), and a
+        `fvgp.gp.GP` instance. The default is a finite difference calculation.
+        If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and a
+        `fvgp.gp.GP` instance, and the output
         is a numpy array of shape (V x U).
-        If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and the output is
-        a numpy array of shape (len(hyperparameters) x U x V)
+        If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and a
+        `fvgp.gp.GP` instance. The output is
+        a numpy array of shape (len(hyperparameters) x N1 x N2). See 'ram_economy'.
     gp_mean_function : Callable, optional
-        A function that evaluates the prior mean at an input position. It accepts as input 
-        an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
-        and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 1-D array of length V. If None is provided,
-        `fvgp.gp.GP.default_mean_function` is used.
+        A function that evaluates the prior mean at a set of input position. It accepts as input
+        an array of positions (of shape N1 x D), hyperparameters (a 1d array of length D+1 for the default kernel)
+        and a `fvgp.gp.GP` instance. The return value is a 1d array of length N1. If None is provided,
+        `fvgp.gp.GP._default_mean_function` is used.
     gp_mean_function_grad : Callable, optional
-        A function that evaluates the gradient of the prior mean at an input position with respect to the hyperparameters.
-        It accepts as input hyperparameters (a 1-D
-        array of length D+1 for the default kernel). The return value is a 2-D array of shape (D x len(hyperparameters)). If None is provided,
-        a finite difference scheme is used.
+        A function that evaluates the gradient of the ``gp_mean_function'' at a set of input positions with respect to the hyperparameters.
+        It accepts as input an array of positions (of size N1 x D), hyperparameters (a 1d array of length D+1 for the default kernel)
+        and a `fvgp.gp.GP` instance. The return value is a 2d array of shape (len(hyperparameters) x N1). If None is provided, either
+        zeros are returned since the default mean function does not depend on hyperparametes, or a finite-difference approximation
+        is used if ``gp_mean_function'' is provided.
+    gp_noise_function : Callable optional
+        The noise function is a callable f(x,hyperparameters,obj) that returns a
+        positive symmetric definite matrix of shape(len(x),len(x)).
+    gp_noise_function_grad : Callable, optional
+        A function that evaluates the gradient of the ``gp_noise_function'' at an input position with respect to the hyperparameters.
+        It accepts as input an array of positions (of size N x D), hyperparameters (a 1d array of length D+1 for the default kernel)
+        and a `fvgp.gp.GP` instance. The return value is a 3-D array of shape (len(hyperparameters) x N x N). If None is provided, either
+        zeros are returned since the default noise function does not dpeend on hyperparametes. If ``gp_noise_function'' is provided but no gradient function,
+        a finite-difference approximation will be used.
     normalize_y : bool, optional
-        If True, the data point values will be normalized to max(initial values) = 1. The dfault is False.
-    use_inv : bool, optional
-        If True, the algorithm calculates and stores the inverse of the covariance matrix after each training or update of the dataset,
+        If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0. The default is False.
+    store_inv : bool, optional
+        If True, the algorithm calculates and stores the inverse of the covariance matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster.
-        For larger problems (>2000 data points), the use of inversion should be avoided due to computational instability. The default is
-        False. Note, the training will always use a linear solve instead of the inverse for stability reasons.
+        For larger problems (>2000 data points), the use of inversion should be avoided due to computational instability and costs. The default is
+        True. Note, the training will always use Cholesky or LU decomposition instead of the inverse for stability reasons. Storing the inverse is
+        a good option when the dataset is not too large and the posterior covariance is heavily used.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
+        If True, components of the derivative of the marginal log-likelihood are calculated subsequently, leading to a slow-down
+        but much less RAM usage. If the derivative of the kernel with respect to the hyperparameters (gp_kernel_function_grad) is
+        going to be provided, it has to be tailored: for ram_economy=True it should be of the form f(x1, x2, direction, hyperparameters)
+        and return a 2d numpy array of shape len(x1) x len(x2).
+        If ram_economy=False, the function should be of the form f(points1, points2, hyperparameters) and return a numpy array of shape
+        H x len(x1) x len(x2), where H is the number of hyperparameters. CAUTION: This array will be stored and is very large.
     args : any, optional
-        args will be a class attribute and therefore available to kernel and and prior mean functions.
+        args will be a class attribute and therefore available to kernel, noise and prior mean functions.
 
+    Attributes
+    ----------
+    x_data : np.ndarray
+        Datapoint positions
+    y_data : np.ndarray
+        Datapoint values
+    noise_variances : np.ndarray
+        Datapoint observation (co)variances.
+    hyperparameters : np.ndarray
+        Current hyperparameters in use.
+    K : np.ndarray
+        Current prior covariance matrix of the GP
+    KVinv : np.ndarray
+        If enabled, the inverse of the prior covariance + nosie matrix V
+        inv(K+V)
+    KVlogdet : float
+        logdet(K_V)
     """
+
     def __init__(
         self,
         input_space_dim,
         output_space_dim,
         output_number,
-        points,
-        values,
-        init_hyperparameters,
-        value_positions = None,
-        variances = None,
+        x_data,
+        y_data,
+        init_hyperparameters = None,
+        output_positions = None,
+        noise_variances = None,
         compute_device = "cpu",
         gp_kernel_function = None,
+        gp_deep_kernel_layer_width = 5,
         gp_kernel_function_grad = None,
+        gp_noise_function = None,
+        gp_noise_function_grad = None,
         gp_mean_function = None,
         gp_mean_function_grad = None,
+        sparse_mode = False,
         normalize_y = False,
-        use_inv = False,
-        ram_economy = True,
-        args = None,
+        store_inv = True,
+        ram_economy = False,
+        args = None
         ):
 
-        self.x_data = np.array(points)
-        self.y_data = np.array(values)
-        self.input_space_dim = input_space_dim
-        self.point_number, self.output_num, self.output_dim = len(points), output_number, output_space_dim
-        self.args = args
+        self.orig_input_space_dim = input_space_dim
+        self.point_number, self.output_num, self.output_dim = len(x_data), output_number, output_space_dim
         ###check the output dims
-        if np.ndim(values) == 1: raise ValueError("the output number is 1, you can use GP for single-task GPs")
-        if output_number != len(values[0]): raise ValueError("the output number is not in agreement with the data values given")
-        if output_space_dim == 1 and isinstance(value_positions, np.ndarray) == False:
-            self.value_positions = self.compute_standard_value_positions()
-        elif self.output_dim > 1 and isinstance(value_positions, np.ndarray) == False:
-            raise ValueError(
+        if np.ndim(y_data) == 1: raise ValueError("The output number is 1, you can use GP for single-task GPs")
+        if output_number != len(y_data[0]): raise ValueError("The output number is not in agreement with the data values given")
+        if output_space_dim == 1 and isinstance(output_positions, np.ndarray) == False:
+            self.output_positions = self._compute_standard_output_positions()
+        elif self.output_dim > 1 and isinstance(output_positions, np.ndarray) == False:
+            raise Exception(
                 "If the dimensionality of the output space is > 1, the value positions have to be given to the fvGP class")
         else:
-            self.value_positions = np.array(value_positions)
-        if variances is None:
-            self.variances = np.ones((self.y_data.shape)) * abs(self.y_data / 100.0)
-            logger.warning("fvGP reports that you have not provided data variances, they will set to be 1 percent of the data values!")
-        else:
-            self.variances = np.array(variances)
+            self.output_positions = output_positions
 
-        self.iset_dim = self.input_space_dim + self.output_dim
+
+        self.iset_dim = self.orig_input_space_dim + self.output_dim
         ####transform the space
-        self.x_data, self.y_data, self.variances = self.transform_index_set()
-        self.point_number = len(self.x_data)
+        self.fvgp_x_data = x_data
+        self.fvgp_y_data = y_data
+        self.fvgp_noise_variances = noise_variances
+        x_data, y_data, noise_variances = self._transform_index_set(x_data,y_data,noise_variances)
+        self.point_number = len(x_data)
+
+        if gp_kernel_function is None:
+            gp_kernel_function = self._default_multi_task_kernel
+            try: import torch
+            except: raise Exception("\
+                    You have not specified a kernel and the default kernel will be used. \
+                    The default kernel needs pytorch to be installed manually. \
+                    You need to install pytorch manually for this to work.")
+            from torch import nn
+            self.gp_deep_kernel_layer_width = gp_deep_kernel_layer_width
+            self.n = Network(self.iset_dim, gp_deep_kernel_layer_width)
+            number_of_hps = int(2. * self.iset_dim * gp_deep_kernel_layer_width + gp_deep_kernel_layer_width**2 + 2.*gp_deep_kernel_layer_width + self.iset_dim + 2.)
+            init_hps = np.zeros((number_of_hps))
+            init_hps[0] = 1.0
+            init_hps[1] = 1.0
+            self.hps_bounds = np.zeros((number_of_hps,2))
+            self.hps_bounds[0] = np.array([0.0001,10000.])
+            self.hps_bounds[1] = np.array([0.0001,10000.])
+            self.hps_bounds[2:] = np.array([-1.,1.])
+            init_hyperparameters = init_hps
+
 
         ####init GP
-        super().__init__(self,self.iset_dim, self.x_data,self.y_data,init_hyperparameters,
-                variances = self.variances,compute_device = compute_device,
-                gp_kernel_function = gp_kernel_function, gp_mean_function = gp_mean_function,
-                gp_kernel_function_grad = gp_kernel_function_grad, gp_mean_function_grad = gp_mean_function_grad,
-                use_inv = use_inv, normalize_y = normalize_y,ram_economy = ram_economy)
+        super().__init__(
+                self.iset_dim,
+                x_data,
+                y_data,
+                init_hyperparameters = init_hyperparameters,
+                noise_variances = noise_variances,
+                compute_device = compute_device,
+                gp_kernel_function = gp_kernel_function,
+                gp_kernel_function_grad = gp_kernel_function_grad,
+                gp_mean_function = gp_mean_function,
+                gp_mean_function_grad = gp_mean_function_grad,
+                gp_noise_function = gp_noise_function,
+                gp_noise_function_grad = gp_noise_function_grad,
+                sparse_mode = sparse_mode,
+                store_inv = store_inv,
+                normalize_y = normalize_y,
+                ram_economy = ram_economy,
+                args = args)
 
-        self.hyperparameters = np.array(init_hyperparameters)
-
+   ################################################################################################
     def update_fvgp_data(
         self,
         points,
         values,
-        value_positions = None,
+        output_positions = None,
         variances = None,
         ):
 
@@ -154,7 +270,7 @@ class fvGP(GP):
             The point positions. Shape (V x D), where D is the `input_space_dim`.
         values : np.ndarray
             The values of the data points. Shape (V,output_number).
-        value_positions : np.ndarray, optional
+        output_positions : np.ndarray, optional
             A 3-D numpy array of shape (U x output_number x output_dim), so that for each measurement position, the outputs
             are clearly defined by their positions in the output space. 
             The default is np.array([[0],[1],[2],[3],...,[output_number - 1]]) for each
@@ -169,14 +285,14 @@ class fvGP(GP):
         ##########################################
         #######prepare value positions############
         ##########################################
-        if self.output_dim == 1 and isinstance(value_positions, np.ndarray) == False:
-            self.value_positions = self.compute_standard_value_positions()
-        elif self.output_dim > 1 and isinstance(value_positions, np.ndarray) == False:
+        if self.output_dim == 1 and isinstance(output_positions, np.ndarray) == False:
+            self.output_positions = self._compute_standard_output_positions()
+        elif self.output_dim > 1 and isinstance(output_positions, np.ndarray) == False:
             raise ValueError(
                 "If the dimensionality of the output space is > 1, the value positions have to be given to the fvGP class. EXIT"
             )
         else:
-            self.value_positions = np.array(value_positions)
+            self.output_positions = np.array(output_positions)
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -187,86 +303,63 @@ class fvGP(GP):
         ######################################
         #####transform to index set###########
         ######################################
-        self.x_data, self.y_data, self.variances = self.transform_index_set()
+        self.x_data, self.y_data, self.variances = self._transform_index_set()
         self.point_number = len(self.x_data)
         GP.update_gp_data(self,self.x_data, self.y_data, self.variances)
 
-    def compute_standard_value_positions(self):
+   ################################################################################################
+    def _compute_standard_output_positions(self):
         value_pos = np.zeros((self.point_number, self.output_num, self.output_dim))
         for j in range(self.output_num):
             value_pos[:, j, :] = j
         return value_pos
 
-    def transform_index_set(self):
+   ################################################################################################
+    def _transform_index_set(self, x_data, y_data, noise_variances):
         new_points = np.zeros((self.point_number * self.output_num, self.iset_dim))
         new_values = np.zeros((self.point_number * self.output_num))
-        new_variances = np.zeros((self.point_number * self.output_num))
+        if noise_variances is not None: new_variances = np.zeros((self.point_number * self.output_num))
+        else: new_variances = None
         for i in range(self.output_num):
             new_points[i * self.point_number : (i + 1) * self.point_number] = \
-            np.column_stack([self.x_data, self.value_positions[:, i, :]])
+            np.column_stack([x_data, self.output_positions[:, i, :]])
             new_values[i * self.point_number : (i + 1) * self.point_number] = \
-            self.y_data[:, i]
-            new_variances[i * self.point_number : (i + 1) * self.point_number] = \
-            self.variances[:, i]
+            y_data[:, i]
+            if noise_variances is not None: new_variances[i * self.point_number : (i + 1) * self.point_number] = \
+            noise_variances[:, i]
         return new_points, new_values, new_variances
 
-    def _multi_task_kernel1(self):
-        return 0
-
-    def _cartesian_product(x1,x2):
-        r = []
-        for i in range(len(x)):
-            for j in range(len(t[i])):
-                r.append(np.append(x[i],t[i,j]))
-        return np.asarray(r)
-
-    def posterior_mean(self, x_pred, x_task):
-        """
-        This function calculates the posterior mean for a set of input points and tasks.
-
-        Parameters
-        ----------
-        x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
-        x_task : np.ndarray
-            A numpy array of shape (V x T x Td), where T is the number of outputs (output_number) and Td is the dimensionality of the output space (output_dim).
-        Example: Let's consider a 2-dim input space and a 3d output space of two tasks. In that case, a possible input would be
-        x_pred = np.array([[0,0],[1,1],])
-        x_task = np.array([[[4 ,5 ,6], [7 ,8 ,9]],
-                           [[10,20,30],[40,50,60]]])
-        which will be transformed to a new array
-        [[ 0  0  4  5  6]
-        [ 0  0  7  8  9]
-        [ 1  1 10 20 30]
-        [ 1  1 40 50 60]]
-        of inputs.
-
-        Return
-        ------
-        solution dictionary : dict
-        """
-        new_x = self._cartesian_product(x_pred,x_task)
-        return super().posterior_mean(new_x)
-
-
-    ###########################################################################
-    def posterior_covariance(self, x_pred, x_task, variance_only = False):
-        """
-        Function to compute the posterior covariance.
-        Parameters
-        ----------
-        x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
-        variance_only : bool, optional
-            If True the compuation of the posterior covariance matrix is avoided which can save compute time.
-            In that case the return will only provide the variance at the input points.
-            Default = False.
-        Return
-        ------
-        solution dictionary : dict
-        """
-        new_x = self._cartesian_product(x_pred,x_task)
-        return super().posterior_covariance(new_x)
-
-
-
+   ################################################################################################
+    def _default_multi_task_kernel(self,x1,x2,hps,obj):
+        signal_var = hps[0]
+        length_scale = hps[1]
+        hps_nn = hps[1:]
+        w1_indices = range(0,self.gp_deep_kernel_layer_width * self.iset_dim)
+        last = self.gp_deep_kernel_layer_width * self.iset_dim
+        w2_indices = range(last, last + self.gp_deep_kernel_layer_width**2)
+        last = last + self.gp_deep_kernel_layer_width**2
+        w3_indices = range(last,last + self.gp_deep_kernel_layer_width * self.iset_dim)
+        last = last + self.gp_deep_kernel_layer_width * self.iset_dim
+        b1_indices = range(last,last + self.gp_deep_kernel_layer_width)
+        last = last + self.gp_deep_kernel_layer_width
+        b2_indices = range(last,last + self.gp_deep_kernel_layer_width)
+        last = last + self.gp_deep_kernel_layer_width
+        b3_indices = range(last, last + self.iset_dim)
+        #print(hps_nn)
+        #print(w1_indices)
+        #print(w2_indices)
+        #print(w3_indices)
+        #print(b1_indices)
+        #print(b2_indices)
+        #print(b3_indices)
+        self.n.set_weights(hps_nn[w1_indices].reshape(self.gp_deep_kernel_layer_width ,self.iset_dim),
+                           hps_nn[w2_indices].reshape(self.gp_deep_kernel_layer_width , self.gp_deep_kernel_layer_width),
+                           hps_nn[w3_indices].reshape(self.iset_dim,self.gp_deep_kernel_layer_width))
+        self.n.set_biases(hps_nn[b1_indices].reshape(self.gp_deep_kernel_layer_width ),
+                          hps_nn[b2_indices].reshape(self.gp_deep_kernel_layer_width ),
+                          hps_nn[b3_indices].reshape(self.iset_dim))
+        x1_nn = self.n.forward(x1)
+        x2_nn = self.n.forward(x2)
+        d = self._get_distance_matrix(x1_nn,x2_nn)
+        k = signal_var * obj.matern_kernel_diff1(d,length_scale)
+        return k

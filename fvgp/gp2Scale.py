@@ -16,33 +16,7 @@ from .mcmc import mcmc
 import torch
 from dask.distributed import Variable
 from .sparse_matrix import gp2ScaleSparseMatrix
-import gc
-
-
-def sparse_stat_kernel(x1,x2, hps):
-    d = 0
-    for i in range(len(x1[0])): d += abs(np.subtract.outer(x1[:,i],x2[:,i]))**2
-    d = np.sqrt(d)
-    d[d == 0.0] = 1e-16
-    d[d > hps[1]] = hps[1]
-    kernel = (np.sqrt(2.0)/(3.0*np.sqrt(np.pi)))*\
-    ((3.0*(d/hps[1])**2*np.log((d/hps[1])/(1+np.sqrt(1.0 - (d/hps[1])**2))))+\
-    ((2.0*(d/hps[1])**2 + 1.0) * np.sqrt(1.0-(d/hps[1])**2)))
-    return hps[0] * kernel
-
-def sparse_stat_kernel_robust(x1,x2, hps):
-    d = 0
-    for i in range(len(x1[0])): d += abs(np.subtract.outer(x1[:,i],x2[:,i]))**2
-    d = np.sqrt(d)
-    d[d == 0.0] = 1e-16
-    d[d > 1./hps[1]**2] = 1./hps[1]**2
-    kernel = (np.sqrt(2.0)/(3.0*np.sqrt(np.pi)))*\
-    ((3.0*(d*hps[1]**2)**2*np.log((d*hps[1]**2)/(1+np.sqrt(1.0 - (d*hps[1]**2)**2))))+\
-    ((2.0*(d*hps[1]**2)**2 + 1.0) * np.sqrt(1.0-(d*hps[1]**2)**2)))
-    return (hps[0]**2) * kernel
-
-
-
+from .advanced_kernels import wendland
 ############################################################
 ############################################################
 ############################################################
@@ -172,10 +146,10 @@ class gp2Scale():
         self.compute_prior_fvGP_pdf(covariance_dask_client)
         if self.info:
             sp = self.SparsePriorCovariance.get_result().result()
-            print("gp2Scale successfully initiated, here is some info about the prior covariance matrix:")
-            print("non zero elements: ", sp.count_nonzero())
-            print("Size in GBits:     ", sp.data.nbytes/1e9)
-            print("Sparsity: ",sp.count_nonzero()/float(self.point_number)**2)
+            print("gp2Scale successfully initiated, here is some info about the prior covariance matrix:",flush = True)
+            print("non zero elements: ", sp.count_nonzero(),flush = True)
+            print("Size in GBits:     ", sp.data.nbytes/1e9,flush = True)
+            print("Sparsity: ",sp.count_nonzero()/float(self.point_number)**2,flush = True)
             if self.point_number <= 5000:
                 print("Here is an image:")
                 plt.imshow(sp.toarray())
@@ -212,8 +186,6 @@ class gp2Scale():
     def _compute_covariance_value_product(self, hyperparameters,y_data, variances, mean, client):
         self.compute_covariance(self.x_data,self.x_data,hyperparameters, variances,client)
         y = y_data - mean
-        #try: success = self.SparsePriorCovariance.compute_LU().result(timeout=self.LUtimeout)
-        #except: print("LU failed")
         x = self.SparsePriorCovariance.solve(y).result()
         return x
 
@@ -266,9 +238,9 @@ class gp2Scale():
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
                 self.assign_future_2_worker(futures[-1].key,current_worker)
                 if self.info:
-                    print("    submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key)
-                    print("    current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches())
-                    print("")
+                    print("    submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key,flush = True)
+                    print("    current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self.total_number_of_batches(),flush = True)
+                    print("",flush = True)
                 count += 1
 
         if self.info:
@@ -276,27 +248,21 @@ class gp2Scale():
             print("number of computed batches: ", count)
 
         actor_futures.append(self.SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
-        #actor_futures[-1].result()
         client.gather(actor_futures)
         actor_futures.append(self.SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
         actor_futures[-1].result()
-        #clean up
-        #del futures
-        #del actor_futures
-        #del finished_futures
-        #del scatter_future
 
         #########
-        if self.info: 
-            print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().count_nonzero())
-            print("Sparsity: ",self.SparsePriorCovariance.get_result().result().count_nonzero()/float(self.point_number)**2)
+        if self.info:
+            print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().count_nonzero(),flush = True)
+            print("Sparsity: ",self.SparsePriorCovariance.get_result().result().count_nonzero()/float(self.point_number)**2,flush = True)
 
 
     def free_workers(self, futures, finished_futures):
         free_workers = set()
         remaining_futures = []
         for future in futures:
-            if future.status == "cancelled": print("WARNING: cancelled futures encountered!")
+            if future.status == "cancelled": print("WARNING: cancelled futures encountered!",flush = True)
             if future.status == "finished":
                 finished_futures.add(future)
                 free_workers.add(self.future_worker_assignments[future.key])
@@ -347,7 +313,7 @@ class gp2Scale():
         ):
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP (synchronously).
-        This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and 
+        This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and
         providing a dask client
 
         inputs:
@@ -370,7 +336,7 @@ class gp2Scale():
         ############################################
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
-        print("fvGP training started with ",len(self.x_data)," data points")
+        print("fvGP training started with ",len(self.x_data)," data points",flush = True)
         ######################
         #####TRAINING#########
         ######################
@@ -395,12 +361,12 @@ class gp2Scale():
         ):
 
         #start_log_likelihood = self.log_likelihood(starting_hps, recompute_xK = False)
-        print("MCMC started in fvGP")
-        print('bounds are',hp_bounds)
-        res = mcmc(self.log_likelihood,hp_bounds,max_iter = max_iter, x0 = starting_hps)
+        print("MCMC started in fvGP",flush = True)
+        print('bounds are',hp_bounds,flush = True)
+        res = adaptive_metr(starting_hps,self.log_likelihood,hp_bounds,max_iter)
         hyperparameters = np.array(res["x"])
         self.mcmc_info = res
-        print("MCMC has found solution: ", hyperparameters, "with log marginal_likelihood ",res["f(x)"])
+        print("MCMC has found solution: ", hyperparameters, "with log marginal_likelihood ",res["f(x)"],flush = True)
         self.hyperparameters = hyperparameters
         return hyperparameters
 
