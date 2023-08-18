@@ -6,6 +6,7 @@ from functools import partial
 import math
 import warnings
 from scipy.sparse import csc_matrix
+from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import splu
 import dask.distributed as distributed
 import matplotlib.pyplot as plt
@@ -15,7 +16,15 @@ from scipy.optimize import minimize
 from scipy.linalg import cho_factor, cho_solve
 from loguru import logger
 from .mcmc import mcmc
+from .gp2Scale import gp2Scale as gp2S
 from hgdl.hgdl import HGDL
+from dask.distributed import wait
+import scipy.sparse as sparse
+from scipy.sparse.linalg import splu
+from dask.distributed import Variable
+from .sparse_matrix import gp2ScaleSparseMatrix
+
+
 
 
 
@@ -104,6 +113,12 @@ class GP():
         a finite-difference approximation will be used.
     normalize_y : bool, optional
         If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0. The default is False.
+    sparse_mode : bool, optional
+        ...
+    gp2Scale_dask_client : dask.distributed.Client, optional
+        ...
+    gp2Scale: book, optional
+        ...
     store_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster.
@@ -139,7 +154,9 @@ class GP():
         If enabled, the inverse of the prior covariance + nosie matrix V
         inv(K+V)
     KVlogdet : float
-        logdet(K_V)
+        logdet(K+V)
+    V : np.ndarray
+        the noise covariance matrix
     """
     def __init__(
         self,
@@ -156,6 +173,8 @@ class GP():
         gp_mean_function = None,
         gp_mean_function_grad = None,
         sparse_mode = False,
+        gp2Scale_dask_client = None,
+        gp2Scale = False,
         normalize_y = False,
         store_inv = True,
         ram_economy = False,
@@ -191,6 +210,20 @@ class GP():
 
         self.KVinv = None
         self.mcmc_info = None
+        self.gp2Scale = gp2Scale
+        self.gp2Scale_dask_client = gp2Scale_dask_client
+        ###########################################
+        #####gp2Scale##############################
+        ###########################################
+        if gp2Scale:
+            if covariance_dask_client is None: raise Exception("gp2Scale needs a 'gp2Scale_dask_client'")
+            gp2Scale_obj = gp2S(x_data, batch size = 10000, gp_kernel_function = gp_kernel_function, covariance_dask_client = gp2Scale_dask_client)
+            raise Exception("gp2Scale is not yet part of the GP class. Please check back later")
+            self.store_inv = False
+            if not callable(gp_kernel_function): gp_kernel_function = self.wendland_anisotropic
+            warnings.warn("WARNING: gp2Scale activated. Only training via MCMC should be performed. \
+                    Only noise variances (no noise covariances can be considered). \
+                    A customed sparse kernel should be used, otherwise an anisotropic Wendland kernel will be used.")
         ###########################################
         ###assign kernel, mean and noise functions#
         ###########################################
@@ -222,20 +255,24 @@ class GP():
         if callable(gp_mean_function_grad): self.dm_dh = gp_mean_function_grad
         elif callable(gp_mean_function): self.dm_dh = self._finitediff_dm_dh
         else: self.dm_dh = self._default_dm_dh
+        if gp_kernel_function is None and (gp_noise_function is not None or gp_mean_function is not None):
+            warnings.warn("You are using the default kernel but a user-defined mean or noise function. \
+                    Make sure the right hyperparameter indices are used in all functions. The default kernel function uses the first D + 1 hyperparameters")
         ##########################################
         #######prepare noise covariances##########
         ##########################################
         if noise_variances is None:
             ##noise covariances are always a square matrix
-            self.noise_covariances = self.noise_function(self.x_data, init_hyperparameters,self)
-            if np.ndim(self.noise_covariances) == 1: raise Exception("Your noise function did not return a square matrix, it should though, the noise can be correlated.")
-            elif self.noise_covariances.shape[0] != self.noise_covariances.shape[1]: raise Exception("Your noise function return is not a square matrix")
+            self.V = self.noise_function(self.x_data, init_hyperparameters,self)
+            if np.ndim(self.V) == 1: 
+                raise Exception("Your noise function did not return a square matrix, it should though, the noise can be correlated.")
+            elif self.V.shape[0] != self.V.shape[1]: raise Exception("Your noise function return is not a square matrix")
         elif np.ndim(noise_variances) == 2:
             if any(noise_variances <= 0.0): raise Exception("Negative or zero measurement variances communicated to fvgp or derived from the data.")
-            self.noise_covariances = np.diag(noise_variances[:,0])
+            self.V = np.diag(noise_variances[:,0])
         elif np.ndim(noise_variances) == 1:
             if any(noise_variances <= 0.0): raise Exception("Negative or zero measurement variances communicated to fvgp or derived from the data.")
-            self.noise_covariances = np.diag(noise_variances)
+            self.V = np.diag(noise_variances)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
         #########################################
@@ -243,7 +280,7 @@ class GP():
         #########################################
         if self.normalize_y:
             self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
-            self.noise_covariances = (1./(self.y_max-self.y_min)**2) * self.noise_covariances
+            self.V = (1./(self.y_max-self.y_min)**2) * self.V
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
@@ -252,7 +289,7 @@ class GP():
         ##########################################
         #compute the prior########################
         ##########################################
-        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.noise_covariances = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
+        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
 
     def update_gp_data(
         self,
@@ -290,13 +327,13 @@ class GP():
         ##########################################
         if noise_variances is None:
             ##noise covariances are always a square matrix
-            self.noise_covariances = self.noise_function(self.x_data, self.hyperparameters,self)
+            self.V = self.noise_function(self.x_data, self.hyperparameters,self)
         elif np.ndim(noise_variances) == 2:
             if any(noise_variances <= 0.0): raise Exception("Negative or zero measurement variances communicated to fvgp or derived from the data.")
-            self.noise_covariances = np.diag(noise_variances[:,0])
+            self.V = np.diag(noise_variances[:,0])
         elif np.ndim(noise_variances) == 1:
             if any(noise_variances <= 0.0): raise Exception("Negative or zero measurement variances communicated to fvgp or derived from the data.")
-            self.noise_covariances = np.diag(noise_variances)
+            self.V = np.diag(noise_variances)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
         #########################################
@@ -304,11 +341,11 @@ class GP():
         #########################################
         if self.normalize_y:
             self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
-            self.noise_covariances = (1./(self.y_max-self.y_min)**2) * self.noise_covariances
+            self.V = (1./(self.y_max-self.y_min)**2) * self.V
         ######################################
         #####transform to index set###########
         ######################################
-        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.noise_covariances = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
+        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
 
     ###################################################################################
     ###################################################################################
@@ -383,7 +420,7 @@ class GP():
             global_optimizer,
             dask_client
             )
-        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.noise_covariances = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
+        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
     ##################################################################################
     def train_async(self,
         hyperparameter_bounds = None,
@@ -423,6 +460,7 @@ class GP():
         ------
         Optimization object that can be given to `fvgp.gp.update_hyperparameters` to update the prior GP : object instance
         """
+        if self.gp2Scale: raise Exception("gp2Scale does not allow asynchronous training!")
         if dask_client is None: dask_client = distributed.Client()
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
@@ -504,7 +542,7 @@ class GP():
                 l_o = self.neg_log_likelihood(self.hyperparameters)
                 if l_n - l_o < 0.000001:
                     self.hyperparameters = res
-                    self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.noise_covariances = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
+                    self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
                     logger.debug("    fvGP async hyperparameter update successful")
                     logger.debug("    Latest hyperparameters: {}", self.hyperparameters)
                 else:
@@ -527,7 +565,7 @@ class GP():
             A 1-d numpy array of hyperparameters.
         """
         self.hyperparameters = np.array(hps)
-        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.noise_covariances = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
+        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(self.x_data, self.y_data, self.hyperparameters, calc_inv = self.store_inv)
     ##################################################################################
     def get_hyperparameters(self):
         """
@@ -593,6 +631,12 @@ class GP():
             local_optimizer,
             global_optimizer,
             dask_client = None):
+
+        if self.gp2Scale:
+            res = mcmc(self.log_likelihood,hp_bounds, x0 = starting_hps, n_updates = max_iter)
+            hyperparameters = np.array(res["distribution mean"])
+            return hyperparameters
+
 
         start_log_likelihood = self.log_likelihood(starting_hps)
 
@@ -691,7 +735,7 @@ class GP():
             hyperparameters = starting_hps
         return hyperparameters
     ##################################################################################
-    def log_likelihood(self,hyperparameters):
+    def log_likelihood(self,hyperparameters = None):
         """
         Function that computes the marginal log-likelihood
 
@@ -703,7 +747,12 @@ class GP():
         ------
             marginal log-likelihood : float
         """
-        K, KV,  KVinvY, KVlogdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
+        if hyperparameters is None:
+            K, KV,  KVinvY, KVlogdet, FO, KVinv, mean, cov = \
+                    self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V
+        else:
+            K, KV,  KVinvY, KVlogdet, FO, KVinv, mean, cov = \
+                    self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
         n = len(self.y_data)
         return -(0.5 * ((self.y_data - mean).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
@@ -721,7 +770,7 @@ class GP():
         """
         return -self.log_likelihood(hyperparameters)
     ##################################################################################
-    def neg_log_likelihood_gradient(self, hyperparameters):
+    def neg_log_likelihood_gradient(self, hyperparameters = None):
         """
         Function that computes the gradient of the marginal log-likelihood.
 
@@ -734,7 +783,13 @@ class GP():
         Gradient of the negative marginal log-likelihood : np.ndarray
         """
         logger.debug("log-likelihood gradient is being evaluated...")
-        K, KV,  KVinvY, KVlogdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
+        if hyperparameters is None:
+            K, KV,  KVinvY, KVlogdet, FO, KVinv, mean, cov = \
+                    self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V
+        else:
+            K, KV,  KVinvY, KVlogdet, FO, KVinv, mean, cov = \
+                    self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
+
         b = KVinvY
         y = self.y_data - mean
         if self.ram_economy is False:
@@ -817,11 +872,26 @@ class GP():
     ##################################################################################
     ##################################################################################
     def _compute_GPpriorV(self, x_data, y_data, hyperparameters, calc_inv = False):
+        #get the prior mean
         prior_mean_vec = self.mean_function(x_data,hyperparameters,self)
-        if callable(self.noise_function): noise_covariances = self.noise_function(x_data,hyperparameters,self)
-        else: noise_covariances = self.noise_covariances
-        K, KV = self._compute_covariance(hyperparameters, noise_covariances) ###could be done in batches for RAM
-        if self.sparse_mode and self._is_sparse(KV):
+
+        #get the latest noise
+        if callable(self.noise_function): V = self.noise_function(x_data,hyperparameters,self)
+        else: V = self.V
+
+        #get K
+        if self.gp2Scale: K, V = None
+        else: K = self._compute_K(hyperparameters)
+
+        #check if shapes are correct
+        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
+
+        #get K + V
+        KV = K + V
+
+        #get Kinv/KVinvY, LU, Chol, logdet(KV)
+        if self.gp2Scale: raise Exception("gp2Scale is not yet part of the GP slass")
+        elif self.sparse_mode and self._is_sparse(KV):
             #print("Sparsity detected: ", self._how_sparse_is(K), "hps: ", hyperparameters)
             KV = csc_matrix(KV)
             LU = splu(KV)
@@ -840,13 +910,12 @@ class GP():
             if calc_inv: KVinv = self._inv(KV)
             else: KVinv = None
 
-        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, noise_covariances
-
-    def _compute_covariance(self, hyperparameters, noise_covariances):
-        """computes the covariance matrix from the kernel and add noise"""
-        PriorCovariance = self.kernel(self.x_data, self.x_data, hyperparameters, self)
-        if PriorCovariance.shape != noise_covariances.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
-        return PriorCovariance, PriorCovariance + noise_covariances
+        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
+    ##################################################################################
+    def _compute_K(self, hyperparameters):
+        """computes the covariance matrix from the kernel"""
+        K = self.kernel(self.x_data, self.x_data, hyperparameters, self)
+        return K
     ##################################################################################
     def _KVsolve(self, b):
         if self.factorization_obj[0] == "LU":

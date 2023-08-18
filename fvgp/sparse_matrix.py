@@ -1,36 +1,22 @@
-import time
-import scipy.sparse as sparse
-import scipy.sparse.linalg as solve
-import numpy as np
-import dask.distributed as distributed
-from scipy.sparse.linalg import spsolve
-from scipy.sparse.linalg import splu
-from scipy.optimize import differential_evolution
-from scipy.sparse import coo_matrix
-import gc
-from scipy.sparse.linalg import splu
-from scipy.sparse.linalg import spilu
-from .mcmc import mcmc
-import torch
-from dask.distributed import Variable
-import math
-
 class gp2ScaleSparseMatrix:
     def __init__(self,n):
         self.n = n
-        self.sparse_covariance = sparse.coo_matrix((n,n))
+        self.V = sparse.coo_matrix((n,n))
+        self.K = sparse.coo_matrix((n,n))
         self.st = time.time()
 
     def get_result(self):
-        return self.sparse_covariance
+        return self. K, self.V
+
 
     def reset_prior(self):
-        self.sparse_covariance = sparse.coo_matrix((self.n,self.n))
+        self.KV = sparse.coo_matrix((self.n,self.n))
+        self.K = sparse.coo_matrix((self.n,self.n))
         return 0
 
     def insert_many(self, list_of_3_tuples):
         l = list_of_3_tuples
-        bg = self.sparse_covariance
+        bg = self.K
         row_list = [bg.row]
         col_list = [bg.col]
         data = [bg.data]
@@ -48,7 +34,7 @@ class gp2ScaleSparseMatrix:
         columns = np.concatenate(col_list).astype(int)
 
         res = sparse.coo_matrix((np.concatenate(data),(rows,columns)), shape = bg.shape)
-        self.sparse_covariance = res
+        self.K = res
         return 0
 
     def get_future_results(self, futures, info = False):
@@ -65,12 +51,13 @@ class gp2ScaleSparseMatrix:
     def add_to_diag(self,vector):
         diag = sparse.eye(self.n, format="coo") ##make variance
         diag.setdiag(vector) ##make variance
-        self.sparse_covariance = self.sparse_covariance + diag  ##add variance
+        self.V = diag
+        self.KV = self.K + diag  ##add variance
         return 0
 
 
-    def compute_LU(self):
-        A = self.sparse_covariance.tocsc()
+    def compute_LU_KV(self):
+        A = self.KV.tocsc()
         A_new = A.__class__(A.shape)
         A_new.data = A.data
         A_new.indptr = np.array(A.indptr, copy=False, dtype=np.intc)
@@ -79,35 +66,35 @@ class gp2ScaleSparseMatrix:
         return True
 
 
-    def solve(self,x):
+    def solveKV(self,x):
         success = True
         try: r = self.LU.solve(x)
         except: success = False
         if success is False:
             try:
-                r,info = sparse.linalg.cg(self.sparse_covariance,x)
+                r,info = sparse.linalg.cg(self.KV,x)
                 if info == 0: success = True
             except: pass
         if success is False:
             try:
-                r, info = sparse.linalg.cgs(self.sparse_covariance,x)
+                r, info = sparse.linalg.cgs(self.KV,x)
                 if info == 0: success = True
             except: pass
         if success is False:
             try:
-                r,info = sparse.linalg.minres(self.sparse_covariance,x)
+                r,info = sparse.linalg.minres(self.KV,x)
                 success = True
             except: raise Exception("No solve method was successful. EXIT")
         return r
 
-    def logdet(self):
+    def logdetKV(self):
         success = True
         try:
             upper_diag = abs(self.LU.U.diagonal())
             r = np.sum(np.log(upper_diag))
         except: success = False
         if success is False:
-            try: r = self.random_logdet(self.sparse_covariance)
+            try: r = self.random_logdet(self.KV)
             except: raise Exception("No logdet() method was successful, EXIT")
         return r
 
