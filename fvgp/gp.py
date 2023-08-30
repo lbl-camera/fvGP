@@ -217,6 +217,13 @@ class GP():
         self.args = args
         self.sparse_mode = sparse_mode
         self.store_inv = store_inv
+
+        ##########################################
+        #######prepare hyper parameters###########
+        ##########################################
+        if init_hyperparameters is None: init_hyperparameters = np.ones((input_space_dim + 1))
+        self.hyperparameters = np.array(init_hyperparameters)
+
         if self.sparse_mode and self.store_inv:
             warnings.warn("sparse_mode and store_inv enabled but they should not be used together. I'll set store_inv = False.", stacklevel=2)
             self.store_inv = False
@@ -301,11 +308,6 @@ class GP():
         if self.normalize_y:
             self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
             self.V = (1./(self.y_max-self.y_min)**2) * self.V
-        ##########################################
-        #######prepare hyper parameters###########
-        ##########################################
-        if init_hyperparameters is None: init_hyperparameters = np.ones((nput_space_dim + 1))
-        self.hyperparameters = np.array(init_hyperparameters)
         ##########################################
         #compute the prior########################
         ##########################################
@@ -922,7 +924,6 @@ class GP():
 
         #get K + V
         KV = K + V
-        print(KV)
 
         #get Kinv/KVinvY, LU, Chol, logdet(KV)
         if self.gp2Scale:
