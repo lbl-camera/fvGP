@@ -1,6 +1,5 @@
 import time
 import numpy as np
-import torch
 
 ###################################
 ######gp2Scale GPU kernels#########
@@ -137,7 +136,7 @@ def wendland_cpu(x1,x2, radius):
 def kernel_cpu(x1,x2, hps):
     k = np.outer(f_cpu(x1,hps[0:12],hps[12:16],hps[16:20]),
                  f_cpu(x2,hps[0:12],hps[12:16],hps[16:20])) + \
-                 np.outer(g_cpu(x1,hps[20:32],hps[32:36],hps[36:40]),
+        np.outer(g_cpu(x1,hps[20:32],hps[32:36],hps[36:40]),
                  g_cpu(x2,hps[20:32],hps[32:36],hps[36:40]))
     return k + hps[40] * wendland_cpu(x1,x2, hps[41])
 
@@ -149,36 +148,36 @@ def kernel_cpu(x1,x2, hps):
 ############################################################
 ############################################################
 ############################################################
-
-import torch
-from torch import nn
-class Network(nn.Module):
-    def __init__(self, dim, layer_width):
-        super().__init__()
+try: 
+    class Network(nn.Module):
+        def __init__(self, dim, layer_width):
+            super().__init__()
+            
+            # Inputs to hidden layer linear transformation
+            self.layer1 = nn.Linear(dim, layer_width)
+            self.layer2 = nn.Linear(layer_width, layer_width)
+            self.layer3 = nn.Linear(layer_width, dim)
+            #nn.init.kaiming_uniform_(self.layer1.weight, nonlinearity="relu")
+            
+        def forward(self, x):
+            x = torch.Tensor(x)
+            x = torch.nn.functional.relu(self.layer1(x))
+            x = torch.nn.functional.relu(self.layer2(x))
+            x = torch.nn.functional.relu(self.layer3(x))
+            return x.detach().numpy()
         
-        # Inputs to hidden layer linear transformation
-        self.layer1 = nn.Linear(dim, layer_width)
-        self.layer2 = nn.Linear(layer_width, layer_width)
-        self.layer3 = nn.Linear(layer_width, dim)
-        #nn.init.kaiming_uniform_(self.layer1.weight, nonlinearity="relu")
-        
-    def forward(self, x):
-        x = torch.Tensor(x)
-        x = torch.nn.functional.relu(self.layer1(x))
-        x = torch.nn.functional.relu(self.layer2(x))
-        x = torch.nn.functional.relu(self.layer3(x))
-        return x.detach().numpy()
-    
-    def set_weights(self,w1,w2,w3):
-        with torch.no_grad(): self.layer1.weight = nn.Parameter(torch.from_numpy(w1).float())
-        with torch.no_grad(): self.layer2.weight = nn.Parameter(torch.from_numpy(w2).float())
-        with torch.no_grad(): self.layer3.weight = nn.Parameter(torch.from_numpy(w3).float())
-    def set_biases(self,b1,b2,b3):
-        with torch.no_grad(): self.layer1.bias = nn.Parameter(torch.from_numpy(b1).float())
-        with torch.no_grad(): self.layer2.bias = nn.Parameter(torch.from_numpy(b2).float())
-        with torch.no_grad(): self.layer3.bias = nn.Parameter(torch.from_numpy(b3).float())
-        
-    def get_weights(self):
-        return self.layer1.weight, self.layer2.weight, self.layer3.weight
-    def get_biases(self):
-        return self.layer1.bias, self.layer2.bias, self.layer3.bias
+        def set_weights(self,w1,w2,w3):
+            with torch.no_grad(): self.layer1.weight = nn.Parameter(torch.from_numpy(w1).float())
+            with torch.no_grad(): self.layer2.weight = nn.Parameter(torch.from_numpy(w2).float())
+            with torch.no_grad(): self.layer3.weight = nn.Parameter(torch.from_numpy(w3).float())
+        def set_biases(self,b1,b2,b3):
+            with torch.no_grad(): self.layer1.bias = nn.Parameter(torch.from_numpy(b1).float())
+            with torch.no_grad(): self.layer2.bias = nn.Parameter(torch.from_numpy(b2).float())
+            with torch.no_grad(): self.layer3.bias = nn.Parameter(torch.from_numpy(b3).float())
+            
+        def get_weights(self):
+            return self.layer1.weight, self.layer2.weight, self.layer3.weight
+        def get_biases(self):
+            return self.layer1.bias, self.layer2.bias, self.layer3.bias
+except:
+    pass

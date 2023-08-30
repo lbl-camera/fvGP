@@ -10,7 +10,6 @@ import itertools
 import time
 from functools import partial
 from fvgp.gp import GP
-from fvgp.advanced_kernels import Network
 
 #TODO:
 #   default kernel
@@ -28,6 +27,10 @@ class fvGP(GP):
     Do... output space dimensionality
     No... number of outputs
     N ... arbitrary integers (N1, N2,...)
+
+    ..
+    see gp.py for docstring instructions for developers
+    ..
 
 
     The main logic of fvGP is that any multi-task GP is just a single-task GP
@@ -211,11 +214,11 @@ class fvGP(GP):
 
         if gp_kernel_function is None:
             gp_kernel_function = self._default_multi_task_kernel
-            try: import torch
-            except: raise Exception("\
-                    You have not specified a kernel and the default kernel will be used. \
-                    The default kernel needs pytorch to be installed manually. \
-                    You need to install pytorch manually for this to work.")
+            try:
+                import torch
+                from fvgp.advanced_kernels import Network
+            except: raise Exception("You have not specified a kernel and the default kernel will be used. \n \
+                    The default kernel needs pytorch to be installed manually.")
             from torch import nn
             self.gp_deep_kernel_layer_width = gp_deep_kernel_layer_width
             self.n = Network(self.iset_dim, gp_deep_kernel_layer_width)

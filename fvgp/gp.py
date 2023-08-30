@@ -16,8 +16,8 @@ from scipy.optimize import minimize
 from scipy.linalg import cho_factor, cho_solve
 from loguru import logger
 from .mcmc import mcmc
-from .gp2Scale import gp2Scale as gp2S
 from hgdl.hgdl import HGDL
+from .gp2Scale import gp2Scale as gp2S
 from dask.distributed import wait
 import scipy.sparse as sparse
 from scipy.sparse.linalg import splu
@@ -29,8 +29,9 @@ from .sparse_matrix import gp2ScaleSparseMatrix
 
 
 #TODO:
-#   check ALL docs
 #   change and run all test scripts
+#   make version on which x is not tested for dim (molecules and such)
+#   finish merging gp2Scale into fvgp
 
 
 class GP():
@@ -38,10 +39,17 @@ class GP():
     This class provides all the tools for a single-task Gaussian Process (GP).
     Use fvGP for multi task GPs. However, the fvGP class inherits all methods from this class.
     This class allows for full HPC support for training via the HGDL package.
-    
+
     V ... number of input points
     D ... input space dimensionality
     N ... arbitrary integers (N1, N2,...)
+
+    ..
+    instructions for docstings (for developers):
+    this class: fvgp.gp.GP
+    callable descriptions: name(input1, input2, input3), where input1 is ..., input2 is ...
+    Use described symbols above, otherwise describe used symbol.
+    ..
 
     Parameters
     ----------
@@ -82,7 +90,7 @@ class GP():
         A function that calculates the derivative of the ``gp_kernel_function'' with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
         It accepts as input x1 (a N1 x D array of positions),
-        x2 (a N2 x D array of positions), 
+        x2 (a N2 x D array of positions),
         hyperparameters (a 1d array of length D+1 for the default kernel), and a
         `fvgp.gp.GP` instance. The default is a finite difference calculation.
         If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and a
@@ -114,11 +122,17 @@ class GP():
     normalize_y : bool, optional
         If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0. The default is False.
     sparse_mode : bool, optional
-        ...
+        When sparse_mode is enabled, the algorithm will use a user-defined kernel function or, if that's not provided, an anisotropic Wendland kernel
+        and check for sparsity in the prior covariance. If sparsity is present, sparse operations will be used to speed up computations.
+        Caution: the covariace is still stored at first in a dense format. For more extreme scaling, check out the gp2Scale option.
+    gp2Scale: bool, optional
+        Turn on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advaced feature for HPC GPs up to 10
+        million datapoints.
     gp2Scale_dask_client : dask.distributed.Client, optional
-        ...
-    gp2Scale: book, optional
-        ...
+        A dask client for gp2Scale to distribute covariance computations over. Has to contain at least 3 workers.
+        A local client is used as default.
+    gp2Scale_batch_size : int, optional
+        Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     store_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster.
@@ -173,12 +187,14 @@ class GP():
         gp_mean_function = None,
         gp_mean_function_grad = None,
         sparse_mode = False,
-        gp2Scale_dask_client = None,
         gp2Scale = False,
+        gp2Scale_dask_client = None,
+        gp2Scale_batch_size = 10000,
         normalize_y = False,
         store_inv = True,
         ram_economy = False,
-        args = None
+        args = None,
+        info = True
         ):
         ########################################
         ###assign and check some attributes#####
@@ -215,15 +231,18 @@ class GP():
         ###########################################
         #####gp2Scale##############################
         ###########################################
+
         if gp2Scale:
-            if covariance_dask_client is None: raise Exception("gp2Scale needs a 'gp2Scale_dask_client'")
-            gp2Scale_obj = gp2S(x_data, batch size = 10000, gp_kernel_function = gp_kernel_function, covariance_dask_client = gp2Scale_dask_client)
-            raise Exception("gp2Scale is not yet part of the GP class. Please check back later")
-            self.store_inv = False
+            if gp2Scale_dask_client is None: raise Exception("gp2Scale needs a 'gp2Scale_dask_client'")
             if not callable(gp_kernel_function): gp_kernel_function = self.wendland_anisotropic
+            self.gp2Scale_obj = gp2S(x_data, batch_size = gp2Scale_batch_size, 
+                    gp_kernel_function = gp_kernel_function, 
+                    covariance_dask_client = gp2Scale_dask_client,
+                    info = info)
+            self.store_inv = False
             warnings.warn("WARNING: gp2Scale activated. Only training via MCMC should be performed. \
                     Only noise variances (no noise covariances can be considered). \
-                    A customed sparse kernel should be used, otherwise an anisotropic Wendland kernel will be used.")
+                    A customed sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.")
         ###########################################
         ###assign kernel, mean and noise functions#
         ###########################################
@@ -264,9 +283,10 @@ class GP():
         if noise_variances is None:
             ##noise covariances are always a square matrix
             self.V = self.noise_function(self.x_data, init_hyperparameters,self)
-            if np.ndim(self.V) == 1: 
+            if isinstance(self.V,np.ndarray) and np.ndim(self.V) == 1: 
                 raise Exception("Your noise function did not return a square matrix, it should though, the noise can be correlated.")
-            elif self.V.shape[0] != self.V.shape[1]: raise Exception("Your noise function return is not a square matrix")
+            elif isinstance(self.V,np.ndarray) and self.V.shape[0] != self.V.shape[1]: raise Exception("Your noise function return is not a square matrix")
+        elif gp2Scale: self.V = gp2Scale_obj.calculate_sparse_noise_covariance(noise_variances)
         elif np.ndim(noise_variances) == 2:
             if any(noise_variances <= 0.0): raise Exception("Negative or zero measurement variances communicated to fvgp or derived from the data.")
             self.V = np.diag(noise_variances[:,0])
@@ -284,7 +304,7 @@ class GP():
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        if init_hyperparameters is None: init_hyperparameters  = np.ones((nput_space_dim + 1))
+        if init_hyperparameters is None: init_hyperparameters = np.ones((nput_space_dim + 1))
         self.hyperparameters = np.array(init_hyperparameters)
         ##########################################
         #compute the prior########################
@@ -365,24 +385,30 @@ class GP():
         dask_client = None):
 
         """
-        This function finds the maximum of the marginal log_likelihood and therefore trains the GP (synchronously).
+        This function finds the maximum of the log marginal likelihood and therefore trains the GP (synchronously).
         This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and
         providing a dask client. The GP prior will automatically be updated with the new hyperparameters.
 
         Parameters
         ----------
         hyperparameter_bounds : np.ndarray, optional
-            A numpy array of shape (D x 2), defining the bounds for the optimization. The default is an array of bounds for the default kernel D = input_space_dim + 1
-            with all bounds defined practically as [0.00001, inf]. This choice is only recommended in very basic scenarios.
+            A numpy array of shape (D x 2), defining the bounds for the optimization. 
+            The default is an array of bounds of the length of the initial hyperparameters
+            with all bounds defined practically as [0.00001, inf].
+            The initial hyperparameters are either defined by the user at initialization, or in this function call,
+            or are defined as np.ones((input_space_dim + 1)).
+            This choice is only recommended in very basic scenarios and
+            can lead to suboptimal results. It is better to provide
+            hyperparameter bounds.
         init_hyperparameters : np.ndarray, optional
             Initial hyperparameters used as starting location for all optimizers with local component.
             The default is reusing the initial hyperparameters given at initialization
         method : str or Callable, optional
             The method used to train the hyperparameters. The options are `'global'`, `'local'`, `'hgdl'`, `'mcmc'`, and a callable.
             The callable gets an gp.GP instance and has to return a 1d np.array of hyperparameters.
-            The default is `'global'` (scipy's differential evolution). 
+            The default is `'global'` (scipy's differential evolution).
             If method = "mcmc",
-            the attribute gp.GP.mcmc_info is updated and contains convergence and disttibution information.
+            the attribute fvgp.gp.GP.mcmc_info is updated and contains convergence and distribution information.
         pop_size : int, optional
             A number of individuals used for any optimizer with a global component. Default = 20.
         tolerance : float, optional
@@ -395,7 +421,7 @@ class GP():
             Defining the global optimizer. Only applicable to method = hgdl. Default = `genetic`
         constraints : tuple of object instances, optional
             Equality and inequality constraints for the optimization. If the optimizer is ``hgdl'' see ``hgdl.readthedocs.io''.
-            If the optimizer is a scipy optimizer, see scipy documentation.
+            If the optimizer is a scipy optimizer, see the scipy documentation.
         dask_client : distributed.client.Client, optional
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
@@ -404,7 +430,8 @@ class GP():
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         if hyperparameter_bounds is None:
-            hyperpameter_bounds = np.zeros((len(init_hyperparameters)))
+            warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance")
+            hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
             hyperparameter_bounds[0] = np.array([0.00001,1e8])
             hyperparameter_bounds[1:] = np.array([0.00001,1e8])
 
@@ -433,8 +460,8 @@ class GP():
         """
         This function asynchronously finds the maximum of the log marginal likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
-        providing a dask client. This function just submits the training and returns
-        an object which can be given to `fvgp.gp.update_hyperparameters`, which will automatically update the GP prior with the new hyperparameters.
+        providing a dask client. This function submits the training and returns
+        an object which can be given to `fvgp.gp.GP.update_hyperparameters()`, which will automatically update the GP prior with the new hyperparameters.
 
         Parameters
         ----------
@@ -465,7 +492,8 @@ class GP():
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         if hyperparameter_bounds is None:
-            hyperpameter_bounds = np.zeros((len(init_hyperparameters)))
+            warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance")
+            hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
             hyperparameter_bounds[0] = np.array([0.00001,1e8])
             hyperparameter_bounds[1:] = np.array([0.00001,1e8])
 
@@ -741,8 +769,9 @@ class GP():
 
         Parameters
         ----------
-        hyperparameters : np.ndarray
-            Vector of hyperparameters of shape (V)
+        hyperparameters : np.ndarray, optional
+            Vector of hyperparameters of shape (N).
+            If not provided, the covariance will not be recomputed.
         Return
         ------
             marginal log-likelihood : float
@@ -756,19 +785,20 @@ class GP():
         n = len(self.y_data)
         return -(0.5 * ((self.y_data - mean).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0*np.pi))
     ##################################################################################
-    def neg_log_likelihood(self,hyperparameters):
+    def neg_log_likelihood(self,hyperparameters = None):
         """
         Function that computes the marginal log-likelihood
 
         Parameters
         ----------
-        hyperparameters : np.ndarray
-            Vector of hyperparameters of shape (V)
+        hyperparameters : np.ndarray, optional
+            Vector of hyperparameters of shape (N)
+            If not provided, the covariance will not be recomputed.
         Return
         ------
             negative marginal log-likelihood : float
         """
-        return -self.log_likelihood(hyperparameters)
+        return -self.log_likelihood(hyperparameters = hyperparameters)
     ##################################################################################
     def neg_log_likelihood_gradient(self, hyperparameters = None):
         """
@@ -776,8 +806,9 @@ class GP():
 
         Parameters
         ----------
-        hyperparameters : np.ndarray
-            Vector of hyperparameters of shape (V)
+        hyperparameters : np.ndarray, optional
+            Vector of hyperparameters of shape (N).
+            If not provided, the covariance will not be recomputed.
         Return
         ------
         Gradient of the negative marginal log-likelihood : np.ndarray
@@ -821,14 +852,15 @@ class GP():
         return dL_dH + dL_dHm
 
     ##################################################################################
-    def neg_log_likelihood_hessian(self, hyperparameters):
+    def neg_log_likelihood_hessian(self, hyperparameters = None):
         """
         Function that computes the Hessian of the marginal log-likelihood.
 
         Parameters
         ----------
         hyperparameters : np.ndarray
-            Vector of hyperparameters of shape (V)
+            Vector of hyperparameters of shape (N).
+            If not provided, the covariance will not be recomputed.
         Return
         ------
         Hessian of the negative marginal log-likelihood : np.ndarray
@@ -837,11 +869,11 @@ class GP():
         len_hyperparameters = len(hyperparameters)
         d2L_dmdh = np.zeros((len_hyperparameters,len_hyperparameters))
         epsilon = 1e-6
-        grad_at_hps = self.neg_log_likelihood_gradient(hyperparameters)
+        grad_at_hps = self.neg_log_likelihood_gradient(hyperparameters = hyperparameters)
         for i in range(len_hyperparameters):
             hps_temp = np.array(hyperparameters)
             hps_temp[i] = hps_temp[i] + epsilon
-            d2L_dmdh[i,i:] = ((self.neg_log_likelihood_gradient(hps_temp) - grad_at_hps)/epsilon)[i:]
+            d2L_dmdh[i,i:] = ((self.neg_log_likelihood_gradient(hyperparameters = hps_temp) - grad_at_hps)/epsilon)[i:]
         return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
 
     def test_log_likelihood_gradient(self,hyperparameters):
@@ -851,8 +883,8 @@ class GP():
         for i in range(len(thps)):
             thps_aux = np.array(thps)
             thps_aux[i] = thps_aux[i] + eps
-            grad[i] = (self.log_likelihood(thps_aux) - self.log_likelihood(thps))/eps
-        analytical = -self.neg_log_likelihood_gradient(thps)
+            grad[i] = (self.log_likelihood(hyperparameters = thps_aux) - self.log_likelihood(hyperparameters = thps))/eps
+        analytical = -self.neg_log_likelihood_gradient(hyperparameters = thps)
         if np.linalg.norm(grad-analytical) > np.linalg.norm(grad)/100.0:
             print("Gradient possibly wrong")
             print("finite diff appr: ",grad)
@@ -880,19 +912,28 @@ class GP():
         else: V = self.V
 
         #get K
-        if self.gp2Scale: K, V = None
+        if self.gp2Scale:
+            self.gp2Scale_obj.compute_covariance(x_data,x_data,hyperparameters,self.gp2Scale_dask_client)
+            K = self.gp2Scale_obj.SparsePriorCovariance.get_result().result()
         else: K = self._compute_K(hyperparameters)
 
         #check if shapes are correct
-        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
+        if isinstance(K,np.ndarray) and K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
 
         #get K + V
         KV = K + V
+        print(KV)
 
         #get Kinv/KVinvY, LU, Chol, logdet(KV)
-        if self.gp2Scale: raise Exception("gp2Scale is not yet part of the GP slass")
+        if self.gp2Scale:
+            LU = splu(KV.tocsr())
+            factorization_obj = ("LU", LU)
+            KVinvY = LU.solve(y_data - prior_mean_vec)
+            upper_diag = abs(LU.U.diagonal())
+            KVlogdet = np.sum(np.log(upper_diag))
+            KVinv = None
+            #raise Exception("gp2Scale is not yet part of the GP class")
         elif self.sparse_mode and self._is_sparse(KV):
-            #print("Sparsity detected: ", self._how_sparse_is(K), "hps: ", hyperparameters)
             KV = csc_matrix(KV)
             LU = splu(KV)
             factorization_obj = ("LU", LU)
@@ -901,7 +942,6 @@ class GP():
             KVlogdet = np.sum(np.log(upper_diag))
             KVinv = None
         else:
-            #if self.sparse_mode: print("Sparse mode enabled but no sparsity detected", self._how_sparse_is(K), "hps: ", hyperparameters)
             c, l = cho_factor(KV)
             factorization_obj = ("Chol",c,l)
             KVinvY = cho_solve((c, l), y_data - prior_mean_vec)
@@ -1028,7 +1068,9 @@ class GP():
         return mean
 
     def _default_noise_function(self, x, hyperparameters, gp_obj):
-        return np.diag(np.ones((self.y_data.shape)) * (np.mean(abs(self.y_data)) / 100.0))
+        noise = np.ones((self.y_data.shape)) * (np.mean(abs(self.y_data)) / 100.0)
+        if self.gp2Scale: return self.gp2Scale_obj.calculate_sparse_noise_covariance(noise)
+        else: return np.diag(noise)
 
     ###########################################################################
     ###########################################################################
@@ -1045,7 +1087,7 @@ class GP():
     ###########################################################################
     ###########################################################################
     ###########################################################################
-    def posterior_mean(self, x_pred, hyperparameters = None, x_out = None): ######think about how this input would look
+    def posterior_mean(self, x_pred, hyperparameters = None, x_out = None):
         """
         This function calculates the posterior mean for a set of input points.
 
@@ -1100,7 +1142,10 @@ class GP():
             a constraint during training. The default is None which means the initialized or trained hyperparameters
             are used.
         x_out : np.ndarray, optional
-            Output space in case of multi-task GP use.
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
+        direction : int, optional
+            Direction of derivative, If None (default) the whole gradient will be computed.
 
         Return
         ------
@@ -1151,7 +1196,8 @@ class GP():
         x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         x_out : np.ndarray, optional
-            Output space in case of multi-task GP use.
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
         variance_only : bool, optional
             If True the compuation of the posterior covariance matrix is avoided which can save compute time.
             In that case the return will only provide the variance at the input points.
@@ -1200,6 +1246,12 @@ class GP():
         ----------
         x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
+        direction : int, optional
+            Direction of derivative, If None (default) the whole gradient will be computed.
+
         Return
         ------
         solution dictionary : dict
@@ -1245,11 +1297,11 @@ class GP():
         Function to compute the joint prior over f (at measured locations) and f__pred at x_pred
         Parameters
         ----------
-            x_pred: np.ndarray
-                1d or 2d numpy array of points, note, these are elements of the
-                index set which results from a cartesian product of input and output space
-            x_out: optional, np.ndarray
-                points in th eoutput space
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
         Return
         ------
         solution dictionary : dict
@@ -1271,12 +1323,17 @@ class GP():
     ###########################################################################
     def gp_prior_grad(self, x_pred, direction, x_out = None):
         """
-        function to compute the gradient of the data-informed prior
+        Function to compute the gradient of the data-informed prior
         Parameters
         ------
-            x_pred: 1d or 2d numpy array of points, note, these are elements of the
-                    index set which results from a cartesian product of input and output space
-            direction: direction in which to compute the gradient
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        direction : int
+            Direction of derivative.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
+
         Return
         -------
         solution dictionary : dict
@@ -1309,8 +1366,16 @@ class GP():
 
     def entropy(self, S):
         """
-        function comuting the entropy of a normal distribution
-        res = entropy(S); S is a 2d numpy array, matrix has to be non-singular
+        Function computing the entropy of a normal distribution
+        res = entropy(S); S is a 2d numpy array, a covariance matrix which is non-singular.
+        Parameters:
+        -----------
+        S : numpy array
+        A covraince matrix.
+
+        Return:
+        -------
+        entropy : float
         """
         dim  = len(S[0])
         logdet = self._logdet(S)
@@ -1318,12 +1383,15 @@ class GP():
     ###########################################################################
     def gp_entropy(self, x_pred, x_out = None):
         """
-        Function to compute the entropy of the prior.
+        Function to compute the entropy of the gp prior probability distribution.
 
         Parameters
         ----------
         x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
         Return
         ------
         entropy : float
@@ -1347,10 +1415,13 @@ class GP():
         x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         direction : int
-            0 <= direction <= D - 1
+            Direction of derivative.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
         Return
         ------
-        entropy : float
+        entropy gradient in given direction : float
         """
         if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
@@ -1396,15 +1467,18 @@ class GP():
         function to compute the kl divergence of a posterior at given points
         Parameters
         ----------
-            x_pred : 1d or 2d numpy array of points, note, these are elements of the
-                    index set which results from a cartesian product of input and output space
-            comp_mean : np.array
-                Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
-            comp_cov : np.array
-                Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
+        comp_mean : np.array
+            Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
+        comp_cov : np.array
+            Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
         Return
         -------
-            solution dictionary : dict
+        solution dictionary : dict
         """
         if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
@@ -1492,7 +1566,8 @@ class GP():
     ###########################################################################
     def shannon_information_gain_vec(self, x_pred, x_out = None):
         """
-        Function to compute the shannon-information gain of a set of points, but per point, in comparison to GP.shannon_information_gain.
+        Function to compute the shannon-information gain of a set of points, 
+        but per point, in comparison to fvgp.gp.GP.shannon_information_gain.
         In this case, the information_gain is a vector.
         Parameters
         ----------
@@ -1983,7 +2058,7 @@ class GP():
         """
         non_stat = np.outer(self._g(x1,x0,w,l),self._g(x2,x0,w,l))
         return non_stat
-    
+
 
     def non_stat_kernel_gradient(self,x1,x2,x0,w,l):
         dkdw = np.einsum('ij,k->ijk', self._dgdw(x1,x0,w,l), self._g(x2,x0,w,l)) + np.einsum('ij,k->ikj', self._dgdw(x2,x0,w,l), self._g(x1,x0,w,l))

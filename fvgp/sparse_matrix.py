@@ -1,3 +1,7 @@
+
+import scipy.sparse as sparse
+import time
+import numpy as np
 class gp2ScaleSparseMatrix:
     def __init__(self,n):
         self.n = n
@@ -6,11 +10,11 @@ class gp2ScaleSparseMatrix:
         self.st = time.time()
 
     def get_result(self):
-        return self. K, self.V
+        return self. K
 
 
     def reset_prior(self):
-        self.KV = sparse.coo_matrix((self.n,self.n))
+        self.V = sparse.coo_matrix((self.n,self.n))
         self.K = sparse.coo_matrix((self.n,self.n))
         return 0
 
@@ -48,14 +52,7 @@ class gp2ScaleSparseMatrix:
         self.insert_many(res)
         return 0
 
-    def add_to_diag(self,vector):
-        diag = sparse.eye(self.n, format="coo") ##make variance
-        diag.setdiag(vector) ##make variance
-        self.V = diag
-        self.KV = self.K + diag  ##add variance
-        return 0
-
-
+    """
     def compute_LU_KV(self):
         A = self.KV.tocsc()
         A_new = A.__class__(A.shape)
@@ -118,7 +115,7 @@ class gp2ScaleSparseMatrix:
         s = np.sum(gamma, axis = 0) / float(p)
         s = s / np.arange(1,len(s)+1)
         return N * np.log(alpha) - np.sum(s)
-
+    """
     def traceKXX(self,X):
         res = np.empty(X.shape)
         for i in range(X.shape[1]): res[:,i] = self.solve(X[:,i])
