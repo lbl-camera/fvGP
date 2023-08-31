@@ -215,11 +215,9 @@ class fvGP(GP):
         if gp_kernel_function is None:
             gp_kernel_function = self._default_multi_task_kernel
             try:
-                import torch
-                from fvgp.advanced_kernels import Network
+                from .deep_kernel_network import Network
             except: raise Exception("You have not specified a kernel and the default kernel will be used. \n \
                     The default kernel needs pytorch to be installed manually.")
-            from torch import nn
             self.gp_deep_kernel_layer_width = gp_deep_kernel_layer_width
             self.n = Network(self.iset_dim, gp_deep_kernel_layer_width)
             number_of_hps = int(2. * self.iset_dim * gp_deep_kernel_layer_width + gp_deep_kernel_layer_width**2 + 2.*gp_deep_kernel_layer_width + self.iset_dim + 2.)
@@ -348,13 +346,6 @@ class fvGP(GP):
         b2_indices = range(last,last + self.gp_deep_kernel_layer_width)
         last = last + self.gp_deep_kernel_layer_width
         b3_indices = range(last, last + self.iset_dim)
-        #print(hps_nn)
-        #print(w1_indices)
-        #print(w2_indices)
-        #print(w3_indices)
-        #print(b1_indices)
-        #print(b2_indices)
-        #print(b3_indices)
         self.n.set_weights(hps_nn[w1_indices].reshape(self.gp_deep_kernel_layer_width ,self.iset_dim),
                            hps_nn[w2_indices].reshape(self.gp_deep_kernel_layer_width , self.gp_deep_kernel_layer_width),
                            hps_nn[w3_indices].reshape(self.iset_dim,self.gp_deep_kernel_layer_width))
@@ -366,3 +357,5 @@ class fvGP(GP):
         d = self._get_distance_matrix(x1_nn,x2_nn)
         k = signal_var * obj.matern_kernel_diff1(d,length_scale)
         return k
+
+

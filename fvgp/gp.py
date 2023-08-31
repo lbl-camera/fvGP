@@ -9,8 +9,8 @@ from scipy.sparse import csc_matrix
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import splu
 import dask.distributed as distributed
-import matplotlib.pyplot as plt
 import numpy as np
+import scipy
 from scipy.optimize import differential_evolution
 from scipy.optimize import minimize
 from scipy.linalg import cho_factor, cho_solve
@@ -18,10 +18,8 @@ from loguru import logger
 from .mcmc import mcmc
 from hgdl.hgdl import HGDL
 from .gp2Scale import gp2Scale as gp2S
-from dask.distributed import wait
-import scipy.sparse as sparse
-from scipy.sparse.linalg import splu
 from dask.distributed import Variable
+from dask.distributed import Client
 from .sparse_matrix import gp2ScaleSparseMatrix
 
 
@@ -127,7 +125,9 @@ class GP():
         Caution: the covariace is still stored at first in a dense format. For more extreme scaling, check out the gp2Scale option.
     gp2Scale: bool, optional
         Turn on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advaced feature for HPC GPs up to 10
-        million datapoints.
+        million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wemsland kernel which is compactly supported. The noise function will have
+        to return a scipy.sparse matrix instead of a numpy array. There are a few more things to consider; this is an advanced option.
+        The default is False.
     gp2Scale_dask_client : dask.distributed.Client, optional
         A dask client for gp2Scale to distribute covariance computations over. Has to contain at least 3 workers.
         A local client is used as default.
@@ -222,26 +222,32 @@ class GP():
         #######prepare hyper parameters###########
         ##########################################
         if init_hyperparameters is None: init_hyperparameters = np.ones((input_space_dim + 1))
-        self.hyperparameters = np.array(init_hyperparameters)
+        self.hyperparameters = init_hyperparameters
 
         if self.sparse_mode and self.store_inv:
             warnings.warn("sparse_mode and store_inv enabled but they should not be used together. I'll set store_inv = False.", stacklevel=2)
             self.store_inv = False
         if self.sparse_mode and not callable(gp_kernel_function):
-                warnings.warn("You have chosen to activate sparse mode. Great! \n But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.", stacklevel=2)
+                warnings.warn("You have chosen to activate sparse mode. Great! \n \
+                        But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.", stacklevel=2)
                 gp_kernel_function = self.wendland_anisotropic
 
         self.KVinv = None
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
-        self.gp2Scale_dask_client = gp2Scale_dask_client
         ###########################################
         #####gp2Scale##############################
         ###########################################
-
         if gp2Scale:
-            if gp2Scale_dask_client is None: raise Exception("gp2Scale needs a 'gp2Scale_dask_client'")
-            if not callable(gp_kernel_function): gp_kernel_function = self.wendland_anisotropic
+            if gp2Scale_dask_client is None:
+                gp2Scale_dask_client = Client()
+                warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. Set to distributed.Client()", stacklevel=2)
+            self.gp2Scale_dask_client = gp2Scale_dask_client
+
+            if not callable(gp_kernel_function): 
+                warnings.warn("You have chosen to activate gp2SCale. A powerful tool! \n \
+                        But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.", stacklevel=2)
+                gp_kernel_function = wendland_anisotropic_gp2Scale
             self.gp2Scale_obj = gp2S(x_data, batch_size = gp2Scale_batch_size, 
                     gp_kernel_function = gp_kernel_function, 
                     covariance_dask_client = gp2Scale_dask_client,
@@ -249,16 +255,19 @@ class GP():
             self.store_inv = False
             warnings.warn("WARNING: gp2Scale activated. Only training via MCMC should be performed. \
                     Only noise variances (no noise covariances can be considered). \
-                    A customed sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.")
+                    A customed sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.", stacklevel=2)
         ###########################################
         ###assign kernel, mean and noise functions#
         ###########################################
+        #noise
+        if noise_variances is not None and callable(gp_noise_function):
+            warnings.warn("Noise function and measurement noise provided. noise_variances set to None", stacklevel=2)
+            noise_variances = None
         if callable(gp_noise_function): self.noise_function = gp_noise_function
         elif noise_variances is not None: self.noise_function = None
         else:
             warnings.warn("No noise function or measurement noise provided. Noise variances will be set to 1% of mean(y_data).", stacklevel=2)
             self.noise_function = self._default_noise_function
-        if noise_variances is not None and callable(gp_noise_function): raise Exception("Noise function and measurement noise provided. Only one should be given.")
         if callable(gp_noise_function_grad): self.noise_function_grad = gp_noise_function_grad
         elif callable(gp_noise_function):
             if self.ram_economy is True: self.noise_function_grad = self._finitediff_dnoise_dh_econ
@@ -267,6 +276,8 @@ class GP():
             if self.ram_economy is True: self.noise_function_grad = self._default_dnoise_dh_econ
             else: self.noise_function_grad = self._default_dnoise_dh
 
+
+        #kernel
         if callable(gp_kernel_function): self.kernel = gp_kernel_function
         elif gp_kernel_function is None: self.kernel = self.default_kernel
         else: raise Exception("No valid kernel function specified")
@@ -276,6 +287,7 @@ class GP():
             if self.ram_economy is True: self.dk_dh = self.gp_kernel_derivative
             else: self.dk_dh = self.gp_kernel_gradient
 
+        #prior mean
         if  callable(gp_mean_function): self.mean_function = gp_mean_function
         else: self.mean_function = self._default_mean_function
         if callable(gp_mean_function_grad): self.dm_dh = gp_mean_function_grad
@@ -283,7 +295,7 @@ class GP():
         else: self.dm_dh = self._default_dm_dh
         if gp_kernel_function is None and (gp_noise_function is not None or gp_mean_function is not None):
             warnings.warn("You are using the default kernel but a user-defined mean or noise function. \
-                    Make sure the right hyperparameter indices are used in all functions. The default kernel function uses the first D + 1 hyperparameters")
+                    Make sure the right hyperparameter indices are used in all functions. The default kernel function uses the first D + 1 hyperparameters", stacklevel=2)
         ##########################################
         #######prepare noise covariances##########
         ##########################################
@@ -332,8 +344,8 @@ class GP():
             The values of the data points. Shape (V,1) or (V).
         noise_variances : np.ndarray, optional
             An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance. Shape (len(y_data), 1) or (len(y_data)). 
-            Note: if no variances are provided here, the noiase_covariance callable will be used; if the callable is not provided the noise variances
-            will be set to `abs(np.mean(y_data) / 100.0`.
+            Note: if no variances are provided here, the noise_covariance callable will be used; if the callable is not provided the noise variances
+            will be set to `abs(np.mean(y_data) / 100.0`. If you provided a noise function, the noise_variances will be ignored.
         """
         if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
         if self.input_space_dim != len(x_data[0]):
@@ -347,6 +359,10 @@ class GP():
         ##########################################
         #######prepare variances##################
         ##########################################
+        if noise_variances is not None and callable(self.noise_function): 
+            warnings.warn("Noise function and measurement noise provided. noise_variances set to None", stacklevel=2)
+            noise_variances = None
+
         if noise_variances is None:
             ##noise covariances are always a square matrix
             self.V = self.noise_function(self.x_data, self.hyperparameters,self)
@@ -432,7 +448,7 @@ class GP():
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         if hyperparameter_bounds is None:
-            warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance")
+            warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance", stacklevel=2)
             hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
             hyperparameter_bounds[0] = np.array([0.00001,1e8])
             hyperparameter_bounds[1:] = np.array([0.00001,1e8])
@@ -494,7 +510,7 @@ class GP():
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         if hyperparameter_bounds is None:
-            warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance")
+            warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance", stacklevel=2)
             hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
             hyperparameter_bounds[0] = np.array([0.00001,1e8])
             hyperparameter_bounds[1:] = np.array([0.00001,1e8])
@@ -524,7 +540,7 @@ class GP():
             opt_obj.cancel_tasks()
             logger.debug("fvGP successfully cancelled the current training.")
         except:
-            warnings.warn("No asynchronous training to be cancelled in fvGP, no training is running.")
+            warnings.warn("No asynchronous training to be cancelled in fvGP, no training is running.", stacklevel=2)
     ###################################################################################
     def kill_training(self,opt_obj):
         """
@@ -540,7 +556,7 @@ class GP():
             opt_obj.kill_client()
             logger.debug("fvGP successfully killed the training.")
         except:
-            warnings.warn("No asynchronous training to be killed, no training is running.")
+            warnings.warn("No asynchronous training to be killed, no training is running.", stacklevel=2)
 
     ##################################################################################
     def update_hyperparameters(self, opt_obj):
@@ -758,8 +774,8 @@ class GP():
         if start_log_likelihood > new_likelihood and method != 'mcmc':
             logger.debug(f"New hyperparameters: {hyperparameters} with log likelihood: {self.log_likelihood(hyperparameters)}")
             warning_str = "Old log marginal likelihood: "+ str(start_log_likelihood) + " New log marginal likelihood: "+ str(new_likelihood)
-            warnings.warn(f"Old log marginal likelihood:  {start_log_likelihood}")
-            warnings.warn(f"New log marginal likelihood:  {new_likelihood}")
+            warnings.warn(f"Old log marginal likelihood:  {start_log_likelihood}", stacklevel=2)
+            warnings.warn(f"New log marginal likelihood:  {new_likelihood}", stacklevel=2)
 
 
             hyperparameters = starting_hps
@@ -779,8 +795,8 @@ class GP():
             marginal log-likelihood : float
         """
         if hyperparameters is None:
-            K, KV,  KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                    self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V
+            K,           KV,      KVinvY,      KVlogdet,                     FO,      KVinv,            mean,      cov = \
+            self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V
         else:
             K, KV,  KVinvY, KVlogdet, FO, KVinv, mean, cov = \
                     self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
@@ -927,7 +943,7 @@ class GP():
 
         #get Kinv/KVinvY, LU, Chol, logdet(KV)
         if self.gp2Scale:
-            LU = splu(KV.tocsr())
+            LU = splu(KV.tocsc())
             factorization_obj = ("LU", LU)
             KVinvY = LU.solve(y_data - prior_mean_vec)
             upper_diag = abs(LU.U.diagonal())
@@ -1189,7 +1205,7 @@ class GP():
                 "df/dx": posterior_mean_grad}
 
     ###########################################################################
-    def posterior_covariance(self, x_pred, x_out = None, variance_only = False):
+    def posterior_covariance(self, x_pred, x_out = None, variance_only = True, add_noise = False):
         """
         Function to compute the posterior covariance.
         Parameters
@@ -1216,7 +1232,7 @@ class GP():
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
         if self.KVinv is not None:
             if variance_only:
-                S = False
+                S = None
                 v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.KVinv, k)
             else:
                 S = kk - (k.T @ self.KVinv @ k)
@@ -1234,6 +1250,13 @@ class GP():
             v[v<0.0] = 0.0
             if not variance_only:
                 np.fill_diagonal(S, v)
+
+        if add_noise:
+            noise = 0
+            if callable(self.noise_function): noise = self.noise_function(x_pred, self.hyperparameters, self)
+            if scipy.sparse.issparse(noise): noise = noise.toarray()
+            v = v + np.diag(noise)
+            if S is not None: S = S + noise
 
         return {"x": x_pred,
                 "v(x)": v,
@@ -2128,12 +2151,12 @@ class GP():
         gr = np.zeros((len(hps),len(x)))
         return gr
 
-    def _default_dnoise_dh(self,x1,x2,hps,gp_obj):
-        gr = np.zeros((len(hps), len(x1),len(x2)))
+    def _default_dnoise_dh(self,x,hps,gp_obj):
+        gr = np.zeros((len(hps), len(x),len(x)))
         return gr
 
-    def _default_dnoise_dh_econ(self,x1,x2,i,hps,gp_obj):
-        gr = np.zeros((len(x1),len(x2)))
+    def _default_dnoise_dh_econ(self,x,i,hps,gp_obj):
+        gr = np.zeros((len(x),len(x)))
         return gr
 
 
@@ -2214,4 +2237,11 @@ class GP():
 ####################################################################################
 ####################################################################################
 ####################################################################################
+def wendland_anisotropic_gp2Scale(x1,x2, hps, obj):
+    distance_matrix = np.zeros((len(x1),len(x2)))
+    for i in range(len(x1[0])): distance_matrix += abs(np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
+    d = np.sqrt(distance_matrix)
+    d[d > 1.] = 1.
+    kernel = (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
+    return kernel
 

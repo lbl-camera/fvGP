@@ -73,7 +73,7 @@ class gp2Scale():
         covariance_dask_client, self.compute_worker_set, self.actor_worker = self._init_dask_client(covariance_dask_client)
         ###initiate actor that is a future contain the covariance and methods
         self.SparsePriorCovariance = covariance_dask_client.submit(gp2ScaleSparseMatrix,self.point_number, actor=True, workers=self.actor_worker).result()
-        self.covariance_dask_client = covariance_dask_client
+        #self.covariance_dask_client = covariance_dask_client
 
         scatter_data = {"x_data":self.x_data} ##data that can be scattered
         self.scatter_future = covariance_dask_client.scatter(scatter_data,workers = self.compute_worker_set)               ##scatter the data
@@ -566,10 +566,10 @@ def kernel_function(data):
         x2 = data["scattered_data"]["x_data"][data["range_j"][0]:data["range_j"][1]]
         range1 = data["range_i"]
         range2 = data["range_j"]
-        k = kernel(x1,x2,hps)
+        k = kernel(x1,x2,hps, None)
     else:
         x1 = data["x_data"]
         x2 = data["x_data"]
-        k = kernel(x1,x2,hps)
+        k = kernel(x1,x2,hps, None)
     k_sparse = sparse.coo_matrix(k)
     return k_sparse, (data["range_i"][0],data["range_j"][0]), time.time() - st, worker.address
