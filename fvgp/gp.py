@@ -757,7 +757,6 @@ class GP():
                     constraints = constraints)
 
             opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
-            print(opt_obj.get_final())
             hyperparameters = opt_obj.get_final()[0]["x"]
             opt_obj.kill_client()
         elif method == "mcmc":
