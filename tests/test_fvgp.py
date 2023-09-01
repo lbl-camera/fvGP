@@ -24,7 +24,7 @@ from dask.distributed import performance_report
 
 
 
-N = 1000
+N = 100
 input_dim = 5
 
 
@@ -36,14 +36,14 @@ x_pred = np.random.rand(10, input_dim)
 class Test_fvGP(unittest.TestCase):
     """Tests for `fvgp` package."""
     def test_single_task_init_basic(self):
-        my_gp1 = GP(input_dim, x_data, y_data, np.array([1, 1, 1, 1, 1, 1]))
+        my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
         my_gp1.update_gp_data(x_data, y_data, noise_variances = np.ones((y_data.shape)) * 0.01)
         my_gp1.update_gp_data(x_data, y_data)
         res = my_gp1.posterior_mean(x_pred)
-        res = my_gp1.posterior_mean_grad(x_pred,0)
+        res = my_gp1.posterior_mean_grad(x_pred,direction=0)
         res = my_gp1.posterior_mean_grad(x_pred)
         res = my_gp1.posterior_covariance(x_pred)
-        res = my_gp1.posterior_covariance_grad(x_pred,0)
+        res = my_gp1.posterior_covariance_grad(x_pred,direction=0)
         res = my_gp1.gp_entropy(x_pred)
         res = my_gp1.shannon_information_gain(x_pred)
         res = my_gp1.squared_exponential_kernel(1,1)
@@ -60,7 +60,7 @@ class Test_fvGP(unittest.TestCase):
 
     def test_single_task_init_advanced(self):
         my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
-            compute_device="cpu", normalize_y = True, use_inv = True, ram_economy = True)
+            compute_device="cpu", normalize_y = True, store_inv = True, ram_economy = True)
 
     def test_train_basic(self):
         my_gp1 = GP(input_dim, x_data, y_data, np.array([1, 1, 1, 1, 1, 1]))
@@ -75,11 +75,10 @@ class Test_fvGP(unittest.TestCase):
 
         res = my_gp1.posterior_mean(np.random.rand(len(x_data),len(x_data[0])))
         res = my_gp1.posterior_mean_grad(np.random.rand(10,len(x_data[0])))
-        res = my_gp1.posterior_mean_constraint(np.random.rand(10,len(x_data[0])), my_gp1.hyperparameters)
         res = my_gp1.posterior_covariance(np.random.rand(10,len(x_data[0])))
         res = my_gp1.posterior_covariance_grad(np.random.rand(10,len(x_data[0])))
-        res = my_gp1.gp_prior(np.random.rand(10,len(x_data[0])))
-        res = my_gp1.gp_prior_grad(np.random.rand(10,len(x_data[0])),0)
+        res = my_gp1.joint_gp_prior(np.random.rand(10,len(x_data[0])))
+        res = my_gp1.joint_gp_prior_grad(np.random.rand(10,len(x_data[0])),0)
         res = my_gp1.gp_entropy(np.random.rand(10,len(x_data[0])))
         res = my_gp1.gp_entropy_grad(np.random.rand(10,len(x_data[0])),0)
 
@@ -120,7 +119,7 @@ class Test_fvGP(unittest.TestCase):
 
     def test_train_hgdl(self):
         my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
-            compute_device="cpu", normalize_y = True, use_inv = True, ram_economy = True)
+            compute_device="cpu", normalize_y = True, store_inv = True, ram_economy = True)
 
 
         my_gp2.train(np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
@@ -129,7 +128,7 @@ class Test_fvGP(unittest.TestCase):
 
     def test_train_hgdl_async(self):
         my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
-            compute_device="cpu", normalize_y = True, use_inv = True, ram_economy = True)
+            compute_device="cpu", normalize_y = True, store_inv = True, ram_economy = True)
 
         opt_obj = my_gp2.train_async(np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
                 max_iter = 5000)
@@ -139,92 +138,34 @@ class Test_fvGP(unittest.TestCase):
         my_gp2.kill_training(opt_obj)
 
     def test_multi_task(self):
+        def mkernel(x1,x2,hps,obj):
+            d = obj._get_distance_matrix(x1,x2)
+            return hps[0] * obj.matern_kernel_diff1(d,hps[1])
         y_data = np.zeros((N,2))
         y_data[:,0] = np.sin(np.linalg.norm(x_data, axis=1))
         y_data[:,1] = np.cos(np.linalg.norm(x_data, axis=1))
 
-        my_fvgp = fvGP(input_dim,1,2, x_data, y_data, np.array([1, 1, 1, 1, 1, 1,1]))
-        my_fvgp.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "global", pop_size = 10, tolerance = 0.001,max_iter = 5)
+        my_fvgp = fvGP(input_dim,1,2, x_data, y_data, np.array([1, 1]), gp_kernel_function=mkernel)
+        my_fvgp.train(np.array([[0.01,1],[0.01,10]]),
+                method = "global", pop_size = 10, tolerance = 0.001, max_iter = 5)
 
     def test_gp2Scale(self):
         client = Client()
-        input_dim = 3
+        input_dim = 1
         N = 10000
         x_data = np.random.rand(N,input_dim)
         y_data = np.sin(np.linalg.norm(x_data,axis = 1) * 5.0)
-        hps_n = 42
+        hps_n = 2
 
-        hps_bounds = np.array([
-                                [0.,1.],   ##pos bump 1 f comp 1
-                                [0.,1.],    ##pos bump 1 f comp 2
-                                [0.,1.],  ##pos bump 1 f comp 3
-                                #
-                                [0.,1.],   ##pos bump 2 f
-                                [0.,1.],    ##pos bump 2 f
-                                [0.,1.],    ##pos bump 2 f
-                                #
-                                [0.,1.],   ##pos bump 3 f
-                                [0.,1.],    ##pos bump 3 f
-                                [0.,1.],    ##pos bump 3 f
-                                #
-                                [0.,1.],   ##pos bump 4 f
-                                [0.,1.],    ##pos bump 4 f
-                                [0.,1.],    ##pos bump 4 f
-                                #
-                                [0.01,0.1],    ##radius bump 1 f
-                                [0.01,0.1],    ##...2
-                                [0.01,0.1],    ##...3
-                                [0.01,0.1],    ##...4
-                                [0.1,1.],    ##ampl bump 1 f
-                                [0.1,1.],    ##...2
-                                [0.1,1.],    ##...3
-                                [0.1,1.],    ##...4
-                                #
-                                [0.,1.],    ##pos bump 1 g comp 1
-                                [0.,1.],     ##pos bump 1 g comp 2
-                                [0.,1.],   ##pos bump 1 g comp 3
-                                #
-                                [0.,1.],    ##pos bump 2 g comp 1
-                                [0.,1.],     ##pos bump 2 g comp 2
-                                [0.,1.],   ##pos bump 2 g comp 3
-                                #
-                                [0.,1.],    ##pos bump 3 g comp 1
-                                [0.,1.],     ##pos bump 3 g comp 2
-                                [0.,1.],   ##pos bump 3 g comp 3
-                                #
-                                [0.,1.],    ##pos bump 4 g comp 1
-                                [0.,1.],     ##pos bump 4 g comp 2
-                                [0.,1.],   ##pos bump 4 g comp 3
-                                #
-                                [0.01,0.1],    ##radius bump 1 g
-                                [0.01,0.1],    ##...2
-                                [0.01,0.1],    ##...3
-                                [0.01,0.1],    ##...4
-                                [0.1,1.],    ##ampl bump 1 g
-                                [0.1,1.],    ##...2
-                                [0.1,1.],    ##...3
-                                [0.1,1.],    ##...4
-                                [0.1,10.],    ##signal var of stat kernel
-                                [0.001,0.02]     ##length scale for stat kernel
+        hps_bounds = np.array([[0.1,10.],    ##signal var of stat kernel
+                               [0.001,0.02]     ##length scale for stat kernel
                                 ])
 
-
         init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
+        my_gp2S = GP(1, x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000)
 
-        print(init_hps)
-        print(hps_bounds)
-        print("INITIALIZED")
-        st = time.time()
+        my_gp2S.train(hps_bounds, max_iter = 5, init_hyperparameters = init_hps)
 
-        my_gp = gp2Scale(input_dim, x_data, y_data, init_hps, 1000,
-                            covariance_dask_client = client)
-        print("initialization done after: ",time.time() - st," seconds")
-        print("===============")
-        print("Log Likelihood: ", my_gp.log_likelihood(my_gp.hyperparameters))
-        print("all done after: ",time.time() - st," seconds")
-
-        my_gp.train(hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
-        my_gp.posterior_mean(np.random.rand(2,3))
-        my_gp.posterior_covariance(np.random.rand(2,3))
-
+        x_pred = np.linspace(0,1,1000)
+        mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["f(x)"]
+        var1 =  my_gp2S.posterior_covariance(x_pred.reshape(-1,1))["v(x)"]

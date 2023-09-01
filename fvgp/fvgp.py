@@ -129,6 +129,21 @@ class fvGP(GP):
         a finite-difference approximation will be used.
     normalize_y : bool, optional
         If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0. The default is False.
+    sparse_mode : bool, optional
+        When sparse_mode is enabled, the algorithm will use a user-defined kernel function or, if that's not provided, an anisotropic Wendland kernel
+        and check for sparsity in the prior covariance. If sparsity is present, sparse operations will be used to speed up computations.
+        Caution: the covariace is still stored at first in a dense format. For more extreme scaling, check out the gp2Scale option.
+    gp2Scale: bool, optional
+        Turn on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advaced feature for HPC GPs up to 10
+        million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wemsland kernel which is compactly supported. The noise function will have
+        to return a scipy.sparse matrix instead of a numpy array. There are a few more things to consider; this is an advanced option.
+        The default is False.
+    gp2Scale_dask_client : dask.distributed.Client, optional
+        A dask client for gp2Scale to distribute covariance computations over. Has to contain at least 3 workers.
+        A local client is used as default.
+    gp2Scale_batch_size : int, optional
+        Matrix batch size for distributed computing in gp2Scale. The default is 10000.
+
     store_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster.
@@ -152,6 +167,10 @@ class fvGP(GP):
         Datapoint positions
     y_data : np.ndarray
         Datapoint values
+    fvgp_x_data : np.ndarray
+        Datapoint positions as seen by fvgp
+    fvgp_y_data : np.ndarray
+        Datapoint values as seen by fvgp
     noise_variances : np.ndarray
         Datapoint observation (co)variances.
     hyperparameters : np.ndarray
@@ -184,10 +203,14 @@ class fvGP(GP):
         gp_mean_function = None,
         gp_mean_function_grad = None,
         sparse_mode = False,
+        gp2Scale = False,
+        gp2Scale_dask_client = None,
+        gp2Scale_batch_size = 10000,
         normalize_y = False,
         store_inv = True,
         ram_economy = False,
-        args = None
+        args = None,
+        info = False,
         ):
 
         self.orig_input_space_dim = input_space_dim
@@ -246,10 +269,14 @@ class fvGP(GP):
                 gp_noise_function = gp_noise_function,
                 gp_noise_function_grad = gp_noise_function_grad,
                 sparse_mode = sparse_mode,
+                gp2Scale = gp2Scale,
+                gp2Scale_dask_client = gp2Scale_dask_client,
+                gp2Scale_batch_size = gp2Scale_batch_size,
                 store_inv = store_inv,
                 normalize_y = normalize_y,
                 ram_economy = ram_economy,
-                args = args)
+                args = args,
+                info = info)
 
    ################################################################################################
     def update_fvgp_data(
@@ -354,7 +381,7 @@ class fvGP(GP):
                           hps_nn[b3_indices].reshape(self.iset_dim))
         x1_nn = self.n.forward(x1)
         x2_nn = self.n.forward(x2)
-        d = self._get_distance_matrix(x1_nn,x2_nn)
+        d = super()._get_distance_matrix(x1_nn,x2_nn)
         k = signal_var * obj.matern_kernel_diff1(d,length_scale)
         return k
 

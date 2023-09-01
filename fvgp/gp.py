@@ -757,6 +757,7 @@ class GP():
                     constraints = constraints)
 
             opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
+            print(opt_obj.get_final())
             hyperparameters = opt_obj.get_final()[0]["x"]
             opt_obj.kill_client()
         elif method == "mcmc":
@@ -1031,10 +1032,7 @@ class GP():
         """
         fvGPs slogdet method based on torch
         """
-
-
-
-        if b.ndim == 1: b = np.expand_dims(b,axis = 1)
+        if np.ndim(b) == 1: b = np.expand_dims(b,axis = 1)
         if self.compute_device == "cpu":
             try: x = np.linalg.solve(A,b)
             except: x,res,rank,s = np.linalg.lstsq(A,b,rcond=None)
@@ -1135,7 +1133,7 @@ class GP():
 
 
         if hyperparameters is not None:
-            hps = self.hyperparameters
+            hps = hyperparameters
             K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
         else:
             hps = self.hyperparameters
@@ -1174,7 +1172,7 @@ class GP():
         """
 
         if hyperparameters is not None:
-            hps = self.hyperparameters
+            hps = hyperparameters
             K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
         else:
             hps = self.hyperparameters
@@ -1209,7 +1207,7 @@ class GP():
                 "df/dx": posterior_mean_grad}
 
     ###########################################################################
-    def posterior_covariance(self, x_pred, x_out = None, variance_only = True, add_noise = False):
+    def posterior_covariance(self, x_pred, x_out = None, variance_only = False, add_noise = False):
         """
         Function to compute the posterior covariance.
         Parameters
@@ -1429,7 +1427,7 @@ class GP():
         priors = self.joint_gp_prior(x_pred)
         S = priors["S"]
         dim  = len(S[0])
-        s, logdet = self._logdet(S)
+        logdet = self._logdet(S)
         return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * logdet)
     ###########################################################################
     def gp_entropy_grad(self, x_pred, direction, x_out = None):
@@ -1478,8 +1476,8 @@ class GP():
         ------
         KL div : float
         """
-        s1, logdet1 = self._logdet(S1)
-        s2, logdet2 = self._logdet(S2)
+        logdet1 = self._logdet(S1)
+        logdet2 = self._logdet(S2)
         x1 = self._solve(S2,S1)
         mu = np.subtract(mu2,mu1)
         x2 = self._solve(S2,mu)
@@ -1492,7 +1490,8 @@ class GP():
     ###########################################################################
     def gp_kl_div(self, x_pred, comp_mean, comp_cov, x_out = None):
         """
-        function to compute the kl divergence of a posterior at given points
+        Function to compute the kl divergence of a posterior at given points
+        and a given normal distribution.
         Parameters
         ----------
         x_pred : np.ndarray
@@ -1679,9 +1678,9 @@ class GP():
         comp_cov_inv = self._inv(comp_cov)
         cov = self._inv(gp_cov_inv + comp_cov_inv)
         mu =  cov @ gp_cov_inv @ gp_mean + cov @ comp_cov_inv @ comp_mean
-        s1, logdet1 = self._logdet(cov)
-        s2, logdet2 = self._logdet(gp_cov)
-        s3, logdet3 = self._logdet(comp_cov)
+        logdet1 = self._logdet(cov)
+        logdet2 = self._logdet(gp_cov)
+        logdet3 = self._logdet(comp_cov)
         dim  = len(mu)
         C = 0.5*(((gp_mean.T @ gp_cov_inv + comp_mean.T @ comp_cov_inv).T \
                @ cov @ (gp_cov_inv @ gp_mean + comp_cov_inv @ comp_mean))\

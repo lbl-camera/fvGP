@@ -1,12 +1,9 @@
 wheel
 versioneer
-torch >= 1.9.0
 scipy
 numpy
-matplotlib
 dask >= 2021.6.2
 distributed >= 2021.6.2
 hgdl == 2.1.2
 notebook
-plotly
 loguru
