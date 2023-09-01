@@ -992,6 +992,10 @@ class GP():
         A : np.ndarray
         Non-singular matrix.
         """
+        c, l = cho_factor(A)
+        upper_diag = abs(c.diagonal())
+        return 2.0 * np.sum(np.log(upper_diag))
+
         if self.compute_device == "cpu":
             s, logdet = np.linalg.slogdet(A)
             return logdet
@@ -1085,7 +1089,7 @@ class GP():
         return mean
 
     def _default_noise_function(self, x, hyperparameters, gp_obj):
-        noise = np.ones((self.y_data.shape)) * (np.mean(abs(self.y_data)) / 100.0)
+        noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)
         if self.gp2Scale: return self.gp2Scale_obj.calculate_sparse_noise_covariance(noise)
         else: return np.diag(noise)
 
@@ -1251,16 +1255,15 @@ class GP():
             if not variance_only:
                 np.fill_diagonal(S, v)
 
-        if add_noise:
-            noise = 0
-            if callable(self.noise_function): noise = self.noise_function(x_pred, self.hyperparameters, self)
+        if add_noise and callable(self.noise_function):
+            noise = self.noise_function(x_pred, self.hyperparameters, self)
             if scipy.sparse.issparse(noise): noise = noise.toarray()
             v = v + np.diag(noise)
             if S is not None: S = S + noise
 
         return {"x": x_pred,
                 "v(x)": v,
-                "S(x)": S}
+                "S": S}
 
     def posterior_covariance_grad(self, x_pred, x_out = None, direction = None):
         """
@@ -1343,9 +1346,9 @@ class GP():
                  "k": k,
                  "kappa": kk,
                  "prior mean": joint_gp_prior_mean,
-                 "S(x)": np.block([[self.K, k],[k.T, kk]])}
+                 "S": np.block([[self.K, k],[k.T, kk]])}
     ###########################################################################
-    def gp_prior_grad(self, x_pred, direction, x_out = None):
+    def joint_gp_prior_grad(self, x_pred, direction, x_out = None):
         """
         Function to compute the gradient of the data-informed prior
         Parameters
@@ -1387,7 +1390,6 @@ class GP():
                  "dS/dx": np.block([[prior_cov_grad, k_g],[k_g.T, kk_g]])}
 
     ###########################################################################
-
     def entropy(self, S):
         """
         Function computing the entropy of a normal distribution
@@ -1424,8 +1426,8 @@ class GP():
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
         if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        priors = self.gp_prior(x_pred)
-        S = priors["S(x)"]
+        priors = self.joint_gp_prior(x_pred)
+        S = priors["S"]
         dim  = len(S[0])
         s, logdet = self._logdet(S)
         return (float(dim)/2.0) +  ((float(dim)/2.0) * np.log(2.0 * np.pi)) + (0.5 * logdet)
@@ -1451,9 +1453,9 @@ class GP():
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
         if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        priors1 = self.gp_prior(x_pred)
-        priors2 = self.gp_prior_grad(x_pred,direction)
-        S1 = priors1["S(x)"]
+        priors1 = self.joint_gp_prior(x_pred)
+        priors2 = self.joint_gp_prior_grad(x_pred,direction)
+        S1 = priors1["S"]
         S2 = priors2["dS/dx"]
         return 0.5 * np.trace(self._inv(S1) @ S2)
     ###########################################################################
@@ -1483,7 +1485,9 @@ class GP():
         x2 = self._solve(S2,mu)
         dim = len(mu)
         kld = 0.5 * (np.trace(x1) + (x2.T @ mu) - dim + (logdet2-logdet1))
-        if kld < -1e-4: logger.debug("Negative KL divergence encountered")
+        if kld < -1e-4:
+            warnings.warn("Negative KL divergence encountered")
+            logger.debug("Negative KL divergence encountered")
         return kld
     ###########################################################################
     def gp_kl_div(self, x_pred, comp_mean, comp_cov, x_out = None):
@@ -1510,7 +1514,7 @@ class GP():
 
         res = self.posterior_mean(x_pred)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_pred)["S(x)"]
+        gp_cov = self.posterior_covariance(x_pred)["S"]
 
         return {"x": x_pred,
                 "gp posterior mean" : gp_mean,
@@ -1543,7 +1547,7 @@ class GP():
 
         gp_mean = self.posterior_mean(x_pred)["f(x)"]
         gp_mean_grad = self.posterior_mean_grad(x_pred,direction)["df/dx"]
-        gp_cov  = self.posterior_covariance(x_pred)["S(x)"]
+        gp_cov  = self.posterior_covariance(x_pred)["S"]
         gp_cov_grad  = self.posterior_covariance_grad(x_pred,direction)["dS/dx"]
 
         return {"x": x_pred,
@@ -1555,10 +1559,37 @@ class GP():
                 "given covariance": comp_cov,
                 "kl-div grad": self.kl_div_grad(gp_mean, gp_mean_grad,comp_mean, gp_cov, gp_cov_grad, comp_cov)}
     ###########################################################################
+    def mutual_information(self,joint,m1,m2):
+        """
+        Function to calculate the mutual information between two normal distributions, which is
+        eqivalent to the KL divergence(joint, marginal1 * marginal1).
+        Parameters:
+        -----------
+        joint : np.ndarray
+            The joint covarianve matrix.
+        m1 : np.ndarray
+            The first marginal distribution
+        m2 : np.ndarray
+            The second marginal distribution
+        """
+        return self.entropy(m1) + self.entropy(m2) - self.entropy(joint)
+
+    def _ig(self,x_pred):
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
+
+
+        joint_covariance = \
+                np.asarray(np.block([[self.K,k],\
+                                     [k.T,  kk]]))
+        return self.mutual_information(joint_covariance, kk, self.K)
+
+    ###########################################################################
     def shannon_information_gain(self, x_pred, x_out = None):
         """
-        Function to compute the shannon-information --- the predicted drop in posterior uncertainty --- given
-        a set of points. The shannon_information gain is a scalar.
+        Function to compute the shannon-information --- the predicted drop in entropy --- given
+        a set of points. The shannon_information gain is a scalar, it is proportionate to
+        the mutual infomation of k(x_pred,x_pred) and the prior K=k(x_data,x_data).
         Parameters
         ----------
             x_pred: 1d or 2d numpy array of points, note, these are elements of the
@@ -1572,25 +1603,12 @@ class GP():
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
         if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
-        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
-
-
-        full_gp_covariances = \
-                np.asarray(np.block([[self.K,k],\
-                            [k.T,kk]]))
-
-        e1 = self.entropy(self.K)
-        e2 = self.entropy(full_gp_covariances)
-        sig = (e2 - e1)
         return {"x": x_pred,
-                "prior entropy" : e1,
-                "posterior entropy": e2,
-                "sig":sig}
+                "sig":-self._ig(x_pred)}
     ###########################################################################
     def shannon_information_gain_vec(self, x_pred, x_out = None):
         """
-        Function to compute the shannon-information gain of a set of points, 
+        Function to compute the shannon-information gain of a set of points,
         but per point, in comparison to fvgp.gp.GP.shannon_information_gain.
         In this case, the information_gain is a vector.
         Parameters
@@ -1605,17 +1623,11 @@ class GP():
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
         if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
-        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
+        sig = np.zeros((len(x_pred)))
+        for i in range(len(x_pred)):
+            sig[i] = -self._ig(x_pred[i].reshape(1,len(x_pred[i])))
 
-        full_gp_covariances = np.empty((len(x_pred),len(self.K)+1,len(self.K)+1))
-        for i in range(len(x_pred)): full_gp_covariances[i] = np.block([[self.K,k[:,i].reshape(-1,1)],[k[:,i].reshape(1,-1),kk[i,i]]])
-        e1 = self.entropy(self.K)
-        e2 = self.entropy(full_gp_covariances)
-        sig = (e2 - e1)
         return {"x": x_pred,
-                "prior entropy" : e1,
-                "posterior entropy": e2,
                 "sig(x)":sig}
 
     ###########################################################################
@@ -1662,7 +1674,7 @@ class GP():
 
         res = self.posterior_mean(x_pred)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_pred)["S(x)"]
+        gp_cov = self.posterior_covariance(x_pred)["S"]
         gp_cov_inv = self._inv(gp_cov)
         comp_cov_inv = self._inv(comp_cov)
         cov = self._inv(gp_cov_inv + comp_cov_inv)

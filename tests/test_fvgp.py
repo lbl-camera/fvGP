@@ -19,7 +19,6 @@ import argparse
 import datetime
 import sys
 from dask.distributed import performance_report
-from fvgp.advanced_kernels import kernel_cpu
 
 
 
@@ -38,7 +37,7 @@ class Test_fvGP(unittest.TestCase):
     """Tests for `fvgp` package."""
     def test_single_task_init_basic(self):
         my_gp1 = GP(input_dim, x_data, y_data, np.array([1, 1, 1, 1, 1, 1]))
-        my_gp1.update_gp_data(x_data, y_data, variances = np.ones((y_data.shape)) * 0.01)
+        my_gp1.update_gp_data(x_data, y_data, noise_variances = np.ones((y_data.shape)) * 0.01)
         my_gp1.update_gp_data(x_data, y_data)
         res = my_gp1.posterior_mean(x_pred)
         res = my_gp1.posterior_mean_grad(x_pred,0)
@@ -60,19 +59,19 @@ class Test_fvGP(unittest.TestCase):
         res = my_gp1.default_kernel(x_data,x_data,np.array([1,1,1,1,1,1]),my_gp1)
 
     def test_single_task_init_advanced(self):
-        my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),variances=np.zeros(y_data.shape) + 0.01,
+        my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
             compute_device="cpu", normalize_y = True, use_inv = True, ram_economy = True)
 
     def test_train_basic(self):
         my_gp1 = GP(input_dim, x_data, y_data, np.array([1, 1, 1, 1, 1, 1]))
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "local", pop_size = 10, tolerance = 0.001,max_iter = 5,deflation_radius = 1.)
+                method = "local", pop_size = 10, tolerance = 0.001,max_iter = 5)
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "global", pop_size = 10, tolerance = 0.001,max_iter = 5,deflation_radius = 1.)
+                method = "global", pop_size = 10, tolerance = 0.001,max_iter = 5)
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 5,deflation_radius = 1.)
+                method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 5)
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 5,deflation_radius = 1.)
+                method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 5)
 
         res = my_gp1.posterior_mean(np.random.rand(len(x_data),len(x_data[0])))
         res = my_gp1.posterior_mean_grad(np.random.rand(10,len(x_data[0])))
@@ -120,20 +119,20 @@ class Test_fvGP(unittest.TestCase):
         res = my_gp1.non_stat_kernel_gradient(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
 
     def test_train_hgdl(self):
-        my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),variances=np.zeros(y_data.shape) + 0.01,
+        my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
             compute_device="cpu", normalize_y = True, use_inv = True, ram_economy = True)
 
 
         my_gp2.train(np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "hgdl", tolerance = 0.001, max_iter = 3, deflation_radius = 0.001)
+                method = "hgdl", tolerance = 0.001, max_iter = 3)
 
 
     def test_train_hgdl_async(self):
-        my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),variances=np.zeros(y_data.shape) + 0.01,
+        my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
             compute_device="cpu", normalize_y = True, use_inv = True, ram_economy = True)
 
         opt_obj = my_gp2.train_async(np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                max_iter = 5000, deflation_radius = 0.001)
+                max_iter = 5000)
 
         time.sleep(5)
         my_gp2.update_hyperparameters(opt_obj)
@@ -146,7 +145,7 @@ class Test_fvGP(unittest.TestCase):
 
         my_fvgp = fvGP(input_dim,1,2, x_data, y_data, np.array([1, 1, 1, 1, 1, 1,1]))
         my_fvgp.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "global", pop_size = 10, tolerance = 0.001,max_iter = 5,deflation_radius = 1.)
+                method = "global", pop_size = 10, tolerance = 0.001,max_iter = 5)
 
     def test_gp2Scale(self):
         client = Client()
@@ -219,7 +218,6 @@ class Test_fvGP(unittest.TestCase):
         st = time.time()
 
         my_gp = gp2Scale(input_dim, x_data, y_data, init_hps, 1000,
-                            gp_kernel_function = kernel_cpu, info = False,
                             covariance_dask_client = client)
         print("initialization done after: ",time.time() - st," seconds")
         print("===============")
@@ -228,5 +226,5 @@ class Test_fvGP(unittest.TestCase):
 
         my_gp.train(hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
         my_gp.posterior_mean(np.random.rand(2,3))
-        my_gp.posterior_covariance(np.random.rand(2,3), umfpack = False)
+        my_gp.posterior_covariance(np.random.rand(2,3))
 
