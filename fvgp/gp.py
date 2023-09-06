@@ -28,6 +28,8 @@ from .sparse_matrix import gp2ScaleSparseMatrix
 
 #TODO:
 #   change and run all test scripts
+#   implement expected improvement
+#   implement CRPS, RMSE
 #   make version on which x is not tested for dim (molecules and such)
 #   finish merging gp2Scale into fvgp
 
