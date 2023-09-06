@@ -279,7 +279,7 @@ class fvGP(GP):
                 info = info)
 
    ################################################################################################
-    def update_fvgp_data(
+    def update_gp_data(
         self,
         points,
         values,
