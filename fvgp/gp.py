@@ -74,11 +74,11 @@ class GP():
         One of "cpu" or "gpu", determines how linear system solves are run. The default is "cpu".
         For "gpu", pytoch has to be installed manually.
     gp_kernel_function : Callable, optional
-        A symmetric positive semi-definite covariance function (a kernel) 
+        A symmetric positive semi-definite covariance function (a kernel)
         that calculates the covariance between
         data points. It is a function of the form k(x1,x2,hyperparameters, obj).
         The input x1 is a N1 x D array of positions, x2 is a N2 x D
-        array of positions, the hyperparameters argument 
+        array of positions, the hyperparameters argument
         is a 1d array of length D+1 for the default kernel and of a different
         user-defined length for other kernels
         obj is an `fvgp.gp.GP` instance. The default is a stationary anisotropic kernel
@@ -244,12 +244,12 @@ class GP():
                 warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. Set to distributed.Client()", stacklevel=2)
             self.gp2Scale_dask_client = gp2Scale_dask_client
 
-            if not callable(gp_kernel_function): 
+            if not callable(gp_kernel_function):
                 warnings.warn("You have chosen to activate gp2SCale. A powerful tool! \n \
                         But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.", stacklevel=2)
                 gp_kernel_function = wendland_anisotropic_gp2Scale
-            self.gp2Scale_obj = gp2S(x_data, batch_size = gp2Scale_batch_size, 
-                    gp_kernel_function = gp_kernel_function, 
+            self.gp2Scale_obj = gp2S(x_data, batch_size = gp2Scale_batch_size,
+                    gp_kernel_function = gp_kernel_function,
                     covariance_dask_client = gp2Scale_dask_client,
                     info = info)
             self.store_inv = False
@@ -302,7 +302,7 @@ class GP():
         if noise_variances is None:
             ##noise covariances are always a square matrix
             self.V = self.noise_function(self.x_data, init_hyperparameters,self)
-            if isinstance(self.V,np.ndarray) and np.ndim(self.V) == 1: 
+            if isinstance(self.V,np.ndarray) and np.ndim(self.V) == 1:
                 raise Exception("Your noise function did not return a square matrix, it should though, the noise can be correlated.")
             elif isinstance(self.V,np.ndarray) and self.V.shape[0] != self.V.shape[1]: raise Exception("Your noise function return is not a square matrix")
         elif gp2Scale: self.V = gp2Scale_obj.calculate_sparse_noise_covariance(noise_variances)
@@ -343,7 +343,7 @@ class GP():
         y_data : np.ndarray
             The values of the data points. Shape (V,1) or (V).
         noise_variances : np.ndarray, optional
-            An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance. Shape (len(y_data), 1) or (len(y_data)). 
+            An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance. Shape (len(y_data), 1) or (len(y_data)).
             Note: if no variances are provided here, the noise_covariance callable will be used; if the callable is not provided the noise variances
             will be set to `abs(np.mean(y_data) / 100.0`. If you provided a noise function, the noise_variances will be ignored.
         """
@@ -359,7 +359,7 @@ class GP():
         ##########################################
         #######prepare variances##################
         ##########################################
-        if noise_variances is not None and callable(self.noise_function): 
+        if noise_variances is not None and callable(self.noise_function):
             warnings.warn("Noise function and measurement noise provided. noise_variances set to None", stacklevel=2)
             noise_variances = None
 
@@ -410,7 +410,7 @@ class GP():
         Parameters
         ----------
         hyperparameter_bounds : np.ndarray, optional
-            A numpy array of shape (D x 2), defining the bounds for the optimization. 
+            A numpy array of shape (D x 2), defining the bounds for the optimization.
             The default is an array of bounds of the length of the initial hyperparameters
             with all bounds defined practically as [0.00001, inf].
             The initial hyperparameters are either defined by the user at initialization, or in this function call,
@@ -575,14 +575,13 @@ class GP():
         ------
         The current hyperparameters : np.ndarray
         """
-        success = False
+
         try:
             res = opt_obj.get_latest()[0]["x"]
-            success = True
         except:
             logger.debug("      The optimizer object could not be queried")
             logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
-        if success is True:
+        else:
             try:
                 l_n = self.neg_log_likelihood(res)
                 l_o = self.neg_log_likelihood(self.hyperparameters)
