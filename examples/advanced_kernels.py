@@ -55,8 +55,7 @@ def wendland_gpu(x1,x2, radius,device):
 
 
 def wendland_cpu(x1,x2, radius,device):
-    d = get_distance_matrix_gpu(x1,x2,device)
-    #d[d == 0.0] = 1e-16
+    d = get_distance_matrix(x1,x2)
     d[d > radius] = radius
     r = radius
     a = d/r

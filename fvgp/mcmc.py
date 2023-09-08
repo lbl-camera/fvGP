@@ -65,6 +65,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
 
 
     start_time = time.time()
+    n_updates = max(n_updates,2)
     if x0 is None: x0 = np.ones((len(bounds)))
     if prior_args is None: prior_args = bounds
     if prior_fn is None: prior_fn = prior_func
@@ -90,7 +91,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
             prop_Sigma = np.eye(p)
             prop_C = np.eye(p)
             invalid = True
-    if invalid: print("Invalid or missing proposal covariance matrix.  Using identity.\n")
+    #if invalid: print("Invalid or missing proposal covariance matrix.  Using identity.\n")
     # Initialize sigma_m to the rule of thumb
     sigma_m = 2.4**2/p
     r_hat = 0
@@ -145,8 +146,8 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
                         check_chol_cont = False
                     except  np.linalg.LinAlgError:
                         prop_Sigma = prop_Sigma + eps*np.eye(p)
-                        print("Oops. Proposal covariance matrix is now:\n")
-                        print(prop_Sigma)
+                        #print("Oops. Proposal covariance matrix is now:\n")
+                        #print(prop_Sigma)
         # Update the trace objects
         trace[:, i] = theta
         x = np.asarray(trace.T)
@@ -157,7 +158,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
         if return_prop_Sigma_trace:
             prop_Sigma_trace[i,:,:] = prop_Sigma
         # Echo every 100 iterations
-        if info: 
+        if info:
             if (i % 100) == 0: print("Finished "+str(i)+ " out of " + str(n_updates), " iterations.\n")
         if len(x)>201 and np.linalg.norm(np.mean(x[-100:],axis = 0)-np.mean(x[-200:-100],axis = 0)) < 0.01 * np.linalg.norm(np.mean(x[-100:],axis = 0)): break
     # End main loop

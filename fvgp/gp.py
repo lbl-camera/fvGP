@@ -8,6 +8,8 @@ import warnings
 from scipy.sparse import csc_matrix
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import splu
+from scipy.sparse.linalg import cg
+from scipy.sparse.linalg import minres
 import dask.distributed as distributed
 import numpy as np
 import scipy
@@ -21,18 +23,17 @@ from .gp2Scale import gp2Scale as gp2S
 from dask.distributed import Variable
 from dask.distributed import Client
 from .sparse_matrix import gp2ScaleSparseMatrix
+from scipy.stats import norm
+from imate import logdet
 
 
 
 
 
 #TODO:
-#   change and run all test scripts
-#   implement expected improvement
 #   implement CRPS, RMSE
 #   make version on which x is not tested for dim (molecules and such)
-#   finish merging gp2Scale into fvgp
-
+#   make all new examples for single task, multi task, gp2Scale (local and HPC)
 
 class GP():
     """
@@ -46,7 +47,7 @@ class GP():
 
     ..
     instructions for docstings (for developers):
-    this class: fvgp.gp.GP
+    this class: fvgp.GP
     callable descriptions: name(input1, input2, input3), where input1 is ..., input2 is ...
     Use described symbols above, otherwise describe used symbol.
     ..
@@ -61,7 +62,7 @@ class GP():
         The values of the data points. Shape (V,1) or (V).
     init_hyperparameters : np.ndarray, optional
         Vector of hyperparameters used by the GP initially.
-        The class provides methods to train hyperparameters.
+        This class provides methods to train hyperparameters.
         The default is an array of ones, with a shape appropriate
         for the default kernel (D + 1), which is an anisotropic Matern
         kernel with automatic relevance determination (ARD).
@@ -83,8 +84,8 @@ class GP():
         array of positions, the hyperparameters argument
         is a 1d array of length D+1 for the default kernel and of a different
         user-defined length for other kernels
-        obj is an `fvgp.gp.GP` instance. The default is a stationary anisotropic kernel
-        (`fvgp.gp.GP.default_kernel`) which performs automatic relevance determination (ARD).
+        obj is an `fvgp.GP` instance. The default is a stationary anisotropic kernel
+        (`fvgp.GP.default_kernel`) which performs automatic relevance determination (ARD).
         The output is a covariance matrix, an N1 x N2 numpy array.
     gp_kernel_function_grad : Callable, optional
         A function that calculates the derivative of the ``gp_kernel_function'' with respect to the hyperparameters.
@@ -92,46 +93,51 @@ class GP():
         It accepts as input x1 (a N1 x D array of positions),
         x2 (a N2 x D array of positions),
         hyperparameters (a 1d array of length D+1 for the default kernel), and a
-        `fvgp.gp.GP` instance. The default is a finite difference calculation.
+        `fvgp.GP` instance. The default is a finite difference calculation.
         If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and a
-        `fvgp.gp.GP` instance, and the output
-        is a numpy array of shape (V x U).
+        `fvgp.GP` instance, and the output
+        is a numpy array of shape (len(hps) x N).
         If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and a
-        `fvgp.gp.GP` instance. The output is
+        `fvgp.GP` instance. The output is
         a numpy array of shape (len(hyperparameters) x N1 x N2). See 'ram_economy'.
     gp_mean_function : Callable, optional
         A function that evaluates the prior mean at a set of input position. It accepts as input
         an array of positions (of shape N1 x D), hyperparameters (a 1d array of length D+1 for the default kernel)
-        and a `fvgp.gp.GP` instance. The return value is a 1d array of length N1. If None is provided,
-        `fvgp.gp.GP._default_mean_function` is used.
+        and a `fvgp.GP` instance. The return value is a 1d array of length N1. If None is provided,
+        `fvgp.GP._default_mean_function` is used.
     gp_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the ``gp_mean_function'' at a set of input positions with respect to the hyperparameters.
         It accepts as input an array of positions (of size N1 x D), hyperparameters (a 1d array of length D+1 for the default kernel)
-        and a `fvgp.gp.GP` instance. The return value is a 2d array of shape (len(hyperparameters) x N1). If None is provided, either
+        and a `fvgp.GP` instance. The return value is a 2d array of shape (len(hyperparameters) x N1). If None is provided, either
         zeros are returned since the default mean function does not depend on hyperparametes, or a finite-difference approximation
         is used if ``gp_mean_function'' is provided.
     gp_noise_function : Callable optional
         The noise function is a callable f(x,hyperparameters,obj) that returns a
         positive symmetric definite matrix of shape(len(x),len(x)).
+        The input x is a numpy array of shape (N x D). The hyperparameter array is the same
+        that is communicated to mean and kernel functions. The obj is a fvgp.GP instance.
     gp_noise_function_grad : Callable, optional
         A function that evaluates the gradient of the ``gp_noise_function'' at an input position with respect to the hyperparameters.
         It accepts as input an array of positions (of size N x D), hyperparameters (a 1d array of length D+1 for the default kernel)
-        and a `fvgp.gp.GP` instance. The return value is a 3-D array of shape (len(hyperparameters) x N x N). If None is provided, either
+        and a `fvgp.GP` instance. The return value is a 3-D array of shape (len(hyperparameters) x N x N). If None is provided, either
         zeros are returned since the default noise function does not dpeend on hyperparametes. If ``gp_noise_function'' is provided but no gradient function,
         a finite-difference approximation will be used.
+        The same rules regarding ram economoy as for the kernel definition apply here.
     normalize_y : bool, optional
         If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0. The default is False.
+        Variances will be updated accordingly.
     sparse_mode : bool, optional
         When sparse_mode is enabled, the algorithm will use a user-defined kernel function or, if that's not provided, an anisotropic Wendland kernel
         and check for sparsity in the prior covariance. If sparsity is present, sparse operations will be used to speed up computations.
         Caution: the covariace is still stored at first in a dense format. For more extreme scaling, check out the gp2Scale option.
     gp2Scale: bool, optional
-        Turn on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advaced feature for HPC GPs up to 10
+        Turns on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advaced feature for HPC GPs up to 10
         million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wemsland kernel which is compactly supported. The noise function will have
-        to return a scipy.sparse matrix instead of a numpy array. There are a few more things to consider; this is an advanced option.
+        to return a scipy.sparse matrix instead of a numpy array. There are a few more things to consider (read on); this is an advanced option.
         The default is False.
     gp2Scale_dask_client : dask.distributed.Client, optional
         A dask client for gp2Scale to distribute covariance computations over. Has to contain at least 3 workers.
+        On HPC architecture, this client is provided by the jobscript. Please have a look at the examples.
         A local client is used as default.
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
@@ -144,13 +150,15 @@ class GP():
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
         If True, components of the derivative of the marginal log-likelihood are calculated subsequently, leading to a slow-down
-        but much less RAM usage. If the derivative of the kernel with respect to the hyperparameters (gp_kernel_function_grad) is
-        going to be provided, it has to be tailored: for ram_economy=True it should be of the form f(x1, x2, direction, hyperparameters)
+        but much less RAM usage. If the derivative of the kernel (or noise function) with respect to the hyperparameters (gp_kernel_function_grad) is
+        going to be provided, it has to be tailored: for ram_economy=True it should be of the form f(x1[, x2], direction, hyperparameters, obj)
         and return a 2d numpy array of shape len(x1) x len(x2).
-        If ram_economy=False, the function should be of the form f(points1, points2, hyperparameters) and return a numpy array of shape
+        If ram_economy=False, the function should be of the form f(x1[, x2,] hyperparameters, obj) and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters. CAUTION: This array will be stored and is very large.
     args : any, optional
         args will be a class attribute and therefore available to kernel, noise and prior mean functions.
+    info : bool, optional
+        Provides a way how to see the progress of gp2Scale, Default is False
 
 
 
@@ -196,13 +204,14 @@ class GP():
         store_inv = True,
         ram_economy = False,
         args = None,
-        info = True
+        info = False
         ):
         ########################################
         ###assign and check some attributes#####
         ########################################
-        if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
-        if input_space_dim != len(x_data[0]): raise ValueError("input space dimensions are not in agreement with the point positions given")
+        if isinstance(x_data,np.ndarray):
+            if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
+            if input_space_dim != len(x_data[0]): raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(y_data) == 2: y_data = y_data[:,0]
         if compute_device == 'gpu':
             try: import torch
@@ -217,6 +226,7 @@ class GP():
         self.compute_device = compute_device
         self.ram_economy = ram_economy
         self.args = args
+        self.info = info
         self.sparse_mode = sparse_mode
         self.store_inv = store_inv
 
@@ -255,7 +265,7 @@ class GP():
                     covariance_dask_client = gp2Scale_dask_client,
                     info = info)
             self.store_inv = False
-            warnings.warn("WARNING: gp2Scale activated. Only training via MCMC should be performed. \
+            warnings.warn("WARNING: gp2Scale activated. Only training via MCMC will be performed. \
                     Only noise variances (no noise covariances can be considered). \
                     A customed sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.", stacklevel=2)
         ###########################################
@@ -349,15 +359,22 @@ class GP():
             Note: if no variances are provided here, the noise_covariance callable will be used; if the callable is not provided the noise variances
             will be set to `abs(np.mean(y_data) / 100.0`. If you provided a noise function, the noise_variances will be ignored.
         """
-        if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
-        if self.input_space_dim != len(x_data[0]):
-            raise ValueError("input space dimensions are not in agreement with the point positions given")
+        if isinstance(x_data,np.ndarray):
+            if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
+            if self.input_space_dim != len(x_data[0]): raise ValueError("input space dimensions are not in agreement with the point positions given")
         if np.ndim(y_data) == 2: y_data = y_data[:,0]
 
         self.x_data = x_data
         self.point_number = len(self.x_data)
         self.y_data = y_data
-
+        ###########################################
+        #####gp2Scale##############################
+        ###########################################
+        if self.gp2Scale:
+            self.gp2Scale_obj = gp2S(x_data, batch_size = gp2Scale_batch_size,
+                    gp_kernel_function = self.kernel,
+                    covariance_dask_client = self.gp2Scale_dask_client,
+                    info = self.info)
         ##########################################
         #######prepare variances##################
         ##########################################
@@ -367,6 +384,7 @@ class GP():
 
         if noise_variances is None:
             ##noise covariances are always a square matrix
+            if not callable(self.noise_function): raise Exception("You originally provided noise in the initialization; please provide noise for the updated data.")
             self.V = self.noise_function(self.x_data, self.hyperparameters,self)
         elif np.ndim(noise_variances) == 2:
             if any(noise_variances <= 0.0): raise Exception("Negative or zero measurement variances communicated to fvgp or derived from the data.")
@@ -407,7 +425,8 @@ class GP():
         """
         This function finds the maximum of the log marginal likelihood and therefore trains the GP (synchronously).
         This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and
-        providing a dask client. The GP prior will automatically be updated with the new hyperparameters.
+        providing a dask client. However, in that case fvgp.GP.train_aync() is preferred.
+        The GP prior will automatically be updated with the new hyperparameters after the training.
 
         Parameters
         ----------
@@ -428,7 +447,7 @@ class GP():
             The callable gets an gp.GP instance and has to return a 1d np.array of hyperparameters.
             The default is `'global'` (scipy's differential evolution).
             If method = "mcmc",
-            the attribute fvgp.gp.GP.mcmc_info is updated and contains convergence and distribution information.
+            the attribute fvgp.GP.mcmc_info is updated and contains convergence and distribution information.
         pop_size : int, optional
             A number of individuals used for any optimizer with a global component. Default = 20.
         tolerance : float, optional
@@ -454,6 +473,7 @@ class GP():
             hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
             hyperparameter_bounds[0] = np.array([0.00001,1e8])
             hyperparameter_bounds[1:] = np.array([0.00001,1e8])
+            print(hyperparameter_bounds)
 
         self.hyperparameters = self._optimize_log_likelihood(
             init_hyperparameters,
@@ -481,7 +501,8 @@ class GP():
         This function asynchronously finds the maximum of the log marginal likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
         providing a dask client. This function submits the training and returns
-        an object which can be given to `fvgp.gp.GP.update_hyperparameters()`, which will automatically update the GP prior with the new hyperparameters.
+        an object which can be given to `fvgp.GP.update_hyperparameters()`, 
+        which will automatically update the GP prior with the new hyperparameters.
 
         Parameters
         ----------
@@ -505,7 +526,7 @@ class GP():
 
         Return
         ------
-        Optimization object that can be given to `fvgp.gp.update_hyperparameters` to update the prior GP : object instance
+        Optimization object that can be given to `fvgp.GP.update_hyperparameters()` to update the prior GP : object instance
         """
         if self.gp2Scale: raise Exception("gp2Scale does not allow asynchronous training!")
         if dask_client is None: dask_client = distributed.Client()
@@ -536,7 +557,7 @@ class GP():
         Parameters
         ----------
         opt_obj : object
-            An object returned form the `fvgp.gp.GP.train_async` function.
+            An object returned form the `fvgp.GP.train_async()` function.
         """
         try:
             opt_obj.cancel_tasks()
@@ -551,7 +572,7 @@ class GP():
         Parameters
         ----------
         opt_obj : object
-            An object returned form the `fvgp.gp.GP.train_async` function.
+            An object returned form the `fvgp.GP.train_async()` function.
         """
 
         try:
@@ -566,12 +587,12 @@ class GP():
         This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
         providing a dask client. This function just submits the training and returns
-        an object which can be given to `fvgp.gp.update_hyperparameters`, which will automatically update the GP prior with the new hyperparameters.
+        an object which can be given to `fvgp.GP.update_hyperparameters()`, which will automatically update the GP prior with the new hyperparameters.
 
         Parameters
         ----------
         object : HGDL class instance
-            HGDL class instance returned by `fvgp.gp.train_async`
+            HGDL class instance returned by `fvgp.GP.train_async()`
 
         Return
         ------
@@ -679,11 +700,7 @@ class GP():
             global_optimizer,
             dask_client = None):
 
-        if self.gp2Scale:
-            res = mcmc(self.log_likelihood,hp_bounds, x0 = starting_hps, n_updates = max_iter)
-            hyperparameters = np.array(res["distribution mean"])
-            return hyperparameters
-
+        if self.gp2Scale: method = 'mcmc'
 
         start_log_likelihood = self.log_likelihood(starting_hps)
 
@@ -706,6 +723,9 @@ class GP():
                 maxiter=max_iter,
                 popsize = pop_size,
                 tol = tolerance,
+                disp = self.info,
+                polish=False,
+                x0 = starting_hps.reshape(1,-1),
                 constraints = constraints,
                 workers = 1,
             )
@@ -716,7 +736,6 @@ class GP():
         ####local optimization:#####
         ############################
         elif method == "local":
-            hyperparameters = np.array(starting_hps)
             logger.debug("fvGP is performing a local update of the hyper parameters.")
             logger.debug("starting hyperparameters: {}", hyperparameters)
             logger.debug("Attempting a BFGS optimization.")
@@ -725,7 +744,7 @@ class GP():
             logger.debug("bounds: {}", hp_bounds)
             OptimumEvaluation = minimize(
                 self.neg_log_likelihood,
-                hyperparameters,
+                starting_hps,
                 method= local_optimizer,
                 jac=self.neg_log_likelihood_gradient,
                 hess = self.neg_log_likelihood_hessian,
@@ -757,13 +776,13 @@ class GP():
                     num_epochs = max_iter,
                     constraints = constraints)
 
-            opt_obj.optimize(dask_client = dask_client, x0 = np.array(starting_hps).reshape(1,-1))
+            opt_obj.optimize(dask_client = dask_client, x0 = starting_hps.reshape(1,-1))
             hyperparameters = opt_obj.get_final()[0]["x"]
             opt_obj.kill_client()
         elif method == "mcmc":
             logger.debug("MCMC started in fvGP")
             logger.debug('bounds are {}', hp_bounds)
-            res = mcmc(self.log_likelihood,hp_bounds, x0 = starting_hps, n_updates = max_iter)
+            res = mcmc(self.log_likelihood,hp_bounds, x0 = starting_hps, n_updates = max_iter, info = self.info)
             hyperparameters = np.array(res["distribution mean"])
             self.mcmc_info = res
         elif callable(method):
@@ -777,8 +796,6 @@ class GP():
             warning_str = "Old log marginal likelihood: "+ str(start_log_likelihood) + " New log marginal likelihood: "+ str(new_likelihood)
             warnings.warn(f"Old log marginal likelihood:  {start_log_likelihood}", stacklevel=2)
             warnings.warn(f"New log marginal likelihood:  {new_likelihood}", stacklevel=2)
-
-
             hyperparameters = starting_hps
         return hyperparameters
     ##################################################################################
@@ -932,9 +949,11 @@ class GP():
 
         #get K
         if self.gp2Scale:
-            self.gp2Scale_obj.compute_covariance(x_data,x_data,hyperparameters,self.gp2Scale_dask_client)
+            self.gp2Scale_obj.compute_covariance(x_data,x_data,hyperparameters, self.gp2Scale_dask_client)
             K = self.gp2Scale_obj.SparsePriorCovariance.get_result().result()
+            self.gp2Scale_obj.SparsePriorCovariance.reset_prior().result()
         else: K = self._compute_K(hyperparameters)
+
 
         #check if shapes are correct
         if isinstance(K,np.ndarray) and K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
@@ -944,13 +963,20 @@ class GP():
 
         #get Kinv/KVinvY, LU, Chol, logdet(KV)
         if self.gp2Scale:
-            LU = splu(KV.tocsc())
-            factorization_obj = ("LU", LU)
-            KVinvY = LU.solve(y_data - prior_mean_vec)
-            upper_diag = abs(LU.U.diagonal())
-            KVlogdet = np.sum(np.log(upper_diag))
+            #LU = splu(KV.tocsc())
+            #factorization_obj = ("LU", LU)
+            #KVinvY = LU.solve(y_data - prior_mean_vec)
+            KVinvY, exit_code = cg(KV.tocsc(),y_data - prior_mean_vec)
+            if exit_code != 0:
+                warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
+                KVinvY, exit_code = minres(KV.tocsc(),y_data - prior_mean_vec)
+            #upper_diag = abs(LU.U.diagonal())
+            #KVlogdet = np.sum(np.log(upper_diag))
+            KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=50, max_num_samples=200,
+                              lanczos_degree=80, error_rtol=0.1,
+                              return_info=True, plot=False, verbose=self.info)
             KVinv = None
-            #raise Exception("gp2Scale is not yet part of the GP class")
+            factorization_obj = ("gp2Scale",None)
         elif self.sparse_mode and self._is_sparse(KV):
             KV = csc_matrix(KV)
             LU = splu(KV)
@@ -979,9 +1005,16 @@ class GP():
         if self.factorization_obj[0] == "LU":
             LU = self.factorization_obj[1]
             return LU.solve(b)
-        if self.factorization_obj[0] == "Chol":
+        elif self.factorization_obj[0] == "Chol":
             c,l = self.factorization_obj[1], self.factorization_obj[2]
             return cho_solve((c, l), b)
+        else:
+            res = np.empty((len(b),b.shape[1]))
+            if b.shape[1]>100: warnings.warn("You want to predict at >100 points. \n When using gp2Scale, this takes a while. \n Better predict at only a handful of points.")
+            for i in range(b.shape[1]):
+                res[:,i], exit_status = cg(self.KV,b[:,i])
+                if exit_status != 0: res[:,i], exit_status = minres(self.KV,b[:,i])
+            return res
 
     def _logdet(self, A, factorization_obj = None):
         """
@@ -1127,10 +1160,11 @@ class GP():
         ------
         solution dictionary : {}
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None and isinstance(x_out,np.ndarray): x_pred = self._cartesian_product(x_pred,x_out)
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         if hyperparameters is not None:
             hps = hyperparameters
@@ -1226,9 +1260,10 @@ class GP():
         solution dictionary : dict
         """
 
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None and isinstance(x_out,np.ndarray): x_pred = self._cartesian_product(x_pred,x_out)
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1529,12 +1564,12 @@ class GP():
         function to compute the gradient of the kl divergence of a posterior at given points
         Parameters
         ----------
-            x_pred: 1d or 2d numpy array of points, note, these are elements of the
-                    index set which results from a cartesian product of input and output space
-            comp_mean : np.array
-                Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
-            comp_cov : np.array
-                Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        comp_mean : np.ndarray
+            Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
+        comp_cov : np.ndarray
+            Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
             direction: direction in which the gradient will be computed
         Return
         -------
@@ -1591,9 +1626,12 @@ class GP():
         the mutual infomation of k(x_pred,x_pred) and the prior K=k(x_data,x_data).
         Parameters
         ----------
-            x_pred: 1d or 2d numpy array of points, note, these are elements of the
-                    index set which results from a cartesian product of input and output space if
-                    x_out is given.
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
+
         Return
         -------
         solution dictionary : dict
@@ -1604,11 +1642,12 @@ class GP():
 
         return {"x": x_pred,
                 "sig":-self._ig(x_pred)}
+
     ###########################################################################
     def shannon_information_gain_vec(self, x_pred, x_out = None):
         """
         Function to compute the shannon-information gain of a set of points,
-        but per point, in comparison to fvgp.gp.GP.shannon_information_gain.
+        but per point, in comparison to fvgp.GP.shannon_information_gain().
         In this case, the information_gain is a vector.
         Parameters
         ----------
@@ -2253,6 +2292,6 @@ def wendland_anisotropic_gp2Scale(x1,x2, hps, obj):
     for i in range(len(x1[0])): distance_matrix += abs(np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
     d = np.sqrt(distance_matrix)
     d[d > 1.] = 1.
-    kernel = (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
+    kernel = hps[0] * (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
     return kernel
 
