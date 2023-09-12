@@ -981,9 +981,9 @@ class GP():
             KV = csc_matrix(KV)
             LU = splu(KV)
             factorization_obj = ("LU", LU)
-            KVinvY = LU.solve(y_data - prior_mean_vec)
-            upper_diag = abs(LU.U.diagonal())
-            KVlogdet = np.sum(np.log(upper_diag))
+            kvinvy = lu.solve(y_data - prior_mean_vec)
+            upper_diag = abs(lu.u.diagonal())
+            kvlogdet = np.sum(np.log(upper_diag))
             KVinv = None
         else:
             c, l = cho_factor(KV)
@@ -1026,9 +1026,16 @@ class GP():
         A : np.ndarray
         Non-singular matrix.
         """
-        c, l = cho_factor(A)
-        upper_diag = abs(c.diagonal())
-        return 2.0 * np.sum(np.log(upper_diag))
+        #print("new logdet")
+        #from scipy.linalg import lu
+        #p,l,u = lu(A)
+        #upper_diag = abs(u.diagonal())
+        #logdet = np.sum(np.log(upper_diag))
+        #return logdet
+
+        #c, l = cho_factor(A)
+        #upper_diag = abs(c.diagonal())
+        #return 2.0 * np.sum(np.log(upper_diag))
 
         if self.compute_device == "cpu":
             s, logdet = np.linalg.slogdet(A)
@@ -1517,11 +1524,14 @@ class GP():
         mu = np.subtract(mu2,mu1)
         x2 = self._solve(S2,mu)
         dim = len(mu)
-        kld = 0.5 * (np.trace(x1) + (x2.T @ mu) - dim + (logdet2-logdet1))
+        kld = 0.5 * (np.trace(x1) + (x2.T @ mu)[0] - float(dim) + (logdet2-logdet1))
         if kld < -1e-4:
-            warnings.warn("Negative KL divergence encountered")
+            warnings.warn("Negative KL divergence encountered. That happens when \n \
+                    one of the covariance matrices is close to positive semi definite \n\
+                    and therefore the logdet() calculation becomes unstable.\n \
+                    Returning abs(KLD)")
             logger.debug("Negative KL divergence encountered")
-        return kld
+        return abs(kld)
     ###########################################################################
     def gp_kl_div(self, x_pred, comp_mean, comp_cov, x_out = None):
         """
