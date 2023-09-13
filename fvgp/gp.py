@@ -2326,6 +2326,7 @@ def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj):
 
 
 def _get_distance_matrix_gpu(x1,x2,device,hps):
+    import torch
     d = torch.zeros((len(x1),len(x2))).to(device, dtype = torch.float32)
     for i in range(x1.shape[1]):
         d += ((x1[:,i].reshape(-1, 1) - x2[:,i])/hps[i])**2
