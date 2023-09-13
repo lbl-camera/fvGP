@@ -2314,6 +2314,7 @@ def wendland_anisotropic_gp2Scale_cpu(x1,x2, hps, obj):
     return kernel
 
 def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj):
+    import torch
     cuda_device = torch.device("cuda:0")
     x1_dev = torch.from_numpy(x1).to(cuda_device, dtype = torch.float32)
     x2_dev = torch.from_numpy(x2).to(cuda_device, dtype = torch.float32)
