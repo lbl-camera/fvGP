@@ -76,6 +76,10 @@ class GP():
     compute_device : str, optional
         One of "cpu" or "gpu", determines how linear system solves are run. The default is "cpu".
         For "gpu", pytoch has to be installed manually.
+        If gp2Scale is enabled but no kernel is provided, the choice of the compute_device
+        becomes much more important. In that case, the default kernel will be computed on
+        the cpu or the gpu which will significantly change the compute time depending on the compute
+        architecture.
     gp_kernel_function : Callable, optional
         A symmetric positive semi-definite covariance function (a kernel)
         that calculates the covariance between
@@ -134,6 +138,7 @@ class GP():
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advaced feature for HPC GPs up to 10
         million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wemsland kernel which is compactly supported. The noise function will have
         to return a scipy.sparse matrix instead of a numpy array. There are a few more things to consider (read on); this is an advanced option.
+        If no kernel is provided, the compute_device option should be revisited. The kernel will use the specified device to compute covariances.
         The default is False.
     gp2Scale_dask_client : dask.distributed.Client, optional
         A dask client for gp2Scale to distribute covariance computations over. Has to contain at least 3 workers.
@@ -259,7 +264,10 @@ class GP():
             if not callable(gp_kernel_function):
                 warnings.warn("You have chosen to activate gp2SCale. A powerful tool! \n \
                         But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.", stacklevel=2)
-                gp_kernel_function = wendland_anisotropic_gp2Scale
+                if compute_device == "cpu": gp_kernel_function = wendland_anisotropic_gp2Scale_cpu
+                elif compute_device == "gpu": gp_kernel_function = wendland_anisotropic_gp2Scale_gpu
+
+
             self.gp2Scale_obj = gp2S(x_data, batch_size = gp2Scale_batch_size,
                     gp_kernel_function = gp_kernel_function,
                     covariance_dask_client = gp2Scale_dask_client,
@@ -2297,11 +2305,28 @@ class GP():
 ####################################################################################
 ####################################################################################
 ####################################################################################
-def wendland_anisotropic_gp2Scale(x1,x2, hps, obj):
+def wendland_anisotropic_gp2Scale_cpu(x1,x2, hps, obj):
     distance_matrix = np.zeros((len(x1),len(x2)))
     for i in range(len(x1[0])): distance_matrix += abs(np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
     d = np.sqrt(distance_matrix)
     d[d > 1.] = 1.
     kernel = hps[0] * (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
     return kernel
+
+def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj):
+    cuda_device = torch.device("cuda:0")
+    x1_dev = torch.from_numpy(x1).to(cuda_device, dtype = torch.float32)
+    x2_dev = torch.from_numpy(x2).to(cuda_device, dtype = torch.float32)
+    hps_dev = torch.from_numpy(hps).to(cuda_device, dtype = torch.float32)
+    distance_matrix = _get_distance_matrix_gpu(x1_dev,x2_dev,device,hps_dev)
+    d[d > 1.] = 1.
+    kernel = hps[0] * (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
+    return kernel
+
+
+def _get_distance_matrix_gpu(x1,x2,device,hps):
+    d = torch.zeros((len(x1),len(x2))).to(device, dtype = torch.float32)
+    for i in range(x1.shape[1]):
+        d += ((x1[:,i].reshape(-1, 1) - x2[:,i])/hps[i])**2
+    return torch.sqrt(d)
 

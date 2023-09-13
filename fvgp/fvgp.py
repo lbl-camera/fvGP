@@ -80,6 +80,10 @@ class fvGP(GP):
     compute_device : str, optional
         One of "cpu" or "gpu", determines how linear system solves are run. The default is "cpu".
         For "gpu", pytoch has to be installed manually.
+        If gp2Scale is enabled but no kernel is provided, the choice of the compute_device
+        becomes much more important. In that case, the default kernel will be computed on
+        the cpu or the gpu which will significantly change the compute time depending on the compute
+        architecture.
     gp_kernel_function : Callable, optional
         A symmetric positive semi-definite covariance function (a kernel)
         that calculates the covariance between
@@ -139,6 +143,7 @@ class fvGP(GP):
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advaced feature for HPC GPs up to 10
         million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wemsland kernel which is compactly supported. The noise function will have
         to return a scipy.sparse matrix instead of a numpy array. There are a few more things to consider (read on); this is an advanced option.
+        If no kernel is provided, the compute_device option should be revisited. The kernel will use the specified device to compute covariances.
         The default is False.
     gp2Scale_dask_client : dask.distributed.Client, optional
         A dask client for gp2Scale to distribute covariance computations over. Has to contain at least 3 workers.
