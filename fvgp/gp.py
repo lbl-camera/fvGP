@@ -29,9 +29,6 @@ from imate import logdet
 
 
 
-
-#TODO:
-
 class GP():
     """
     This class provides all the tools for a single-task Gaussian Process (GP).
@@ -42,12 +39,6 @@ class GP():
     D ... input space dimensionality
     N ... arbitrary integers (N1, N2,...)
 
-    ..
-    instructions for docstings (for developers):
-    this class: fvgp.GP
-    callable descriptions: name(input1, input2, input3), where input1 is ..., input2 is ...
-    Use described symbols above, otherwise describe used symbol.
-    ..
 
     Parameters
     ----------

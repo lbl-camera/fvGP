@@ -9,8 +9,6 @@ import time
 from functools import partial
 from .gp import GP
 
-#TODO:
-#   adapt docs based on default kernel
 
 
 class fvGP(GP):
@@ -24,10 +22,6 @@ class fvGP(GP):
     Do... output space dimensionality
     No... number of outputs
     N ... arbitrary integers (N1, N2,...)
-
-    ..
-    see gp.py for docstring instructions for developers
-    ..
 
 
     The main logic of fvGP is that any multi-task GP is just a single-task GP
