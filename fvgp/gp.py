@@ -481,8 +481,6 @@ class GP():
             hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
             hyperparameter_bounds[0] = np.array([0.00001,1e8])
             hyperparameter_bounds[1:] = np.array([0.00001,1e8])
-            print(hyperparameter_bounds)
-
         self.hyperparameters = self._optimize_log_likelihood(
             init_hyperparameters,
             np.array(hyperparameter_bounds),
@@ -709,8 +707,7 @@ class GP():
             dask_client = None):
 
         if self.gp2Scale: method = 'mcmc'
-
-        start_log_likelihood = self.log_likelihood(starting_hps)
+        else: start_log_likelihood = self.log_likelihood(starting_hps)
 
         logger.debug(
             "fvGP hyperparameter tuning in progress. Old hyperparameters: ",

@@ -243,7 +243,7 @@ class fvGP(GP):
         self.fvgp_y_data = y_data
         self.fvgp_noise_variances = noise_variances
         x_data, y_data, noise_variances = self._transform_index_set(x_data,y_data,noise_variances,self.output_positions)
-        init_hps = None
+        init_hps = init_hyperparameters
 
         if gp_kernel_function is None:
             gp_kernel_function = self._default_multi_task_kernel
