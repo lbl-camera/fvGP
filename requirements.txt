@@ -2,8 +2,8 @@ wheel
 versioneer
 matplotlib
 plotly
-scipy
-numpy
+scipy == 1.11.2
+numpy == 1.25.2
 dask >= 2021.6.2
 distributed >= 2021.6.2
 hgdl == 2.1.2

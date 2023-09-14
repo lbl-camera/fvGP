@@ -28,17 +28,15 @@ with open(path.join(here, 'requirements.txt')) as requirements_file:
 setup(
     author="Marcus Michael Noack",
     author_email='MarcusNoack@lbl.gov',
-    python_requires='>=3.7',
+    python_requires='>=3.9',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
         'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
         'Natural Language :: English',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.5',
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7',
-        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
     ],
     description="Python package for highly flexible function-valued Gaussian processes (fvGP)",
     entry_points={

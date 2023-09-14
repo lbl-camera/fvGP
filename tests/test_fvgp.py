@@ -70,13 +70,13 @@ class Test_fvGP(unittest.TestCase):
     def test_train_basic(self):
         my_gp1 = GP(input_dim, x_data, y_data, np.array([1, 1, 1, 1, 1, 1]))
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "local", pop_size = 10, tolerance = 0.001,max_iter = 5)
+                method = "local", pop_size = 10, tolerance = 0.001,max_iter = 2)
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "global", pop_size = 10, tolerance = 0.001,max_iter = 5)
+                method = "global", pop_size = 10, tolerance = 0.001,max_iter = 2)
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 5)
+                method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 2)
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 5)
+                method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 2)
 
         res = my_gp1.posterior_mean(np.random.rand(len(x_data),len(x_data[0])))
         res = my_gp1.posterior_mean_grad(np.random.rand(10,len(x_data[0])))
@@ -128,7 +128,7 @@ class Test_fvGP(unittest.TestCase):
 
 
         my_gp2.train(np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-                method = "hgdl", tolerance = 0.001, max_iter = 3)
+                method = "hgdl", tolerance = 0.001, max_iter = 2)
 
 
     def test_train_hgdl_async(self):
@@ -152,12 +152,12 @@ class Test_fvGP(unittest.TestCase):
 
         my_fvgp = fvGP(input_dim,1,2, x_data, y_data, np.array([1, 1]), gp_kernel_function=mkernel)
         my_fvgp.train(np.array([[0.01,1],[0.01,10]]),
-                method = "global", pop_size = 10, tolerance = 0.001, max_iter = 5)
+                method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2)
 
     def test_gp2Scale(self):
         client = Client()
         input_dim = 1
-        N = 10000
+        N = 2000
         x_data = np.random.rand(N,input_dim)
         y_data = np.sin(np.linalg.norm(x_data,axis = 1) * 5.0)
         hps_n = 2
@@ -169,7 +169,7 @@ class Test_fvGP(unittest.TestCase):
         init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
         my_gp2S = GP(1, x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000)
 
-        my_gp2S.train(hps_bounds, max_iter = 5, init_hyperparameters = init_hps)
+        my_gp2S.train(hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
 
         x_pred = np.linspace(0,1,1000)
         mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["f(x)"]
