@@ -31,9 +31,6 @@ from imate import logdet
 
 
 #TODO:
-#   implement CRPS, RMSE
-#   make version on which x is not tested for dim (molecules and such)
-#   make all new examples for single task, multi task, gp2Scale (local and HPC)
 
 class GP():
     """
@@ -707,10 +704,9 @@ class GP():
             dask_client = None):
 
         if self.gp2Scale: method = 'mcmc'
-        else: start_log_likelihood = self.log_likelihood(starting_hps)
-
-        logger.debug(
-            "fvGP hyperparameter tuning in progress. Old hyperparameters: ",
+        else:
+            start_log_likelihood = self.log_likelihood(starting_hps)
+            logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: ",
             starting_hps, " with old log likelihood: ", start_log_likelihood)
         logger.debug("method: ", method)
 
@@ -742,7 +738,7 @@ class GP():
         ############################
         elif method == "local":
             logger.debug("fvGP is performing a local update of the hyper parameters.")
-            logger.debug("starting hyperparameters: {}", hyperparameters)
+            logger.debug("starting hyperparameters: {}", starting_hps)
             logger.debug("Attempting a BFGS optimization.")
             logger.debug("maximum number of iterations: {}", max_iter)
             logger.debug("termination tolerance: {}", tolerance)
@@ -762,14 +758,15 @@ class GP():
             if OptimumEvaluation["success"] == True:
                 logger.debug(f"fvGP local optimization successfully concluded with result: "
                              f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
-                hyperparameters = OptimumEvaluation["x"]
             else:
                 logger.debug("fvGP local optimization not successful.")
+            hyperparameters = OptimumEvaluation["x"]
         ############################
         ####hybrid optimization:####
         ############################
         elif method == "hgdl":
             logger.debug("fvGP submitted HGDL optimization")
+            logger.debug("starting hyperparameters: {}", starting_hps)
             logger.debug('bounds are',hp_bounds)
 
             opt_obj = HGDL(self.neg_log_likelihood,
@@ -795,8 +792,8 @@ class GP():
         else:
             raise ValueError("No optimization mode specified in fvGP")
         ###################################################
-        new_likelihood = self.log_likelihood(hyperparameters)
-        if start_log_likelihood > new_likelihood and method != 'mcmc':
+        if method != 'mcmc': new_likelihood = self.log_likelihood(hyperparameters)
+        if method != 'mcmc' and start_log_likelihood > new_likelihood: 
             logger.debug(f"New hyperparameters: {hyperparameters} with log likelihood: {self.log_likelihood(hyperparameters)}")
             warning_str = "Old log marginal likelihood: "+ str(start_log_likelihood) + " New log marginal likelihood: "+ str(new_likelihood)
             warnings.warn(f"Old log marginal likelihood:  {start_log_likelihood}", stacklevel=2)
@@ -2297,6 +2294,59 @@ class GP():
                 res.append(np.append(x[j],y[i]))
         return np.array(res)
 
+####################################################################################
+####################################################################################
+#######################VALIDATION###################################################
+####################################################################################
+    def _crps_s(self,x, mu, sigma):
+        return sigma * ((1./np.sqrt(np.pi))\
+                    -2.*norm.pdf((x-mu)/sigma) \
+                    -(((x-mu)/sigma) * (2.*norm.cdf((x-mu)/sigma)-1.)))
+    def crps(self, x_test, y_test):
+        """
+        This function calculates the continuous rank probability score.
+        Note that in the multi-task setting the user should perform their
+        input point transformation beforehand.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape (V x 1). These are the y data to compare against
+
+        Return
+        ------
+        float
+        """
+
+        mean  = self.posterior_mean(x_test)["f(x)"]
+        sigma = self.posterior_covariance(x_test)["v(x)"]
+        r = np.empty((len(x_test)))
+        for i in range(len(x_test)): r[i] = self._crps_s(y_test[i],mean[i],sigma[i])
+        return np.sum(r)/len(r)
+
+    def rmse(self, x_test, y_test):
+        """
+        This function calculates the root mean squared error.
+        Note that in the multi-task setting the user should perform their
+        input point transformation beforehand.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape (V x 1). These are the y data to compare against
+
+        Return
+        ------
+        float
+        """
+
+        v1 = y_test
+        v2 = self.posterior_mean(x_test)["f(x)"]
+        return np.sqrt(np.sum((v1-v2)**2) / len(v1))
 ####################################################################################
 ####################################################################################
 ####################################################################################

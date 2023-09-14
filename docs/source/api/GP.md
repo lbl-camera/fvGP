@@ -1,6 +1,6 @@
 # GP
 
 ```{eval-rst}
-.. autoclass:: fvgp.gp.GP
+.. autoclass:: fvgp.GP
     :members:
 ```

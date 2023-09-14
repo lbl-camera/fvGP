@@ -22,9 +22,10 @@ hidden: true
 maxdepth: 2
 caption: Examples
 ---
-examples/single_task_test_notebook.ipynb
-examples/multi_task_test_notebook.ipynb
-examples/NoNStat.ipynb
+examples/SingleTaskTest.ipynb
+examples/MultiTaskTest.ipynb
+examples/gp2ScaleTest.ipynb
+examples/NonEuclideanInputSpaces.ipynb
 ```
 
 # fvGP - A Flexible Multi-Task GP Engine
