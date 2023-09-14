@@ -39,6 +39,7 @@ class gp2ScaleSparseMatrix:
 
         res = sparse.coo_matrix((np.concatenate(data),(rows,columns)), shape = bg.shape)
         self.K = res
+        print("    Size of the current covariance matrix: ", self.K.count_nonzero(), flush = True)
         return 0
 
     def get_future_results(self, futures, info = False):

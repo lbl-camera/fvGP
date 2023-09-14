@@ -138,7 +138,7 @@ class gp2Scale():
                 if self.info:
                     print("    submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key,flush = True)
                     print("    current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self._total_number_of_batches(),flush = True)
-                    print("    Size of the current covariance matrix: ", self.SparsePriorCovariance.get_result().result().count_nonzero(), flush = True)
+                    #print("    Size of the current covariance matrix: ", self.SparsePriorCovariance.get_result().result().count_nonzero(), flush = True)
                     print("",flush = True)
                 count += 1
 
