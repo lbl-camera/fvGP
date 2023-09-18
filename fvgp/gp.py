@@ -879,7 +879,6 @@ class GP():
                 dL_dH[i] = - 0.5 * (mtrace - np.trace(matr))
             else:
                 dL_dH[i] = 0.0
-
         logger.debug("gradient norm: {}",np.linalg.norm(dL_dH + dL_dHm))
         return dL_dH + dL_dHm
 
@@ -1022,17 +1021,6 @@ class GP():
         A : np.ndarray
         Non-singular matrix.
         """
-        #print("new logdet")
-        #from scipy.linalg import lu
-        #p,l,u = lu(A)
-        #upper_diag = abs(u.diagonal())
-        #logdet = np.sum(np.log(upper_diag))
-        #return logdet
-
-        #c, l = cho_factor(A)
-        #upper_diag = abs(c.diagonal())
-        #return 2.0 * np.sum(np.log(upper_diag))
-
         if self.compute_device == "cpu":
             s, logdet = np.linalg.slogdet(A)
             return logdet
@@ -1166,8 +1154,8 @@ class GP():
 
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None and isinstance(x_out,np.ndarray): x_pred = self._cartesian_product(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
         if hyperparameters is not None:
             hps = hyperparameters
@@ -1214,9 +1202,10 @@ class GP():
         else:
             hps = self.hyperparameters
             KVinvY = self.KVinvY
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,hps,self)
         f = self.mean_function(x_pred,hps,self)
@@ -1265,8 +1254,8 @@ class GP():
 
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None and isinstance(x_out,np.ndarray): x_pred = self._cartesian_product(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1319,9 +1308,10 @@ class GP():
         ------
         solution dictionary : dict
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         k_covariance_prod = self._KVsolve(k)
@@ -1369,9 +1359,11 @@ class GP():
         ------
         solution dictionary : dict
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1401,9 +1393,10 @@ class GP():
         -------
         solution dictionary : dict
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1458,11 +1451,12 @@ class GP():
         ------
         entropy : float
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        priors = self.joint_gp_prior(x_pred)
+        priors = self.joint_gp_prior(x_pred, x_out = None)
         S = priors["S"]
         dim  = len(S[0])
         logdet = self._logdet(S)
@@ -1485,15 +1479,35 @@ class GP():
         ------
         entropy gradient in given direction : float
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        priors1 = self.joint_gp_prior(x_pred)
-        priors2 = self.joint_gp_prior_grad(x_pred,direction)
+        priors1 = self.joint_gp_prior(x_pred, x_out = None)
+        priors2 = self.joint_gp_prior_grad(x_pred,direction, x_out = None)
         S1 = priors1["S"]
         S2 = priors2["dS/dx"]
         return 0.5 * np.trace(self._inv(S1) @ S2)
+
+
+    ###########################################################################
+    def _kl_div_grad(self,mu1,dmu1dx, mu2, S1, dS1dx, S2):
+        """
+        This function computes the gradient of the KL divergence between two normal distributions
+        when the gradients of the mean and covariance are given.
+        a = kl_div(mu1, dmudx,mu2, S1, dS1dx, S2); S1, S2 are 2d numpy arrays, matrices have to be non-singular,
+        mu1, mu2 are mean vectors, given as 2d arrays
+        """
+        logdet1 = self._logdet(S1)
+        logdet2 = self._logdet(S2)
+        x1 = self._solve(S2,dS1dx)
+        mu = np.subtract(mu2,mu1)
+        x2 = self._solve(S2,mu)
+        x3 = self._solve(S2,-dmu1dx)
+        dim = len(mu)
+        kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2.T @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
+        return kld
     ###########################################################################
     def kl_div(self,mu1, mu2, S1, S2):
         """
@@ -1548,13 +1562,14 @@ class GP():
         -------
         solution dictionary : dict
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        res = self.posterior_mean(x_pred)
+        res = self.posterior_mean(x_pred, x_out = None)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_pred)["S"]
+        gp_cov = self.posterior_covariance(x_pred, x_out = None)["S"]
 
         return {"x": x_pred,
                 "gp posterior mean" : gp_mean,
@@ -1581,14 +1596,15 @@ class GP():
         -------
             solution dictionary : dict
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        gp_mean = self.posterior_mean(x_pred)["f(x)"]
-        gp_mean_grad = self.posterior_mean_grad(x_pred,direction)["df/dx"]
-        gp_cov  = self.posterior_covariance(x_pred)["S"]
-        gp_cov_grad  = self.posterior_covariance_grad(x_pred,direction)["dS/dx"]
+        gp_mean = self.posterior_mean(x_pred, x_out = None)["f(x)"]
+        gp_mean_grad = self.posterior_mean_grad(x_pred,direction = direction, x_out = None)["df/dx"]
+        gp_cov  = self.posterior_covariance(x_pred, x_out = None)["S"]
+        gp_cov_grad  = self.posterior_covariance_grad(x_pred,direction = direction, x_out = None)["dS/dx"]
 
         return {"x": x_pred,
                 "gp posterior mean" : gp_mean,
@@ -1597,7 +1613,7 @@ class GP():
                 "gp posterior covariance grad": gp_cov_grad,
                 "given mean": comp_mean,
                 "given covariance": comp_cov,
-                "kl-div grad": self.kl_div_grad(gp_mean, gp_mean_grad,comp_mean, gp_cov, gp_cov_grad, comp_cov)}
+                "kl-div grad": self._kl_div_grad(gp_mean, gp_mean_grad,comp_mean, gp_cov, gp_cov_grad, comp_cov)}
     ###########################################################################
     def mutual_information(self,joint,m1,m2):
         """
@@ -1613,23 +1629,11 @@ class GP():
             The second marginal distribution
         """
         return self.entropy(m1) + self.entropy(m2) - self.entropy(joint)
-
-    def _ig(self,x_pred):
-        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
-        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
-
-
-        joint_covariance = \
-                np.asarray(np.block([[self.K,k],\
-                                     [k.T,  kk]]))
-        return self.mutual_information(joint_covariance, kk, self.K)
-
     ###########################################################################
-    def shannon_information_gain(self, x_pred, x_out = None):
+    def gp_mutual_information(self,x_pred, x_out = None):
         """
-        Function to compute the shannon-information --- the predicted drop in entropy --- given
-        a set of points. The shannon_information gain is a scalar, it is proportionate to
-        the mutual infomation of k(x_pred,x_pred) and the prior K=k(x_data,x_data).
+        Function to calculate the mutual information between
+        the random variables f(x_data) and f(x_pred).
         Parameters
         ----------
         x_pred : np.ndarray
@@ -1640,14 +1644,86 @@ class GP():
 
         Return
         -------
-        solution dictionary : dict
+        solution dictionary : {}
+            Information gain of collective points.
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
+
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self) 
+        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self) + (np.identity(len(x_pred)) * 1e-14)
+
+
+        joint_covariance = \
+                np.asarray(np.block([[self.K,k],\
+                                     [k.T,  kk]]))
+        return self.mutual_information(joint_covariance, kk, self.K)
+
+    ###########################################################################
+    def gp_total_correlation(self,x_pred, x_out = None):
+        """
+        Function to calculate the interaction information between
+        the random variables f(x_data) and f(x_pred). This is the mutual information
+        of each f(x_pred) with f(x_data). It is also called the MUltiinformation.
+        It best used when several prediction points are supposed to be mutually aware.
+        Parameters
+        ----------
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
+
+        Return
+        -------
+        solution dictionary : {}
+            Information gain of collective points.
+        """
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+
+        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self) 
+        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)  + (np.identity(len(x_pred)) * 1e-9)
+        joint_covariance = np.asarray(np.block([[self.K, k],\
+                                                 [k.T,   kk]]))
+
+        prod_covariance = np.asarray(np.block([[self.K, k * 0.],\
+                                                 [k.T * 0.,   kk * np.identity(len(kk))]]))
+        return self.kl_div(np.zeros((len(joint_covariance))),np.zeros((len(joint_covariance))),joint_covariance,prod_covariance)
+
+    ###########################################################################
+    def shannon_information_gain(self, x_pred, x_out = None):
+        """
+        Function to compute the shannon-information --- the predicted drop in entropy --- given
+        a set of points. The shannon_information gain is a scalar, it is proportionate to
+        the mutual infomation of the two random variables f(x_pred) and f(x_data).
+        The mutual information is always positive, as it is a KL divergence, and is bound
+        from below by 0. The maxima are expcetd at the data points. Zero is expected far from the
+        data support. This shannon information gain is exp(-total correlation).
+        Parameters
+        ----------
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
+            and L is the dimensionality of the output space.
+
+        Return
+        -------
+        solution dictionary : {}
+            Information gain of collective points.
+        """
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
+        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
         return {"x": x_pred,
-                "sig":-self._ig(x_pred)}
+                "sig":np.exp(-self.gp_total_correlation(x_pred, x_out = None))}
 
     ###########################################################################
     def shannon_information_gain_vec(self, x_pred, x_out = None):
@@ -1662,14 +1738,16 @@ class GP():
         Return
         -------
         solution dictionary : {}
+            Informatino gain per point.
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         sig = np.zeros((len(x_pred)))
         for i in range(len(x_pred)):
-            sig[i] = -self._ig(x_pred[i].reshape(1,len(x_pred[i])))
+            sig[i] = np.exp(-self.gp_mutual_information(x_pred[i].reshape(1,len(x_pred[i])), x_out = None))
 
         return {"x": x_pred,
                 "sig(x)":sig}
@@ -1689,11 +1767,12 @@ class GP():
         -------
         solution dictionary : {}
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        e2 = self.gp_entropy_grad(x_pred,direction)
+        e2 = self.gp_entropy_grad(x_pred,direction, x_out = None)
         sig = e2
         return {"x": x_pred,
                 "sig grad":sig}
@@ -1712,13 +1791,14 @@ class GP():
         -------
         solution dictionary : {}
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
-        res = self.posterior_mean(x_pred)
+        res = self.posterior_mean(x_pred, x_out = None)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_pred)["S"]
+        gp_cov = self.posterior_covariance(x_pred, x_out = None)["S"]
         gp_cov_inv = self._inv(gp_cov)
         comp_cov_inv = self._inv(comp_cov)
         cov = self._inv(gp_cov_inv + comp_cov_inv)
@@ -1751,16 +1831,18 @@ class GP():
         -------
         solution dictionary : {}
         """
-        if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+        if isinstance(x_pred,np.ndarray):
+            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-        if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
 
         x1 = np.array(x_pred)
         x2 = np.array(x_pred)
         x1[:,direction] = x1[:,direction] + 1e-6
         x2[:,direction] = x2[:,direction] - 1e-6
 
-        probability_grad = (posterior_probability(x1, comp_mean_comp_cov) - posterior_probability(x2, comp_mean_comp_cov))/2e-6
+        probability_grad = (self.posterior_probability(x1, comp_mean, comp_cov, x_out=None)["probability"] - \
+                self.posterior_probability(x2, comp_mean, comp_cov, x_out = None)["probability"])/2e-6
         return {"probability grad": probability_grad}
 
     ###########################################################################
@@ -2354,7 +2436,7 @@ def wendland_anisotropic_gp2Scale_cpu(x1,x2, hps, obj):
     kernel = hps[0] * (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
     return kernel
 
-def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj):
+def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj): # pragma: no cover
     import torch
     cuda_device = torch.device("cuda:0")
     x1_dev = torch.from_numpy(x1).to(cuda_device, dtype = torch.float32)
@@ -2366,7 +2448,7 @@ def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj):
     return kernel.cpu().numpy()
 
 
-def _get_distance_matrix_gpu(x1,x2,device,hps):
+def _get_distance_matrix_gpu(x1,x2,device,hps): # pragma: no cover
     import torch
     d = torch.zeros((len(x1),len(x2))).to(device, dtype = torch.float32)
     for i in range(x1.shape[1]):

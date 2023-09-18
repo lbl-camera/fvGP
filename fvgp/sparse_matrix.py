@@ -117,7 +117,7 @@ class gp2ScaleSparseMatrix:
         s = s / np.arange(1,len(s)+1)
         return N * np.log(alpha) - np.sum(s)
     """
-    def traceKXX(self,X):
+    def traceKXX(self,X): # pragma: no cover
         res = np.empty(X.shape)
         for i in range(X.shape[1]): res[:,i] = self.solve(X[:,i])
         tr = np.sum(X * res)

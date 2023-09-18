@@ -215,7 +215,7 @@ class gp2Scale():
 #########################################################################
 #########################################################################
 #########################################################################
-class gpm2Scale(gp2Scale):
+class gpm2Scale(gp2Scale): # pragma: no cover
     def __init__(self,input_space_dim,
                  output_space_dim,
                  x_data, ##data in the original input space

@@ -5,8 +5,8 @@
 
 import unittest
 import numpy as np
-from fvgp.fvgp import fvGP
-from fvgp.fvgp import GP
+from fvgp import fvGP
+from fvgp import GP
 import matplotlib.pyplot as plt
 import time
 import urllib.request
@@ -14,7 +14,6 @@ import urllib.request
 from dask.distributed import Client
 import socket
 import time
-from fvgp.gp2Scale import gp2Scale
 import argparse
 import datetime
 import sys
@@ -89,11 +88,14 @@ class Test_fvGP(unittest.TestCase):
 
         A = np.random.rand(10,10)
         B = A.T @ A
+        res = my_gp1.entropy(B)
         res = my_gp1.gp_kl_div(np.random.rand(10,len(x_data[0])), np.random.rand(10), B)
-        #res = my_gp1.gp_kl_div_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B,0)
+        res = my_gp1.gp_kl_div_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B,0)
         res = my_gp1.shannon_information_gain(np.random.rand(10,len(x_data[0])))
         res = my_gp1.shannon_information_gain_vec(np.random.rand(10,len(x_data[0])))
         res = my_gp1.shannon_information_gain_grad(np.random.rand(10,len(x_data[0])),0)
+        res = my_gp1.posterior_probability(np.random.rand(10,len(x_data[0])), np.random.rand(10), B)
+        res = my_gp1.posterior_probability_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B, direction = 0)
 
         res = my_gp1.squared_exponential_kernel(1.,1.)
         res = my_gp1.squared_exponential_kernel_robust(1.,1.)
@@ -121,6 +123,7 @@ class Test_fvGP(unittest.TestCase):
         res = my_gp1.default_kernel(x_data,x_data,np.ones((6)),my_gp1)
         res = my_gp1.non_stat_kernel(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
         res = my_gp1.non_stat_kernel_gradient(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
+        res = my_gp1.wendland_anisotropic(x_data,x_data,np.ones((6)), my_gp1)
 
     def test_train_hgdl(self):
         my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
@@ -138,9 +141,15 @@ class Test_fvGP(unittest.TestCase):
         opt_obj = my_gp2.train_async(np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
                 max_iter = 5000)
 
-        time.sleep(5)
+        time.sleep(3)
         my_gp2.update_hyperparameters(opt_obj)
+        my_gp2.stop_training(opt_obj)
         my_gp2.kill_training(opt_obj)
+        my_gp2.set_hyperparameters(np.array([1., 1., 1., 1., 1., 1.]))
+        my_gp2.get_hyperparameters()
+        my_gp2.get_prior_pdf()
+        my_gp2.test_log_likelihood_gradient(np.array([1., 1., 1., 1., 1., 1.]))
+
 
     def test_multi_task(self):
         def mkernel(x1,x2,hps,obj):
