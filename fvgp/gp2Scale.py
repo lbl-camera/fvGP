@@ -127,7 +127,7 @@ class gp2Scale():
 
                 ####collect finished workers but only if actor is not busy, otherwise do it later
                 if len(finished_futures) >= 1000:
-                    actor_futures.append(self.SparsePriorCovariance.get_future_results(set(finished_futures)), info = self.info)
+                    actor_futures.append(self.SparsePriorCovariance.get_future_results(set(finished_futures), info = self.info))
                     finished_futures = set()
 
                 #get idle worker and submit work
