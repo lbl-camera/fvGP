@@ -18,9 +18,13 @@ class fvGP(GP):
     class provides all the methods described for the GP class.
 
     V ... number of input points
+
     Di... input space dimensionality
+    
     Do... output space dimensionality
+    
     No... number of outputs
+    
     N ... arbitrary integers (N1, N2,...)
 
 
@@ -32,9 +36,13 @@ class fvGP(GP):
     see that the input ``x'' is defined over this combined space. 
     For example, if your input space is a Euclidean 2d space and your output
     is labelled [[0],[1]], the input to the mean, kernel, and noise function might be
+    
     x =
+    
     [[0.2, 0.3,0],[0.9,0.6,0],
-     [0.2, 0.3,1],[0.9,0.6,1]]
+    
+    [0.2, 0.3,1],[0.9,0.6,1]]
+    
     This has to be understood and taken into account when customizing fvGP for multi-task
     use.
 

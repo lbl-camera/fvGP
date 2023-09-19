@@ -39,7 +39,9 @@ class GP():
     This class allows for full HPC support for training via the HGDL package.
 
     V ... number of input points
+
     D ... input space dimensionality
+
     N ... arbitrary integers (N1, N2,...)
 
 

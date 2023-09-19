@@ -2,7 +2,8 @@
 import scipy.sparse as sparse
 import time
 import numpy as np
-class gp2ScaleSparseMatrix:
+class gp2ScaleSparseMatrix: # pragma: no cover
+
     def __init__(self,n):
         self.n = n
         self.V = sparse.coo_matrix((n,n))

@@ -163,6 +163,8 @@ class Test_fvGP(unittest.TestCase):
         my_fvgp.train(np.array([[0.01,1],[0.01,10]]),
                 method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2)
 
+        my_gp2 = fvGP(input_dim, 1, 2, x_data,y_data,init_hyperparameters=np.ones((2)))
+
     def test_gp2Scale(self):
         client = Client()
         input_dim = 1

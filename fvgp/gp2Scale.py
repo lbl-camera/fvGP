@@ -522,7 +522,7 @@ class gpm2Scale(gp2Scale): # pragma: no cover
 #########################################################################
 #########################################################################
 #########################################################################
-def kernel_function(data):
+def kernel_function(data):  # pragma: no cover
     st = time.time()
     hps= data["hps"]
     mode = data["mode"]
