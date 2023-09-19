@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-class Network(nn.Module):
+class Network(nn.Module): # pragma: no cover
     def __init__(self, dim, layer_width):
         super().__init__()
         # Inputs to hidden layer linear transformation
