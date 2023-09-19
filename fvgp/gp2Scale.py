@@ -126,7 +126,7 @@ class gp2Scale():
                     time.sleep(0.1)
 
                 ####collect finished workers but only if actor is not busy, otherwise do it later
-                if len(finished_futures) >= 1000:
+                if len(finished_futures) >= 100:
                     actor_futures.append(self.SparsePriorCovariance.get_future_results(set(finished_futures), info = self.info))
                     finished_futures = set()
 
@@ -135,9 +135,9 @@ class gp2Scale():
                 data = {"scattered_data": self.scatter_future,"hps": hyperparameters, "kernel" :self.kernel,  "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
                 futures.append(client.submit(kernel_function, data, workers = current_worker))
                 self.assign_future_2_worker(futures[-1].key,current_worker)
-                if self.info:
+                if self.info and ( i % 10) == 0.:
                     print("    submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key,flush = True)
-                    print("    current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self._total_number_of_batches(),flush = True)
+                    print("    current time stamp: ", time.time() - start_time," percent finished: ",int(100. * float(count)/self._total_number_of_batches()),flush = True)
                     #print("    Size of the current covariance matrix: ", self.SparsePriorCovariance.get_result().result().count_nonzero(), flush = True)
                     print("",flush = True)
                 count += 1
