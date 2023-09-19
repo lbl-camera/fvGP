@@ -127,7 +127,7 @@ class gp2Scale():
 
                 ####collect finished workers but only if actor is not busy, otherwise do it later
                 if len(finished_futures) >= 1000:
-                    actor_futures.append(self.SparsePriorCovariance.get_future_results(set(finished_futures)))
+                    actor_futures.append(self.SparsePriorCovariance.get_future_results(set(finished_futures)), info = self.info)
                     finished_futures = set()
 
                 #get idle worker and submit work
@@ -146,7 +146,7 @@ class gp2Scale():
             print("All tasks submitted after ",time.time() - start_time,flush = True)
             print("number of computed batches: ", count)
 
-        actor_futures.append(self.SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
+        actor_futures.append(self.SparsePriorCovariance.get_future_results(finished_futures.union(futures), info = self.info))
         client.gather(actor_futures)
         #actor_futures.append(self.SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
         actor_futures[-1].result()
@@ -539,4 +539,5 @@ def kernel_function(data):  # pragma: no cover
         x2 = data["x_data"]
         k = kernel(x1,x2,hps, None)
     k_sparse = sparse.coo_matrix(k)
+    #print(time.time() - st, flush = True)
     return k_sparse, (data["range_i"][0],data["range_j"][0]), time.time() - st, worker.address

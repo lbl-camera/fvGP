@@ -45,10 +45,9 @@ class gp2ScaleSparseMatrix: # pragma: no cover
 
     def get_future_results(self, futures, info = False):
         res = []
-        info = False
         for future in futures:
             SparseCov_sub, ranges, ketime, worker = future.result()
-            if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st)
+            if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
             res.append((SparseCov_sub,ranges[0],ranges[1]))
 
         self.insert_many(res)
