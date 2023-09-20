@@ -947,8 +947,11 @@ class GP():
         #get K
         if self.gp2Scale:
             self.gp2Scale_obj.compute_covariance(x_data,x_data,hyperparameters, self.gp2Scale_dask_client)
+            if self.info: print("Computing the covariance matrix done.", flush = True)
             K = self.gp2Scale_obj.SparsePriorCovariance.get_result().result()
+            if self.info: print("Transferring the covariance matrix to host done. aparsity = ", float(K.count_nonzero())/float(len(x_data)**2) , flush = True)
             self.gp2Scale_obj.SparsePriorCovariance.reset_prior().result()
+            if self.info: print("Reset the prior done.", flush = True)
         else: K = self._compute_K(hyperparameters)
 
 
