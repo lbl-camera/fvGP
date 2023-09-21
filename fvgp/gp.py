@@ -28,8 +28,6 @@ from imate import logdet
 
 
 #TODO:
-#   do we need init_hps?
-#   do we need input_space_dim?
 
 
 class GP():
