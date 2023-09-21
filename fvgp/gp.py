@@ -48,7 +48,7 @@ class GP():
     Parameters
     ----------
     input_space_dim : int
-        Dimensionality of the input space (D).
+        Dimensionality of the input space (D). If the input is non-Euclidean, the input dimensionality will be ignored.
     x_data : np.ndarray
         The input point positions. Shape (V x D), where D is the `input_space_dim`.
     y_data : np.ndarray
@@ -214,8 +214,6 @@ class GP():
         if compute_device == 'gpu':
             try: import torch
             except: raise Exception("You have specified the 'gpu' as your compute device. You need to install pytorch manually for this to work.")
-
-
         self.normalize_y = normalize_y
         self.input_space_dim = input_space_dim
         self.x_data = x_data
@@ -227,6 +225,9 @@ class GP():
         self.info = info
         self.sparse_mode = sparse_mode
         self.store_inv = store_inv
+        self.KVinv = None
+        self.mcmc_info = None
+        self.gp2Scale = gp2Scale
 
         ##########################################
         #######prepare hyper parameters###########
@@ -234,6 +235,9 @@ class GP():
         if init_hyperparameters is None: init_hyperparameters = np.ones((input_space_dim + 1))
         self.hyperparameters = init_hyperparameters
 
+        ##########################################
+        ##############preps for sparse mode#######
+        ##########################################
         if self.sparse_mode and self.store_inv:
             warnings.warn("sparse_mode and store_inv enabled but they should not be used together. I'll set store_inv = False.", stacklevel=2)
             self.store_inv = False
@@ -242,9 +246,6 @@ class GP():
                         But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.", stacklevel=2)
                 gp_kernel_function = self.wendland_anisotropic
 
-        self.KVinv = None
-        self.mcmc_info = None
-        self.gp2Scale = gp2Scale
         ###########################################
         #####gp2Scale##############################
         ###########################################
@@ -1156,20 +1157,20 @@ class GP():
         ------
         solution dictionary : {}
         """
+        x_data, y_data, KVinvY = self.x_data.copy(), self.y_data.copy(), self.KVinvY.copy()
+        if hyperparameters is not None:
+            hps = hyperparameters
+            K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(x_data, y_data, hps, calc_inv = False)
+        else:
+            hps = self.hyperparameters
 
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
-        if hyperparameters is not None:
-            hps = hyperparameters
-            K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
-        else:
-            hps = self.hyperparameters
-            KVinvY = self.KVinvY
 
-        k = self.kernel(self.x_data,x_pred,hps,self)
+        k = self.kernel(x_data,x_pred,hps,self)
         A = k.T @ KVinvY
         posterior_mean = self.mean_function(x_pred,hps,self) + A
 
@@ -1200,27 +1201,27 @@ class GP():
         ------
         solution dictionary : dict
         """
-
+        x_data, y_data, KVinvY = self.x_data.copy(), self.y_data.copy(), self.KVinvY.copy()
         if hyperparameters is not None:
             hps = hyperparameters
-            K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv = False)
+            K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(x_data, y_data, hps, calc_inv = False)
         else:
             hps = self.hyperparameters
-            KVinvY = self.KVinvY
+
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
-        k = self.kernel(self.x_data,x_pred,hps,self)
+        k = self.kernel(x_data,x_pred,hps,self)
         f = self.mean_function(x_pred,hps,self)
         eps = 1e-6
         if direction is not None:
             x1 = np.array(x_pred)
             x1[:,direction] = x1[:,direction] + eps
             mean_der = (self.mean_function(x1,hps,self) - f)/eps
-            k = self.kernel(self.x_data,x_pred,hps,self)
-            k_g = self.d_kernel_dx(x_pred,self.x_data, direction,hps)
+            k = self.kernel(x_data,x_pred,hps,self)
+            k_g = self.d_kernel_dx(x_pred,x_data, direction,hps)
             posterior_mean_grad = mean_der + (k_g @ KVinvY)
         else:
             posterior_mean_grad = np.zeros((x_pred.shape))
@@ -1228,8 +1229,8 @@ class GP():
                 x1 = np.array(x_pred)
                 x1[:,direction] = x1[:,direction] + eps
                 mean_der = (self.mean_function(x1,hps,self) - f)/eps
-                k = self.kernel(self.x_data,x_pred,hps,self)
-                k_g = self.d_kernel_dx(x_pred,self.x_data, direction,hps)
+                k = self.kernel(x_data,x_pred,hps,self)
+                k_g = self.d_kernel_dx(x_pred,x_data, direction,hps)
                 posterior_mean_grad[:,direction] = mean_der + (k_g @ KVinvY)
             direction = "ALL"
 
@@ -1257,12 +1258,13 @@ class GP():
         solution dictionary : dict
         """
 
+        x_data = self.x_data.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
-        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        k = self.kernel(x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
         if self.KVinv is not None:
             if variance_only:
@@ -1313,15 +1315,16 @@ class GP():
         ------
         solution dictionary : dict
         """
+        x_data = self.x_data.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
-        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        k = self.kernel(x_data,x_pred,self.hyperparameters,self)
         k_covariance_prod = self._KVsolve(k)
         if direction is not None:
-            k_g = self.d_kernel_dx(x_pred,self.x_data, direction,self.hyperparameters).T
+            k_g = self.d_kernel_dx(x_pred,x_data, direction,self.hyperparameters).T
             kk =  self.kernel(x_pred, x_pred,self.hyperparameters,self)
             x1 = np.array(x_pred)
             x2 = np.array(x_pred)
@@ -1336,14 +1339,14 @@ class GP():
         else:
             grad_v = np.zeros((len(x_pred),len(x_pred[0])))
             for direction in range(len(x_pred[0])):
-                k_g = self.d_kernel_dx(x_pred,self.x_data, direction,self.hyperparameters).T
+                k_g = self.d_kernel_dx(x_pred,x_data, direction,self.hyperparameters).T
                 kk =  self.kernel(x_pred, x_pred,self.hyperparameters,self)
                 x1 = np.array(x_pred)
                 x2 = np.array(x_pred)
                 eps = 1e-6
                 x1[:,direction] = x1[:,direction] + eps
                 kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-\
-                    self.kernel(x2, x2,self.hyperparameters,self)) /eps
+                        self.kernel(x2, x2,self.hyperparameters,self)) /eps
                 grad_v[:,direction] = np.diag(kk_g - (2.0 * k_g.T @ k_covariance_prod))
             return {"x": x_pred,
                     "dv/dx": grad_v}
@@ -1365,21 +1368,22 @@ class GP():
         solution dictionary : dict
         """
 
+        x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
-        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        k = self.kernel(x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
         post_mean = self.mean_function(x_pred, self.hyperparameters,self)
-        joint_gp_prior_mean = np.append(self.prior_mean_vec, post_mean)
+        joint_gp_prior_mean = np.append(prior_mean_vec, post_mean)
         return  {"x": x_pred,
-                 "K": self.K,
+                 "K": K,
                  "k": k,
                  "kappa": kk,
                  "prior mean": joint_gp_prior_mean,
-                 "S": np.block([[self.K, k],[k.T, kk]])}
+                 "S": np.block([[K, k],[k.T, kk]])}
     ###########################################################################
     def joint_gp_prior_grad(self, x_pred, direction, x_out = None):
         """
@@ -1398,14 +1402,15 @@ class GP():
         -------
         solution dictionary : dict
         """
+        x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
-        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self)
+        k = self.kernel(x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
-        k_g = self.d_kernel_dx(x_pred,self.x_data, direction,self.hyperparameters).T
+        k_g = self.d_kernel_dx(x_pred,x_data, direction,self.hyperparameters).T
         x1 = np.array(x_pred)
         x2 = np.array(x_pred)
         eps = 1e-6
@@ -1414,10 +1419,10 @@ class GP():
         kk_g = (self.kernel(x1, x1,self.hyperparameters,self)-self.kernel(x2, x2,self.hyperparameters,self)) /(2.0*eps)
         post_mean = self.mean_function(x_pred, self.hyperparameters,self)
         mean_der = (self.mean_function(x1,self.hyperparameters,self) - self.mean_function(x2,self.hyperparameters,self))/(2.0*eps)
-        full_gp_prior_mean_grad = np.append(np.zeros((self.prior_mean_vec.shape)), mean_der)
-        prior_cov_grad = np.zeros(self.K.shape)
+        full_gp_prior_mean_grad = np.append(np.zeros((prior_mean_vec.shape)), mean_der)
+        prior_cov_grad = np.zeros(K.shape)
         return  {"x": x_pred,
-                 "K": self.K,
+                 "K": K,
                  "dk/dx": k_g,
                  "d kappa/dx": kk_g,
                  "d prior mean/x": full_gp_prior_mean_grad,
@@ -1652,19 +1657,20 @@ class GP():
         solution dictionary : {}
             Information gain of collective points.
         """
+        x_data, K = self.x_data.copy(), self.K.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
-        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self) 
-        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self) + (np.identity(len(x_pred)) * 1e-14)
+        k = self.kernel(x_data,x_pred,self.hyperparameters,self) 
+        kk = self.kernel(x_pred, x_pred,self.hyperparameters,self) + (np.identity(len(x_pred)) * 1e-9)
 
 
         joint_covariance = \
-                np.asarray(np.block([[self.K,k],\
+                np.asarray(np.block([[K,k],\
                                      [k.T,  kk]]))
-        return self.mutual_information(joint_covariance, kk, self.K)
+        return self.mutual_information(joint_covariance, kk, K)
 
     ###########################################################################
     def gp_total_correlation(self,x_pred, x_out = None):
@@ -1686,18 +1692,19 @@ class GP():
         solution dictionary : {}
             Information gain of collective points.
         """
+        x_data, K = self.x_data.copy(), self.K.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
         if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
 
-        k = self.kernel(self.x_data,x_pred,self.hyperparameters,self) 
+        k = self.kernel(x_data,x_pred,self.hyperparameters,self) 
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)  + (np.identity(len(x_pred)) * 1e-9)
-        joint_covariance = np.asarray(np.block([[self.K, k],\
-                                                 [k.T,   kk]]))
+        joint_covariance = np.asarray(np.block([[K  , k],\
+                                                [k.T, kk]]))
 
-        prod_covariance = np.asarray(np.block([[self.K, k * 0.],\
-                                                 [k.T * 0.,   kk * np.identity(len(kk))]]))
+        prod_covariance = np.asarray(np.block([[K, k * 0.],\
+                                               [k.T * 0.,   kk * np.identity(len(kk))]]))
         return self.kl_div(np.zeros((len(joint_covariance))),np.zeros((len(joint_covariance))),joint_covariance,prod_covariance)
 
     ###########################################################################
@@ -1757,30 +1764,6 @@ class GP():
         return {"x": x_pred,
                 "sig(x)":sig}
 
-    ###########################################################################
-    def shannon_information_gain_grad(self, x_pred, direction, x_out = None):
-        """
-        Function to compute the gradient if the shannon-information gain --- the predicted drop in posterior entropy --- given
-        a set of points.
-
-        Parameters
-        ----------
-            x_pred: 1d or 2d numpy array of points, note, these are elements of the
-                    index set which results from a cartesian product of input and output space
-            direction: direction in which to compute the gradient
-        Return
-        -------
-        solution dictionary : {}
-        """
-        if isinstance(x_pred,np.ndarray):
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-
-        e2 = self.gp_entropy_grad(x_pred,direction, x_out = None)
-        sig = e2
-        return {"x": x_pred,
-                "sig grad":sig}
     ###########################################################################
     def posterior_probability(self, x_pred, comp_mean, comp_cov, x_out = None):
         """
@@ -2428,6 +2411,54 @@ class GP():
         v1 = y_test
         v2 = self.posterior_mean(x_test)["f(x)"]
         return np.sqrt(np.sum((v1-v2)**2) / len(v1))
+
+    def make_2d_x_pred(self, bx,by, resx = 100,resy = 100): #pragma: no cover
+        """
+        This is a purely convenience-driven function calculating prediction points
+        on a ed grid.
+
+        Parameters
+        ----------
+        bx : np.ndarray
+            A numpy array of shape (2) defineing lower and upper bounds in x direction
+        by : np.ndarray
+            A numpy array of shape (2) defineing lower and upper bounds in y direction
+        resx : int, optional
+            Resolution in x direction. Default = 100
+        resy : int, optional
+            Resolution in y direction. Default = 100
+
+        Return
+        ------
+        prediction points : np.ndarray
+        """
+
+        x = np.linspace(bx[0],bx[1],resx)
+        y = np.linspace(by[0],by[1],resy)
+        from itertools import product
+        x_pred = np.array(list(product(x, y)))
+        return x_pred
+
+    def make_1d_x_pred(self, b, res = 100): #pragma: no cover
+        """
+        This is a purely convenience-driven function calculating prediction points
+        on a ed grid.
+
+        Parameters
+        ----------
+        b : np.ndarray
+            A numpy array of shape (2) defineing lower and upper bounds
+        res : int, optional
+            Resolution. Default = 100
+
+        Return
+        ------
+        prediction points : np.ndarray
+        """
+
+        x_pred = np.linspace(b[0],b[1],res).reshape(res,-1)
+        return x_pred
+
 ####################################################################################
 ####################################################################################
 ####################################################################################

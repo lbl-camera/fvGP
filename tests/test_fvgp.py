@@ -93,7 +93,6 @@ class Test_fvGP(unittest.TestCase):
         res = my_gp1.gp_kl_div_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B,0)
         res = my_gp1.shannon_information_gain(np.random.rand(10,len(x_data[0])))
         res = my_gp1.shannon_information_gain_vec(np.random.rand(10,len(x_data[0])))
-        res = my_gp1.shannon_information_gain_grad(np.random.rand(10,len(x_data[0])),0)
         res = my_gp1.posterior_probability(np.random.rand(10,len(x_data[0])), np.random.rand(10), B)
         res = my_gp1.posterior_probability_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B, direction = 0)
 

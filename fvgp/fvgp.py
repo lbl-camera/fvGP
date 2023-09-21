@@ -49,7 +49,7 @@ class fvGP(GP):
     Parameters
     ----------
     input_space_dim : int
-        Dimensionality of the input space (D).
+        Dimensionality of the input space (D). If the input is non-Euclidean, the input dimensionality will be ignored.
     output_space_dim : int
         Integer specifying the number of dimensions of the output space. Most often 1. This is not the number of outputs/tasks.
         For instance, a spectrum as output at each input is itslef a function over a 1d space but has many outputs.
