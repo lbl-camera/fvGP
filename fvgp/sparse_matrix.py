@@ -40,7 +40,6 @@ class gp2ScaleSparseMatrix: # pragma: no cover
 
         res = sparse.coo_matrix((np.concatenate(data),(rows,columns)), shape = bg.shape)
         self.K = res
-        print("    Size of the current covariance matrix: ", self.K.count_nonzero(), flush = True)
         return 0
 
     def get_future_results(self, futures, info = False):
@@ -51,6 +50,7 @@ class gp2ScaleSparseMatrix: # pragma: no cover
             res.append((SparseCov_sub,ranges[0],ranges[1]))
 
         self.insert_many(res)
+        if info = True: print("    Size of the current covariance matrix: ", self.K.count_nonzero(), flush = True)
         return 0
 
     """

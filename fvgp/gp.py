@@ -945,10 +945,11 @@ class GP():
 
         #get K
         if self.gp2Scale:
+            st = time.time()
             self.gp2Scale_obj.compute_covariance(x_data,x_data,hyperparameters, self.gp2Scale_dask_client)
-            if self.info: print("Computing the covariance matrix done.", flush = True)
+            if self.info: print("Computing the covariance matrix done after ",time.time()-st," seconds.", flush = True)
             K = self.gp2Scale_obj.SparsePriorCovariance.get_result().result()
-            if self.info: print("Transferring the covariance matrix to host done. aparsity = ", float(K.count_nonzero())/float(len(x_data)**2) , flush = True)
+            if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", float(K.count_nonzero())/float(len(x_data)**2) , flush = True)
             self.gp2Scale_obj.SparsePriorCovariance.reset_prior().result()
             if self.info: print("Reset the prior done.", flush = True)
         else: K = self._compute_K(hyperparameters)
@@ -974,6 +975,7 @@ class GP():
             KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=50, max_num_samples=200,
                               lanczos_degree=80, error_rtol=0.1,
                               return_info=True, plot=False, verbose=self.info)
+            if self.info: print("Solve and logdet done after ",time.time() - st,"seconds.")
             KVinv = None
             factorization_obj = ("gp2Scale",None)
         elif self.sparse_mode and self._is_sparse(KV):
