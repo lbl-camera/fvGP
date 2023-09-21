@@ -50,7 +50,7 @@ class gp2ScaleSparseMatrix: # pragma: no cover
             res.append((SparseCov_sub,ranges[0],ranges[1]))
 
         self.insert_many(res)
-        if info = True: print("    Size of the current covariance matrix: ", self.K.count_nonzero(), flush = True)
+        if info: print("    Size of the current covariance matrix: ", self.K.count_nonzero(), flush = True)
         return 0
 
     """
