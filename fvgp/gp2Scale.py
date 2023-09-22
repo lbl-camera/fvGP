@@ -3,14 +3,31 @@
 ############################################################
 
 import dask.distributed as distributed
+import numpy as np
+from distributed import wait
+
 from .sparse_matrix import gp2ScaleSparseMatrix
 import time
 import scipy.sparse as sparse
+from functools import partial
+from itertools import islice
+
+
+def batched(iterable, n):
+    "Batch data into tuples of length n. The last batch may be shorter."
+    # batched('ABCDEFG', 3) --> ABC DEF G
+    if n < 1:
+        raise ValueError('n must be at least one')
+    it = iter(iterable)
+    while batch := tuple(islice(it, n)):
+        yield batch
+
+
 class gp2Scale():
     """
     This class allows the user to scale GPs up to millions of datapoints. There is full high-performance-computing
     support through DASK.
-    
+
     Parameters
     ----------
     input_space_dim : int
@@ -32,7 +49,7 @@ class gp2Scale():
         `gpcam.gp_optimizer.GPOptimizer` instance. The default is a stationary anisotropic kernel
         (`fvgp.gp.GP.default_kernel`).
     gp_mean_function : Callable, optional
-        A function that evaluates the prior mean at an input position. It accepts as input 
+        A function that evaluates the prior mean at an input position. It accepts as input
         an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
         and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 1-D array of length V. If None is provided,
         `fvgp.gp.GP.default_mean_function` is used.
@@ -93,15 +110,6 @@ class gp2Scale():
 
     def compute_covariance(self, x1,x2,hyperparameters,client):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
-        ###initialize futures
-        futures = []           ### a list of futures
-        actor_futures = []
-        finished_futures = set()
-        ###get workers
-        compute_workers = set(self.compute_worker_set)
-        idle_workers = set(compute_workers)
-        ###future_worker_assignments
-        self.future_worker_assignments = {}
         ###scatter data
         start_time = time.time()
         count = 0
@@ -112,67 +120,23 @@ class gp2Scale():
         if last_batch_size_i != 0: num_batches_i += 1
         if last_batch_size_j != 0: num_batches_j += 1
 
-        for i in range(num_batches_i):
-            beg_i = i * self.batch_size
-            end_i = min((i+1) * self.batch_size, self.point_number)
-            batch1 = self.x_data[beg_i: end_i]
-            for j in range(i,num_batches_j):
-                beg_j = j * self.batch_size
-                end_j = min((j+1) * self.batch_size, self.point_number)
-                batch2 = self.x_data[beg_j : end_j]
-                ##make workers available that are not actively computing
-                while not idle_workers:
-                    idle_workers, futures, finished_futures = self.free_workers(futures, finished_futures)
-                    time.sleep(0.1)
+        igrid, jgrid = np.mgrid[0:num_batches_i, 0:num_batches_j]
 
-                ####collect finished workers but only if actor is not busy, otherwise do it later
-                if len(finished_futures) >= 1000:
-                    actor_futures.append(self.SparsePriorCovariance.get_future_results(set(finished_futures)))
-                    finished_futures = set()
+        COLLECT_BATCH_SIZE = 1000  # number of batches to compute before collecting results
 
-                #get idle worker and submit work
-                current_worker = self.get_idle_worker(idle_workers)
-                data = {"scattered_data": self.scatter_future,"hps": hyperparameters, "kernel" :self.kernel,  "range_i": (beg_i,end_i), "range_j": (beg_j,end_j), "mode": "prior","gpu": 0}
-                futures.append(client.submit(kernel_function, data, workers = current_worker))
-                self.assign_future_2_worker(futures[-1].key,current_worker)
-                if self.info:
-                    print("    submitted batch. i:", beg_i,end_i,"   j:",beg_j,end_j, "to worker ",current_worker, " Future: ", futures[-1].key,flush = True)
-                    print("    current time stamp: ", time.time() - start_time," percent finished: ",float(count)/self._total_number_of_batches(),flush = True)
-                    print("",flush = True)
-                count += 1
+        collect_batches = batched(zip(igrid.ravel(), jgrid.ravel()), COLLECT_BATCH_SIZE)  # split batches into chunks
+        for batch in collect_batches:  # for each chunk
+            futures = list(map(partial(self.submit_kernel_function, hyperparameters=hyperparameters, client=client),
+                               batch))  # submit kernel function for each i,j in the chunk
+            wait(futures)
+            self.SparsePriorCovariance.get_future_results(futures).result()
 
+        # TODO: use loguru over prints
         if self.info:
-            print("All tasks submitted after ",time.time() - start_time,flush = True)
-            print("number of computed batches: ", count)
-
-        actor_futures.append(self.SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
-        client.gather(actor_futures)
-        #actor_futures.append(self.SparsePriorCovariance.add_to_diag(variances)) ##add to diag on actor
-        actor_futures[-1].result()
-
-        #########
-        if self.info:
-            print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().count_nonzero(),flush = True)
-            print("Sparsity: ",self.SparsePriorCovariance.get_result().result().count_nonzero()/float(self.point_number)**2,flush = True)
-
-
-    def free_workers(self, futures, finished_futures):
-        free_workers = set()
-        remaining_futures = []
-        for future in futures:
-            if future.status == "cancelled": print("WARNING: cancelled futures encountered!",flush = True)
-            if future.status == "finished":
-                finished_futures.add(future)
-                free_workers.add(self.future_worker_assignments[future.key])
-                del self.future_worker_assignments[future.key]
-            else: remaining_futures.append(future)
-        return free_workers, remaining_futures, finished_futures
-
-    def assign_future_2_worker(self, future_key, worker_address):
-        self.future_worker_assignments[future_key] = worker_address
-
-    def get_idle_worker(self,idle_workers):
-        return idle_workers.pop()
+            print("All tasks submitted after ", time.time() - start_time, flush=True)
+            # print("number of computed batches: ", count)
+            print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().count_nonzero())
+            print("Sparsity: ", self.SparsePriorCovariance.get_result().result().count_nonzero() / float(self.point_number) ** 2)
 
     def calculate_sparse_noise_covariance(self,vector):
         diag = sparse.eye(len(vector), format="coo")
@@ -390,7 +354,7 @@ class gpm2Scale(gp2Scale):
         #del scatter_future
 
         #########
-        if self.info: 
+        if self.info:
             print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().count_nonzero())
             print("Sparsity: ",self.SparsePriorCovariance.get_result().result().count_nonzero()/float(self.point_number)**2)
 
@@ -432,7 +396,7 @@ class gpm2Scale(gp2Scale):
         print("Scheduler Address: ", dask_client.scheduler_info()["address"])
         return dask_client, compute_worker_set,actor_worker
 
- 
+
     def train(self,
         hyperparameter_bounds,
         method = "global",
@@ -441,7 +405,7 @@ class gpm2Scale(gp2Scale):
         ):
         """
         This function finds the maximum of the log_likelihood and therefore trains the fvGP (synchronously).
-        This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and 
+        This can be done on a remote cluster/computer by specifying the method to be be 'hgdl' and
         providing a dask client
 
         inputs:
