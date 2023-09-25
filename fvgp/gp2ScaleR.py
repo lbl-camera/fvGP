@@ -131,7 +131,7 @@ class gp2Scale():  # pragma: no cover
             futures = list(map(partial(self.submit_kernel_function, hyperparameters=hyperparameters, client=client),
                                batch))  # submit kernel function for each i,j in the chunk
             wait(futures)
-            self.SparsePriorCovariance.get_future_results(futures).result()
+            self.SparsePriorCovariance.get_future_results(futures)
 
         # TODO: use loguru over prints
         if self.info:
@@ -139,6 +139,30 @@ class gp2Scale():  # pragma: no cover
             # print("number of computed batches: ", count)
             print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().count_nonzero())
             print("Sparsity: ", self.SparsePriorCovariance.get_result().result().count_nonzero() / float(self.point_number) ** 2)
+
+    def submit_kernel_function(self, ij, hyperparameters, client):
+        i, j = ij
+        beg_i = i * self.batch_size
+        end_i = min((i+1) * self.batch_size, self.point_number)
+        beg_j = j * self.batch_size
+        end_j = min((j+1) * self.batch_size, self.point_number)
+
+        data = {"scattered_data": self.scatter_future, "hps": hyperparameters, "kernel": self.kernel,
+                "range_i": (beg_i, end_i), "range_j": (beg_j, end_j), "mode": "prior", "gpu": 0}
+
+        future = client.submit(kernel_function, data)
+
+        return future
+
+    def get_future_results(self, futures, info=False):
+        res = []
+        for future in futures:
+            SparseCov_sub, ranges, ketime, worker = future.result()
+            if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
+            res.append((SparseCov_sub,ranges[0],ranges[1]))
+
+        self.SparsePriorCovariance.insert_many(res)
+        if info: print("    Size of the current covariance matrix: ", self.SparsePriorCovariance.K.count_nonzero(), flush=True)
 
     def calculate_sparse_noise_covariance(self,vector):
         diag = sparse.eye(len(vector), format="coo")
@@ -165,19 +189,6 @@ class gp2Scale():  # pragma: no cover
         print("Scheduler Address: ", dask_client.scheduler_info()["address"])
         return dask_client, compute_worker_set,actor_worker
 
-    def submit_kernel_function(self, ij, hyperparameters, client):
-        i, j = ij
-        beg_i = i * self.batch_size
-        end_i = min((i+1) * self.batch_size, self.point_number)
-        beg_j = j * self.batch_size
-        end_j = min((j+1) * self.batch_size, self.point_number)
-
-        data = {"scattered_data": self.scatter_future, "hps": hyperparameters, "kernel": self.kernel,
-                "range_i": (beg_i, end_i), "range_j": (beg_j, end_j), "mode": "prior", "gpu": 0}
-
-        future = client.submit(kernel_function, data)
-
-        return future
 #########################################################################
 #########################################################################
 #########################################################################

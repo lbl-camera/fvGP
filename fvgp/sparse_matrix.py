@@ -42,17 +42,6 @@ class gp2ScaleSparseMatrix: # pragma: no cover
         self.K = res
         return 0
 
-    def get_future_results(self, futures, info = False):
-        res = []
-        for future in futures:
-            SparseCov_sub, ranges, ketime, worker = future.result()
-            if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
-            res.append((SparseCov_sub,ranges[0],ranges[1]))
-
-        self.insert_many(res)
-        if info: print("    Size of the current covariance matrix: ", self.K.count_nonzero(), flush = True)
-        return 0
-
     """
     def compute_LU_KV(self):
         A = self.KV.tocsc()
