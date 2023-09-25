@@ -19,7 +19,8 @@ from scipy.linalg import cho_factor, cho_solve
 from loguru import logger
 from .mcmc import mcmc
 from hgdl.hgdl import HGDL
-from .gp2Scale import gp2Scale as gp2S
+#from .gp2Scale import gp2Scale as gp2S
+from .gp2ScaleR import gp2Scale as gp2S
 from dask.distributed import Variable
 from dask.distributed import Client
 from .sparse_matrix import gp2ScaleSparseMatrix
