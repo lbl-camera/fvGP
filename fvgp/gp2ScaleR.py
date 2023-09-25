@@ -131,7 +131,7 @@ class gp2Scale():  # pragma: no cover
             futures = list(map(partial(self.submit_kernel_function, hyperparameters=hyperparameters, client=client),
                                batch))  # submit kernel function for each i,j in the chunk
             wait(futures)
-            self.get_future_results(futures)
+            self.SparsePriorCovariance.get_future_results(futures)
 
         # TODO: use loguru over prints
         if self.info:
