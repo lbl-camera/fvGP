@@ -165,19 +165,7 @@ class gp2Scale():  # pragma: no cover
         print("Scheduler Address: ", dask_client.scheduler_info()["address"])
         return dask_client, compute_worker_set,actor_worker
 
-    def submit_kernel_function(self, ij, hyperparameters, client):
-        i, j = ij
-        beg_i = i * self.batch_size
-        end_i = min((i+1) * self.batch_size, self.point_number)
-        beg_j = j * self.batch_size
-        end_j = min((j+1) * self.batch_size, self.point_number)
 
-        data = {"scattered_data": self.scatter_future, "hps": hyperparameters, "kernel": self.kernel,
-                "range_i": (beg_i, end_i), "range_j": (beg_j, end_j), "mode": "prior", "gpu": 0}
-
-        future = client.submit(kernel_function, data)
-
-        return future
 #########################################################################
 #########################################################################
 #########################################################################
