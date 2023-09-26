@@ -51,6 +51,7 @@ class gp2ScaleSparseMatrix: # pragma: no cover
 
         self.insert_many(res)
         if info: print("    Size of the current covariance matrix: ", self.K.count_nonzero(), flush = True)
+        del futures
         return 0
 
     """

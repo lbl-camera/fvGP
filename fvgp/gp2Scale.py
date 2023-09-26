@@ -120,8 +120,8 @@ class gp2Scale():
 
                 ####collect finished workers but only if actor is not busy, otherwise do it later
                 if len(finished_futures) >= 2000:
-                    #actor_futures.append(self.SparsePriorCovariance.get_future_results(set(finished_futures), info = self.info))
                     actor_futures.append(self.SparsePriorCovariance.get_future_results(finished_futures.copy(), info = self.info))
+                    actor_futures = self.clean_actor_futures(actor_futures)
                     finished_futures = set()
 
                 #get idle worker and submit work
@@ -141,7 +141,6 @@ class gp2Scale():
 
         actor_futures.append(self.SparsePriorCovariance.get_future_results(finished_futures.union(futures), info = self.info))
         client.gather(actor_futures)
-        #actor_futures[-1].result()
 
         #########
         if self.info:
@@ -161,6 +160,13 @@ class gp2Scale():
             else: remaining_futures.append(future)
         del futures
         return free_workers, remaining_futures, finished_futures
+
+    def clean_actor_futures(self,actor_futures):
+        for entry in reversed(actor_futures):
+            if entry.status == "finished":
+                actor_futures.remove(entry)
+        return actor_futures
+
 
     def assign_future_2_worker(self, future_key, worker_address):
         self.future_worker_assignments[future_key] = worker_address
