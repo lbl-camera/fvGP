@@ -46,11 +46,11 @@ class gp2ScaleSparseMatrix: # pragma: no cover
         res = []
         for future in futures:
             SparseCov_sub, ranges, ketime, worker = future.result()
-            if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
+            #if info: print("Collected Future ", future.key, " has finished its work in", ketime," seconds. time stamp: ",time.time() - self.st, flush = True)
             res.append((SparseCov_sub,ranges[0],ranges[1]))
 
         self.insert_many(res)
-        if info: print("    Size of the current covariance matrix: ", self.K.count_nonzero(), flush = True)
+        #if info: print("    Size of the current covariance matrix: ", self.K.count_nonzero(), flush = True)
         del futures
         return 0
 

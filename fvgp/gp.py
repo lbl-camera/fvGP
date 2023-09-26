@@ -946,12 +946,13 @@ class GP():
         #get K
         if self.gp2Scale:
             st = time.time()
-            self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
+            #self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
+            K = self.gp2Scale_obj.compute_covariance_new(hyperparameters, self.gp2Scale_dask_client)
+            print("K ",K)
             if self.info: print("Computing the covariance matrix done after ",time.time()-st," seconds.", flush = True)
             K = self.gp2Scale_obj.SparsePriorCovariance.get_result().result()
             if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", float(K.count_nonzero())/float(len(x_data)**2) , flush = True)
             self.gp2Scale_obj.SparsePriorCovariance.reset_prior().result()
-            if self.info: print("Reset the prior done.", flush = True)
         else: K = self._compute_K(hyperparameters)
 
 
@@ -963,12 +964,25 @@ class GP():
 
         #get Kinv/KVinvY, LU, Chol, logdet(KV)
         if self.gp2Scale:
+            #try fast but RAM intensive SuperLU first
             if len(x_data) < 100000:
-                LU = splu(KV.tocsc())
-                factorization_obj = ("LU", LU)
-                KVinvY = LU.solve(y_data - prior_mean_vec)
-                upper_diag = abs(LU.U.diagonal())
-                KVlogdet = np.sum(np.log(upper_diag))
+                try:
+                    LU = splu(KV.tocsc())
+                    factorization_obj = ("LU", LU)
+                    KVinvY = LU.solve(y_data - prior_mean_vec)
+                    upper_diag = abs(LU.U.diagonal())
+                    KVlogdet = np.sum(np.log(upper_diag))
+                #if that did not work, do random lin algebra magic
+                except:
+                    KVinvY, exit_code = cg(KV.tocsc(),y_data - prior_mean_vec)
+                    factorization_obj = ("gp2Scale",None)
+                    if exit_code != 0:
+                        warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
+                        KVinvY, exit_code = minres(KV.tocsc(),y_data - prior_mean_vec)
+                    KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=50, max_num_samples=200,
+                                lanczos_degree=80, error_rtol=0.1,
+                                return_info=True, plot=False, verbose=self.info)
+            #if the problem is large go with rand. lin. algebra straight away
             else:
                 KVinvY, exit_code = cg(KV.tocsc(),y_data - prior_mean_vec)
                 factorization_obj = ("gp2Scale",None)
