@@ -2512,7 +2512,7 @@ def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj): # pragma: no cover
     del d
     del kernel
     torch.cuda.empty_cache()
-    #gc.collect()
+    gc.collect()
     return k_np
 
 
