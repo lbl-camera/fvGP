@@ -22,7 +22,6 @@ from hgdl.hgdl import HGDL
 from .gp2Scale import gp2Scale as gp2S
 from dask.distributed import Variable
 from dask.distributed import Client
-from .sparse_matrix import gp2ScaleSparseMatrix
 from scipy.stats import norm
 from imate import logdet
 
@@ -946,13 +945,8 @@ class GP():
         #get K
         if self.gp2Scale:
             st = time.time()
-            #self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
-            K = self.gp2Scale_obj.compute_covariance_new(hyperparameters, self.gp2Scale_dask_client)
-            print("K ",K)
+            K = self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
             if self.info: print("Computing the covariance matrix done after ",time.time()-st," seconds.", flush = True)
-            K = self.gp2Scale_obj.SparsePriorCovariance.get_result().result()
-            if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", float(K.count_nonzero())/float(len(x_data)**2) , flush = True)
-            self.gp2Scale_obj.SparsePriorCovariance.reset_prior().result()
         else: K = self._compute_K(hyperparameters)
 
 
@@ -965,7 +959,7 @@ class GP():
         #get Kinv/KVinvY, LU, Chol, logdet(KV)
         if self.gp2Scale:
             #try fast but RAM intensive SuperLU first
-            if len(x_data) < 100000:
+            if len(x_data) < 2000: #basically never, this is a place holder for a better LU
                 try:
                     LU = splu(KV.tocsc())
                     factorization_obj = ("LU", LU)
@@ -979,8 +973,10 @@ class GP():
                     if exit_code != 0:
                         warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
                         KVinvY, exit_code = minres(KV.tocsc(),y_data - prior_mean_vec)
-                    KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=50, max_num_samples=200,
-                                lanczos_degree=80, error_rtol=0.1,
+                    if self.compute_device == "gpu": gpu = True
+                    else: gpu = False
+                    KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
+                                lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu = gpu,
                                 return_info=True, plot=False, verbose=self.info)
             #if the problem is large go with rand. lin. algebra straight away
             else:
@@ -989,9 +985,11 @@ class GP():
                 if exit_code != 0:
                     warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
                     KVinvY, exit_code = minres(KV.tocsc(),y_data - prior_mean_vec)
-                KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=50, max_num_samples=200,
-                              lanczos_degree=80, error_rtol=0.1,
-                              return_info=True, plot=False, verbose=self.info)
+                if self.compute_device == "gpu": gpu = True
+                else: gpu = False
+                KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
+                            lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu = gpu,
+                            return_info=True, plot=False, verbose=self.info)
             if self.info: print("Solve and logdet/LU done after ",time.time() - st,"seconds.")
             KVinv = None
         elif self.sparse_mode and self._is_sparse(KV):

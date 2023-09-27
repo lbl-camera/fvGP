@@ -10,9 +10,6 @@ import dask.distributed as distributed
 import numpy as np
 import scipy.sparse as sparse
 
-from .sparse_matrix import gp2ScaleSparseMatrix
-
-
 class gp2Scale():
     """
     This class allows the user to scale GPs up to millions of datapoints. There is full high-performance-computing
@@ -65,9 +62,6 @@ class gp2Scale():
         self.x_data = x_data
         self.kernel = gp_kernel_function
 
-        # covariance_dask_client, self.compute_worker_set, self.actor_worker = self._init_dask_client(covariance_dask_client)
-        ###initiate actor that is a future contain the covariance and methods
-
         scatter_data = self.x_data  ##data that can be scattered
         self.scatter_future = covariance_dask_client.scatter(
             scatter_data)  ##scatter the data to compute workers, not the actor
@@ -90,7 +84,7 @@ class gp2Scale():
         step = N / nb
         return [(round(step * i), round(step * (i + 1))) for i in range(nb)]
 
-    def compute_covariance_new(self, hyperparameters, client):  # pragma: no cover
+    def compute_covariance(self, hyperparameters, client):  # pragma: no cover
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
         NUM_RANGES = self.num_batches
@@ -100,17 +94,12 @@ class gp2Scale():
         ##scattering
         results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
-                              partial(kernel_function_new,
+                              partial(kernel_function,
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
                               ranges_ij,
                               [self.scatter_future] * len(ranges_ij)),
                               with_results=True)))
-        # not scattering
-        # result = list(map(self.harvest_result,
-        #                   distributed.as_completed(client.map(
-        #                       partial(kernel_function_new, hyperparameters=hyperparameters, kernel=self.kernel),
-        #                       ranges_ij, [self.x_data] * len(ranges_ij)), with_results=True)))
 
         # reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
@@ -459,7 +448,7 @@ class gpm2Scale(gp2Scale):  # pragma: no cover
 #########################################################################
 #########################################################################
 #########################################################################
-def kernel_function_new(range_ij, scatter_future, hyperparameters, kernel):
+def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     """
     Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the covariance matrix being calculated.
     Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
