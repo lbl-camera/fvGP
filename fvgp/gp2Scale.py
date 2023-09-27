@@ -91,6 +91,8 @@ class gp2Scale():
         ranges = self.ranges(len(self.x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
+        ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
+
         ##scattering
         results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
@@ -103,6 +105,11 @@ class gp2Scale():
 
         # reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
+        # mirror across diagonal
+        diagonal_mask = i_s != j_s
+        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
+                         np.hstack([i_s, j_s[diagonal_mask]]), \
+                         np.hstack([j_s, i_s[diagonal_mask]])
         return sparse.coo_matrix((data, (i_s, j_s)))
 
     @staticmethod
@@ -461,4 +468,11 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     k = kernel(x1, x2, hps, None)
     k_sparse = sparse.coo_matrix(k)
 
-    return k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
+    data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
+
+    # mask lower triangular values when current chunk spans diagonal
+    if range_i[0] == range_j[0]:
+        mask = [row <= col for (row, col) in zip(rows, cols)]
+        return data[mask], rows[mask], cols[mask]
+    else:
+        return data, rows, cols
