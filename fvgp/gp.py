@@ -948,7 +948,8 @@ class GP():
         if self.gp2Scale:
             st = time.time()
             K = self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
-            if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", float(K.count_nonzero())/float(len(x_data)**2) , flush = True)
+            Ksparsity = float(K.count_nonzero())/float(len(x_data)**2)
+            if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", Ksparsity, flush = True)
         else: K = self._compute_K(hyperparameters)
 
 
@@ -961,7 +962,7 @@ class GP():
         #get Kinv/KVinvY, LU, Chol, logdet(KV)
         if self.gp2Scale:
             #try fast but RAM intensive SuperLU first
-            if len(x_data) < 20000: #basically never, this is a place holder for a better LU
+            if len(x_data) < 50000 and Ksparsity < 0.001:
                 try:
                     LU = splu(KV.tocsc())
                     factorization_obj = ("LU", LU)
@@ -995,7 +996,7 @@ class GP():
                 else: gpu = False
                 if self.info: print("logdet() in progress ... ",time.time() - st,"seconds.")
                 KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
-                            lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu = gpu,
+                            lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu = False,
                             return_info=True, plot=False, verbose=self.info)
                 if self.info: print("logdet/LU done after ",time.time() - st,"seconds.")
 
