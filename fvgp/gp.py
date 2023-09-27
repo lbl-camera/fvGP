@@ -24,6 +24,7 @@ from dask.distributed import Variable
 from dask.distributed import Client
 from scipy.stats import norm
 from imate import logdet
+import gc
 
 
 #TODO:
@@ -959,7 +960,7 @@ class GP():
         #get Kinv/KVinvY, LU, Chol, logdet(KV)
         if self.gp2Scale:
             #try fast but RAM intensive SuperLU first
-            if len(x_data) < 2000: #basically never, this is a place holder for a better LU
+            if len(x_data) < 20000: #basically never, this is a place holder for a better LU
                 try:
                     LU = splu(KV.tocsc())
                     factorization_obj = ("LU", LU)
@@ -980,6 +981,7 @@ class GP():
                                 return_info=True, plot=False, verbose=self.info)
             #if the problem is large go with rand. lin. algebra straight away
             else:
+                if self.info: print("CG solve in progress ...",time.time() - st,"seconds.")
                 KVinvY, exit_code = cg(KV.tocsc(),y_data - prior_mean_vec)
                 if self.info: print("solve done after ",time.time() - st,"seconds.")
                 factorization_obj = ("gp2Scale",None)
@@ -988,6 +990,7 @@ class GP():
                     KVinvY, exit_code = minres(KV.tocsc(),y_data - prior_mean_vec)
                 if self.compute_device == "gpu": gpu = True
                 else: gpu = False
+                if self.info: print("logdet() in progress ... ",time.time() - st,"seconds.")
                 KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                             lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu = gpu,
                             return_info=True, plot=False, verbose=self.info)
@@ -2509,6 +2512,7 @@ def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj): # pragma: no cover
     del d
     del kernel
     torch.cuda.empty_cache()
+    #gc.collect()
     return k_np
 
 
