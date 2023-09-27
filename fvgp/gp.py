@@ -946,7 +946,7 @@ class GP():
         if self.gp2Scale:
             st = time.time()
             K = self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
-            if self.info: print("Computing the covariance matrix done after ",time.time()-st," seconds.", flush = True)
+            if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", float(K.count_nonzero())/float(len(x_data)**2) , flush = True)
         else: K = self._compute_K(hyperparameters)
 
 
@@ -981,6 +981,7 @@ class GP():
             #if the problem is large go with rand. lin. algebra straight away
             else:
                 KVinvY, exit_code = cg(KV.tocsc(),y_data - prior_mean_vec)
+                if self.info: print("solve done after ",time.time() - st,"seconds.")
                 factorization_obj = ("gp2Scale",None)
                 if exit_code != 0:
                     warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
@@ -990,7 +991,7 @@ class GP():
                 KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                             lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu = gpu,
                             return_info=True, plot=False, verbose=self.info)
-            if self.info: print("Solve and logdet/LU done after ",time.time() - st,"seconds.")
+            if self.info: print("logdet/LU done after ",time.time() - st,"seconds.")
             KVinv = None
         elif self.sparse_mode and self._is_sparse(KV):
             KV = csc_matrix(KV)
@@ -2501,7 +2502,14 @@ def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj): # pragma: no cover
     d = _get_distance_matrix_gpu(x1_dev,x2_dev,cuda_device,hps_dev)
     d[d > 1.] = 1.
     kernel = hps[0] * (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
-    return kernel.cpu().numpy()
+    k_np = kernel.cpu().numpy()
+    del x1_dev
+    del x2_dev
+    del hps_dev
+    del d
+    del kernel
+    torch.cuda.empty_cache()
+    return k_np
 
 
 def _get_distance_matrix_gpu(x1,x2,device,hps): # pragma: no cover
