@@ -1035,8 +1035,8 @@ class GP():
             res = np.empty((len(b),b.shape[1]))
             if b.shape[1]>100: warnings.warn("You want to predict at >100 points. \n When using gp2Scale, this takes a while. \n Better predict at only a handful of points.")
             for i in range(b.shape[1]):
-                res[:,i], exit_status = cg(self.KV,b[:,i])
-                if exit_status != 0: res[:,i], exit_status = minres(self.KV,b[:,i])
+                res[:,i], exit_status = minres(self.KV,b[:,i])
+                #if exit_status != 0: res[:,i], exit_status = minres(self.KV,b[:,i])
             return res
 
     def _logdet(self, A, factorization_obj = None):
