@@ -9,6 +9,7 @@ from scipy.sparse import csc_matrix
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import splu
 from scipy.sparse.linalg import cg
+from scipy.sparse.linalg import cgs
 from scipy.sparse.linalg import minres
 import dask.distributed as distributed
 import numpy as np
@@ -977,24 +978,27 @@ class GP():
                     if self.compute_device == "gpu": gpu = True
                     else: gpu = False
                     KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
-                                lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu = gpu,
+                                lanczos_degree=20, error_rtol=0.1, gpu = False,
                                 return_info=True, plot=False, verbose=self.info)
             #if the problem is large go with rand. lin. algebra straight away
             else:
-                if self.info: print("CG solve in progress ...",time.time() - st,"seconds.")
-                KVinvY, exit_code = cg(KV.tocsc(),y_data - prior_mean_vec)
-                if self.info: print("solve done after ",time.time() - st,"seconds.")
+                if self.info: print("MINRES solve in progress ...",time.time() - st,"seconds.")
+                #KVinvY, exit_code = cg(KV.tocsc(),y_data - prior_mean_vec)
                 factorization_obj = ("gp2Scale",None)
-                if exit_code != 0:
-                    warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
-                    KVinvY, exit_code = minres(KV.tocsc(),y_data - prior_mean_vec)
+                #if exit_code != 0:
+                #if self.info: print("CG solve done ...",time.time() - st,"seconds.")
+                #warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
+                KVinvY, exit_code = minres(KV.tocsc(),y_data - prior_mean_vec)
+                if self.info: print("MINRES solve done after ",time.time() - st,"seconds.")
+
                 if self.compute_device == "gpu": gpu = True
                 else: gpu = False
                 if self.info: print("logdet() in progress ... ",time.time() - st,"seconds.")
                 KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                             lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu = gpu,
                             return_info=True, plot=False, verbose=self.info)
-            if self.info: print("logdet/LU done after ",time.time() - st,"seconds.")
+                if self.info: print("logdet/LU done after ",time.time() - st,"seconds.")
+
             KVinv = None
         elif self.sparse_mode and self._is_sparse(KV):
             KV = csc_matrix(KV)
