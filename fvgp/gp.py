@@ -2500,10 +2500,12 @@ def wendland_anisotropic_gp2Scale_cpu(x1,x2, hps, obj):
 def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj): # pragma: no cover
     import torch
     cuda_device = torch.device("cuda:0")
+    ##going for float32 leads to about a 0.01% error in the distance matrix
     x1_dev = torch.from_numpy(x1).to(cuda_device, dtype = torch.float32)
     x2_dev = torch.from_numpy(x2).to(cuda_device, dtype = torch.float32)
     hps_dev = torch.from_numpy(hps).to(cuda_device, dtype = torch.float32)
     d = _get_distance_matrix_gpu(x1_dev,x2_dev,cuda_device,hps_dev)
+
     d[d > 1.] = 1.
     kernel = hps[0] * (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
     k_np = kernel.cpu().numpy()
@@ -2516,11 +2518,10 @@ def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj): # pragma: no cover
     gc.collect()
     return k_np
 
-
 def _get_distance_matrix_gpu(x1,x2,device,hps): # pragma: no cover
     import torch
     d = torch.zeros((len(x1),len(x2))).to(device, dtype = torch.float32)
     for i in range(x1.shape[1]):
-        d += ((x1[:,i].reshape(-1, 1) - x2[:,i])/hps[i])**2
+        d += ((x1[:,i].reshape(-1, 1) - x2[:,i])/hps[1+i])**2
     return torch.sqrt(d)
 
