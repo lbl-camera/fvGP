@@ -971,7 +971,7 @@ class GP():
                     KVlogdet = np.sum(np.log(upper_diag))
                 #if that did not work, do random lin algebra magic
                 except:
-                    KVinvY, exit_code = cg(KV.tocsc(),y_data - prior_mean_vec)
+                    KVinvY, exit_code = minres(KV.tocsc(),y_data - prior_mean_vec)
                     factorization_obj = ("gp2Scale",None)
                     if exit_code != 0:
                         warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
@@ -984,11 +984,7 @@ class GP():
             #if the problem is large go with rand. lin. algebra straight away
             else:
                 if self.info: print("MINRES solve in progress ...",time.time() - st,"seconds.")
-                #KVinvY, exit_code = cg(KV.tocsc(),y_data - prior_mean_vec)
                 factorization_obj = ("gp2Scale",None)
-                #if exit_code != 0:
-                #if self.info: print("CG solve done ...",time.time() - st,"seconds.")
-                #warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
                 KVinvY, exit_code = minres(KV.tocsc(),y_data - prior_mean_vec)
                 if self.info: print("MINRES solve done after ",time.time() - st,"seconds.")
 
