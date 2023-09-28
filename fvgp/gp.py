@@ -2491,7 +2491,7 @@ class GP():
 ####################################################################################
 def wendland_anisotropic_gp2Scale_cpu(x1,x2, hps, obj):
     distance_matrix = np.zeros((len(x1),len(x2)))
-    for i in range(len(x1[0])): distance_matrix += abs(np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
+    for i in range(len(x1[0])): distance_matrix += (np.subtract.outer(x1[:,i],x2[:,i])/hps[1+i])**2
     d = np.sqrt(distance_matrix)
     d[d > 1.] = 1.
     kernel = hps[0] * (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
