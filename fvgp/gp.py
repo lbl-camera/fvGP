@@ -2206,7 +2206,7 @@ class GP():
         d = np.sqrt(distance_matrix)
         d[d > 1.] = 1.
         kernel = (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
-        return kernel
+        return hps[0] * kernel
 
 
     def non_stat_kernel(self,x1,x2,x0,w,l):

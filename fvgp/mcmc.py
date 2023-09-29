@@ -159,7 +159,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
             prop_Sigma_trace[i,:,:] = prop_Sigma
         # Echo every 100 iterations
         if info:
-            if (i % 100) == 0: print("Finished "+str(i)+ " out of " + str(n_updates), " iterations.\n")
+            if (i % 100) == 0: print("Finished "+str(i)+ " out of " + str(n_updates), " iterations. f(x)=",likelihood)
         if len(x)>201 and np.linalg.norm(np.mean(x[-100:],axis = 0)-np.mean(x[-200:-100],axis = 0)) < 0.01 * np.linalg.norm(np.mean(x[-100:],axis = 0)): break
     # End main loop
     #########################################################
@@ -176,10 +176,9 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
     return  {"f(x)": f[arg_max],
              "x":x[arg_max],
              "F":f,
-             "distribution": x[int(len(x) - (len(x)/10)):], 
+             "stripped distribution": x[int(len(x) - (len(x)/10)):], 
              "full distribution": x,
              "distribution mean": np.mean(x[int(len(x) - (len(x)/10)):],axis = 0),
-             "distribution var":   np.var(x[int(len(x) - (len(x)/10)):],axis = 0),
-             "compute time" : ctime,
-             "meta": res}
+             "distribution var":  np.var(x[int(len(x) - (len(x)/10)):],axis = 0),
+             "compute time" : ctime}
 
