@@ -58,6 +58,10 @@ class GP():
         The default is an array of ones, with a shape appropriate
         for the default kernel (D + 1), which is an anisotropic Matern
         kernel with automatic relevance determination (ARD).
+    hyperparameter_bounds : np.ndarray, optional
+        A 2d numpy array of shape (N x 2), where N is the number of needed hyperparameters.
+        The default is None, in that case hyperparameter_bounds have to be specified
+        in the train calls or default bounds are used. Those only work for the default kernel.
     noise_variances : np.ndarray, optional
         An numpy array defining the uncertainties/noise in the data
         `y_data` in form of a point-wise variance. Shape (len(y_data), 1) or (len(y_data)).
@@ -185,6 +189,7 @@ class GP():
         x_data,
         y_data,
         init_hyperparameters = None,
+        hyperparameter_bounds = None,
         noise_variances = None,
         compute_device = "cpu",
         gp_kernel_function = None,
@@ -233,6 +238,7 @@ class GP():
         ##########################################
         if init_hyperparameters is None: init_hyperparameters = np.ones((input_space_dim + 1))
         self.hyperparameters = init_hyperparameters
+        self.hyperparameter_bounds = hyperparameter_bounds
 
         ##########################################
         ##############preps for sparse mode#######
@@ -470,10 +476,14 @@ class GP():
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         if hyperparameter_bounds is None:
-            warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance", stacklevel=2)
-            hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
-            hyperparameter_bounds[0] = np.array([0.00001,1e8])
-            hyperparameter_bounds[1:] = np.array([0.00001,1e8])
+            if self.hyperparameter_bounds is None:
+                warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance", stacklevel=2)
+                hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
+                hyperparameter_bounds[:] = np.array([0.00001,1e8])
+            else:
+                hyperparameter_bounds = self.hyperparameter_bounds
+
+
         self.hyperparameters = self._optimize_log_likelihood(
             init_hyperparameters,
             np.array(hyperparameter_bounds),
@@ -532,11 +542,12 @@ class GP():
         if init_hyperparameters is None:
             init_hyperparameters = np.array(self.hyperparameters)
         if hyperparameter_bounds is None:
-            warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance", stacklevel=2)
-            hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
-            hyperparameter_bounds[0] = np.array([0.00001,1e8])
-            hyperparameter_bounds[1:] = np.array([0.00001,1e8])
-
+            if self.hyperparameter_bounds is None:
+                warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance", stacklevel=2)
+                hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
+                hyperparameter_bounds[:] = np.array([0.00001,1e8])
+            else:
+                hyperparameter_bounds = self.hyperparameter_bounds
         opt_obj = self._optimize_log_likelihood_async(
             init_hyperparameters,
             hyperparameter_bounds,

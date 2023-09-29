@@ -68,6 +68,10 @@ class fvGP(GP):
         fvgp.fvGP.gp_deep_kernel_layer_width. If you specify 
         another kernel, please provide
         init_hyperparameters.
+    hyperparameter_bounds : np.ndarray, optional
+        A 2d numpy array of shape (N x 2), where N is the number of needed hyperparameters.
+        The default is None, in that case hyperparameter_bounds have to be specified
+        in the train calls or default bounds are used. Those only work for the default kernel.
     output_positions : np.ndarray, optional
         A 3-D numpy array of shape (U x output_number x output_dim), so that for each measurement position, the outputs
         are clearly defined by their positions in the output space. The default is np.array([[0],[1],[2],[3],...,[output_number - 1]]) for each
@@ -204,6 +208,7 @@ class fvGP(GP):
         x_data,
         y_data,
         init_hyperparameters = None,
+        hyperparameter_bounds = None,
         output_positions = None,
         noise_variances = None,
         compute_device = "cpu",
@@ -262,9 +267,9 @@ class fvGP(GP):
             self.hps_bounds[2:] = np.array([-1.,1.])
             init_hps = np.random.uniform(low = self.hps_bounds[:,0], high = self.hps_bounds[:,1],size = len(self.hps_bounds))
             warnings.warn("Hyperparameter bounds have been initialized automatically \
-                    \n for the default kernel in fvgp. They have to be provided to the training.\
-                    \n For instance: GP.train(hyperparameter_bounds = fvgp_obj_name.hps_bounds)\
+                    \n for the default kernel in fvgp. They will automatically used for the training.\
                     \n However, you can also define and provide new bounds.")
+            hyperparameter_bounds = self.hps_bounds
 
 
         ####init GP
@@ -273,6 +278,7 @@ class fvGP(GP):
                 x_data,
                 y_data,
                 init_hyperparameters = init_hps,
+                hyperparameter_bounds = hyperparameter_bounds,
                 noise_variances = noise_variances,
                 compute_device = compute_device,
                 gp_kernel_function = gp_kernel_function,

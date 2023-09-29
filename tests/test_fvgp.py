@@ -62,14 +62,14 @@ class Test_fvGP(unittest.TestCase):
         res = my_gp1.matern_kernel_diff2_robust(1,1)
         res = my_gp1.sparse_kernel(1,1)
         res = my_gp1.periodic_kernel(1,1,1)
-        res = my_gp1.default_kernel(x_data,x_data,np.array([1,1,1,1,1,1]),my_gp1)
+        res = my_gp1.default_kernel(x_data,x_data,np.array([1.,1.,1.,1.,1.,1.]),my_gp1)
 
     def test_single_task_init_advanced(self):
         my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
             compute_device="cpu", normalize_y = True, store_inv = True, ram_economy = True)
 
     def test_train_basic(self):
-        my_gp1 = GP(input_dim, x_data, y_data, np.array([1, 1, 1, 1, 1, 1]))
+        my_gp1 = GP(input_dim, x_data, y_data, np.array([1., 1., 1., 1., 1., 1.]))
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
                 method = "local", pop_size = 10, tolerance = 0.001,max_iter = 2)
         my_gp1.train(np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
@@ -127,7 +127,7 @@ class Test_fvGP(unittest.TestCase):
         res = my_gp1.wendland_anisotropic(x_data,x_data,np.ones((6)), my_gp1)
 
     def test_train_hgdl(self):
-        my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
+        my_gp2 = GP(input_dim, x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]), noise_variances=np.zeros(y_data.shape) + 0.01,
             compute_device="cpu", normalize_y = True, store_inv = True, ram_economy = True)
 
 
@@ -136,7 +136,7 @@ class Test_fvGP(unittest.TestCase):
 
 
     def test_train_hgdl_async(self):
-        my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
+        my_gp2 = GP(input_dim, x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]),noise_variances=np.zeros(y_data.shape) + 0.01,
             compute_device="cpu", normalize_y = True, store_inv = True, ram_economy = True)
 
         opt_obj = my_gp2.train_async(np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
