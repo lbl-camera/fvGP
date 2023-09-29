@@ -1185,9 +1185,9 @@ class GP():
 
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
-
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
 
         k = self.kernel(x_data,x_pred,hps,self)
         A = k.T @ KVinvY
@@ -1229,8 +1229,11 @@ class GP():
 
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
+
 
         k = self.kernel(x_data,x_pred,hps,self)
         f = self.mean_function(x_pred,hps,self)
@@ -1280,8 +1283,9 @@ class GP():
         x_data = self.x_data.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
 
         k = self.kernel(x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1337,8 +1341,9 @@ class GP():
         x_data = self.x_data.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
 
         k = self.kernel(x_data,x_pred,self.hyperparameters,self)
         k_covariance_prod = self._KVsolve(k)
@@ -1390,8 +1395,10 @@ class GP():
         x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
 
         k = self.kernel(x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1424,8 +1431,11 @@ class GP():
         x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
+
 
         k = self.kernel(x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)
@@ -1482,8 +1492,10 @@ class GP():
         """
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
 
         priors = self.joint_gp_prior(x_pred, x_out = None)
         S = priors["S"]
@@ -1510,8 +1522,11 @@ class GP():
         """
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
+
 
         priors1 = self.joint_gp_prior(x_pred, x_out = None)
         priors2 = self.joint_gp_prior_grad(x_pred,direction, x_out = None)
@@ -1593,8 +1608,10 @@ class GP():
         """
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
 
         res = self.posterior_mean(x_pred, x_out = None)
         gp_mean = res["f(x)"]
@@ -1627,8 +1644,10 @@ class GP():
         """
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
 
         gp_mean = self.posterior_mean(x_pred, x_out = None)["f(x)"]
         gp_mean_grad = self.posterior_mean_grad(x_pred,direction = direction, x_out = None)["df/dx"]
@@ -1682,8 +1701,11 @@ class GP():
         x_data, K = self.x_data.copy(), self.K.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
+
 
         k = self.kernel(x_data,x_pred,self.hyperparameters,self) 
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self) + (np.identity(len(x_pred)) * 1e-9)
@@ -1718,8 +1740,11 @@ class GP():
         x_data, K = self.x_data.copy(), self.K.copy()
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
+
 
         k = self.kernel(x_data,x_pred,self.hyperparameters,self) 
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self)  + (np.identity(len(x_pred)) * 1e-9)
@@ -1756,8 +1781,10 @@ class GP():
         """
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
 
         return {"x": x_pred,
                 "sig":np.exp(-self.gp_total_correlation(x_pred, x_out = None)["total correlation"])}
@@ -1779,8 +1806,11 @@ class GP():
         """
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
+
 
         sig = np.zeros((len(x_pred)))
         for i in range(len(x_pred)):
@@ -1806,8 +1836,11 @@ class GP():
         """
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
+
 
         res = self.posterior_mean(x_pred, x_out = None)
         gp_mean = res["f(x)"]
@@ -1846,8 +1879,10 @@ class GP():
         """
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
+            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-        if x_out is not None: x_pred = self._cartesian_product(x_pred,x_out)
+        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+
 
         x1 = np.array(x_pred)
         x2 = np.array(x_pred)
@@ -2372,7 +2407,7 @@ class GP():
             new_x_pred[:,i] = (x_pred[:,i] - x_min[i]) / (x_max[i] - x_min[i])
         return new_x_pred
 
-    def _cartesian_product(self,x,y):
+    def _cartesian_product_euclid(self,x,y):
         """
         Input x,y have to be 2d numpy arrays
         The return is the cartesian product of the two sets
@@ -2382,6 +2417,17 @@ class GP():
             for j in range(len(x)):
                 res.append(np.append(x[j],y[i]))
         return np.array(res)
+
+    def _cartesian_product_noneuclid(self,x,y):
+        """
+        Input x,y have to be 2d numpy arrays
+        The return is the cartesian product of the two sets
+        """
+        res = []
+        for i in range(len(y)):
+            for j in range(len(x)):
+                res.append([x[j],y[i]])
+        return res
 
 ####################################################################################
 ####################################################################################
