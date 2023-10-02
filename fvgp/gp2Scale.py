@@ -125,6 +125,7 @@ class gp2Scale():
 
         ##scattering
         results = []
+        st = time.time()
         for i in range(0,len(ranges_ij),self.number_of_workers):
             r = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
@@ -135,7 +136,8 @@ class gp2Scale():
                               [self.scatter_future] * self.number_of_workers),
                               with_results=True)))
             results.extend(r)
-            distributed.wait(r)
+            #distributed.wait(r)
+        print("All tasks submitted after", time.time() - st, flush = True)
 
         #reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
@@ -144,6 +146,7 @@ class gp2Scale():
         data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
                          np.hstack([i_s, j_s[diagonal_mask]]), \
                          np.hstack([j_s, i_s[diagonal_mask]])
+        print("All tasks included", time.time() - st, flush = True)
         return sparse.coo_matrix((data, (i_s, j_s)))
 
 
