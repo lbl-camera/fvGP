@@ -61,6 +61,7 @@ class gp2Scale():
         self.info = info
         self.x_data = x_data
         self.kernel = gp_kernel_function
+        self.number_of_workers = len(covariance_dask_client.scheduler_info()['workers'])
 
         scatter_data = self.x_data  ##data that can be scattered
         self.scatter_future = covariance_dask_client.scatter(
@@ -100,10 +101,10 @@ class gp2Scale():
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
                               ranges_ij,
-                              [self.scatter_future] * len(ranges_ij)),
+                              [self.scatter_future] * len(ranges_ij), batch_size= self.number_of_workers),
                               with_results=True)))
 
-        # reshape the result set into COO components
+        #reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
         # mirror across diagonal
         diagonal_mask = i_s != j_s
