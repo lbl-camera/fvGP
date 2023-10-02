@@ -2567,12 +2567,12 @@ def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps, obj): # pragma: no cover
     d[d > 1.] = 1.
     kernel = hps[0] * (1.-d)**8 * (35.*d**3 + 25.*d**2 + 8.*d + 1.)
     k_np = kernel.cpu().numpy()
-    del x1_dev
-    del x2_dev
-    del hps_dev
-    del d
-    del kernel
-    torch.cuda.empty_cache()
+    #del x1_dev
+    #del x2_dev
+    #del hps_dev
+    #del d
+    #del kernel
+    #torch.cuda.empty_cache()
     #gc.collect()
     return k_np
 
