@@ -959,7 +959,7 @@ class GP():
         #get K
         if self.gp2Scale:
             st = time.time()
-            K = self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
+            K = self.gp2Scale_obj.compute_covarianceM(hyperparameters, self.gp2Scale_dask_client)
             Ksparsity = float(K.count_nonzero())/float(len(x_data)**2)
             if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", Ksparsity, flush = True)
         else: K = self._compute_K(hyperparameters)

@@ -85,7 +85,7 @@ class gp2Scale():
         step = N / nb
         return [(round(step * i), round(step * (i + 1))) for i in range(nb)]
 
-    def compute_covariance(self, hyperparameters, client):  # pragma: no cover
+    def compute_covarianceR(self, hyperparameters, client):  # pragma: no cover
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
         NUM_RANGES = self.num_batches
@@ -95,14 +95,13 @@ class gp2Scale():
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
 
         ##scattering
-        print("BATCH SIZE ",self.number_of_workers)
         results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
                               partial(kernel_function,
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
                               ranges_ij,
-                              [self.scatter_future] * len(ranges_ij), batch_size= self.number_of_workers),
+                              [self.scatter_future] * len(ranges_ij)),
                               with_results=True)))
 
         #reshape the result set into COO components
@@ -113,6 +112,42 @@ class gp2Scale():
                          np.hstack([i_s, j_s[diagonal_mask]]), \
                          np.hstack([j_s, i_s[diagonal_mask]])
         return sparse.coo_matrix((data, (i_s, j_s)))
+
+
+    def compute_covarianceM(self, hyperparameters, client):  # pragma: no cover
+        """computes the covariance matrix from the kernel on HPC in sparse format"""
+
+        NUM_RANGES = self.num_batches
+        ranges = self.ranges(len(self.x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
+        ranges_ij = list(
+            itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
+        ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
+
+        ##scattering
+        results = []
+        for i in range(0,len(ranges_ij),self.number_of_workers):
+            r = list(map(self.harvest_result,
+                          distributed.as_completed(client.map(
+                              partial(kernel_function,
+                                      hyperparameters=hyperparameters,
+                                      kernel=self.kernel),
+                              ranges_ij[i:i+self.number_of_workers],
+                              [self.scatter_future] * self.number_of_workers),
+                              with_results=True)))
+            results.extend(r)
+            distributed.wait(r)
+
+        #reshape the result set into COO components
+        data, i_s, j_s = map(np.hstack, zip(*results))
+        # mirror across diagonal
+        diagonal_mask = i_s != j_s
+        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
+                         np.hstack([i_s, j_s[diagonal_mask]]), \
+                         np.hstack([j_s, i_s[diagonal_mask]])
+        return sparse.coo_matrix((data, (i_s, j_s)))
+
+
+
 
     @staticmethod
     def harvest_result(future_result):
