@@ -2588,19 +2588,45 @@ def get_distance_matrix_gpu(x1,x2,device):
         d += ((x1[:,i].reshape(-1, 1) - x2[:,i]))**2
     return torch.sqrt(d)
 
+
+
+
+
+def get_distance_matrix_gpu(x1,x2,device):
+    import torch
+    d = torch.zeros((len(x1),len(x2))).to(device, dtype = torch.float32)
+    for i in range(x1.shape[1]):
+        d += ((x1[:,i].reshape(-1, 1) - x2[:,i]))**2
+    return torch.sqrt(d)
+
+def sparse_stat_kernel_gpu(x1,x2, hps,device):
+    import torch
+    d = get_distance_matrix_gpu(x1,x2,device)
+    d[d == 0.0] = 1e-6
+    d[d > hps] = hps
+
+    d_hps = d/hps
+    d_hpss= d_hps**2
+    sq = torch.sqrt(1.0 - d_hpss)
+
+
+    kernel = (torch.sqrt(torch.tensor(2.0))/(3.0*torch.sqrt(torch.tensor(3.141592653))))*\
+    ((3.0*d_hpss * torch.log((d_hps)/(1+sq)))+\
+    ((2.0*d_hpss + 1.0)*sq))
+    return kernel
+
+
+def ks_gpu(x1,x2,hps,cuda_device):
+    import torch
+    k2 = sparse_stat_kernel_gpu(x1,x2, hps[1],cuda_device)
+    return hps[0]*k2
+
 def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps,obj):
     import torch
     cuda_device = torch.device("cuda:0")
     x1_dev = torch.from_numpy(x1).to(cuda_device, dtype = torch.float32)
     x2_dev = torch.from_numpy(x2).to(cuda_device, dtype = torch.float32)
     hps_dev = torch.from_numpy(hps).to(cuda_device, dtype = torch.float32)
-    d = get_distance_matrix_gpu(x1_dev,x2_dev,cuda_device)
-    d[d == 0.0] = 1e-6
-    d[d > hps_dev] = hps_dev
-    d_hps = d/hps_dev
-    d_hpss= d_hps**2
-    sq = torch.sqrt(1.0 - d_hpss)
-    kernel = (torch.sqrt(torch.tensor(2.0))/(3.0*torch.sqrt(torch.tensor(3.141592653))))*\
-    ((3.0*d_hpss * torch.log((d_hps)/(1+sq)))+\
-    ((2.0*d_hpss + 1.0)*sq))
-    return kernel.cpu().numpy()
+    ksparse = ks_gpu(x1_dev,x2_dev,hps_dev,cuda_device).cpu().numpy()
+    return ksparse
+
