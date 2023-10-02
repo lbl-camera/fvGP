@@ -509,14 +509,12 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     k = kernel(x1, x2, hps, None)
     k_sparse = sparse.coo_matrix(k)
 
-    print("kernel time pure: ", time.time() - st, flush = True)
+    print("kernel time: ", time.time() - st, flush = True)
     data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
 
     # mask lower triangular values when current chunk spans diagonal
     if range_i[0] == range_j[0]:
         mask = [row <= col for (row, col) in zip(rows, cols)]
-        print("kernel time: ", time.time() - st, flush = True)
         return data[mask], rows[mask], cols[mask]
     else:
-        print("kernel time: ", time.time() - st, flush = True)
         return data, rows, cols
