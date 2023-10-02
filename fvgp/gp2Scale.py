@@ -500,7 +500,7 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the covariance matrix being calculated.
     Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
     """
-    #st = time.time()
+    st = time.time()
     hps = hyperparameters
     range_i, range_j = range_ij
     x1 = scatter_future[range_i[0]:range_i[1]]
@@ -509,13 +509,14 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     k = kernel(x1, x2, hps, None)
     k_sparse = sparse.coo_matrix(k)
 
+    print("kernel time pure: ", time.time() - st, flush = True)
     data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
 
     # mask lower triangular values when current chunk spans diagonal
     if range_i[0] == range_j[0]:
         mask = [row <= col for (row, col) in zip(rows, cols)]
-        #print("kernel time: ", time.time() - st, flush = True)
+        print("kernel time: ", time.time() - st, flush = True)
         return data[mask], rows[mask], cols[mask]
     else:
-        #print("kernel time: ", time.time() - st, flush = True)
+        print("kernel time: ", time.time() - st, flush = True)
         return data, rows, cols
