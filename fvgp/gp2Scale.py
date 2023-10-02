@@ -136,7 +136,7 @@ class gp2Scale():
                               [self.scatter_future] * self.number_of_workers),
                               with_results=True)))
             results.extend(r)
-            #distributed.wait(r)
+
         if self.info: print("All tasks submitted after", time.time() - st, flush = True)
 
         #reshape the result set into COO components
@@ -148,7 +148,6 @@ class gp2Scale():
                          np.hstack([j_s, i_s[diagonal_mask]])
         if self.info: print("All tasks included", time.time() - st, flush = True)
         return sparse.coo_matrix((data, (i_s, j_s)))
-
 
 
 
