@@ -117,15 +117,16 @@ class gp2Scale():
     def compute_covarianceM(self, hyperparameters, client):  # pragma: no cover
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
+        st = time.time()
         NUM_RANGES = self.num_batches
         ranges = self.ranges(len(self.x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
+        if self.info: print("Ranges computed", time.time() - st, flush = True)
 
         ##scattering
         results = []
-        st = time.time()
         for i in range(0,len(ranges_ij),self.number_of_workers):
             r = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
@@ -137,7 +138,7 @@ class gp2Scale():
                               with_results=True)))
             results.extend(r)
             #distributed.wait(r)
-        print("All tasks submitted after", time.time() - st, flush = True)
+        if self.info: print("All tasks submitted after", time.time() - st, flush = True)
 
         #reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
@@ -146,7 +147,7 @@ class gp2Scale():
         data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
                          np.hstack([i_s, j_s[diagonal_mask]]), \
                          np.hstack([j_s, i_s[diagonal_mask]])
-        print("All tasks included", time.time() - st, flush = True)
+        if self.info: print("All tasks included", time.time() - st, flush = True)
         return sparse.coo_matrix((data, (i_s, j_s)))
 
 
