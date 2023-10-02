@@ -123,7 +123,6 @@ class gp2Scale():
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
-        if self.info: print("Ranges computed", time.time() - st, flush = True)
 
         ##scattering
         results = []
@@ -501,6 +500,7 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the covariance matrix being calculated.
     Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
     """
+    st = time.time()
     hps = hyperparameters
     range_i, range_j = range_ij
     x1 = scatter_future[range_i[0]:range_i[1]]
@@ -514,6 +514,8 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     # mask lower triangular values when current chunk spans diagonal
     if range_i[0] == range_j[0]:
         mask = [row <= col for (row, col) in zip(rows, cols)]
+        print("kernel time: ", time.time() - st, flush = True)
         return data[mask], rows[mask], cols[mask]
     else:
+        print("kernel time: ", time.time() - st, flush = True)
         return data, rows, cols
