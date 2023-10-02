@@ -548,6 +548,7 @@ class GP():
                 hyperparameter_bounds[:] = np.array([0.00001,1e8])
             else:
                 hyperparameter_bounds = self.hyperparameter_bounds
+
         opt_obj = self._optimize_log_likelihood_async(
             init_hyperparameters,
             hyperparameter_bounds,
