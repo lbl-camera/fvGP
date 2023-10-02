@@ -5,7 +5,6 @@
 import itertools
 import time
 from functools import partial
-
 import dask.distributed as distributed
 import numpy as np
 import scipy.sparse as sparse
@@ -504,6 +503,7 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     range_i, range_j = range_ij
     x1 = scatter_future[range_i[0]:range_i[1]]
     x2 = scatter_future[range_j[0]:range_j[1]]
+    print(x1.shape,x2.shape, flush = True)
 
     k = kernel(x1, x2, hps, None)
     k_sparse = sparse.coo_matrix(k)
