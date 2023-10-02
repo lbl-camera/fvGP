@@ -65,7 +65,7 @@ class gp2Scale():
 
         scatter_data = self.x_data  ##data that can be scattered
         self.scatter_future = covariance_dask_client.scatter(
-            scatter_data, broadcast = True)  ##scatter the data to compute workers, not the actor
+            scatter_data, broadcast = False)  ##scatter the data to compute workers, not the actor
 
     ##################################################################################
     ##################################################################################
