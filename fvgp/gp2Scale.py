@@ -95,6 +95,7 @@ class gp2Scale():
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
 
         ##scattering
+        print("BATCH SIZE ",self.number_of_workers)
         results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
                               partial(kernel_function,
