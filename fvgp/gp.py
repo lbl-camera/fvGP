@@ -2596,8 +2596,8 @@ def wendland_anisotropic_gp2Scale_gpu(x1,x2, hps,obj):
     hps_dev = torch.from_numpy(hps).to(cuda_device, dtype = torch.float32)
     d = get_distance_matrix_gpu(x1_dev,x2_dev,cuda_device)
     d[d == 0.0] = 1e-6
-    d[d > hps] = hps
-    d_hps = d/hps
+    d[d > hps_dev] = hps_dev
+    d_hps = d/hps_dev
     d_hpss= d_hps**2
     sq = torch.sqrt(1.0 - d_hpss)
     kernel = (torch.sqrt(torch.tensor(2.0))/(3.0*torch.sqrt(torch.tensor(3.141592653))))*\
