@@ -62,9 +62,15 @@ class gp2Scale():
         self.kernel = gp_kernel_function
         self.number_of_workers = len(covariance_dask_client.scheduler_info()['workers'])
 
+
+
+        worker_info = list(covariance_dask_client.scheduler_info()["workers"].keys())
+        if not worker_info: raise Exception("No workers available")
+        self.compute_workers = set(worker_info)
+
         scatter_data = self.x_data  ##data that can be scattered
         self.scatter_future = covariance_dask_client.scatter(
-            scatter_data, broadcast = False)  ##scatter the data to compute workers, not the actor
+            scatter_data,workers = self.compute_workers ,broadcast = False)  ##scatter the data to compute workers, not the actor
 
     ##################################################################################
     ##################################################################################
@@ -132,7 +138,7 @@ class gp2Scale():
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
                               ranges_ij[i:i+self.number_of_workers],
-                              [self.scatter_future] * self.number_of_workers),
+                              [self.scatter_future] * self.number_of_workers, workers=self.compute_workers, retries=1),
                               with_results=True)))
             results.extend(r)
 
