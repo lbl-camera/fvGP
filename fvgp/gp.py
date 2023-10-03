@@ -960,7 +960,7 @@ class GP():
         if self.gp2Scale:
             st = time.time()
             K = self.gp2Scale_obj.compute_covarianceM(hyperparameters, self.gp2Scale_dask_client)
-            Ksparsity = float(K.count_nonzero())/float(len(x_data)**2)
+            Ksparsity = float(K.nnz)/float(len(x_data)**2)
             if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", Ksparsity, flush = True)
         else: K = self._compute_K(hyperparameters)
 
@@ -974,7 +974,7 @@ class GP():
         #get Kinv/KVinvY, LU, Chol, logdet(KV)
         if self.gp2Scale:
             #try fast but RAM intensive SuperLU first
-            if len(x_data) < 50000 and Ksparsity < 0.001:
+            if len(x_data) < 50000 and Ksparsity < 0.0001:
                 try:
                     LU = splu(KV.tocsc())
                     factorization_obj = ("LU", LU)
