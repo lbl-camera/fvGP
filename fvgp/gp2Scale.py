@@ -66,7 +66,7 @@ class gp2Scale():
 
         worker_info = list(covariance_dask_client.scheduler_info()["workers"].keys())
         if not worker_info: raise Exception("No workers available")
-        self.compute_workers = set(worker_info)
+        self.compute_workers = list(worker_info)
 
         scatter_data = self.x_data  ##data that can be scattered
         self.scatter_future = covariance_dask_client.scatter(
@@ -132,14 +132,25 @@ class gp2Scale():
         ##scattering
         results = []
         for i in range(0,len(ranges_ij),self.number_of_workers):
+            #r = list(map(self.harvest_result,
+            #              distributed.as_completed(client.map(
+            #                  partial(kernel_function,
+            #                          hyperparameters=hyperparameters,
+            #                          kernel=self.kernel),
+            #                  ranges_ij[i:i+self.number_of_workers],
+            #                  [self.scatter_future] * self.number_of_workers, retries=1),
+            #                  with_results=True)))
+            current_range_list = [x for x in ranges_ij[i:i+self.number_of_workers]]
             r = list(map(self.harvest_result,
-                          distributed.as_completed(client.map(
+                          distributed.as_completed(
+                              [client.submit(
                               partial(kernel_function,
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
-                              ranges_ij[i:i+self.number_of_workers],
-                              [self.scatter_future] * self.number_of_workers, resources={'thread': 1}, retries=1),
-                              with_results=True)))
+                                      current_range_list[j],
+                                      self.scatter_future, retries=1, workers = self.compute_workers[j]) for j in range(len(current_range_list))], with_results = True)
+                          ))
+
             results.extend(r)
 
         if self.info: print("All tasks submitted after", time.time() - st, flush = True)
