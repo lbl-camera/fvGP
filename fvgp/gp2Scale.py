@@ -138,7 +138,7 @@ class gp2Scale():
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
                               ranges_ij[i:i+self.number_of_workers],
-                              [self.scatter_future] * self.number_of_workers, workers=self.compute_workers, retries=1),
+                              [self.scatter_future] * self.number_of_workers, resources={'thread': 1}, retries=1),
                               with_results=True)))
             results.extend(r)
 
