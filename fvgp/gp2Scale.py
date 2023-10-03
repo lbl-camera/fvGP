@@ -70,7 +70,7 @@ class gp2Scale():
 
         scatter_data = self.x_data  ##data that can be scattered
         self.scatter_future = covariance_dask_client.scatter(
-            scatter_data,workers = self.compute_workers ,broadcast = False)  ##scatter the data to compute workers, not the actor
+            scatter_data,workers = self.compute_workers ,broadcast = False)  ##scatter the data to compute workers, TEST if broadcast is better
 
     ##################################################################################
     ##################################################################################
@@ -132,14 +132,6 @@ class gp2Scale():
         ##scattering
         results = []
         for i in range(0,len(ranges_ij),self.number_of_workers):
-            #r = list(map(self.harvest_result,
-            #              distributed.as_completed(client.map(
-            #                  partial(kernel_function,
-            #                          hyperparameters=hyperparameters,
-            #                          kernel=self.kernel),
-            #                  ranges_ij[i:i+self.number_of_workers],
-            #                  [self.scatter_future] * self.number_of_workers, retries=1),
-            #                  with_results=True)))
             current_range_list = [x for x in ranges_ij[i:i+self.number_of_workers]]
             r = list(map(self.harvest_result,
                           distributed.as_completed(
@@ -524,7 +516,7 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     k = kernel(x1, x2, hps, None)
     k_sparse = sparse.coo_matrix(k)
 
-    print("kernel compute time: ", time.time() - st, flush = True)
+    #print("kernel compute time: ", time.time() - st, flush = True)
     data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
 
     # mask lower triangular values when current chunk spans diagonal
