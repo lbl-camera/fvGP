@@ -140,7 +140,8 @@ class gp2Scale():
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
                                       current_range_list[j],
-                                      self.scatter_future, retries=1, workers = self.compute_workers[j]) for j in range(len(current_range_list))], with_results = True)
+                                      #self.scatter_future, retries=1, workers = self.compute_workers[j]) for j in range(len(current_range_list))], with_results = True)
+                                      self.scatter_future, retries=1) for j in range(len(current_range_list))], with_results = True)
                           ))
 
             results.extend(r)
