@@ -276,7 +276,7 @@ class gpm2Scale(gp2Scale): # pragma: no cover
         if self.info:
             sp = self.SparsePriorCovariance.get_result().result()
             print("gp2Scale successfully initiated, here is some info about the prior covariance matrix:")
-            print("non zero elements: ", sp.nnz))
+            print("non zero elements: ", sp.nnz)
             print("Size in GBits:     ", sp.data.nbytes/1e9)
             print("Sparsity: ",sp.nnz/float(self.point_number)**2)
             if self.point_number <= 5000:
