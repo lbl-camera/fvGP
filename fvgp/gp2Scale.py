@@ -144,8 +144,8 @@ class gp2Scale():
 
         #########
         if self.info:
-            print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().count_nonzero(),flush = True)
-            print("Sparsity: ",self.SparsePriorCovariance.get_result().result().count_nonzero()/float(self.point_number)**2,flush = True)
+            print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().nzz,flush = True)
+            print("Sparsity: ",self.SparsePriorCovariance.get_result().result().nnz/float(self.point_number)**2,flush = True)
 
 
     def free_workers(self, futures, finished_futures):
@@ -276,9 +276,9 @@ class gpm2Scale(gp2Scale): # pragma: no cover
         if self.info:
             sp = self.SparsePriorCovariance.get_result().result()
             print("gp2Scale successfully initiated, here is some info about the prior covariance matrix:")
-            print("non zero elements: ", sp.count_nonzero())
+            print("non zero elements: ", sp.nnz))
             print("Size in GBits:     ", sp.data.nbytes/1e9)
-            print("Sparsity: ",sp.count_nonzero()/float(self.point_number)**2)
+            print("Sparsity: ",sp.nnz/float(self.point_number)**2)
             if self.point_number <= 5000:
                 print("Here is an image:")
                 plt.imshow(sp.toarray())
@@ -357,8 +357,8 @@ class gpm2Scale(gp2Scale): # pragma: no cover
 
         #########
         if self.info: 
-            print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().count_nonzero())
-            print("Sparsity: ",self.SparsePriorCovariance.get_result().result().count_nonzero()/float(self.point_number)**2)
+            print("total prior covariance compute time: ", time.time() - start_time, "Non-zero count: ", self.SparsePriorCovariance.get_result().result().nnz)
+            print("Sparsity: ",self.SparsePriorCovariance.get_result().result().nnz/float(self.point_number)**2)
 
 
     def free_workers(self, futures, finished_futures):
