@@ -100,27 +100,27 @@ class gp2Scale():
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
 
         ##scattering
-        #results = list(map(self.harvest_result,
-        #                  distributed.as_completed(client.map(
-        #                      partial(kernel_function,
-        #                              hyperparameters=hyperparameters,
-        #                              kernel=self.kernel),
-        #                      ranges_ij,
-        #                      [self.scatter_future] * len(ranges_ij)),
-        #                      with_results=True)))
-        results = []
-        steps = self.number_of_workers
-        for i in range(0,len(ranges_ij),steps):
-            r = list(map(self.harvest_result,
+        results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
                               partial(kernel_function,
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
-                              ranges_ij[i:i + steps],
-                              [self.scatter_future] * len(ranges_ij[i:i + steps])),
+                              ranges_ij,
+                              [self.scatter_future] * len(ranges_ij)),
                               with_results=True)))
-
-            results.extend(r)
+        #results = []
+        #steps = self.number_of_workers
+        #for i in range(0,len(ranges_ij),steps):
+        #    r = list(map(self.harvest_result,
+        #                  distributed.as_completed(client.map(
+        #                      partial(kernel_function,
+        #                              hyperparameters=hyperparameters,
+        #                              kernel=self.kernel),
+        #                      ranges_ij[i:i + steps],
+        #                      [self.scatter_future] * len(ranges_ij[i:i + steps])),
+        #                      with_results=True)))
+#
+#            results.extend(r)
 
 
         #reshape the result set into COO components

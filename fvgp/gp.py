@@ -959,7 +959,7 @@ class GP():
         #get K
         if self.gp2Scale:
             st = time.time()
-            K = self.gp2Scale_obj.compute_covarianceM(hyperparameters, self.gp2Scale_dask_client)
+            K = self.gp2Scale_obj.compute_covarianceR(hyperparameters, self.gp2Scale_dask_client)
             Ksparsity = float(K.nnz)/float(len(x_data)**2)
             if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", Ksparsity, flush = True)
         else: K = self._compute_K(hyperparameters)
@@ -1287,6 +1287,8 @@ class GP():
             If True the compuation of the posterior covariance matrix is avoided which can save compute time.
             In that case the return will only provide the variance at the input points.
             Default = False.
+        add_noise : bool, optional
+            If True the noise variances will be added to the posterior variances. Default = False.
         Return
         ------
         solution dictionary : dict
@@ -1697,6 +1699,9 @@ class GP():
         """
         Function to calculate the mutual information between
         the random variables f(x_data) and f(x_pred).
+        The mutual information is always positive, as it is a KL divergence, and is bounded
+        from below by 0. The maxima are expected at the data points. Zero is expected far from the
+        data support.
         Parameters
         ----------
         x_pred : np.ndarray
@@ -1734,8 +1739,12 @@ class GP():
         """
         Function to calculate the interaction information between
         the random variables f(x_data) and f(x_pred). This is the mutual information
-        of each f(x_pred) with f(x_data). It is also called the MUltiinformation.
-        It best used when several prediction points are supposed to be mutually aware.
+        of each f(x_pred) with f(x_data). It is also called the Multiinformation.
+        It is best used when several prediction points are supposed to be mutually aware.
+        The total correlation is always positive, as it is a KL divergence, and is bounded
+        from below by 0. The maxima are expected at the data points. Zero is expected far from the
+        data support.
+
         Parameters
         ----------
         x_pred : np.ndarray
@@ -1772,11 +1781,12 @@ class GP():
     ###########################################################################
     def shannon_information_gain(self, x_pred, x_out = None):
         """
-        Function to compute the shannon-information --- the predicted drop in entropy --- given
+        Function to compute the shannon-information --- a well-behaved function 
+        of the predicted drop in entropy --- given
         a set of points. The shannon_information gain is a scalar, it is proportionate to
         the mutual infomation of the two random variables f(x_pred) and f(x_data).
-        The mutual information is always positive, as it is a KL divergence, and is bound
-        from below by 0. The maxima are expcetd at the data points. Zero is expected far from the
+        The mutual information is always positive, as it is a KL divergence, and is bounded
+        from below by 0. The maxima are expected at the data points. Zero is expected far from the
         data support. This shannon information gain is exp(-total correlation).
         Parameters
         ----------
