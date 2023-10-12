@@ -61,7 +61,6 @@ class gp2Scale():
 
     def compute_covariance(self, hyperparameters, client, batched=False):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
-
         NUM_RANGES = self.num_batches
         ranges = self.ranges(len(self.x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
@@ -198,6 +197,7 @@ class gpm2Scale(gp2Scale):  # pragma: no cover
             print("non zero elements: ", sp.nnz)
             print("Size in GBits:     ", sp.data.nbytes / 1e9)
             print("Sparsity: ", sp.nnz / float(self.point_number) ** 2)
+
             if self.point_number <= 5000:
                 print("Here is an image:")
                 plt.imshow(sp.toarray())
@@ -276,7 +276,6 @@ class gpm2Scale(gp2Scale):  # pragma: no cover
         # del scatter_future
 
         #########
-
     def free_workers(self, futures, finished_futures):
         free_workers = set()
         remaining_futures = []
