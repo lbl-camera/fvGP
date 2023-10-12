@@ -26,7 +26,7 @@ echo ${port}
 echo "starting scheduler"
 dask-scheduler --no-dashboard --no-show --host ${hn} --port ${port} &
 echo "starting workers"
-srun -o dask_worker_info.txt dask-worker ${hn}:${port} &
+srun -o dask_worker_info.txt dask-worker ${hn}:${port} --nthreads 1 &
 echo "starting gp2Scale"
-python -u run_gp2ScaleGPU.py ${hn}:${port} ${number_of_workers}
+python -u gp2Scale_example_HPC_RunScript.py ${hn}:${port} ${number_of_workers}
 

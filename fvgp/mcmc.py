@@ -66,6 +66,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
 
     start_time = time.time()
     n_updates = max(n_updates,2)
+    if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
     if x0 is None: x0 = np.ones((len(bounds)))
     if prior_args is None: prior_args = bounds
     if prior_fn is None: prior_fn = prior_func
@@ -75,23 +76,23 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
     ctime = []
     if type(x0).__module__!='numpy' or isinstance(x0, np.float64):
         x0 = np.array(x0)
-    p = x0.size
+    p = len(x0)
     invalid = False
     # If the supplied proposal covariance matrix is either not given or invalid,
     # just use the identity.
     if np.any(np.isnan(prop_Sigma)) or prop_Sigma.size != p**2:
-        prop_Sigma = np.eye(p)
-        prop_C = np.eye(p)
+        axis_std = np.linalg.norm(bounds, axis = 1)/10.
+        prop_Sigma = np.diag(axis_std**2)
+        prop_C = np.linalg.cholesky(prop_Sigma)
         invalid = True
     else:
         try:
             # Initialize prop_C
             prop_C = np.linalg.cholesky(prop_Sigma)
-        except  np.linalg.LinAlgError:
+        except np.linalg.LinAlgError:
             prop_Sigma = np.eye(p)
             prop_C = np.eye(p)
             invalid = True
-    #if invalid: print("Invalid or missing proposal covariance matrix.  Using identity.\n")
     # Initialize sigma_m to the rule of thumb
     sigma_m = 2.4**2/p
     r_hat = 0
@@ -108,7 +109,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
         prop_Sigma_trace[0,:,:] = prop_Sigma
     # Initialize Metropolis
     theta = x0
-    likelihood = likelihood_fn(theta)
+    likelihood = likelihood_fn(hyperparameters = theta)
     prior = prior_fn(theta, prior_args)
     #########################################################
     # Begin main loop
@@ -116,7 +117,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
         theta_star= theta + sigma_m * np.random.standard_normal(p) @ prop_C
         prior_star = prior_fn(theta_star, prior_args)
         if prior_star != -np.inf:
-            likelihood_star = likelihood_fn(theta_star)
+            likelihood_star = likelihood_fn(hyperparameters = theta_star)
             if np.isnan(likelihood_star): likelihood_star = -np.inf
             metr_ratio = np.exp(prior_star + likelihood_star -
                                   prior - likelihood)
@@ -146,8 +147,6 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
                         check_chol_cont = False
                     except  np.linalg.LinAlgError:
                         prop_Sigma = prop_Sigma + eps*np.eye(p)
-                        #print("Oops. Proposal covariance matrix is now:\n")
-                        #print(prop_Sigma)
         # Update the trace objects
         trace[:, i] = theta
         x = np.asarray(trace.T)
@@ -159,7 +158,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
             prop_Sigma_trace[i,:,:] = prop_Sigma
         # Echo every 100 iterations
         if info:
-            if (i % 100) == 0: print("Finished "+str(i)+ " out of " + str(n_updates), " iterations.\n")
+            if (i % 100) == 0: print("Finished "+str(i)+ " out of " + str(n_updates), " iterations. f(x)=",likelihood)
         if len(x)>201 and np.linalg.norm(np.mean(x[-100:],axis = 0)-np.mean(x[-200:-100],axis = 0)) < 0.01 * np.linalg.norm(np.mean(x[-100:],axis = 0)): break
     # End main loop
     #########################################################
@@ -176,10 +175,9 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
     return  {"f(x)": f[arg_max],
              "x":x[arg_max],
              "F":f,
-             "distribution": x[int(len(x) - (len(x)/10)):], 
+             "stripped distribution": x[int(len(x) - (len(x)/10)):], 
              "full distribution": x,
              "distribution mean": np.mean(x[int(len(x) - (len(x)/10)):],axis = 0),
-             "distribution var":   np.var(x[int(len(x) - (len(x)/10)):],axis = 0),
-             "compute time" : ctime,
-             "meta": res}
+             "distribution var":  np.var(x[int(len(x) - (len(x)/10)):],axis = 0),
+             "compute time" : ctime}
 
