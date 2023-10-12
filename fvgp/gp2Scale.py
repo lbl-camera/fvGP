@@ -10,38 +10,6 @@ import numpy as np
 import scipy.sparse as sparse
 
 class gp2Scale():
-    """
-    This class allows the user to scale GPs up to millions of datapoints. There is full high-performance-computing
-    support through DASK.
-
-    Parameters
-    ----------
-    x_data : np.ndarray
-        The point positions. Shape (V x D), where D is the `input_space_dim`.
-    batch_size : int, optional
-        The covariance is divided into batches of the defined size for distributed computing. Default = 10000
-    LUtimeout : int, optional (future release)
-        Controls the timeout for the LU decomposition.
-    gp_kernel_function : Callable, optional
-        A function that calculates the covariance between datapoints. It accepts as input x1 (a V x D array of positions),
-        x2 (a U x D array of positions), hyperparameters (a 1-D array of length D+1 for the default kernel), and a
-        `gpcam.gp_optimizer.GPOptimizer` instance. The default is a stationary anisotropic kernel
-        (`fvgp.gp.GP.default_kernel`).
-    gp_mean_function : Callable, optional
-        A function that evaluates the prior mean at an input position. It accepts as input
-        an array of positions (of size V x D), hyperparameters (a 1-D array of length D+1 for the default kernel)
-        and a `gpcam.gp_optimizer.GPOptimizer` instance. The return value is a 1-D array of length V. If None is provided,
-        `fvgp.gp.GP.default_mean_function` is used.
-        a finite difference scheme is used.
-    covariance_dask_client : dask.distributed.client, optional
-        The client used for the covariance computation. If none is provided a local client will be used.
-    info : bool, optional
-        Controls the output of the algorithm for tests. The default is False
-    args : user defined, optional
-        These optional arguments will be available as attribute in kernel and mean function definitions.
-
-    """
-
     def __init__(
         self,
         x_data,
@@ -91,7 +59,7 @@ class gp2Scale():
         step = N / nb
         return [(round(step * i), round(step * (i + 1))) for i in range(nb)]
 
-    def compute_covarianceR(self, hyperparameters, client, batched=True):  # pragma: no cover
+    def compute_covariance(self, hyperparameters, client, batched=True):  # pragma: no cover
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
         NUM_RANGES = self.num_batches
@@ -118,20 +86,6 @@ class gp2Scale():
                               ranges_ij,
                               [self.scatter_future] * len(ranges_ij)),
                               with_results=True)))
-        #results = []
-        #steps = self.number_of_workers
-        #for i in range(0,len(ranges_ij),steps):
-        #    r = list(map(self.harvest_result,
-        #                  distributed.as_completed(client.map(
-        #                      partial(kernel_function,
-        #                              hyperparameters=hyperparameters,
-        #                              kernel=self.kernel),
-        #                      ranges_ij[i:i + steps],
-        #                      [self.scatter_future] * len(ranges_ij[i:i + steps])),
-        #                      with_results=True)))
-#
-#            results.extend(r)
-
 
         #reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
@@ -141,45 +95,6 @@ class gp2Scale():
                          np.hstack([i_s, j_s[diagonal_mask]]), \
                          np.hstack([j_s, i_s[diagonal_mask]])
         return sparse.coo_matrix((data, (i_s, j_s)))
-
-
-    def compute_covarianceM(self, hyperparameters, client):  # pragma: no cover
-        """computes the covariance matrix from the kernel on HPC in sparse format"""
-
-        st = time.time()
-        NUM_RANGES = self.num_batches
-        ranges = self.ranges(len(self.x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
-        ranges_ij = list(
-            itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
-        ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
-
-        ##scattering
-        results = []
-        for i in range(0,len(ranges_ij),self.number_of_workers):
-            current_range_list = [x for x in ranges_ij[i:i+self.number_of_workers]]
-            r = list(map(self.harvest_result,
-                          distributed.as_completed(
-                              [client.submit(
-                              partial(kernel_function,
-                                      hyperparameters=hyperparameters,
-                                      kernel=self.kernel),
-                                      current_range_list[j],
-                                      self.scatter_future, retries=1, workers = self.compute_workers[j]) for j in range(len(current_range_list))], with_results = True)
-                          ))
-            results.extend(r)
-
-        if self.info: print("All tasks submitted after", time.time() - st, flush = True)
-
-        #reshape the result set into COO components
-        data, i_s, j_s = map(np.hstack, zip(*results))
-        # mirror across diagonal
-        diagonal_mask = i_s != j_s
-        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
-                         np.hstack([i_s, j_s[diagonal_mask]]), \
-                         np.hstack([j_s, i_s[diagonal_mask]])
-        if self.info: print("All tasks included", time.time() - st, flush = True)
-        return sparse.coo_matrix((data, (i_s, j_s)))
-
 
 
     @staticmethod

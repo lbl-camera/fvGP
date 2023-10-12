@@ -959,7 +959,7 @@ class GP():
         #get K
         if self.gp2Scale:
             st = time.time()
-            K = self.gp2Scale_obj.compute_covarianceR(hyperparameters, self.gp2Scale_dask_client)
+            K = self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
             Ksparsity = float(K.nnz)/float(len(x_data)**2)
             if self.info: print("Transferring the covariance matrix to host done after ",time.time()-st," seconds. sparsity = ", Ksparsity, flush = True)
         else: K = self._compute_K(hyperparameters)
@@ -1715,7 +1715,7 @@ class GP():
         solution dictionary : {}
             Information gain of collective points.
         """
-        x_data, K = self.x_data.copy(), self.K.copy()
+        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
@@ -1724,7 +1724,7 @@ class GP():
 
 
 
-        k = self.kernel(x_data,x_pred,self.hyperparameters,self) 
+        k = self.kernel(x_data,x_pred,self.hyperparameters,self)
         kk = self.kernel(x_pred, x_pred,self.hyperparameters,self) + (np.identity(len(x_pred)) * 1e-9)
 
 
@@ -1758,7 +1758,7 @@ class GP():
         solution dictionary : {}
             Information gain of collective points.
         """
-        x_data, K = self.x_data.copy(), self.K.copy()
+        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
         if isinstance(x_pred,np.ndarray):
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
