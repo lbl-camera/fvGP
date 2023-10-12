@@ -85,12 +85,13 @@ class gp2Scale():
         Db = float(self.num_batches)
         return 0.5 * Db * (Db + 1.)
 
-    def ranges(self, N, nb):
+    @staticmethod
+    def ranges(N, nb):
         """ splits a range(N) into nb chunks defined by chunk_start, chunk_end """
         step = N / nb
         return [(round(step * i), round(step * (i + 1))) for i in range(nb)]
 
-    def compute_covarianceR(self, hyperparameters, client):  # pragma: no cover
+    def compute_covarianceR(self, hyperparameters, client, batched=True):  # pragma: no cover
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
         NUM_RANGES = self.num_batches
@@ -98,11 +99,20 @@ class gp2Scale():
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
+        if batched:
+            # number of batches shouldn't be less than the number of workers
+            batches = min(len(client.cluster.workers), len(ranges_ij))
+            # split ranges_ij into roughly equal batches
+            ranges_ij = [ranges_ij[i::batches] for i in range(batches)]
+
+            kernel_caller = kernel_function_batched
+        else:
+            kernel_caller = kernel_function
 
         ##scattering
         results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
-                              partial(kernel_function,
+                              partial(kernel_caller,
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
                               ranges_ij,
@@ -533,3 +543,21 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
         return data[mask], rows[mask], cols[mask]
     else:
         return data, rows, cols
+
+
+def kernel_function_batched(range_ijs, scatter_future, hyperparameters, kernel):
+    """
+    Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the covariance matrix being calculated.
+    Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
+    """
+    data = []
+    rows = []
+    cols = []
+
+    for range_ij in range_ijs:
+        data_ij, rows_ij, cols_ij = kernel_function(range_ij, scatter_future, hyperparameters, kernel)
+        data.append(data_ij)
+        rows.append(rows_ij)
+        cols.append(cols_ij)
+
+    return np.hstack(data), np.hstack(rows), np.hstack(cols)
