@@ -59,7 +59,7 @@ class gp2Scale():
         step = N / nb
         return [(round(step * i), round(step * (i + 1))) for i in range(nb)]
 
-    def compute_covariance(self, hyperparameters, client, batched=True):  # pragma: no cover
+    def compute_covariance(self, hyperparameters, client, batched=False):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
         NUM_RANGES = self.num_batches
