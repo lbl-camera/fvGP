@@ -51,7 +51,6 @@ def test_single_task_init_basic():
     res = my_gp1.posterior_covariance(x_pred)
     res = my_gp1.posterior_covariance_grad(x_pred,direction=0)
     res = my_gp1.gp_entropy(x_pred)
-    res = my_gp1.shannon_information_gain(x_pred)
     res = my_gp1.squared_exponential_kernel(1,1)
     res = my_gp1.squared_exponential_kernel_robust(1,1)
     res = my_gp1.exponential_kernel(1,1)
@@ -87,14 +86,14 @@ def test_train_basic():
     res = my_gp1.joint_gp_prior_grad(np.random.rand(10,len(x_data[0])),0)
     res = my_gp1.gp_entropy(np.random.rand(10,len(x_data[0])))
     res = my_gp1.gp_entropy_grad(np.random.rand(10,len(x_data[0])),0)
+    res = my_gp1.gp_relative_information_entropy(np.random.rand(10,len(x_data[0])))
+    res = my_gp1.gp_relative_information_entropy_set(np.random.rand(10,len(x_data[0])))
 
     A = np.random.rand(10,10)
     B = A.T @ A
     res = my_gp1.entropy(B)
     res = my_gp1.gp_kl_div(np.random.rand(10,len(x_data[0])), np.random.rand(10), B)
     res = my_gp1.gp_kl_div_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B,0)
-    res = my_gp1.shannon_information_gain(np.random.rand(10,len(x_data[0])))
-    res = my_gp1.shannon_information_gain_vec(np.random.rand(10,len(x_data[0])))
     res = my_gp1.posterior_probability(np.random.rand(10,len(x_data[0])), np.random.rand(10), B)
     res = my_gp1.posterior_probability_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B, direction = 0)
 
