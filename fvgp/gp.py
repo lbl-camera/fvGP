@@ -1835,68 +1835,6 @@ class GP():
         return {"x":x_pred,
                 "RIE":RIE}
 
-#    def shannon_information_gain(self, x_pred, x_out = None):
-#        """
-#        Function to compute the shannon-information --- a well-behaved function 
-#        of the predicted drop in entropy --- given
-#        a set of points. The shannon_information gain is a scalar, it is proportionate to
-#        the mutual infomation of the two random variables f(x_pred) and f(x_data).
-#        The mutual information is always positive, as it is a KL divergence, and is bounded
-#        from below by 0. The maxima are expected at the data points. Zero is expected far from the
-#        data support. This shannon information gain is exp(-total correlation).
-#        Parameters
-#        ----------
-#        x_pred : np.ndarray
-#            A numpy array of shape (V x D), interpreted as  an array of input point positions.
-#        x_out : np.ndarray, optional
-#            Output coordinates in case of multi-task GP use; a numpy array of size (N x L), where N is the number of output points,
-#            and L is the dimensionality of the output space.
-#
-#        Return
-#        -------
-#        solution dictionary : {}
-#            Information gain of collective points.
-#        """
-#        if isinstance(x_pred,np.ndarray):
-#            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-#            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
-#            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-#        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-#
-#
-#        return {"x": x_pred,
-#                "sig":np.exp(-self.gp_total_correlation(x_pred, x_out = None)["total correlation"])}
-#
-#    ###########################################################################
-#    def shannon_information_gain_vec(self, x_pred, x_out = None):
-#        """
-#        Function to compute the shannon-information gain of a set of points,
-#        but per point, in comparison to fvgp.GP.shannon_information_gain().
-#        In this case, the information_gain is a vector.
-#        Parameters
-#        ----------
-#            x_pred: 1d or 2d numpy array of points, note, these are elements of the
-#                    index set which results from a cartesian product of input and output space
-#        Return
-#        -------
-#        solution dictionary : {}
-#            Informatino gain per point.
-#        """
-#        if isinstance(x_pred,np.ndarray):
-#            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-#            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
-#            if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
-#        elif x_out is not None: raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-#
-#
-#
-#        sig = np.zeros((len(x_pred)))
-#        for i in range(len(x_pred)):
-#            sig[i] = np.exp(-self.gp_mutual_information(x_pred[i].reshape(1,len(x_pred[i])), x_out = None)["mutual information"])
-#
-#        return {"x": x_pred,
-#                "sig(x)":sig}
-
     ###########################################################################
     def posterior_probability(self, x_pred, comp_mean, comp_cov, x_out = None):
         """
