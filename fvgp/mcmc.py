@@ -63,7 +63,6 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
                           r_opt = .234, c_0 = 10, c_1 = .8,
                           K = 10, *argv):
 
-
     start_time = time.time()
     n_updates = max(n_updates,2)
     if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
