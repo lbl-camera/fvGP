@@ -3,7 +3,7 @@
 fvGP is an API for flexible HPC single and multi-task Gaussian processes over Euclidean and non-Euclidean (strings, molecules, materials) spaces.
 
 The [GP](GP.md) class is the core of most the functionality in fvGP
-and therefore in [gpCAM](https://gpcam.readthedocs.io)
+and therefore in [gpCAM](https://gpcam.readthedocs.io).
 
 fvGP can use [HGDL](https://hgdl.readthedocs.io) optimization on supercomputers for advanced GP use cases.
 

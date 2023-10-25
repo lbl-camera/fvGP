@@ -14,7 +14,7 @@ Python package for highly flexible function-valued Gaussian processes (fvGP)
 Specialties: Extreme-Scale GPs, GPs Tailored for HPC training, Advanced Kernel Designs, Domain-Aware Stochastic Function Approximation
 Coming soon: All those advancements for stochastic manifold learning
 
-fvGP hold the world record for exact large-scale Gaussian Processes!
+fvGP holds the world record for exact large-scale Gaussian Processes!
 ## Credits
 
 This package uses the HGDL package of David Perryman and Marcus Noack, which
