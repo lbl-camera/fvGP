@@ -9,3 +9,5 @@ fvGP can use [HGDL](https://hgdl.readthedocs.io) optimization on supercomputers 
 
 The [fvGP](fvGP.md) class is a multi-output GP framework
 which inherits most of its functionality from the [GP](GP.md) base class.
+
+The fvGP package holds the world-record for exact scalable GPs. It was run on 5 million data points in 2023.
