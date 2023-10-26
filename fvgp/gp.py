@@ -55,13 +55,17 @@ class GP():
     init_hyperparameters : np.ndarray, optional
         Vector of hyperparameters used by the GP initially.
         This class provides methods to train hyperparameters.
-        The default is an array of ones, with a shape appropriate
+        The default is a random draw from a uniform distribution 
+        within hyperparmeter_bounds, with a shape appropriate
         for the default kernel (D + 1), which is an anisotropic Matern
-        kernel with automatic relevance determination (ARD).
+        kernel with automatic relevance determination (ARD). If sparse_node or gp2Scale is
+        enabled, the default kernel changes to the anisotropic Wendland kernel.
     hyperparameter_bounds : np.ndarray, optional
         A 2d numpy array of shape (N x 2), where N is the number of needed hyperparameters.
-        The default is None, in that case hyperparameter_bounds have to be specified
-        in the train calls or default bounds are used. Those only work for the default kernel.
+        The default is None, in which case the hyperparameter_bounds are estimed fromt he domain size
+        and the initial y_data. If normalize_y is True or the data changes significantly,
+        the hyperparameters and the bounds should be changed/retrained. Initial hyperparameters and bounds
+        can also be set in the train calls. The default only works for the default kernels.
     noise_variances : np.ndarray, optional
         An numpy array defining the uncertainties/noise in the data
         `y_data` in form of a point-wise variance. Shape (len(y_data), 1) or (len(y_data)).
@@ -213,7 +217,10 @@ class GP():
         ########################################
         if isinstance(x_data,np.ndarray):
             if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
-            if input_space_dim != len(x_data[0]): raise ValueError("input space dimensions are not in agreement with the point positions given")
+            if input_space_dim != len(x_data[0]): raise ValueError("The input space dimension is not in agreement with the provided x_data.")
+
+        if not isinstance(x_data,np.ndarray) and (init_hyperparameters is None or hyperparameter_bounds is None):
+            raise Exception("You are running fvGP on non-standrad inputs. Please provide initial hyperparameters and hyperparameter bounds")
         if np.ndim(y_data) == 2: y_data = y_data[:,0]
         if compute_device == 'gpu':
             try: import torch
@@ -233,13 +240,26 @@ class GP():
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
 
+        if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function)) and init_hyperparameters is None:
+            warnings.warn("You have provided callables for kernel, mean, or noise functions but no initial hyperparameters.", stacklevel=2)
+            warnings.warn("It is likley they have to be defined for a success initialization.", stacklevel=2)
+
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        if init_hyperparameters is None: init_hyperparameters = np.ones((input_space_dim + 1))
-        self.hyperparameters = init_hyperparameters
+        if hyperparameter_bounds is None:
+            if callable(gp_kernel_function):
+                warnings.warn("You have not provided hyperparameter bounds but a kernel function. It is likely that your kernel needs user defined hyperparameters.", stacklevel=2)
+            hyperparameter_bounds = np.zeros((input_space_dim+1,2))
+            hyperparameter_bounds[0] = np.array([np.var(y_data)/100.,np.var(y_data) * 10.])
+            for i in range(input_space_dim):
+                range_xi = np.max(x_data[:,i]) - np.min(x_data[:,i])
+                hyperparameter_bounds[i+1] = np.array([range_xi/100.,range_xi*10.])
         self.hyperparameter_bounds = hyperparameter_bounds
 
+        if init_hyperparameters is None:
+            init_hyperparameters = np.random.uniform(low = self.hyperparameter_bounds[:,0], high = self.hyperparameter_bounds[:,1], size = len(self.hyperparameter_bounds))
+        self.hyperparameters = init_hyperparameters
         ##########################################
         ##############preps for sparse mode#######
         ##########################################
@@ -257,7 +277,7 @@ class GP():
         if gp2Scale:
             if gp2Scale_dask_client is None:
                 gp2Scale_dask_client = Client()
-                warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. Set to distributed.Client()", stacklevel=2)
+                warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. Set to distributed.Client().", stacklevel=2)
             self.gp2Scale_dask_client = gp2Scale_dask_client
 
             if not callable(gp_kernel_function):
@@ -275,12 +295,13 @@ class GP():
             warnings.warn("WARNING: gp2Scale activated. Only training via MCMC will be performed. \
                     Only noise variances (no noise covariances can be considered). \
                     A customed sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.", stacklevel=2)
+
         ###########################################
         ###assign kernel, mean and noise functions#
         ###########################################
         #noise
         if noise_variances is not None and callable(gp_noise_function):
-            warnings.warn("Noise function and measurement noise provided. noise_variances set to None", stacklevel=2)
+            warnings.warn("Noise function and measurement noise provided. noise_variances set to None.", stacklevel=2)
             noise_variances = None
         if callable(gp_noise_function): self.noise_function = gp_noise_function
         elif noise_variances is not None: self.noise_function = None
@@ -315,6 +336,7 @@ class GP():
         if gp_kernel_function is None and (gp_noise_function is not None or gp_mean_function is not None):
             warnings.warn("You are using the default kernel but a user-defined mean or noise function. \
                     Make sure the right hyperparameter indices are used in all functions. The default kernel function uses the first D + 1 hyperparameters", stacklevel=2)
+
         ##########################################
         #######prepare noise covariances##########
         ##########################################
@@ -333,12 +355,15 @@ class GP():
             self.V = np.diag(noise_variances)
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
+
         #########################################
         ###########normalization#################
         #########################################
         if self.normalize_y:
+            warnings.warn("y_data and noise normalized. Make sure your hyperparameters and their bounds are still valid. They will not be recomputed.")
             self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
             self.V = (1./(self.y_max-self.y_min)**2) * self.V
+
         ##########################################
         #compute the prior########################
         ##########################################
@@ -368,7 +393,7 @@ class GP():
         """
         if isinstance(x_data,np.ndarray):
             if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
-            if self.input_space_dim != len(x_data[0]): raise ValueError("input space dimensions are not in agreement with the point positions given")
+            if self.input_space_dim != len(x_data[0]): raise ValueError("The input space dimension id not in agreement with the provided x_data.")
         if np.ndim(y_data) == 2: y_data = y_data[:,0]
 
         self.x_data = x_data
@@ -383,7 +408,7 @@ class GP():
                     covariance_dask_client = self.gp2Scale_dask_client,
                     info = self.info)
         ##########################################
-        #######prepare variances##################
+        #######prepare noise covariances##########
         ##########################################
         if noise_variances is not None and callable(self.noise_function):
             warnings.warn("Noise function and measurement noise provided. noise_variances set to None", stacklevel=2)
@@ -400,11 +425,13 @@ class GP():
             if any(noise_variances <= 0.0): raise Exception("Negative or zero measurement variances communicated to fvgp or derived from the data.")
             self.V = np.diag(noise_variances)
         else:
-            raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
+            raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array.")
+
         #########################################
         ###########normalization#################
         #########################################
         if self.normalize_y:
+            warnings.warn("y_data and noise normalized. Make sure your hyperparameters and their bounds are still valid. They will not be recomputed.")
             self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
             self.V = (1./(self.y_max-self.y_min)**2) * self.V
         ######################################
@@ -448,7 +475,7 @@ class GP():
             hyperparameter bounds.
         init_hyperparameters : np.ndarray, optional
             Initial hyperparameters used as starting location for all optimizers with local component.
-            The default is reusing the initial hyperparameters given at initialization
+            The default is a random draw from a uniform distribution within the bounds.
         method : str or Callable, optional
             The method used to train the hyperparameters. The options are `'global'`, `'local'`, `'hgdl'`, `'mcmc'`, and a callable.
             The callable gets an gp.GP instance and has to return a 1d np.array of hyperparameters.
@@ -472,17 +499,8 @@ class GP():
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
         """
-        ############################################
-        if init_hyperparameters is None:
-            init_hyperparameters = np.array(self.hyperparameters)
-        if hyperparameter_bounds is None:
-            if self.hyperparameter_bounds is None:
-                warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance", stacklevel=2)
-                hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
-                hyperparameter_bounds[:] = np.array([0.00001,1e8])
-            else:
-                hyperparameter_bounds = self.hyperparameter_bounds
-
+        if hyperparameter_bounds is None: hyperparameter_bounds = self.hyperparameter_bounds.copy()
+        if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low = hyperparameter_bounds[:,0], high = hyperparameter_bounds[:,1], size = len(hyperparameter_bounds))
 
         self.hyperparameters = self._optimize_log_likelihood(
             init_hyperparameters,
@@ -520,7 +538,7 @@ class GP():
             with all bounds defined practically as [0.00001, inf]. This choice is only recommended in very basic scenarios.
         init_hyperparameters : np.ndarray, optional
             Initial hyperparameters used as starting location for all optimizers with local component.
-            The default is reusing the initial hyperparameters given at initialization
+            The default is a random draw from a uniform distribution within the bounds.
         max_iter : int, optional
             Maximum number of epochs for HGDL. Default = 10000.
         local_optimizer : str, optional
@@ -539,15 +557,8 @@ class GP():
         """
         if self.gp2Scale: raise Exception("gp2Scale does not allow asynchronous training!")
         if dask_client is None: dask_client = distributed.Client()
-        if init_hyperparameters is None:
-            init_hyperparameters = np.array(self.hyperparameters)
-        if hyperparameter_bounds is None:
-            if self.hyperparameter_bounds is None:
-                warnings.warn("You have not provided hyperparameter bounds. Standard ones will be used but this might lead to suboptimal performance", stacklevel=2)
-                hyperparameter_bounds = np.zeros((len(init_hyperparameters),2))
-                hyperparameter_bounds[:] = np.array([0.00001,1e8])
-            else:
-                hyperparameter_bounds = self.hyperparameter_bounds
+        if hyperparameter_bounds is None: hyperparameter_bounds = self.hyperparameter_bounds.copy()
+        if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low = hyperparameter_bounds[:,0], high = hyperparameter_bounds[:,1], size = len(hyperparameter_bounds))
 
         opt_obj = self._optimize_log_likelihood_async(
             init_hyperparameters,
@@ -685,6 +696,9 @@ class GP():
         dask_client):
 
         logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: {}", starting_hps)
+        if not self._in_bounds(starting_hps,hp_bounds):
+            raise Exception("Starting positions outside of optimization bounds.")
+
         opt_obj = HGDL(self.neg_log_likelihood,
                     self.neg_log_likelihood_gradient,
                     hp_bounds,
@@ -710,6 +724,9 @@ class GP():
             local_optimizer,
             global_optimizer,
             dask_client = None):
+
+        if not self._in_bounds(starting_hps,hp_bounds):
+            raise Exception("Starting positions outside of optimization bounds.")
 
         if self.gp2Scale: method = 'mcmc'
         else:
@@ -2545,6 +2562,10 @@ class GP():
 
         x_pred = np.linspace(b[0],b[1],res).reshape(res,-1)
         return x_pred
+
+    def _in_bounds(self,v,bounds):
+        if any(v<bounds[:,0]) or any(v>bounds[:,1]): return False
+        return True
 
 ####################################################################################
 ####################################################################################
