@@ -62,7 +62,7 @@ class GP():
         enabled, the default kernel changes to the anisotropic Wendland kernel.
     hyperparameter_bounds : np.ndarray, optional
         A 2d numpy array of shape (N x 2), where N is the number of needed hyperparameters.
-        The default is None, in which case the hyperparameter_bounds are estimed fromt he domain size
+        The default is None, in which case the hyperparameter_bounds are estimated from the domain size
         and the initial y_data. If normalize_y is True or the data changes significantly,
         the hyperparameters and the bounds should be changed/retrained. Initial hyperparameters and bounds
         can also be set in the train calls. The default only works for the default kernels.
@@ -124,25 +124,25 @@ class GP():
         A function that evaluates the gradient of the ``gp_noise_function'' at an input position with respect to the hyperparameters.
         It accepts as input an array of positions (of size N x D), hyperparameters (a 1d array of length D+1 for the default kernel)
         and a `fvgp.GP` instance. The return value is a 3-D array of shape (len(hyperparameters) x N x N). If None is provided, either
-        zeros are returned since the default noise function does not dpeend on hyperparametes. If ``gp_noise_function'' is provided but no gradient function,
+        zeros are returned since the default noise function does not depend on hyperparametes. If ``gp_noise_function'' is provided but no gradient function,
         a finite-difference approximation will be used.
-        The same rules regarding ram economoy as for the kernel definition apply here.
+        The same rules regarding ram economy as for the kernel definition apply here.
     normalize_y : bool, optional
         If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0. The default is False.
         Variances will be updated accordingly.
     sparse_mode : bool, optional
         When sparse_mode is enabled, the algorithm will use a user-defined kernel function or, if that's not provided, an anisotropic Wendland kernel
         and check for sparsity in the prior covariance. If sparsity is present, sparse operations will be used to speed up computations.
-        Caution: the covariace is still stored at first in a dense format. For more extreme scaling, check out the gp2Scale option.
+        Caution: the covariance is still stored at first in a dense format. For more extreme scaling, check out the gp2Scale option.
     gp2Scale: bool, optional
-        Turns on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advaced feature for HPC GPs up to 10
-        million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wemsland kernel which is compactly supported. The noise function will have
+        Turns on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advanced feature for HPC GPs up to 10
+        million data points. If gp2Scale is used, the default kernel is an anisotropic Wendland kernel which is compactly supported. The noise function will have
         to return a scipy.sparse matrix instead of a numpy array. There are a few more things to consider (read on); this is an advanced option.
         If no kernel is provided, the compute_device option should be revisited. The kernel will use the specified device to compute covariances.
         The default is False.
     gp2Scale_dask_client : dask.distributed.Client, optional
         A dask client for gp2Scale to distribute covariance computations over. Has to contain at least 3 workers.
-        On HPC architecture, this client is provided by the jobscript. Please have a look at the examples.
+        On HPC architecture, this client is provided by the job script. Please have a look at the examples.
         A local client is used as default.
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.

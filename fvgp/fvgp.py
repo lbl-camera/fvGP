@@ -52,7 +52,7 @@ class fvGP(GP):
         Dimensionality of the input space (D). If the input is non-Euclidean, the input dimensionality will be ignored.
     output_space_dim : int
         Integer specifying the number of dimensions of the output space. Most often 1. This is not the number of outputs/tasks.
-        For instance, a spectrum as output at each input is itslef a function over a 1d space but has many outputs.
+        For instance, a spectrum as output at each input is itself a function over a 1d space but has many outputs.
     output_number : int
         Number of output values.
     x_data : np.ndarray
@@ -96,7 +96,7 @@ class fvGP(GP):
         data points. It is a function of the form k(x1,x2,hyperparameters, obj).
         The input x1 is a N1 x Di+Do array of positions, x2 is a N2 x Di+Do
         array of positions, the hyperparameters argument
-        is a 1d array of length N depending on how many hyperpapameters are initialized, and
+        is a 1d array of length N depending on how many hyperparameters are initialized, and
         obj is an `fvgp.GP` instance. The default is a deep kernel with 2 hidden layers and
         a width of fvgp.fvGP.gp_deep_kernel_layer_width.
     gp_deep_kernel_layer_width : int, optional
@@ -135,19 +135,19 @@ class fvGP(GP):
         A function that evaluates the gradient of the ``gp_noise_function'' at an input position with respect to the hyperparameters.
         It accepts as input an array of positions (of size N x Di+Do), hyperparameters (a 1d array of length D+1 for the default kernel)
         and a `fvgp.GP` instance. The return value is a 3-D array of shape (len(hyperparameters) x N x N). If None is provided, either
-        zeros are returned since the default noise function does not dpeend on hyperparametes. If ``gp_noise_function'' is provided but no gradient function,
+        zeros are returned since the default noise function does not depend on hyperparametes. If ``gp_noise_function'' is provided but no gradient function,
         a finite-difference approximation will be used. 
-        The same rules regarding ram economoy as for the kernel definition apply here.
+        The same rules regarding ram economy as for the kernel definition apply here.
     normalize_y : bool, optional
         If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0. The default is False.
         Variances will be updated accordingly.
     sparse_mode : bool, optional
         When sparse_mode is enabled, the algorithm will use a user-defined kernel function or, if that's not provided, an anisotropic Wendland kernel
         and check for sparsity in the prior covariance. If sparsity is present, sparse operations will be used to speed up computations.
-        Caution: the covariace is still stored at first in a dense format. For more extreme scaling, check out the gp2Scale option.
+        Caution: the covariance is still stored at first in a dense format. For more extreme scaling, check out the gp2Scale option.
     gp2Scale: bool, optional
-        Turns on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advaced feature for HPC GPs up to 10
-        million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wemsland kernel which is compactly supported. The noise function will have
+        Turns on gp2Scale. This will distribute the covariance computations across multiple workers. This is an advanced feature for HPC GPs up to 10
+        million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wendland kernel which is compactly supported. The noise function will have
         to return a scipy.sparse matrix instead of a numpy array. There are a few more things to consider (read on); this is an advanced option.
         If no kernel is provided, the compute_device option should be revisited. The kernel will use the specified device to compute covariances.
         The default is False.
