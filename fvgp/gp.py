@@ -170,7 +170,7 @@ class GP():
     y_data : np.ndarray
         Datapoint values
     noise_variances : np.ndarray
-        Datapoint observation (co)variances.
+        Datapoint observation (co)variances
     hyperparameters : np.ndarray
         Current hyperparameters in use.
     K : np.ndarray
