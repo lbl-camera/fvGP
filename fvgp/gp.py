@@ -218,9 +218,14 @@ class GP():
         if isinstance(x_data,np.ndarray):
             if np.ndim(x_data) == 1: x_data = x_data.reshape(-1,1)
             if input_space_dim != len(x_data[0]): raise ValueError("The input space dimension is not in agreement with the provided x_data.")
+            self.non_Euclidean = False
+        else:
+            if not callable(gp_kernel_function): raise Exception("For GPs on non-Eucledian input spaces you need a user-defined kernel, hyperparameters, and hyperparameter_bounds.")
+            input_space_dim = 1
+            self.non_Euclidean = True
 
-        if not isinstance(x_data,np.ndarray) and (init_hyperparameters is None or hyperparameter_bounds is None):
-            raise Exception("You are running fvGP on non-standrad inputs. Please provide initial hyperparameters and hyperparameter bounds")
+        if self.non_Euclidean and (init_hyperparameters is None or hyperparameter_bounds is None):
+            raise Exception("You are running fvGP on non-Euclidean inputs. Please provide initial hyperparameters and hyperparameter bounds.")
         if np.ndim(y_data) == 2: y_data = y_data[:,0]
         if compute_device == 'gpu':
             try: import torch
@@ -247,9 +252,9 @@ class GP():
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        if hyperparameter_bounds is None:
+        if hyperparameter_bounds is None and not self.non_Euclidean:
             if callable(gp_kernel_function):
-                warnings.warn("You have not provided hyperparameter bounds but a kernel function. It is likely that your kernel needs user defined hyperparameters.", stacklevel=2)
+                raise Exception("You have not provided hyperparameter bounds but a kernel function. Your kernel needs user defined hyperparameters and bounds.")
             hyperparameter_bounds = np.zeros((input_space_dim+1,2))
             hyperparameter_bounds[0] = np.array([np.var(y_data)/100.,np.var(y_data) * 10.])
             for i in range(input_space_dim):
@@ -499,7 +504,9 @@ class GP():
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
         """
-        if hyperparameter_bounds is None: hyperparameter_bounds = self.hyperparameter_bounds.copy()
+        if hyperparameter_bounds is None:
+            if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
+            hyperparameter_bounds = self.hyperparameter_bounds.copy()
         if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low = hyperparameter_bounds[:,0], high = hyperparameter_bounds[:,1], size = len(hyperparameter_bounds))
 
         self.hyperparameters = self._optimize_log_likelihood(
@@ -557,7 +564,9 @@ class GP():
         """
         if self.gp2Scale: raise Exception("gp2Scale does not allow asynchronous training!")
         if dask_client is None: dask_client = distributed.Client()
-        if hyperparameter_bounds is None: hyperparameter_bounds = self.hyperparameter_bounds.copy()
+        if hyperparameter_bounds is None:
+            if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
+            hyperparameter_bounds = self.hyperparameter_bounds.copy()
         if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low = hyperparameter_bounds[:,0], high = hyperparameter_bounds[:,1], size = len(hyperparameter_bounds))
 
         opt_obj = self._optimize_log_likelihood_async(
@@ -983,7 +992,7 @@ class GP():
 
 
         #check if shapes are correct
-        if isinstance(K,np.ndarray) and K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
+        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
 
         #get K + V
         KV = K + V
@@ -1212,7 +1221,7 @@ class GP():
         else:
             hps = self.hyperparameters
 
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1256,7 +1265,7 @@ class GP():
         else:
             hps = self.hyperparameters
 
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1312,7 +1321,7 @@ class GP():
         """
 
         x_data = self.x_data.copy()
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1370,7 +1379,7 @@ class GP():
         solution dictionary : dict
         """
         x_data = self.x_data.copy()
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1424,7 +1433,7 @@ class GP():
         """
 
         x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1460,7 +1469,7 @@ class GP():
         solution dictionary : dict
         """
         x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1521,7 +1530,7 @@ class GP():
         ------
         entropy : float
         """
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1551,7 +1560,7 @@ class GP():
         ------
         entropy gradient in given direction : float
         """
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1637,7 +1646,7 @@ class GP():
         -------
         solution dictionary : dict
         """
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1673,7 +1682,7 @@ class GP():
         -------
             solution dictionary : dict
         """
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1733,7 +1742,7 @@ class GP():
             Information gain of collective points.
         """
         x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1776,7 +1785,7 @@ class GP():
             Information gain of collective points.
         """
         x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1813,7 +1822,7 @@ class GP():
         solution dictionary : {}
             Information gain of collective points.
         """
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1840,7 +1849,7 @@ class GP():
         solution dictionary : {}
             Information gain of collective points.
         """
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1867,7 +1876,7 @@ class GP():
         -------
         solution dictionary : {}
         """
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")
@@ -1910,7 +1919,7 @@ class GP():
         -------
         solution dictionary : {}
         """
-        if isinstance(x_pred,np.ndarray):
+        if not self.non_Euclidean:
             if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
             if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred,x_out)
             if len(x_pred[0]) != self.input_space_dim: raise Exception("Wrong dimensionality of the input points x_pred.")

@@ -159,11 +159,13 @@ def test_multi_task():
     y_data[:,0] = np.sin(np.linalg.norm(x_data, axis=1))
     y_data[:,1] = np.cos(np.linalg.norm(x_data, axis=1))
 
-    my_fvgp = fvGP(input_dim,1,2, x_data, y_data, np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(input_dim,1,2, x_data, y_data, init_hyperparameters = np.array([1, 1]), hyperparameter_bounds = np.array([[0.,1.],[0.,1.]]), gp_kernel_function=mkernel)
     my_fvgp.update_gp_data(x_data, y_data)
     my_fvgp.train(np.array([[0.01,1],[0.01,10]]),
             method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2)
     my_fvgp.posterior_mean(np.random.rand(2,5), x_out = np.zeros((1,1)))["f(x)"]
+    
+    #my_fvgp = fvGP(input_dim,1,2, x_data, y_data, init_hyperparameters = np.array([1, 1]))
 
 
 def test_gp2Scale(client):

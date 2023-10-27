@@ -233,11 +233,16 @@ class fvGP(GP):
         self.orig_input_space_dim = input_space_dim
         self.output_num, self.output_dim = output_number, output_space_dim
         ###check the output dims
+
+        if not isinstance(x_data,np.ndarray):
+            raise Exception("Multi-task GPs on non-Euclidean input spaces are not implemented yet.")
+
+
         if np.ndim(y_data) == 1: raise ValueError("The output number is 1, you can use GP for single-task GPs")
         if output_number != len(y_data[0]): raise ValueError("The output number is not in agreement with the data values given")
         if output_space_dim == 1 and isinstance(output_positions, np.ndarray) == False:
             self.output_positions = self._compute_standard_output_positions(len(x_data))
-        elif self.output_dim > 1 and isinstance(output_positions, np.ndarray) == False:
+        elif self.output_dim > 1 and not isinstance(output_positions, np.ndarray):
             raise Exception(
                 "If the dimensionality of the output space is > 1, the value positions have to be given to the fvGP class")
         else:
