@@ -195,7 +195,7 @@ class GP():
     K : np.ndarray
         Current prior covariance matrix of the GP
     KVinv : np.ndarray
-        If enabled, the inverse of the prior covariance + nosie matrix V
+        If enabled, the inverse of the prior covariance + nose matrix V
         inv(K+V)
     KVlogdet : float
         logdet(K+V)

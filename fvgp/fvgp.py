@@ -50,7 +50,7 @@ class fvGP(GP):
     output_number : int
         Number of output values.
     x_data : np.ndarray
-        The input point positions. Shape (V x D), where D is the `input_space_dim`.
+        The input point positions. Shape (V x D), where D is the `'input_space_dim'`.
     y_data : np.ndarray
         The values of the data points. Shape (V,No).
     init_hyperparameters : np.ndarray, optional
@@ -209,7 +209,7 @@ class fvGP(GP):
     K : np.ndarray
         Current prior covariance matrix of the GP
     KVinv : np.ndarray
-        If enabled, the inverse of the prior covariance + nosie matrix V
+        If enabled, the inverse of the prior covariance + nose matrix V
         inv(K+V)
     KVlogdet : float
         logdet(K+V)
