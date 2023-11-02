@@ -2469,7 +2469,6 @@ class GP():
         kernel = (1.0 + x1.T @ x2) ** p
         return p
 
-    @staticmethod
     def default_kernel(self, x1, x2, hyperparameters, obj):
         """
         Function for the default kernel, a Matern kernel of first-order differentiability.
