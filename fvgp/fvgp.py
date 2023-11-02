@@ -393,7 +393,7 @@ class fvGP(GP):
         return new_points, new_values, new_variances
 
    ################################################################################################
-    def _default_multi_task_kernel(self,x1,x2,hps,obj):
+    def _default_multi_task_kernel(self, x1, x2, hps, obj):  # pragma: no cover
         signal_var = hps[0]
         length_scale = hps[1]
         hps_nn = hps[2:]
