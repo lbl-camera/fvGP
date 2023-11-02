@@ -1,12 +1,6 @@
 #!/usr/bin/env python
-import dask.distributed as distributed
-from loguru import logger
 import numpy as np
-import math
 import warnings
-import itertools
-import time
-from functools import partial
 from .gp import GP
 
 
@@ -228,27 +222,27 @@ class fvGP(GP):
         output_number,
         x_data,
         y_data,
-        init_hyperparameters = None,
-        hyperparameter_bounds = None,
-        output_positions = None,
-        noise_variances = None,
-        compute_device = "cpu",
-        gp_kernel_function = None,
-        gp_deep_kernel_layer_width = 5,
-        gp_kernel_function_grad = None,
-        gp_noise_function = None,
-        gp_noise_function_grad = None,
-        gp_mean_function = None,
-        gp_mean_function_grad = None,
-        sparse_mode = False,
-        gp2Scale = False,
-        gp2Scale_dask_client = None,
-        gp2Scale_batch_size = 10000,
-        normalize_y = False,
-        store_inv = True,
-        ram_economy = False,
-        args = None,
-        info = False,
+        init_hyperparameters=None,
+        hyperparameter_bounds=None,
+        output_positions=None,
+        noise_variances=None,
+        compute_device="cpu",
+        gp_kernel_function=None,
+        gp_deep_kernel_layer_width=5,
+        gp_kernel_function_grad=None,
+        gp_noise_function=None,
+        gp_noise_function_grad=None,
+        gp_mean_function=None,
+        gp_mean_function_grad=None,
+        sparse_mode=False,
+        gp2Scale=False,
+        gp2Scale_dask_client=None,
+        gp2Scale_batch_size=10000,
+        normalize_y=False,
+        store_inv=True,
+        ram_economy=False,
+        args=None,
+        info=False,
         ):
 
         self.orig_input_space_dim = input_space_dim
@@ -302,25 +296,25 @@ class fvGP(GP):
                 self.iset_dim,
                 x_data,
                 y_data,
-                init_hyperparameters = init_hps,
-                hyperparameter_bounds = hyperparameter_bounds,
-                noise_variances = noise_variances,
-                compute_device = compute_device,
-                gp_kernel_function = gp_kernel_function,
-                gp_kernel_function_grad = gp_kernel_function_grad,
-                gp_mean_function = gp_mean_function,
-                gp_mean_function_grad = gp_mean_function_grad,
-                gp_noise_function = gp_noise_function,
-                gp_noise_function_grad = gp_noise_function_grad,
-                sparse_mode = sparse_mode,
-                gp2Scale = gp2Scale,
-                gp2Scale_dask_client = gp2Scale_dask_client,
-                gp2Scale_batch_size = gp2Scale_batch_size,
-                store_inv = store_inv,
-                normalize_y = normalize_y,
-                ram_economy = ram_economy,
-                args = args,
-                info = info)
+                init_hyperparameters=init_hps,
+                hyperparameter_bounds=hyperparameter_bounds,
+                noise_variances=noise_variances,
+                compute_device=compute_device,
+                gp_kernel_function=gp_kernel_function,
+                gp_kernel_function_grad=gp_kernel_function_grad,
+                gp_mean_function=gp_mean_function,
+                gp_mean_function_grad=gp_mean_function_grad,
+                gp_noise_function=gp_noise_function,
+                gp_noise_function_grad=gp_noise_function_grad,
+                sparse_mode=sparse_mode,
+                gp2Scale=gp2Scale,
+                gp2Scale_dask_client=gp2Scale_dask_client,
+                gp2Scale_batch_size=gp2Scale_batch_size,
+                store_inv=store_inv,
+                normalize_y=normalize_y,
+                ram_economy=ram_economy,
+                args=args,
+                info=info)
 
    ################################################################################################
     def update_gp_data(
@@ -343,14 +337,18 @@ class fvGP(GP):
         y_data : np.ndarray
             The values of the data points. Shape (V,Do).
         output_positions : np.ndarray, optional
-            A 3-D numpy array of shape (U x output_number x output_dim), so that for each measurement position, the outputs
+            A 3-D numpy array of shape (U x output_number x output_dim), so that
+            for each measurement position, the outputs
             are clearly defined by their positions in the output space.
             The default is np.array([[0],[1],[2],[3],...,[output_number - 1]]) for each
             point in the input space. The default is only permissible if output_dim is 1.
         noise_variances : np.ndarray, optional
-            An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance. Shape (y_data).
-            Note: if no variances are provided here, the noise_covariance callable will be used; if the callable is not provided the noise variances
-            will be set to `abs(np.mean(y_data) / 100.0`. If you provided a noise function, the noise_variances will be ignored.
+            An numpy array defining the uncertainties in the data `y_data`
+            in form of a point-wise variance. Shape (y_data).
+            Note: if no variances are provided here, the noise_covariance callable
+            will be used; if the callable is not provided the noise variances
+            will be set to `abs(np.mean(y_data)) / 100.0`. If you provided a noise function,
+            the noise_variances will be ignored.
         """
         self.fvgp_x_data = np.array(x_data)
         self.fvgp_y_data = np.array(y_data)

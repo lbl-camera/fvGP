@@ -3,10 +3,7 @@ import inspect
 import time
 import warnings
 from scipy.sparse import csc_matrix
-#from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import splu
-#from scipy.sparse.linalg import cg
-#from scipy.sparse.linalg import cgs
 from scipy.sparse.linalg import minres
 import dask.distributed as distributed
 import numpy as np
@@ -18,35 +15,11 @@ from loguru import logger
 from .mcmc import mcmc
 from hgdl.hgdl import HGDL
 from .gp2Scale import gp2Scale as gp2S
-#from dask.distributed import Variable
 from dask.distributed import Client
 from scipy.stats import norm
 from imate import logdet
-#import gc
-
 
 # TODO:
-
-
-def make_1d_x_pred(b, res=100):  # pragma: no cover
-    """
-    This is a purely convenience-driven function calculating prediction points
-    on a ed grid.
-
-    Parameters
-    ----------
-    b : np.ndarray
-        A numpy array of shape (2) defineing lower and upper bounds
-    res : int, optional
-        Resolution. Default = 100
-
-    Return
-    ------
-    prediction points : np.ndarray
-    """
-
-    x_pred = np.linspace(b[0], b[1], res).reshape(res, -1)
-    return x_pred
 
 
 class GP():
@@ -2810,6 +2783,26 @@ class GP():
         y = np.linspace(by[0], by[1], resy)
         from itertools import product
         x_pred = np.array(list(product(x, y)))
+        return x_pred
+
+    def make_1d_x_pred(self, b, res=100):  # pragma: no cover
+        """
+        This is a purely convenience-driven function calculating prediction points
+        on a 1d grid.
+
+        Parameters
+        ----------
+        b : np.ndarray
+            A numpy array of shape (2) defineing lower and upper bounds
+        res : int, optional
+            Resolution. Default = 100
+
+        Return
+        ------
+        prediction points : np.ndarray
+        """
+
+        x_pred = np.linspace(b[0], b[1], res).reshape(res, -1)
         return x_pred
 
     def _in_bounds(self, v, bounds):
