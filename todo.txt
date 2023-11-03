@@ -1,8 +1,0 @@
-###########
-##TODO#####
-###########
-
-*GP manifold lerning
-*GP on manifold
-*General Stochastic Processes
-*extreme scale GPs
