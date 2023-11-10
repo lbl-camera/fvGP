@@ -39,8 +39,9 @@ class GP():
     ----------
     input_space_dim : int
         Dimensionality of the input space (D). If the input is non-Euclidean, the input dimensionality will be ignored.
-    x_data : np.ndarray
-        The input point positions. Shape (V x D), where D is the `input_space_dim`.
+    x_data : np.ndarray or set or list
+        The input point positions. Shape (V x D), where D is the `input_space_dim`. If dealing with non-Euclidean inputs
+        x_data should be a set or iterable, not a numpy array.
     y_data : np.ndarray
         The values of the data points. Shape (V,1) or (V).
     init_hyperparameters : np.ndarray, optional
@@ -239,20 +240,21 @@ class GP():
         else:
             if not callable(gp_kernel_function):
                 raise Exception(
-                    "For GPs on non-Eucledian input spaces you need a user-defined kernel, hyperparameters, and hyperparameter_bounds.")
+                    "For GPs on non-Eucledian input spaces you need a user-defined kernel, hyperparameters, \
+                    and hyperparameter_bounds.")
             input_space_dim = 1
             self.non_Euclidean = True
-
-        if self.non_Euclidean and (init_hyperparameters is None or hyperparameter_bounds is None):
+        if self.non_Euclidean and init_hyperparameters is None:
             raise Exception(
-                "You are running fvGP on non-Euclidean inputs. Please provide initial hyperparameters and hyperparameter bounds.")
+                "You are running fvGP on non-Euclidean inputs. Please provide initial hyperparameters.")
         if np.ndim(y_data) == 2: y_data = y_data[:, 0]
         if compute_device == 'gpu':
             try:
                 import torch
             except:
                 raise Exception(
-                    "You have specified the 'gpu' as your compute device. You need to install pytorch manually for this to work.")
+                    "You have specified the 'gpu' as your compute device. You need to install pytorch\
+                     manually for this to work.")
         self.normalize_y = normalize_y
         self.input_space_dim = input_space_dim
         self.x_data = x_data
@@ -267,29 +269,34 @@ class GP():
         self.KVinv = None
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
+        self.hyperparameter_bounds = hyperparameter_bounds
 
         if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(
             gp_noise_function)) and init_hyperparameters is None:
             warnings.warn(
-                "You have provided callables for kernel, mean, or noise functions but no initial hyperparameters.",
+                "You have provided callables for kernel, mean, or noise \
+                functions but no initial hyperparameters.",
                 stacklevel=2)
-            warnings.warn("It is likley they have to be defined for a success initialization.", stacklevel=2)
+            warnings.warn("It is likely they have to be defined for a success initialization.", stacklevel=2)
 
         ##########################################
         #######prepare hyper parameters###########
         ##########################################
-        if hyperparameter_bounds is None and not self.non_Euclidean:
-            if callable(gp_kernel_function):
-                raise Exception(
-                    "You have not provided hyperparameter bounds but a kernel function. Your kernel needs user defined hyperparameters and bounds.")
-            hyperparameter_bounds = np.zeros((input_space_dim + 1, 2))
-            hyperparameter_bounds[0] = np.array([np.var(y_data) / 100., np.var(y_data) * 10.])
-            for i in range(input_space_dim):
-                range_xi = np.max(x_data[:, i]) - np.min(x_data[:, i])
-                hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
-        self.hyperparameter_bounds = hyperparameter_bounds
+        if self.hyperparameter_bounds is None:
+            if self.non_Euclidean:
+                if callable(gp_kernel_function):
+                    warnings.warn("You have not provided hyperparameter bounds but a kernel function. \n \
+                    Make sure you provide them tot he training.")
+            else:
+                hyperparameter_bounds = np.zeros((input_space_dim + 1, 2))
+                hyperparameter_bounds[0] = np.array([np.var(y_data) / 100., np.var(y_data) * 10.])
+                for i in range(input_space_dim):
+                    range_xi = np.max(x_data[:, i]) - np.min(x_data[:, i])
+                    hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
+                self.hyperparameter_bounds = hyperparameter_bounds
 
         if init_hyperparameters is None:
+            if self.hyperparameter_bounds is None: raise Exception("hyperparameter_bounds non available.")
             init_hyperparameters = np.random.uniform(low=self.hyperparameter_bounds[:, 0],
                                                      high=self.hyperparameter_bounds[:, 1],
                                                      size=len(self.hyperparameter_bounds))
@@ -299,12 +306,14 @@ class GP():
         ##########################################
         if self.sparse_mode and self.store_inv:
             warnings.warn(
-                "sparse_mode and store_inv enabled but they should not be used together. I'll set store_inv = False.",
+                "sparse_mode and store_inv enabled but they should not be used together. \
+                I'll set store_inv = False.",
                 stacklevel=2)
             self.store_inv = False
         if self.sparse_mode and not callable(gp_kernel_function):
             warnings.warn("You have chosen to activate sparse mode. Great! \n \
-                        But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.",
+                        But you have not supplied a kernel that is compactly supported. \n I will use an \
+                        anisotropic Wendland kernel for now.",
                           stacklevel=2)
             gp_kernel_function = self.wendland_anisotropic
 
@@ -314,7 +323,8 @@ class GP():
         if gp2Scale:
             if gp2Scale_dask_client is None:
                 gp2Scale_dask_client = Client()
-                warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. Set to distributed.Client().", stacklevel=2)
+                warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. \
+                Set to distributed.Client().", stacklevel=2)
             self.gp2Scale_dask_client = gp2Scale_dask_client
 
             if not callable(gp_kernel_function):

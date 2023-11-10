@@ -1,6 +1,4 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from loguru import logger
 import time
 
 
@@ -18,7 +16,7 @@ def project_onto_bounds(x,bounds):
     return x
 
 def in_bounds(v,bounds):
-    for i in range(len(v)): 
+    for i in range(len(v)):
         if v[i] < bounds[i,0] or v[i] > bounds[i,1]: return False
     return True
 
@@ -41,7 +39,7 @@ def prior_func(theta,bounds):
 
 
 # x0 ........................................... initial values
-# likelihood_fn ............................................ log likelihood 
+# likelihood_fn ............................................ log likelihood
 # prior_fn ....................................... prior function for theta
 # prior_args .............................................. for prior functions
 # n_updates .................................. number of Metropolis updates
@@ -61,7 +59,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
                           prop_Sigma = np.nan, adapt_cov = True,
                           return_prop_Sigma_trace = False,
                           r_opt = .234, c_0 = 10, c_1 = .8,
-                          K = 10, *argv):
+                          K = 10):
 
     start_time = time.time()
     n_updates = max(n_updates,2)
@@ -174,7 +172,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
     return  {"f(x)": f[arg_max],
              "x":x[arg_max],
              "F":f,
-             "stripped distribution": x[int(len(x) - (len(x)/10)):], 
+             "stripped distribution": x[int(len(x) - (len(x)/10)):],
              "full distribution": x,
              "distribution mean": np.mean(x[int(len(x) - (len(x)/10)):],axis = 0),
              "distribution var":  np.var(x[int(len(x) - (len(x)/10)):],axis = 0),
