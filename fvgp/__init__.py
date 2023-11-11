@@ -8,6 +8,7 @@ from loguru import logger
 import sys
 from .gp import GP
 from .fvgp import fvGP
+from .gpMCMC import gpMCMC
 
 __all__ = ['GP', 'fvGP']
 __version__ = _version.get_versions()['version']
