@@ -1992,8 +1992,10 @@ class GP():
     ###########################################################################
     def gp_relative_information_entropy(self, x_pred, x_out=None):
         """
-        Function to compute KL divergence and therefore relative information entropy
+        Function to compute the KL divergence and therefore the relative information entropy
         of the prior distribution over predicted function values and the posterior distribution.
+        The value is a reflection of how much information is predicted to be gained 
+        through observing a set of data points at x_pred.
 
         Parameters
         ----------
@@ -2024,8 +2026,12 @@ class GP():
     ###########################################################################
     def gp_relative_information_entropy_set(self, x_pred, x_out=None):
         """
-        Function to compute KL divergence and therefore relative information entropy
-        if the prior distribution over predicted function values and the posterior distribution.
+        Function to compute the KL divergence and therefore the relative information entropy
+        of the prior distribution over predicted function values and the posterior distribution.
+        The value is a reflection of how much information is predicted to be gained 
+        through observing each data point in x_pred separately, not all 
+        at once as in `gp_relative_information_entrop`.
+
 
         Parameters
         ----------
