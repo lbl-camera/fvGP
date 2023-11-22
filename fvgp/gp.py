@@ -39,9 +39,9 @@ class GP():
     ----------
     input_space_dim : int
         Dimensionality of the input space (D). If the input is non-Euclidean, the input dimensionality will be ignored.
-    x_data : np.ndarray or set or list
+    x_data : np.ndarray or list of tuples
         The input point positions. Shape (V x D), where D is the `input_space_dim`. If dealing with non-Euclidean inputs
-        x_data should be a set or iterable, not a numpy array.
+        x_data should be an iterable, not a numpy array.
     y_data : np.ndarray
         The values of the data points. Shape (V,1) or (V).
     init_hyperparameters : np.ndarray, optional
