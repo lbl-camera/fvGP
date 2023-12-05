@@ -153,7 +153,7 @@ def test_train_hgdl_async():
 
 def test_multi_task():
     def mkernel(x1,x2,hps,obj):
-        d = obj._get_distance_matrix(x1,x2)
+        d = obj.get_distance_matrix(x1,x2)
         return hps[0] * obj.matern_kernel_diff1(d,hps[1])
     y_data = np.zeros((N,2))
     y_data[:,0] = np.sin(np.linalg.norm(x_data, axis=1))

@@ -21,10 +21,6 @@ with open(path.join(here, 'requirements.txt')) as requirements_file:
                     if not line.startswith('#')]
 
 
-#setup_requirements = [ ]
-
-#test_requirements = [ ]
-
 setup(
     author="Marcus Michael Noack",
     author_email='MarcusNoack@lbl.gov',
@@ -45,7 +41,7 @@ setup(
         ],
     },
     extras_require={
-        'tests': ['pytest', 'codecov', 'pytest-cov'],
+        'tests': ['pytest', 'codecov', 'pytest-cov','imate'],
         'docs': ['sphinx', 'sphinx-rtd-theme', 'myst-parser', 'myst-nb', 'sphinx-panels', 'autodocs', 'jupytext']
     },
     install_requires=requirements,

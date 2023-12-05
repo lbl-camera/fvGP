@@ -17,15 +17,14 @@ from hgdl.hgdl import HGDL
 from .gp2Scale import gp2Scale as gp2S
 from dask.distributed import Client
 from scipy.stats import norm
-from imate import logdet
 
 # TODO:
 
 
-class GP():
+class GP:
     """
     This class provides all the tools for a single-task Gaussian Process (GP).
-    Use fvGP for multi-task GPs. However, the fvGP class inherits all methods from this class.
+    Use fvGP for multitask GPs. However, the fvGP class inherits all methods from this class.
     This class allows for full HPC support for training via the HGDL package.
 
     V ... number of input points
@@ -115,7 +114,7 @@ class GP():
         The noise function is a callable f(x,hyperparameters,obj) that returns a
         positive symmetric definite matrix of shape(len(x),len(x)).
         The input x is a numpy array of shape (N x D). The hyperparameter array is the same
-        that is communicated to mean and kernel functions. The obj is a fvgp.GP instance.
+        that is communicated to mean and kernel functions. The obj is a `fvgp.GP` instance.
     gp_noise_function_grad : Callable, optional
         A function that evaluates the gradient of the `'gp_noise_function'`
         at an input position with respect to the hyperparameters.
@@ -143,7 +142,7 @@ class GP():
         This is an advanced feature for HPC GPs up to 10
         million data points. If gp2Scale is used, the default kernel is an anisotropic
         Wendland kernel which is compactly supported. The noise function will have
-        to return a scipy.sparse matrix instead of a numpy array. There are a few more
+        to return a `scipy.sparse` matrix instead of a numpy array. There are a few more
         things to consider (read on); this is an advanced option.
         If no kernel is provided, the compute_device option should be revisited.
         The kernel will use the specified device to compute covariances.
@@ -240,7 +239,7 @@ class GP():
         else:
             if not callable(gp_kernel_function):
                 raise Exception(
-                    "For GPs on non-Eucledian input spaces you need a user-defined kernel, hyperparameters, \
+                    "For GPs on non-Euclidean input spaces you need a user-defined kernel, hyperparameters, \
                     and hyperparameter_bounds.")
             input_space_dim = 1
             self.non_Euclidean = True
@@ -269,6 +268,7 @@ class GP():
         self.KVinv = None
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
+        self.gp2Scale_batch_size = gp2Scale_batch_size
         self.hyperparameter_bounds = hyperparameter_bounds
 
         if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(
@@ -321,6 +321,12 @@ class GP():
         #####gp2Scale##############################
         ###########################################
         if gp2Scale:
+            try:
+                import imate
+            except:
+                raise Exception(
+                    "You have activated `gp2Scale`. You need to install imate\
+                     manually for this to work.")
             if gp2Scale_dask_client is None:
                 gp2Scale_dask_client = Client()
                 warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. \
@@ -343,7 +349,7 @@ class GP():
             self.store_inv = False
             warnings.warn("WARNING: gp2Scale activated. Only training via MCMC will be performed. \
                     Only noise variances (no noise covariances can be considered). \
-                    A customed sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.",
+                    A customized sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.",
                           stacklevel=2)
 
         ###########################################
@@ -436,7 +442,8 @@ class GP():
         #########################################
         if self.normalize_y:
             warnings.warn(
-                "y_data and noise normalized. Make sure your hyperparameters and their bounds are still valid. They will not be recomputed.")
+                "y_data and noise normalized. Make sure your hyperparameters and \
+                their bounds are still valid. They will not be recomputed.")
             self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
             self.V = (1. / (self.y_max - self.y_min) ** 2) * self.V
 
@@ -484,7 +491,7 @@ class GP():
         #####gp2Scale##############################
         ###########################################
         if self.gp2Scale:
-            self.gp2Scale_obj = gp2S(x_data, batch_size=gp2Scale_batch_size,
+            self.gp2Scale_obj = gp2S(x_data, batch_size=self.gp2Scale_batch_size,
                                      gp_kernel_function=self.kernel,
                                      covariance_dask_client=self.gp2Scale_dask_client,
                                      info=self.info)
@@ -516,7 +523,8 @@ class GP():
         #########################################
         if self.normalize_y:
             warnings.warn(
-                "y_data and noise normalized. Make sure your hyperparameters and their bounds are still valid. They will not be recomputed.")
+                "y_data and noise normalized. Make sure your hyperparameters and \
+                their bounds are still valid. They will not be recomputed.")
             self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
             self.V = (1. / (self.y_max - self.y_min) ** 2) * self.V
         ######################################
@@ -1129,6 +1137,7 @@ class GP():
 
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
         if self.gp2Scale:
+            from imate import logdet
             # try fast but RAM intensive SuperLU first
             if len(x_data) < 50000 and Ksparsity < 0.0001:
                 try:
@@ -1644,7 +1653,7 @@ class GP():
         x1[:, direction] = x1[:, direction] + eps
         x2[:, direction] = x2[:, direction] - eps
         kk_g = (self.kernel(x1, x1, self.hyperparameters, self) - self.kernel(x2, x2, self.hyperparameters, self)) / (
-                2.0 * eps)
+            2.0 * eps)
         post_mean = self.mean_function(x_pred, self.hyperparameters, self)
         mean_der = (self.mean_function(x1, self.hyperparameters, self) - self.mean_function(x2, self.hyperparameters,
                                                                                             self)) / (2.0 * eps)
@@ -2565,23 +2574,38 @@ class GP():
         res[-1] = dkdl
         return res
 
-    def _get_distance_matrix(self, x1, x2):
+    def get_distance_matrix(self, x1, x2):
+        """
+        Function to calculate the pairwise distance matrix of
+        points in x1 and x2.
+
+        Parameters
+        ----------
+        x1 : np.ndarray
+            Numpy array of shape (U x D).
+        x2 : np.ndarray
+            Numpy array of shape (V x D).
+
+        Return
+        ------
+        distance matrix : np.ndarray
+        """
         d = np.zeros((len(x1), len(x2)))
         for i in range(x1.shape[1]): d += (x1[:, i].reshape(-1, 1) - x2[:, i]) ** 2
         return np.sqrt(d)
 
     def _g(self, x, x0, w, l):
-        d = self._get_distance_matrix(x, x0)
+        d = self.get_distance_matrix(x, x0)
         e = np.exp(-(d ** 2) / l)
         return np.sum(w * e, axis=1)
 
     def _dgdw(self, x, x0, w, l):
-        d = self._get_distance_matrix(x, x0)
+        d = self.get_distance_matrix(x, x0)
         e = np.exp(-(d ** 2) / l).T
         return e
 
     def _dgdl(self, x, x0, w, l):
-        d = self._get_distance_matrix(x, x0)
+        d = self.get_distance_matrix(x, x0)
         e = np.exp(-(d ** 2) / l)
         return np.sum(w * e * (d ** 2 / l ** 2), axis=1)
 

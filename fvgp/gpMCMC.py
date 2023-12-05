@@ -126,11 +126,11 @@ class gpMCMC():  # pragma: no cover
                 "distribution var": np.var(x[int(len(x) - (len(x) / 10)):], axis=0)}
 
     ###############################################################
-    def _jump(self, x, obj, prior, likelihood):  # pragma: no cover
-        x_star = x.copy()
+    def _jump(self, x_old, obj, prior, likelihood):  # pragma: no cover
+        x_star = x_old.copy()
         if callable(obj.prop_dist):
-            print("obj: ", obj.indices)
-            x_star[obj.indices] = obj.prop_dist(x[obj.indices], obj)
+            print("obj indices: ", obj.indices)
+            x_star[obj.indices] = obj.prop_dist(x_old[obj.indices], obj)
         else:
             raise Exception("A proposal distribution is not callable.")
 
@@ -143,18 +143,19 @@ class gpMCMC():  # pragma: no cover
                                 prior - likelihood)
             if np.isnan(metr_ratio):  metr_ratio = 0.
             if metr_ratio > np.random.uniform(0, 1, 1):
-                x = x_star
+                x = x_star.copy()
                 prior = prior_evaluation_x_star
                 likelihood = likelihood_star
                 jump_trace = 1.
                 print("accepted")
             else:
+                x = x_old.copy()
                 print("NOT accepted")
         else:
             print("prior probability 0")
 
-        print("x*  :", x_star)
-        print("x   :", x)
+        print("old x  :", x_old)
+        print("new x  :", x)
         input()
         return x, prior, likelihood, jump_trace
 
@@ -207,7 +208,7 @@ class ProposalDistribution:  # pragma: no cover
         dim = len(indices)
         self.jump_trace = []
         if not callable(adapt_callable) and args:
-            raise Exception("The args should only be provided for a user defined `adapt_callable`")
+            raise Exception("The args should only be provided for a user-defined `adapt_callable`")
         if not callable(adapt_callable) and init_prop_Sigma is None and should_be_adapted:
             raise Exception("You are using the default adaption mechanism for normal distributions.\n \
                             Please provide an initial_prop_Sigma")
