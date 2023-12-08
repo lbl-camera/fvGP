@@ -73,6 +73,7 @@ class gpMCMC():  # pragma: no cover
         self.prior_function = prior_function
         self.proposal_distributions = proposal_distributions
         self.args = args
+        self.trace = None
 
     def run_mcmc(self, n_updates=10000,
                  x0=None,
@@ -85,10 +86,8 @@ class gpMCMC():  # pragma: no cover
         if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
         if break_condition is None: break_condition = lambda a: False
 
-        eps = .001
         self.trace = {"f(x)": [], "x": [], "time stamp": []}
         # Set up and initialize trace objects
-
         self.trace["x"].append(x0)
 
         # Initialize Metropolis
@@ -115,7 +114,7 @@ class gpMCMC():  # pragma: no cover
 
         # Collect trace objects to return
         arg_max = np.argmax(self.trace["f(x)"])
-        x = np.asarray(self.trace["x"].T)
+        x = np.asarray(self.trace["x"]).T
 
         return {"max f(x)": self.trace["f(x)"][arg_max],
                 "max x": x[arg_max],

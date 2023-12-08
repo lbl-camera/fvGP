@@ -91,7 +91,7 @@ def main():
     print("===============")
     print("===============")
 
-    my_gp2S.train(hps_bounds, max_iter = 20)
+    my_gp2S.train(hyperparameter_bounds = hps_bounds, max_iter = 20)
 
 
 if __name__ == '__main__':

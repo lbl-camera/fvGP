@@ -111,7 +111,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
     #########################################################
     # Begin main loop
     for i in np.arange(1,n_updates):
-        theta_star= theta + sigma_m * np.random.standard_normal(p) @ prop_C
+        theta_star = theta + sigma_m * np.random.standard_normal(p) @ prop_C
         prior_star = prior_fn(theta_star, prior_args)
         if prior_star != -np.inf:
             likelihood_star = likelihood_fn(hyperparameters = theta_star)

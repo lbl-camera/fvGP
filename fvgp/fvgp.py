@@ -6,7 +6,7 @@ from .gp import GP
 
 class fvGP(GP):
     """
-    This class provides all the tools for a multi-task Gaussian Process (GP).
+    This class provides all the tools for a multitask Gaussian Process (GP).
     This class allows for full HPC support for training. After initialization, this
     class provides all the methods described for the GP class.
 
@@ -21,7 +21,7 @@ class fvGP(GP):
     N ... arbitrary integers (N1, N2,...)
 
 
-    The main logic of fvGP is that any multi-task GP is just a single-task GP
+    The main logic of fvGP is that any multitask GP is just a single-task GP
     over a Cartesian product space of input and output space, as long as the kernel
     is flexible enough, so prepare to work on your kernel. This is the best
     way to give the user optimal control and power. At various instances, for instances
@@ -36,7 +36,7 @@ class fvGP(GP):
 
     [0.2, 0.3,1],[0.9,0.6,1]]
 
-    This has to be understood and taken into account when customizing fvGP for multi-task
+    This has to be understood and taken into account when customizing fvGP for multitask
     use.
 
     Parameters
@@ -50,7 +50,7 @@ class fvGP(GP):
     output_number : int
         Number of output values.
     x_data : np.ndarray
-        The input point positions. Shape (V x D), where D is the `'input_space_dim'`.
+        The input point positions. Shape (V x D), where D is the `input_space_dim`.
     y_data : np.ndarray
         The values of the data points. Shape (V,No).
     init_hyperparameters : np.ndarray, optional
@@ -243,7 +243,7 @@ class fvGP(GP):
         ram_economy=False,
         args=None,
         info=False,
-        ):
+    ):
 
         self.orig_input_space_dim = input_space_dim
         self.output_num, self.output_dim = output_number, output_space_dim
@@ -252,14 +252,16 @@ class fvGP(GP):
         if not isinstance(x_data,np.ndarray):
             raise Exception("Multi-task GPs on non-Euclidean input spaces are not implemented yet.")
 
-
-        if np.ndim(y_data) == 1: raise ValueError("The output number is 1, you can use GP for single-task GPs")
-        if output_number != len(y_data[0]): raise ValueError("The output number is not in agreement with the data values given")
-        if output_space_dim == 1 and isinstance(output_positions, np.ndarray) == False:
+        if np.ndim(y_data) == 1:
+            raise ValueError("The output number is 1, you can use GP for single-task GPs")
+        if output_number != len(y_data[0]):
+            raise ValueError("The output number is not in agreement with the data values given")
+        if output_space_dim == 1 and isinstance(output_positions, np.ndarray) is False:
             self.output_positions = self._compute_standard_output_positions(len(x_data))
         elif self.output_dim > 1 and not isinstance(output_positions, np.ndarray):
             raise Exception(
-                "If the dimensionality of the output space is > 1, the value positions have to be given to the fvGP class")
+                "If the dimensionality of the output space is > 1, \
+                the value positions have to be given to the fvGP class")
         else:
             self.output_positions = output_positions
 
@@ -279,12 +281,15 @@ class fvGP(GP):
                     The default kernel needs pytorch to be installed manually.")
             self.gp_deep_kernel_layer_width = gp_deep_kernel_layer_width
             self.n = Network(self.iset_dim, gp_deep_kernel_layer_width)
-            number_of_hps = int(2. * self.iset_dim * gp_deep_kernel_layer_width + gp_deep_kernel_layer_width**2 + 2.*gp_deep_kernel_layer_width + self.iset_dim + 2.)
+            number_of_hps = int(2. * self.iset_dim * gp_deep_kernel_layer_width +
+                                gp_deep_kernel_layer_width**2 + 2.*gp_deep_kernel_layer_width + self.iset_dim + 2.)
             self.hps_bounds = np.zeros((number_of_hps,2))
             self.hps_bounds[0] = np.array([np.var(y_data)/10.,np.var(y_data)*10.])
-            self.hps_bounds[1] = np.array([(np.max(x_data) - np.min(x_data)) / 100., (np.max(x_data) - np.min(x_data)) * 100.])
+            self.hps_bounds[1] = np.array([(np.max(x_data) - np.min(x_data)) / 100., (np.max(x_data) -
+                                                                                      np.min(x_data)) * 100.])
             self.hps_bounds[2:] = np.array([-1.,1.])
-            init_hps = np.random.uniform(low = self.hps_bounds[:,0], high = self.hps_bounds[:,1],size = len(self.hps_bounds))
+            init_hps = np.random.uniform(low = self.hps_bounds[:, 0],
+                                         high = self.hps_bounds[:, 1], size=len(self.hps_bounds))
             warnings.warn("Hyperparameter bounds have been initialized automatically \
                     \n for the default kernel in fvgp. They will automatically used for the training.\
                     \n However, you can also define and provide new bounds.")
@@ -316,7 +321,6 @@ class fvGP(GP):
                 args=args,
                 info=info)
 
-   ################################################################################################
     def update_gp_data(
         self,
         x_data,
@@ -359,7 +363,8 @@ class fvGP(GP):
             self.output_positions = self._compute_standard_output_positions(len(x_data))
         elif self.output_dim > 1 and isinstance(output_positions, np.ndarray) == False:
             raise ValueError(
-                "If the dimensionality of the output space is > 1, the value positions have to be given to the fvGP class. EXIT"
+                "If the dimensionality of the output space is > 1, \
+                the value positions have to be given to the fvGP class. EXIT"
             )
         else:
             self.output_positions = output_positions
@@ -417,6 +422,6 @@ class fvGP(GP):
                           hps_nn[b3_indices].reshape(self.iset_dim))
         x1_nn = self.n.forward(x1)
         x2_nn = self.n.forward(x2)
-        d = obj._get_distance_matrix(x1_nn,x2_nn)
-        k = signal_var * obj.matern_kernel_diff1(d,length_scale)
+        d = obj.get_distance_matrix(x1_nn, x2_nn)
+        k = signal_var * obj.matern_kernel_diff1(d, length_scale)
         return k
