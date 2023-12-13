@@ -501,7 +501,9 @@ class GP:
         #######prepare noise covariances##########
         ##########################################
         if noise_variances is not None and callable(self.noise_function):
-            warnings.warn("Noise function and measurement noise provided. noise_variances set to None", stacklevel=2)
+            warnings.warn("Noise function and measurement noise provided. \
+            This can happen if no measurement noise was provided at initialization.\
+            New noise_variances set to None", stacklevel=2)
             noise_variances = None
 
         if noise_variances is None:
@@ -1883,9 +1885,9 @@ class GP:
         ----------
         x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
-        comp_mean : np.array
+        comp_mean : np.ndarray
             Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
-        comp_cov : np.array
+        comp_cov : np.ndarray
             Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
@@ -1906,8 +1908,8 @@ class GP:
 
         res = self.posterior_mean(x_pred, x_out=None)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"]
-
+        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + np.identity(len(x_pred))*1e-9
+        comp_cov = comp_cov+np.identity(len(comp_cov))*1e-9
         return {"x": x_pred,
                 "gp posterior mean": gp_mean,
                 "gp posterior covariance": gp_cov,
@@ -1949,9 +1951,9 @@ class GP:
 
         gp_mean = self.posterior_mean(x_pred, x_out=None)["f(x)"]
         gp_mean_grad = self.posterior_mean_grad(x_pred, direction=direction, x_out=None)["df/dx"]
-        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"]
+        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + np.identity(len(x_pred))*1e-9
         gp_cov_grad = self.posterior_covariance_grad(x_pred, direction=direction, x_out=None)["dS/dx"]
-
+        comp_cov = comp_cov + np.identity(len(comp_cov)) * 1e-9
         return {"x": x_pred,
                 "gp posterior mean": gp_mean,
                 "gp posterior mean grad": gp_mean_grad,

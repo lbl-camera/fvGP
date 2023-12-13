@@ -125,7 +125,7 @@ class gpMCMC():  # pragma: no cover
                 "distribution var": np.var(x[int(len(x) - (len(x) / 10)):], axis=0)}
 
     ###############################################################
-    def _jump(self, x_old, obj, prior, likelihood):  # pragma: no cover
+    def _jump(self, x_old, obj, prior_eval, likelihood):  # pragma: no cover
         x_star = x_old.copy()
         if callable(obj.prop_dist):
             print("obj indices: ", obj.indices)
@@ -139,11 +139,11 @@ class gpMCMC():  # pragma: no cover
             likelihood_star = self.log_likelihood_function(x_star, self.args)
             if np.isnan(likelihood_star): likelihood_star = -np.inf
             metr_ratio = np.exp(prior_evaluation_x_star + likelihood_star -
-                                prior - likelihood)
+                                prior_eval - likelihood)
             if np.isnan(metr_ratio):  metr_ratio = 0.
             if metr_ratio > np.random.uniform(0, 1, 1):
                 x = x_star.copy()
-                prior = prior_evaluation_x_star
+                prior_eval = prior_evaluation_x_star
                 likelihood = likelihood_star
                 jump_trace = 1.
                 print("accepted")
@@ -156,7 +156,7 @@ class gpMCMC():  # pragma: no cover
         print("old x  :", x_old)
         print("new x  :", x)
         input()
-        return x, prior, likelihood, jump_trace
+        return x, prior_eval, likelihood, jump_trace
 
     ###############################################################
 
