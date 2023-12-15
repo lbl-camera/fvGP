@@ -243,7 +243,7 @@ class GP:
                     "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters")
             if not isinstance(x_data,list):
                 raise Exception("Non-Euclidean data has to be provided as a list")
-            input_space_dim = len(x_data[0])
+            input_space_dim = 1
             self.non_Euclidean = True
         if self.non_Euclidean and init_hyperparameters is None:
             raise Exception(
