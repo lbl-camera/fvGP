@@ -824,8 +824,8 @@ class GP:
         """
         Function to set hyperparameters.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         hps : np.ndarray
             A 1-d numpy array of hyperparameters.
         """
@@ -838,11 +838,11 @@ class GP:
         """
         Function to get the current hyperparameters.
 
-        Parameters: None
-        -----------
+        Parameters
+        ----------
 
-        Return:
-        -------
+        Return
+        ------
         hyperparameters : np.ndarray
         """
 
@@ -853,12 +853,12 @@ class GP:
         """
         Function to get the current prior covariance matrix.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         None
 
-        Return:
-        -------
+        Return
+        ------
         A dictionary containing information about the GP prior distribution : dict
         """
 
@@ -1743,13 +1743,13 @@ class GP:
         Function computing the entropy of a normal distribution
         res = entropy(S); S is a 2d np.ndarray array, a covariance matrix which is non-singular.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         S : np.ndarray
             A covariance matrix.
 
-        Return:
-        -------
+        Return
+        ------
         Entropy : float
         """
         dim = len(S[0])

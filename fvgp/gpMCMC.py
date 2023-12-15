@@ -34,7 +34,7 @@ import time
 # *the proposal distribution has to receive and return parameters without knowing what they are
 
 
-class gpMCMC():  # pragma: no cover
+class gpMCMC:  # pragma: no cover
     """
     This class provides allows the user to customize an MCMC via user-defined proposal distributions and a prior.
 
