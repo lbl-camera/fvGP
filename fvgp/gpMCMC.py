@@ -31,7 +31,7 @@ import time
 #                                                                         #
 
 # TODO:
-# *the proposal distribution has to receive and return parameters without knowing what they are
+# *
 
 
 class gpMCMC:  # pragma: no cover
@@ -81,7 +81,7 @@ class gpMCMC:  # pragma: no cover
                  break_condition=None):  # pragma: no cover
         start_time = time.time()
         n_updates = max(n_updates, 2)
-        if x0 is None: x0 = np.ones((self.dim))
+        if x0 is None: x0 = np.ones(self.dim)
         if not isinstance(x0, np.ndarray): raise Exception("x0 is not a numpy array")
         if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
         if break_condition is None: break_condition = lambda a: False
@@ -93,10 +93,14 @@ class gpMCMC:  # pragma: no cover
         # Initialize Metropolis
         x = x0.copy()
         likelihood = self.log_likelihood_function(x, self.args)
+        if info:
+            print("Starting likelihood. f(x)=", likelihood)
         prior = self.prior_function(x, self.args)
         #########################################################
         # Begin main loop
+        st = time.time()
         for i in np.arange(1, n_updates):
+            #print(i, time.time() - st)
             for obj in self.proposal_distributions:
                 x, prior, likelihood, jt = self._jump(x, obj, prior, likelihood)
                 obj.jump_trace.append(jt)
@@ -114,7 +118,7 @@ class gpMCMC:  # pragma: no cover
 
         # Collect trace objects to return
         arg_max = np.argmax(self.trace["f(x)"])
-        x = np.asarray(self.trace["x"]).T
+        x = np.asarray(self.trace["x"])
 
         return {"max f(x)": self.trace["f(x)"][arg_max],
                 "max x": x[arg_max],
@@ -128,8 +132,7 @@ class gpMCMC:  # pragma: no cover
     def _jump(self, x_old, obj, prior_eval, likelihood):  # pragma: no cover
         x_star = x_old.copy()
         if callable(obj.prop_dist):
-            print("obj indices: ", obj.indices)
-            x_star[obj.indices] = obj.prop_dist(x_old[obj.indices], obj)
+            x_star[obj.indices] = obj.prop_dist(x_old[obj.indices].copy(), obj)
         else:
             raise Exception("A proposal distribution is not callable.")
 
@@ -137,25 +140,25 @@ class gpMCMC:  # pragma: no cover
         jump_trace = 0.
         if prior_evaluation_x_star != -np.inf:
             likelihood_star = self.log_likelihood_function(x_star, self.args)
-            if np.isnan(likelihood_star): likelihood_star = -np.inf
+            if np.isnan(likelihood_star): raise Exception("Likelihood evaluated to NaN in gpMCMC")
             metr_ratio = np.exp(prior_evaluation_x_star + likelihood_star -
                                 prior_eval - likelihood)
             if np.isnan(metr_ratio):  metr_ratio = 0.
             if metr_ratio > np.random.uniform(0, 1, 1):
-                x = x_star.copy()
+                x = x_star
                 prior_eval = prior_evaluation_x_star
                 likelihood = likelihood_star
                 jump_trace = 1.
-                print("accepted")
+                #print("accepted")
             else:
-                x = x_old.copy()
-                print("NOT accepted")
+                x = x_old
+                #print("NOT accepted")
         else:
-            print("prior probability 0")
+            x = x_old
+            #print("prior probability 0")
 
-        print("old x  :", x_old)
-        print("new x  :", x)
-        input()
+        # print("old x  :", x_old)
+        # print("new x  :", x)
         return x, prior_eval, likelihood, jump_trace
 
     ###############################################################
@@ -172,7 +175,7 @@ class ProposalDistribution:  # pragma: no cover
                  c_1=.8,
                  K=10,
                  init_prop_Sigma=None,
-                 adapt_cov=False,
+                 adapt_cov=True,
                  args=None):  # pragma: no cover
         """
         Function to define a set of proposal distributions.
@@ -214,10 +217,12 @@ class ProposalDistribution:  # pragma: no cover
 
         if init_prop_Sigma is None and not callable(adapt_callable):
             init_prop_Sigma = np.identity(dim)
-        if callable(adapt_callable):
+        if callable(adapt_callable) and self.should_be_adapted:
             self.adapt = adapt_callable
-        else:
+        elif self.should_be_adapted:
             self.adapt = self._adapt
+        else:
+            self.adapt = self._no_adapt
 
         if args is None:
             self.args = {"prop_Sigma": init_prop_Sigma, "sigma_m": 2.4 ** 2 / dim}
@@ -225,29 +230,28 @@ class ProposalDistribution:  # pragma: no cover
             self.args = args
 
     #########################################################
-    def _adapt(
-        self,
-        end,
-        obj
-        ):  # pragma: no cover
-        k = 3
-        c_0 = self.c_0
-        c_1 = self.c_1
+    def _adapt(self, end, mcmc_obj):  # pragma: no cover
         K = self.K
-        r_opt = self.r_opt
-        prop_Sigma = self.args["prop_Sigma"]
-        sigma_m = self.args["sigma_m"]
-        jump_trace = self.jump_trace
-        trace = obj.trace["x"]
         if (end % K) == 0:
+            k = 3
+            c_0 = self.c_0
+            c_1 = self.c_1
+            r_opt = self.r_opt
+            prop_Sigma = self.args["prop_Sigma"]
+            sigma_m = self.args["sigma_m"]
+            jump_trace = self.jump_trace
+            trace = np.asarray(mcmc_obj.trace["x"]).T
             start = (end - K + 1)
             gamma2 = 1. / ((end / K) + k) ** c_1
             gamma1 = c_0 * gamma2
             r_hat = np.mean(jump_trace[start: end])
             sigma_m = np.exp(np.log(sigma_m) + gamma1 * (r_hat - r_opt))
-            if self.adapt_cov: prop_Sigma = prop_Sigma + gamma2 * (np.cov(trace[:, start: end]) - prop_Sigma)
-        self.args["prop_Sigma"] = prop_Sigma
-        self.args["sigma_m"] = sigma_m
+            if self.adapt_cov: prop_Sigma = prop_Sigma + gamma2 * (np.cov(trace[self.indices, start: end]) - prop_Sigma)
+            self.args["prop_Sigma"] = prop_Sigma
+            self.args["sigma_m"] = sigma_m
+
+    def _no_adapt(self, end, mcmc_obj):  # pragma: no cover
+        return
 
 
 ###############################################################
