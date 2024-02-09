@@ -159,9 +159,15 @@ class gpMCMC:  # pragma: no cover
     ###############################################################
     def _default_break_condition(self,obj):
         x = obj.trace["x"]
-        if len(x) > 201 and np.linalg.norm(
-            np.mean(x[-100:], axis=0) - np.mean(x[-200:-100], axis=0)) < 0.01 * np.linalg.norm(
-            np.mean(x[-100:], axis=0)): return True
+
+        if len(x) > 201:
+            latest_mean = np.mean(x[-100:], axis=0)
+            earlier_mean = np.mean(x[-200:-100], axis=0)
+            abs_diff = abs(latest_mean - earlier_mean)
+            max_index = np.argmax(abs_diff)
+            ratio = (abs_diff[max_index] / abs(latest_mean[max_index])) * 100.
+            if ratio < 0.1: return True
+            else: return False
         else: return False
     ###############################################################
     def _jump(self, x_old, obj, prior_eval, likelihood):  # pragma: no cover
