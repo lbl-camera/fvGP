@@ -39,6 +39,7 @@ class gp2Scale():
         scatter_data = self.x_data  ##data that can be scattered
         self.scatter_future = covariance_dask_client.scatter(
             scatter_data,workers = self.compute_workers ,broadcast = False)  ##scatter the data to compute workers, TEST if broadcast is better
+        self.sparse_covariance_matrix = None
 
     ##################################################################################
     ##################################################################################
@@ -77,6 +78,43 @@ class gp2Scale():
             kernel_caller = kernel_function
 
         ##scattering
+        results = list(map(self.harvest_result, distributed.as_completed(client.map(
+                        partial(kernel_caller,
+                                hyperparameters=hyperparameters,
+                                kernel=self.kernel),
+                                ranges_ij,
+                                [self.scatter_future] * len(ranges_ij)),
+                              with_results=True)))
+
+        #reshape the result set into COO components
+        data, i_s, j_s = map(np.hstack, zip(*results))
+        # mirror across diagonal
+        diagonal_mask = i_s != j_s
+        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
+                         np.hstack([i_s, j_s[diagonal_mask]]), \
+                         np.hstack([j_s, i_s[diagonal_mask]])
+        self.sparse_covariance_matrix = sparse.coo_matrix((data, (i_s, j_s)))
+        return sparse.coo_matrix((data, (i_s, j_s)))
+
+    def update_covariance(self, hyperparameters, client, batched=False):
+        """computes the covariance matrix from the kernel on HPC in sparse format"""
+        NUM_RANGES = self.num_batches
+        ranges_data = self.ranges(len(self.x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
+        ranges_input = self.ranges(len(self.x_input), NUM_RANGES)
+        ranges_ij = list(
+            itertools.product(ranges_data, ranges_input))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
+        #ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
+        if batched:
+            # number of batches shouldn't be less than the number of workers
+            batches = min(len(client.cluster.workers), len(ranges_ij))
+            # split ranges_ij into roughly equal batches
+            ranges_ij = [ranges_ij[i::batches] for i in range(batches)]
+
+            kernel_caller = kernel_function_batched
+        else:
+            kernel_caller = kernel_function
+
+        ##scattering
         results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
                               partial(kernel_caller,
@@ -93,8 +131,8 @@ class gp2Scale():
         data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
                          np.hstack([i_s, j_s[diagonal_mask]]), \
                          np.hstack([j_s, i_s[diagonal_mask]])
+        self.sparse_covariance_matrix = sparse.coo_matrix((data, (i_s, j_s)))
         return sparse.coo_matrix((data, (i_s, j_s)))
-
 
     @staticmethod
     def harvest_result(future_result):
@@ -436,7 +474,8 @@ class gpm2Scale(gp2Scale):  # pragma: no cover
 #########################################################################
 def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
     """
-    Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the covariance matrix being calculated.
+    Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the
+    covariance matrix being calculated.
     Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
     """
     st = time.time()
@@ -461,7 +500,8 @@ def kernel_function(range_ij, scatter_future, hyperparameters, kernel):
 
 def kernel_function_batched(range_ijs, scatter_future, hyperparameters, kernel):
     """
-    Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the covariance matrix being calculated.
+    Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the
+    covariance matrix being calculated.
     Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
     """
     data = []

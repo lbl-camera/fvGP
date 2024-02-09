@@ -74,14 +74,12 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
     if type(x0).__module__!='numpy' or isinstance(x0, np.float64):
         x0 = np.array(x0)
     p = len(x0)
-    invalid = False
     # If the supplied proposal covariance matrix is either not given or invalid,
     # just use the identity.
     if np.any(np.isnan(prop_Sigma)) or prop_Sigma.size != p**2:
         axis_std = np.linalg.norm(bounds, axis = 1)/10.
         prop_Sigma = np.diag(axis_std**2)
         prop_C = np.linalg.cholesky(prop_Sigma)
-        invalid = True
     else:
         try:
             # Initialize prop_C
@@ -89,7 +87,6 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
         except np.linalg.LinAlgError:
             prop_Sigma = np.eye(p)
             prop_C = np.eye(p)
-            invalid = True
     # Initialize sigma_m to the rule of thumb
     sigma_m = 2.4**2/p
     r_hat = 0

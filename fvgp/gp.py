@@ -18,8 +18,8 @@ from .gp2Scale import gp2Scale as gp2S
 from dask.distributed import Client
 from scipy.stats import norm
 
-# TODO:
 
+# TODO:
 
 class GP:
     """
@@ -131,13 +131,6 @@ class GP:
         If True, the data values `y_data` will be normalized to max(y_data) = 1, min(y_data) = 0.
         The default is False.
         Variances will be updated accordingly.
-    sparse_mode : bool, optional
-        When sparse_mode is enabled, the algorithm will use a user-defined kernel
-        function or, if that's not provided, an anisotropic Wendland kernel
-        and check for sparsity in the prior covariance. If sparsity is present,
-        sparse operations will be used to speed up computations.
-        Caution: the covariance is still stored at first in a dense format.
-        For more extreme scaling, check out the gp2Scale option.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
         This is an advanced feature for HPC GPs up to 10
@@ -219,7 +212,6 @@ class GP:
         gp_noise_function_grad=None,
         gp_mean_function=None,
         gp_mean_function_grad=None,
-        sparse_mode=False,
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
@@ -240,9 +232,8 @@ class GP:
         else:
             if not callable(gp_kernel_function):
                 raise Exception(
-                    "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters")
-            if not isinstance(x_data,list):
-                raise Exception("Non-Euclidean data has to be provided as a list")
+                    "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters.")
+            if not isinstance(x_data, list): raise Exception("Non-Euclidean data has to be provided as a list")
             input_space_dim = 1
             self.non_Euclidean = True
         if self.non_Euclidean and init_hyperparameters is None:
@@ -265,7 +256,6 @@ class GP:
         self.ram_economy = ram_economy
         self.args = args
         self.info = info
-        self.sparse_mode = sparse_mode
         self.store_inv = store_inv
         self.KVinv = None
         self.mcmc_info = None
@@ -276,10 +266,15 @@ class GP:
         if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(
             gp_noise_function)) and init_hyperparameters is None:
             warnings.warn(
-                "You have provided callables for kernel, mean, or noise \
-                functions but no initial hyperparameters.",
+                "You have provided callables for kernel, mean, or noise functions but no initial \n \
+                hyperparameters. It is likely they have to be defined for a success initialization",
                 stacklevel=2)
-            warnings.warn("It is likely they have to be defined for a success initialization.", stacklevel=2)
+        if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(
+            gp_noise_function)) and hyperparameter_bounds is None:
+            warnings.warn(
+                "You have provided callables for kernel, mean, or noise functions but no \n \
+                hyperparameter_bounds. That means they have to provided to the training.",
+                stacklevel=2)
 
         ##########################################
         #######prepare hyper parameters###########
@@ -303,22 +298,6 @@ class GP:
                                                      high=self.hyperparameter_bounds[:, 1],
                                                      size=len(self.hyperparameter_bounds))
         self.hyperparameters = init_hyperparameters
-        ##########################################
-        ##############preps for sparse mode#######
-        ##########################################
-        if self.sparse_mode and self.store_inv:
-            warnings.warn(
-                "sparse_mode and store_inv enabled but they should not be used together. \
-                I'll set store_inv = False.",
-                stacklevel=2)
-            self.store_inv = False
-        if self.sparse_mode and not callable(gp_kernel_function):
-            warnings.warn("You have chosen to activate sparse mode. Great! \n \
-                        But you have not supplied a kernel that is compactly supported. \n I will use an \
-                        anisotropic Wendland kernel for now.",
-                          stacklevel=2)
-            gp_kernel_function = self.wendland_anisotropic
-
         ###########################################
         #####gp2Scale##############################
         ###########################################
@@ -483,7 +462,7 @@ class GP:
         if isinstance(x_data, np.ndarray):
             if np.ndim(x_data) == 1: x_data = x_data.reshape(-1, 1)
             if self.input_space_dim != len(x_data[0]): raise ValueError(
-                "The input space dimension id not in agreement with the provided x_data.")
+                "The input space dimension is not in agreement with the provided x_data.")
         if np.ndim(y_data) == 2: y_data = y_data[:, 0]
 
         self.x_data = x_data
@@ -497,6 +476,10 @@ class GP:
                                      gp_kernel_function=self.kernel,
                                      covariance_dask_client=self.gp2Scale_dask_client,
                                      info=self.info)
+            #self.gp2Scale_obj.update(x_data, batch_size=self.gp2Scale_batch_size,
+            #                         gp_kernel_function=self.kernel,
+            #                         covariance_dask_client=self.gp2Scale_dask_client,
+            #                         info=self.info)
         ##########################################
         #######prepare noise covariances##########
         ##########################################
@@ -648,7 +631,7 @@ class GP:
         )
         self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
             self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
-                self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
+            self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
 
     ##################################################################################
     def train_async(self,
@@ -804,13 +787,15 @@ class GP:
                 l_o = self.neg_log_likelihood(self.hyperparameters)
                 if l_n - l_o < 0.000001:
                     self.hyperparameters = res
-                    self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
+                    (self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv,
+                     self.prior_mean_vec, self.V) = self._compute_GPpriorV(
                         self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
                     logger.debug("    fvGP async hyperparameter update successful")
                     logger.debug("    Latest hyperparameters: {}", self.hyperparameters)
                 else:
                     logger.debug(
-                        "    The update was attempted but the new hyperparameters led to a lower likelihood, so I kept the old ones")
+                        "    The update was attempted but the new hyperparameters led to a \n \
+                        lower likelihood, so I kept the old ones")
                     logger.debug(f"Old likelihood: {-l_o} at {self.hyperparameters}")
                     logger.debug(f"New likelihood: {-l_n} at {res}")
             except Exception as e:
@@ -917,7 +902,7 @@ class GP:
 
         if self.gp2Scale:
             method = 'mcmc'
-        #else:
+        # else:
         #    start_log_likelihood = self.log_likelihood(starting_hps)
         #    logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: ",
         #                 starting_hps, " with old log likelihood: ", start_log_likelihood)
@@ -1006,8 +991,8 @@ class GP:
         else:
             raise ValueError("No optimization mode specified in fvGP")
         ###################################################
-        #if method != 'mcmc': new_likelihood = self.log_likelihood(hyperparameters)
-        #if method != 'mcmc' and start_log_likelihood > new_likelihood:
+        # if method != 'mcmc': new_likelihood = self.log_likelihood(hyperparameters)
+        # if method != 'mcmc' and start_log_likelihood > new_likelihood:
         #    logger.debug(
         #        f"New hyperparameters: {hyperparameters} with log likelihood: {self.log_likelihood(hyperparameters)}")
         #    warning_str = "Old log marginal likelihood: " + str(
@@ -1033,7 +1018,8 @@ class GP:
         """
         if hyperparameters is None:
             K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V
+                (self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj,
+                 self.KVinv, self.prior_mean_vec, self.V)
         else:
             K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
                 self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv=False)
@@ -1076,7 +1062,7 @@ class GP:
         if hyperparameters is None:
             K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
                 self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
-                self.KVinv, self.prior_mean_vec, self.V
+                    self.KVinv, self.prior_mean_vec, self.V
         else:
             K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
                 self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv=False)
@@ -1180,25 +1166,26 @@ class GP:
     ######################Compute#Covariance#Matrix###################################
     ##################################################################################
     ##################################################################################
-    def _compute_GPpriorV(self, x_data, y_data, hyperparameters, calc_inv=False):
+    def _compute_GPpriorV(self, x_data, y_data, hyperparameters, calc_inv=False, overwrite=False):
         # get the prior mean
-        prior_mean_vec = self.mean_function(x_data, hyperparameters, self)
+        prior_mean_vec = self.mean_function(x_data, hyperparameters, self) #only update if overwrite=False
 
         # get the latest noise
         if callable(self.noise_function):
-            V = self.noise_function(x_data, hyperparameters, self)
+            V = self.noise_function(x_data, hyperparameters, self) #only update if overwrite=False
         else:
-            V = self.V
+            V = self.V #only update if overwrite=False
 
         # get K
         if self.gp2Scale:
             st = time.time()
             K = self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
+            #K = self.gp2Scale_obj.update_covariance(hyperparameters, self.gp2Scale_dask_client)
             Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
             if self.info: print("Transferring the covariance matrix to host done after ", time.time() - st,
                                 " seconds. sparsity = ", Ksparsity, flush=True)
         else:
-            K = self._compute_K(hyperparameters)
+            K = self._compute_K(hyperparameters) #only update if overwrite=False
 
         # check if shapes are correct
         if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
@@ -1221,15 +1208,12 @@ class GP:
                 except:
                     KVinvY, exit_code = minres(KV.tocsc(), y_data - prior_mean_vec)
                     factorization_obj = ("gp2Scale", None)
-                    if exit_code != 0:
-                        warnings.warn("CG solve not successful in gp2Scale. Trying MINRES")
-                        KVinvY, exit_code = minres(KV.tocsc(), y_data - prior_mean_vec)
                     if self.compute_device == "gpu":
                         gpu = True
                     else:
                         gpu = False
                     KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
-                                                lanczos_degree=20, error_rtol=0.1, gpu=False,
+                                                lanczos_degree=20, error_rtol=0.1, gpu=gpu,
                                                 return_info=True, plot=False, verbose=self.info)
             # if the problem is large go with rand. lin. algebra straight away
             else:
@@ -1237,25 +1221,15 @@ class GP:
                 factorization_obj = ("gp2Scale", None)
                 KVinvY, exit_code = minres(KV.tocsc(), y_data - prior_mean_vec)
                 if self.info: print("MINRES solve done after ", time.time() - st, "seconds.")
-
                 if self.compute_device == "gpu":
                     gpu = True
                 else:
                     gpu = False
                 if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
                 KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
-                                            lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu=False,
+                                            lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu=gpu,
                                             return_info=True, plot=False, verbose=self.info)
                 if self.info: print("logdet/LU done after ", time.time() - st, "seconds.")
-
-            KVinv = None
-        elif self.sparse_mode and self._is_sparse(KV):
-            KV = csc_matrix(KV)
-            LU = splu(KV)
-            factorization_obj = ("LU", LU)
-            KVinvY = lu.solve(y_data - prior_mean_vec)
-            upper_diag = abs(lu.u.diagonal())
-            KVlogdet = np.sum(np.log(upper_diag))
             KVinv = None
         else:
             c, l = cho_factor(KV)
@@ -1703,7 +1677,7 @@ class GP:
             and L is the dimensionality of the output space.
 
         Return
-        -------
+        ------
         Solution : dict
         """
         x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
@@ -1908,8 +1882,8 @@ class GP:
 
         res = self.posterior_mean(x_pred, x_out=None)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + np.identity(len(x_pred))*1e-9
-        comp_cov = comp_cov+np.identity(len(comp_cov))*1e-9
+        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + np.identity(len(x_pred)) * 1e-9
+        comp_cov = comp_cov + np.identity(len(comp_cov)) * 1e-9
         return {"x": x_pred,
                 "gp posterior mean": gp_mean,
                 "gp posterior covariance": gp_cov,
@@ -1951,7 +1925,7 @@ class GP:
 
         gp_mean = self.posterior_mean(x_pred, x_out=None)["f(x)"]
         gp_mean_grad = self.posterior_mean_grad(x_pred, direction=direction, x_out=None)["df/dx"]
-        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + np.identity(len(x_pred))*1e-9
+        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + np.identity(len(x_pred)) * 1e-9
         gp_cov_grad = self.posterior_covariance_grad(x_pred, direction=direction, x_out=None)["dS/dx"]
         comp_cov = comp_cov + np.identity(len(comp_cov)) * 1e-9
         return {"x": x_pred,
@@ -2566,7 +2540,7 @@ class GP:
 
     def wendland_anisotropic(self, x1, x2, hyperparameters, obj):
         """
-        Function for the Wendland kernel, default kernel if `sparse_mode` is enabled.
+        Function for the Wendland kernel.
         The Wendland kernel is compactly supported, leading to sparse covariance matrices.
 
         Parameters
@@ -2819,9 +2793,9 @@ class GP:
     #######################VALIDATION###################################################
     ####################################################################################
     def _crps_s(self, x, mu, sigma):
-        return sigma * ((1. / np.sqrt(np.pi))
-                        - 2. * norm.pdf((x - mu) / sigma)
-                        - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.)))
+        return np.mean(abs(sigma * ((1. / np.sqrt(np.pi))
+                                    - 2. * norm.pdf((x - mu) / sigma)
+                                    - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.)))))
 
     def crps(self, x_test, y_test):
         """
@@ -2843,9 +2817,8 @@ class GP:
 
         mean = self.posterior_mean(x_test)["f(x)"]
         sigma = self.posterior_covariance(x_test)["v(x)"]
-        r = np.empty((len(x_test)))
-        for i in range(len(x_test)): r[i] = self._crps_s(y_test[i], mean[i], sigma[i])
-        return np.sum(r) / len(r)
+        r = self._crps_s(y_test, mean, sigma)
+        return r
 
     def rmse(self, x_test, y_test):
         """
@@ -2868,33 +2841,6 @@ class GP:
         v1 = y_test
         v2 = self.posterior_mean(x_test)["f(x)"]
         return np.sqrt(np.sum((v1 - v2) ** 2) / len(v1))
-
-    def make_2d_x_pred(self, bx, by, resx=100, resy=100):  # pragma: no cover
-        """
-        This is a purely convenience-driven function calculating prediction points
-        on a grid.
-
-        Parameters
-        ----------
-        bx : np.ndarray
-            A numpy array of shape (2) defining lower and upper bounds in x direction.
-        by : np.ndarray
-            A numpy array of shape (2) defining lower and upper bounds in y direction.
-        resx : int, optional
-            Resolution in x direction. Default = 100.
-        resy : int, optional
-            Resolution in y direction. Default = 100.
-
-        Return
-        ------
-        prediction points : np.ndarray
-        """
-
-        x = np.linspace(bx[0], bx[1], resx)
-        y = np.linspace(by[0], by[1], resy)
-        from itertools import product
-        x_pred = np.array(list(product(x, y)))
-        return x_pred
 
     def make_1d_x_pred(self, b, res=100):  # pragma: no cover
         """
