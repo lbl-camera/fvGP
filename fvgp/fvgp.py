@@ -140,13 +140,6 @@ class fvGP(GP):
         If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0.
         The default is False.
         Variances will be updated accordingly.
-    sparse_mode : bool, optional
-        When sparse_mode is enabled, the algorithm will use a user-defined kernel function or,
-        if that's not provided, an anisotropic Wendland kernel
-        and check for sparsity in the prior covariance. If sparsity is present,
-        sparse operations will be used to speed up computations.
-        Caution: the covariance is still stored at first in a dense format. For more extreme scaling,
-        check out the gp2Scale option.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
         This is an advanced feature for HPC GPs up to 10
@@ -172,7 +165,7 @@ class fvGP(GP):
         True. Note, the training will always use Cholesky or LU decomposition instead of the inverse
         for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
-        If sparse_mode or gp2Scale is used, store_inv will be set to False.
+        If gp2Scale is used, store_inv will be set to False.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood
         is/are used for the training.
@@ -234,7 +227,6 @@ class fvGP(GP):
         gp_noise_function_grad=None,
         gp_mean_function=None,
         gp_mean_function_grad=None,
-        sparse_mode=False,
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
@@ -311,7 +303,6 @@ class fvGP(GP):
                 gp_mean_function_grad=gp_mean_function_grad,
                 gp_noise_function=gp_noise_function,
                 gp_noise_function_grad=gp_noise_function_grad,
-                sparse_mode=sparse_mode,
                 gp2Scale=gp2Scale,
                 gp2Scale_dask_client=gp2Scale_dask_client,
                 gp2Scale_batch_size=gp2Scale_batch_size,
