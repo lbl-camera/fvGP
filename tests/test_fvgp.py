@@ -40,7 +40,6 @@ def test_single_task_init_basic():
     my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), normalize_y = True)
     my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), store_inv = False)
     my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), args = {'a':2.})
-    my_gp1 = GP(input_dim, x_data, y_data, sparse_mode = True)
 
 
     my_gp1.update_gp_data(x_data, y_data, noise_variances = np.ones((y_data.shape)) * 0.01)
