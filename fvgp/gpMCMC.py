@@ -81,7 +81,8 @@ class gpMCMC:  # pragma: no cover
     def run_mcmc(self, n_updates=10000,
                  x0=None,
                  info=False,
-                 break_condition=None):  # pragma: no cover
+                 break_condition=None,
+                 run_in_every_iteration=None):  # pragma: no cover
         """
         This function runs the mcmc.
 
@@ -103,6 +104,8 @@ class gpMCMC:  # pragma: no cover
         Return
         ------
         trace information : dict
+            Mean and variances are presented of the last 1% of x. All other returns consider all x.
+            x here are all the accepted positions in the MCMC.
 
         """
         start_time = time.time()
@@ -112,6 +115,7 @@ class gpMCMC:  # pragma: no cover
         if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
         if break_condition is None: break_condition = lambda a: False
         elif break_condition == "default": break_condition = self._default_break_condition
+        if run_in_every_iteration is None: run_in_every_iteration = lambda a: False
 
         self.trace = {"f(x)": [], "x": [], "time stamp": []}
         # Set up and initialize trace objects
@@ -136,6 +140,7 @@ class gpMCMC:  # pragma: no cover
             self.trace["x"].append(x)
             self.trace["f(x)"].append(likelihood)
             self.trace["time stamp"].append(time.time() - start_time)
+            run_in_every_iteration(self)
 
             if info and (i % 100) == 0:
                 print("Finished " + str(i) + " out of " + str(n_updates), " iterations. f(x)=", likelihood)
@@ -147,13 +152,12 @@ class gpMCMC:  # pragma: no cover
         x = np.asarray(self.trace["x"])
         dist_index = int(len(x) - (len(x) / 100))
         self.mcmc_info = {"f(x)": self.trace["f(x)"],
-                     "max f(x)": self.trace["f(x)"][arg_max],
-                     "max x": x[arg_max],
-                     "trace": self.trace,
-                     "distribution": x[dist_index:],
-                     "full distribution": x,
-                     "distribution mean": np.mean(x[dist_index:], axis=0),
-                     "distribution var": np.var(x[dist_index:], axis=0)}
+                          "max f(x)": self.trace["f(x)"][arg_max],
+                          "max x": x[arg_max],
+                          "time stamps": self.trace["time stamp"],
+                          "x": x,
+                          "mean(x)": np.mean(x[dist_index:], axis=0),
+                          "var(x)": np.var(x[dist_index:], axis=0)}
 
         return self.mcmc_info
     ###############################################################

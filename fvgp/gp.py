@@ -19,7 +19,7 @@ from dask.distributed import Client
 from scipy.stats import norm
 
 
-# TODO:
+# TODO: search below "TODO"
 
 class GP:
     """
@@ -55,7 +55,7 @@ class GP:
     hyperparameter_bounds : np.ndarray, optional
         A 2d numpy array of shape (N x 2), where N is the number of needed hyperparameters.
         The default is None, in which case the hyperparameter_bounds are estimated from the domain size
-        and the initial y_data. If normalize_y is True or the data changes significantly,
+        and the initial y_data. If the data set changes significantly,
         the hyperparameters and the bounds should be changed/retrained. Initial hyperparameters and bounds
         can also be set in the train calls. The default only works for the default kernels.
     noise_variances : np.ndarray, optional
@@ -127,10 +127,6 @@ class GP:
         hyperparameters. If `gp_noise_function` is provided but no gradient function,
         a finite-difference approximation will be used.
         The same rules regarding ram economy as for the kernel definition apply here.
-    normalize_y : bool, optional
-        If True, the data values `y_data` will be normalized to max(y_data) = 1, min(y_data) = 0.
-        The default is False.
-        Variances will be updated accordingly.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
         This is an advanced feature for HPC GPs up to 10
@@ -215,7 +211,6 @@ class GP:
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
-        normalize_y=False,
         store_inv=True,
         ram_economy=False,
         args=None,
@@ -224,6 +219,7 @@ class GP:
         ########################################
         ###assign and check some attributes#####
         ########################################
+        assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
         if isinstance(x_data, np.ndarray):
             if np.ndim(x_data) == 1: x_data = x_data.reshape(-1, 1)
             if input_space_dim != len(x_data[0]):
@@ -247,7 +243,6 @@ class GP:
                 raise Exception(
                     "You have specified the 'gpu' as your compute device. You need to install pytorch\
                      manually for this to work.")
-        self.normalize_y = normalize_y
         self.input_space_dim = input_space_dim
         self.x_data = x_data
         self.point_number = len(self.x_data)
@@ -418,15 +413,6 @@ class GP:
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
 
-        #########################################
-        ###########normalization#################
-        #########################################
-        if self.normalize_y:
-            warnings.warn(
-                "y_data and noise normalized. Make sure your hyperparameters and \
-                their bounds are still valid. They will not be recomputed.")
-            self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
-            self.V = (1. / (self.y_max - self.y_min) ** 2) * self.V
 
         ##########################################
         # compute the prior########################
@@ -436,20 +422,23 @@ class GP:
 
     def update_gp_data(
         self,
-        x_data,
-        y_data,
+        x_new,
+        y_new,
         noise_variances=None,
+        overwrite=False
     ):
         """
         This function updates the data in the gp object instance.
-        The data will NOT be appended but overwritten!
-        Please provide the full updated data set.
+        The data will only be overwritten of `overwrite = True`, otherwise
+        the data will be appended. This is a change from earlier versions.
+        Now, the default is not to overwrite the existing data.
+
 
         Parameters
         ----------
-        x_data : np.ndarray
+        x_new : np.ndarray
             The point positions. Shape (V x D), where D is the `input_space_dim`.
-        y_data : np.ndarray
+        y_new : np.ndarray
             The values of the data points. Shape (V,1) or (V).
         noise_variances : np.ndarray, optional
             An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance.
@@ -458,28 +447,32 @@ class GP:
             callable will be used; if the callable is not provided the noise variances
             will be set to `abs(np.mean(y_data)) / 100.0`. If you provided a noise function,
             the noise_variances will be ignored.
+        overwrite : bool, optional
+            Indication whether to overwrite the existing dataset. Default = False.
+            In the default case, data will be appended.
         """
-        if isinstance(x_data, np.ndarray):
-            if np.ndim(x_data) == 1: x_data = x_data.reshape(-1, 1)
-            if self.input_space_dim != len(x_data[0]): raise ValueError(
+        if isinstance(x_new, np.ndarray):
+            if np.ndim(x_new) == 1: x_data = x_new.reshape(-1, 1)
+            if self.input_space_dim != len(x_new[0]): raise ValueError(
                 "The input space dimension is not in agreement with the provided x_data.")
-        if np.ndim(y_data) == 2: y_data = y_data[:, 0]
+        if np.ndim(y_new) == 2: y_data = y_new[:, 0]
 
-        self.x_data = x_data
+        #update class instance x_data, and y_data, and set noise
+        if overwrite:
+            self.x_data = x_new
+            self.y_data = y_new
+        else:
+            x_data_old = self.x_data.copy()
+            y_data_old = self.y_data.copy()
+            if self.non_Euclidean: self.x_data = self.x_data + x_new
+            else: self.x_data = np.row_stack([self.x_data, x_new])
+            self.y_data = np.append(self.y_data, y_new)
+            if noise_variances is not None: noise_variances = np.append(np.diag(self.V), noise_variances)
         self.point_number = len(self.x_data)
-        self.y_data = y_data
         ###########################################
         #####gp2Scale##############################
         ###########################################
-        if self.gp2Scale:
-            self.gp2Scale_obj = gp2S(x_data, batch_size=self.gp2Scale_batch_size,
-                                     gp_kernel_function=self.kernel,
-                                     covariance_dask_client=self.gp2Scale_dask_client,
-                                     info=self.info)
-            #self.gp2Scale_obj.update(x_data, batch_size=self.gp2Scale_batch_size,
-            #                         gp_kernel_function=self.kernel,
-            #                         covariance_dask_client=self.gp2Scale_dask_client,
-            #                         info=self.info)
+        if self.gp2Scale: self.gp2Scale_obj.update(x_new, covariance_dask_client=self.gp2Scale_dask_client)
         ##########################################
         #######prepare noise covariances##########
         ##########################################
@@ -505,20 +498,17 @@ class GP:
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array.")
 
-        #########################################
-        ###########normalization#################
-        #########################################
-        if self.normalize_y:
-            warnings.warn(
-                "y_data and noise normalized. Make sure your hyperparameters and \
-                their bounds are still valid. They will not be recomputed.")
-            self.y_data, self.y_min, self.y_max = self._normalize_y_data(self.y_data)
-            self.V = (1. / (self.y_max - self.y_min) ** 2) * self.V
         ######################################
         #####transform to index set###########
         ######################################
-        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
-            self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
+        if overwrite:
+            self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
+                self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
+                self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
+        else:
+            self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
+                self.KVinv, self.prior_mean_vec, self.V = self._update_GPpriorV(
+                x_data_old, x_new,  y_data_old, y_new, self.hyperparameters, calc_inv=self.store_inv)
 
     ###################################################################################
     ###################################################################################
@@ -568,7 +558,7 @@ class GP:
             A numpy array of shape (D x 2), defining the bounds for the optimization.
             A 2d numpy array of shape (N x 2), where N is the number of hyperparameters.
             The default is None, in which case the hyperparameter_bounds are estimated from the domain size
-            and the y_data. If normalize_y is True or the data changes significantly,
+            and the y_data. If the data set changes significantly,
             the hyperparameters and the bounds should be changed/retrained.
             The default only works for the default kernels.
         init_hyperparameters : np.ndarray, optional
@@ -674,7 +664,7 @@ class GP:
             A numpy array of shape (D x 2), defining the bounds for the optimization.
             A 2d numpy array of shape (N x 2), where N is the number of hyperparameters.
             The default is None, in which case the hyperparameter_bounds are estimated from the domain size
-            and the y_data. If normalize_y is True or the data changes significantly,
+            and the y_data. If the data set changes significantly,
             the hyperparameters and the bounds should be changed/retrained.
             The default only works for the default kernels.
         init_hyperparameters : np.ndarray, optional
@@ -1166,26 +1156,27 @@ class GP:
     ######################Compute#Covariance#Matrix###################################
     ##################################################################################
     ##################################################################################
-    def _compute_GPpriorV(self, x_data, y_data, hyperparameters, calc_inv=False, overwrite=False):
+    def _compute_GPpriorV(self, x_data, y_data, hyperparameters, calc_inv=False):
         # get the prior mean
         prior_mean_vec = self.mean_function(x_data, hyperparameters, self) #only update if overwrite=False
-
+        assert np.ndim(prior_mean_vec) == 1
         # get the latest noise
-        if callable(self.noise_function):
-            V = self.noise_function(x_data, hyperparameters, self) #only update if overwrite=False
-        else:
-            V = self.V #only update if overwrite=False
+        if callable(self.noise_function): V = self.noise_function(x_data, hyperparameters, self)
+        else: V = self.V
+        assert np.ndim(V) == 2
 
         # get K
+        try_sparse_LU = False
         if self.gp2Scale:
             st = time.time()
             K = self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
             #K = self.gp2Scale_obj.update_covariance(hyperparameters, self.gp2Scale_dask_client)
             Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
+            if len(x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
             if self.info: print("Transferring the covariance matrix to host done after ", time.time() - st,
                                 " seconds. sparsity = ", Ksparsity, flush=True)
         else:
-            K = self._compute_K(hyperparameters) #only update if overwrite=False
+            K = self._compute_K(x_data, x_data, hyperparameters)
 
         # check if shapes are correct
         if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
@@ -1194,37 +1185,83 @@ class GP:
         KV = K + V
 
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
+        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
+                                                calc_inv=calc_inv, try_sparse_LU=try_sparse_LU)
+
+        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
+
+    ##################################################################################
+
+    def _update_GPpriorV(self, x_data, x_new, y_data, y_new, hyperparameters, calc_inv=False):
+        # get the prior mean
+        prior_mean_vec = np.append(self.prior_mean_vec, self.mean_function(x_new, hyperparameters, self))
+        assert np.ndim(prior_mean_vec) == 1
+        # get the latest noise
+        if callable(self.noise_function): V = self.noise_function(self.x_data, hyperparameters, self)
+        else: V = self.V
+        assert np.ndim(V) == 2
+        # get K
+        try_sparse_LU = False
+        if self.gp2Scale:
+            st = time.time()
+            K = self.gp2Scale_obj.update_covariance(hyperparameters, self.gp2Scale_dask_client, self.K)
+            Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
+            if len(x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
+            if self.info: print("Transferring the covariance matrix to host done after ", time.time() - st,
+                                " seconds. sparsity = ", Ksparsity, flush=True)
+        else:
+            #K = self._compute_K(x_data, x_new, hyperparameters) ####here we could use block matrices to make this faster TODO
+            off_diag = self._compute_K(x_data, x_new, hyperparameters)
+            K = np.block([
+                         [self.K,          off_diag],
+                         [off_diag.T,      self._compute_K(x_new, x_new, hyperparameters)]
+                         ])
+        # check if shapes are correct
+        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
+
+        # get K + V
+        KV = K + V
+        y_data = np.append(y_data, y_new)
+        # get Kinv/KVinvY, LU, Chol, logdet(KV)
+
+        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
+                                                     calc_inv=calc_inv, try_sparse_LU=try_sparse_LU)
+
+        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
+
+    ##################################################################################
+    def _compute_gp_linalg(self, vec, KV, calc_inv=False ,try_sparse_LU = False):
+        st = time.time()
         if self.gp2Scale:
             from imate import logdet
             # try fast but RAM intensive SuperLU first
-            if len(x_data) < 50000 and Ksparsity < 0.0001:
+            if try_sparse_LU:
                 try:
                     LU = splu(KV.tocsc())
                     factorization_obj = ("LU", LU)
-                    KVinvY = LU.solve(y_data - prior_mean_vec)
+                    KVinvY = LU.solve(vec)
                     upper_diag = abs(LU.U.diagonal())
                     KVlogdet = np.sum(np.log(upper_diag))
+                    if self.info: print("LU done after", time.time() - st, "seconds.")
                 # if that did not work, do random lin algebra magic
                 except:
-                    KVinvY, exit_code = minres(KV.tocsc(), y_data - prior_mean_vec)
+                    KVinvY, exit_code = minres(KV.tocsc(), vec)
                     factorization_obj = ("gp2Scale", None)
-                    if self.compute_device == "gpu":
-                        gpu = True
-                    else:
-                        gpu = False
+                    if self.compute_device == "gpu": gpu = True
+                    else: gpu = False
+                    if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
                     KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                                                 lanczos_degree=20, error_rtol=0.1, gpu=gpu,
                                                 return_info=True, plot=False, verbose=self.info)
+                    if self.info: print("logdet/LU done after ", time.time() - st, "seconds.")
             # if the problem is large go with rand. lin. algebra straight away
             else:
                 if self.info: print("MINRES solve in progress ...", time.time() - st, "seconds.")
                 factorization_obj = ("gp2Scale", None)
-                KVinvY, exit_code = minres(KV.tocsc(), y_data - prior_mean_vec)
+                KVinvY, exit_code = minres(KV.tocsc(), vec)
                 if self.info: print("MINRES solve done after ", time.time() - st, "seconds.")
-                if self.compute_device == "gpu":
-                    gpu = True
-                else:
-                    gpu = False
+                if self.compute_device == "gpu": gpu = True
+                else: gpu = False
                 if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
                 KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                                             lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu=gpu,
@@ -1234,20 +1271,19 @@ class GP:
         else:
             c, l = cho_factor(KV)
             factorization_obj = ("Chol", c, l)
-            KVinvY = cho_solve((c, l), y_data - prior_mean_vec)
+            KVinvY = cho_solve((c, l), vec)
             upper_diag = abs(c.diagonal())
             KVlogdet = 2.0 * np.sum(np.log(upper_diag))
             if calc_inv:
                 KVinv = self._inv(KV)
             else:
                 KVinv = None
-
-        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
+        return KVinvY, KVlogdet, factorization_obj, KVinv
 
     ##################################################################################
-    def _compute_K(self, hyperparameters):
+    def _compute_K(self, x1, x2, hyperparameters):
         """computes the covariance matrix from the kernel"""
-        K = self.kernel(self.x_data, self.x_data, hyperparameters, self)
+        K = self.kernel(x1, x2, hyperparameters, self)
         return K
 
     ##################################################################################
@@ -2749,8 +2785,18 @@ class GP:
         data = (data - min_d) / (max_d - min_d)
         return data, min_d, max_d
 
-    def _normalize_y_data(self, y_data):
-        return self._normalize(self.y_data)
+    def normalize_y_data(self, y_data):
+        """
+        Function to normalize the y_data.
+        The user is responsible to normalize the noise accordingly.
+        This function will not update the object instance.
+
+        Parameters
+        ----------
+        y_data : np.ndarray
+            Numpy array of shape (U).
+        """
+        return self._normalize(y_data)
 
     def _normalize_x_data(self, x_data):
         n_x = np.empty(x_data.shape)

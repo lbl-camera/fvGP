@@ -136,10 +136,6 @@ class fvGP(GP):
         If ``gp_noise_function'' is provided but no gradient function,
         a finite-difference approximation will be used.
         The same rules regarding ram economy as for the kernel definition apply here.
-    normalize_y : bool, optional
-        If True, the data values ``y_data'' will be normalized to max(y_data) = 1, min(y_data) = 0.
-        The default is False.
-        Variances will be updated accordingly.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
         This is an advanced feature for HPC GPs up to 10
@@ -230,7 +226,6 @@ class fvGP(GP):
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
-        normalize_y=False,
         store_inv=True,
         ram_economy=False,
         args=None,
@@ -307,7 +302,6 @@ class fvGP(GP):
                 gp2Scale_dask_client=gp2Scale_dask_client,
                 gp2Scale_batch_size=gp2Scale_batch_size,
                 store_inv=store_inv,
-                normalize_y=normalize_y,
                 ram_economy=ram_economy,
                 args=args,
                 info=info)

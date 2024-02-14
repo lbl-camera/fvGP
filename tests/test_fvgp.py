@@ -37,7 +37,7 @@ x_pred = np.random.rand(10, input_dim)
 def test_single_task_init_basic():
     my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu')
     my_gp1 = GP(input_dim, x_data, y_data)
-    my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), normalize_y = True)
+    my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), store_inv = False)
     my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), args = {'a':2.})
 
@@ -64,7 +64,7 @@ def test_single_task_init_basic():
 
 def test_single_task_init_advanced():
     my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
-        compute_device="cpu", normalize_y = True, store_inv = True, ram_economy = True)
+        compute_device="cpu", store_inv = True, ram_economy = True)
 
 def test_train_basic():
     my_gp1 = GP(input_dim, x_data, y_data, np.array([1., 1., 1., 1., 1., 1.]))
@@ -126,7 +126,7 @@ def test_train_basic():
 
 def test_train_hgdl():
     my_gp2 = GP(input_dim, x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]), noise_variances=np.zeros(y_data.shape) + 0.01,
-        compute_device="cpu", normalize_y = True, store_inv = True, ram_economy = True)
+        compute_device="cpu", store_inv = True, ram_economy = True)
 
 
     my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
@@ -135,7 +135,7 @@ def test_train_hgdl():
 
 def test_train_hgdl_async():
     my_gp2 = GP(input_dim, x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]),noise_variances=np.zeros(y_data.shape) + 0.01,
-        compute_device="cpu", normalize_y = True, store_inv = True, ram_economy = True)
+        compute_device="cpu", store_inv = True, ram_economy = True)
 
     opt_obj = my_gp2.train_async(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             max_iter = 5000)
