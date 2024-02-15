@@ -1207,7 +1207,6 @@ class GP:
             if self.info: print("Transferring the covariance matrix to host done after ", time.time() - st,
                                 " seconds. sparsity = ", Ksparsity, flush=True)
         else:
-            #K = self._compute_K(x_data, x_new, hyperparameters) ####here we could use block matrices to make this faster TODO
             off_diag = self._compute_K(x_data, x_new, hyperparameters)
             K = np.block([
                          [self.K,          off_diag],
@@ -1227,7 +1226,7 @@ class GP:
         return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
 
     ##################################################################################
-    def _compute_gp_linalg(self, vec, KV, calc_inv=False ,try_sparse_LU = False):
+    def _compute_gp_linalg(self, vec, KV, calc_inv=False, try_sparse_LU=False):
         st = time.time()
         if self.gp2Scale:
             from imate import logdet

@@ -118,7 +118,6 @@ class gp2Scale():
         ranges_ij = list(itertools.product(ranges_data, ranges_input))
         ranges_ij2 = list(itertools.product(ranges_input, ranges_input))
 
-
         kernel_caller = kernel_function_update
 
         #K = np.block([[A, B],
@@ -138,7 +137,8 @@ class gp2Scale():
         B = sparse.coo_matrix((data, (i_s, j_s)))
 
         # mirror across diagonal
-
+        ranges_ij2 = [range_ij2 for range_ij2 in ranges_ij2 if range_ij2[0][0] <= range_ij2[1][0]]  # filter lower diagonal
+        kernel_caller = kernel_function
         results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
                               partial(kernel_caller,
@@ -149,6 +149,10 @@ class gp2Scale():
                               [self.x_new_scatter_future] * len(ranges_ij2)),
                               with_results=True)))
         data, i_s, j_s = map(np.hstack, zip(*results))
+        diagonal_mask = i_s != j_s
+        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
+            np.hstack([i_s, j_s[diagonal_mask]]), \
+            np.hstack([j_s, i_s[diagonal_mask]])
         D = sparse.coo_matrix((data, (i_s, j_s)))
 
         res = block_array([[cov,           B],
