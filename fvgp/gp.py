@@ -311,14 +311,15 @@ class GP:
 
             if not callable(gp_kernel_function):
                 warnings.warn("You have chosen to activate gp2SCale. A powerful tool! \n \
-                        But you have not supplied a kernel that is compactly supported. \n I will use an anisotropic Wendland kernel for now.",
+                        But you have not supplied a kernel that is compactly supported. \n \
+                        I will use an anisotropic Wendland kernel for now.",
                               stacklevel=2)
                 if compute_device == "cpu":
                     gp_kernel_function = wendland_anisotropic_gp2Scale_cpu
                 elif compute_device == "gpu":
                     gp_kernel_function = wendland_anisotropic_gp2Scale_gpu
 
-            self.gp2Scale_obj = gp2S(x_data, batch_size=gp2Scale_batch_size,
+            self.gp2Scale_obj = gp2S(batch_size=gp2Scale_batch_size,
                                      gp_kernel_function=gp_kernel_function,
                                      covariance_dask_client=gp2Scale_dask_client,
                                      info=info)
@@ -455,7 +456,7 @@ class GP:
             if np.ndim(x_new) == 1: x_data = x_new.reshape(-1, 1)
             if self.input_space_dim != len(x_new[0]): raise ValueError(
                 "The input space dimension is not in agreement with the provided x_data.")
-        if np.ndim(y_new) == 2: y_data = y_new[:, 0]
+        if np.ndim(y_new) == 2: y_new = y_new[:, 0]
 
         #update class instance x_data, and y_data, and set noise
         if overwrite:
@@ -469,10 +470,6 @@ class GP:
             self.y_data = np.append(self.y_data, y_new)
             if noise_variances is not None: noise_variances = np.append(np.diag(self.V), noise_variances)
         self.point_number = len(self.x_data)
-        ###########################################
-        #####gp2Scale##############################
-        ###########################################
-        if self.gp2Scale: self.gp2Scale_obj.update(x_new, covariance_dask_client=self.gp2Scale_dask_client)
         ##########################################
         #######prepare noise covariances##########
         ##########################################
@@ -1169,7 +1166,7 @@ class GP:
         try_sparse_LU = False
         if self.gp2Scale:
             st = time.time()
-            K = self.gp2Scale_obj.compute_covariance(hyperparameters, self.gp2Scale_dask_client)
+            K = self.gp2Scale_obj.compute_covariance(x_data, hyperparameters, self.gp2Scale_dask_client)
             #K = self.gp2Scale_obj.update_covariance(hyperparameters, self.gp2Scale_dask_client)
             Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
             if len(x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
@@ -1204,7 +1201,7 @@ class GP:
         try_sparse_LU = False
         if self.gp2Scale:
             st = time.time()
-            K = self.gp2Scale_obj.update_covariance(hyperparameters, self.gp2Scale_dask_client, self.K)
+            K = self.gp2Scale_obj.update_covariance(x_new, hyperparameters, self.gp2Scale_dask_client, self.K)
             Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
             if len(x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
             if self.info: print("Transferring the covariance matrix to host done after ", time.time() - st,

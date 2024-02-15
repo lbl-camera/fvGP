@@ -312,6 +312,7 @@ class fvGP(GP):
         y_data,
         output_positions = None,
         noise_variances = None,
+        overwrite = False
         ):
 
         """
@@ -357,9 +358,9 @@ class fvGP(GP):
         #####transform to index set###########
         ######################################
         x_data, y_data, noise_variances = self._transform_index_set(x_data,y_data,noise_variances, self.output_positions)
-        super().update_gp_data(self.x_data, self.y_data, noise_variances)
+        super().update_gp_data(self.x_data, self.y_data, noise_variances, overwrite=overwrite)
 
-   ################################################################################################
+    ################################################################################################
     def _compute_standard_output_positions(self, point_number):
         value_pos = np.zeros((point_number, self.output_num, self.output_dim))
         for j in range(self.output_num):

@@ -30,6 +30,11 @@ input_dim = 5
 
 x_data = np.random.rand(N, input_dim)
 y_data = np.sin(np.linalg.norm(x_data, axis=1))
+
+x_new = np.random.rand(3, input_dim)
+y_new = np.sin(np.linalg.norm(x_new, axis=1))
+
+
 x_pred = np.random.rand(10, input_dim)
 
 
@@ -159,7 +164,8 @@ def test_multi_task():
     y_data[:,1] = np.cos(np.linalg.norm(x_data, axis=1))
 
     my_fvgp = fvGP(input_dim,1,2, x_data, y_data, init_hyperparameters = np.array([1, 1]), hyperparameter_bounds = np.array([[0.,1.],[0.,1.]]), gp_kernel_function=mkernel)
-    my_fvgp.update_gp_data(x_data, y_data)
+    my_fvgp.update_gp_data(x_data, y_data, overwrite = True)
+    my_fvgp.update_gp_data(x_data, y_data, overwrite = False)
     my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10]]),
             method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2)
     my_fvgp.posterior_mean(np.random.rand(2,5), x_out = np.zeros((1,1)))["f(x)"]
@@ -172,6 +178,11 @@ def test_gp2Scale(client):
     N = 2000
     x_data = np.random.rand(N,input_dim)
     y_data = np.sin(np.linalg.norm(x_data,axis = 1) * 5.0)
+
+    x_new = np.random.rand(3, input_dim)
+    y_new = np.sin(np.linalg.norm(x_new, axis=1))
+
+
     hps_n = 2
 
     hps_bounds = np.array([[0.1,10.],    ##signal var of stat kernel
@@ -180,8 +191,51 @@ def test_gp2Scale(client):
 
     init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
     my_gp2S = GP(1, x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client)
+    
+    my_gp2S.update_gp_data(x_data,y_data, overwrite = True)
+    my_gp2S.update_gp_data(x_new,y_new, overwrite = True)
 
     my_gp2S.train(hyperparameter_bounds=hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
+
+    def obj_func(hps,args):
+        return my_gp2S.log_likelihood(hyperparameters=hps[0:2])
+
+
+    from fvgp.gpMCMC import ProposalDistribution
+
+    init_s = (np.diag(hps_bounds[:,1]-hps_bounds[:,0])/100.)**2
+
+    from fvgp import gpMCMC
+    def proposal_distribution(x0, obj):
+        cov = obj.prop_args["prop_Sigma"]
+        proposal_hps = np.zeros((len(x0)))
+        proposal_hps = np.random.multivariate_normal(
+            mean = x0, cov = cov, size = 1).reshape(len(x0))
+        return proposal_hps
+
+    def in_bounds(v,bounds):
+        if any(v<bounds[:,0]) or any(v>bounds[:,1]): return False
+        return True
+    def prior_function(theta,args):
+        bounds = args["bounds"]
+        if in_bounds(theta, bounds): 
+            return 0. + np.sum(np.log(theta)/2.)
+        else: 
+            return -np.inf
+    pd = ProposalDistribution(proposal_distribution, [0,1], 
+                            init_prop_Sigma = init_s, adapt_callable="default")
+
+
+
+
+    my_mcmc = gpMCMC(obj_func, len(hps_bounds), prior_function, [pd], 
+                    args={"bounds":hps_bounds})
+
+    hps = np.random.uniform(
+                            low = hps_bounds[:,0], 
+                            high = hps_bounds[:,1], 
+                            size = len(hps_bounds))
+    mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
 
     x_pred = np.linspace(0,1,1000)
     mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["f(x)"]

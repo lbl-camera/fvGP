@@ -12,7 +12,7 @@ from scipy.sparse import block_array
 class gp2Scale():
     def __init__(
         self,
-        x_data,
+        #x_data,
         batch_size=10000,
         gp_kernel_function=None,
         covariance_dask_client=None,
@@ -24,42 +24,25 @@ class gp2Scale():
         """
         assert covariance_dask_client is not None
         self.batch_size = batch_size
-        self.point_number = len(x_data)
-        self.num_batches = self.point_number // self.batch_size
+        self.point_number = None
+        self.num_batches = None
         self.info = info
-        self.x_data = x_data
+        #self.x_data = x_data
         self.kernel = gp_kernel_function
         self.number_of_workers = len(covariance_dask_client.scheduler_info()['workers'])
+        self.cov_initialized = False
 
         worker_info = list(covariance_dask_client.scheduler_info()["workers"].keys())
         if not worker_info: raise Exception("No workers available")
         self.compute_workers = list(worker_info)
 
-        scatter_data = self.x_data
-        self.scatter_future = covariance_dask_client.scatter(
-            scatter_data, workers=self.compute_workers, broadcast=False)
+        #scatter_data = self.x_data
+        #self.scatter_future = covariance_dask_client.scatter(
+        #    scatter_data, workers=self.compute_workers, broadcast=False)
         ##scatter the data to compute workers, TEST if broadcast is better
-
-    def update(self, x_new, covariance_dask_client = None):
-        """
-        The constructor for the gp class.
-        type help(GP) for more information about attributes, methods and their parameters
-        """
-        assert covariance_dask_client is not None
-        if isinstance(x_new, list) and isinstance(self.x_data, list):
-            self.x_data = self.x_data + x_new
-        else:
-            self.x_data = np.row_stack([self.x_data, x_new])
-        self.point_number = len(self.x_data)
-        self.num_batches = self.point_number // self.batch_size
-
-        scatter_data = self.x_data
-        self.scatter_future = covariance_dask_client.scatter(
-            scatter_data, workers=self.compute_workers, broadcast=False)
-        self.x_new = x_new
-        self.scatter_future2 = covariance_dask_client.scatter(
-            self.x_new, workers=self.compute_workers, broadcast=False)
-        ##scatter the data to compute workers, TEST if broadcast is better
+        self.x_data_scatter_future = None
+        self.x_new_scatter_future = None
+        self.x_data = None
 
     ##################################################################################
     ##################################################################################
@@ -77,34 +60,39 @@ class gp2Scale():
     @staticmethod
     def ranges(N, nb):
         """ splits a range(N) into nb chunks defined by chunk_start, chunk_end """
+        if nb == 0: nb = 1
         step = N / nb
         return [(round(step * i), round(step * (i + 1))) for i in range(nb)]
 
-    def compute_covariance(self, hyperparameters, client, batched=False):
+    def update_x_data(self, x_new):
+        if isinstance(x_new, list) and isinstance(self.x_data, list):
+            self.x_data = self.x_data + x_new
+        elif isinstance(x_new, np.ndarray) and isinstance(self.x_data, np.ndarray):
+            self.x_data = np.row_stack([self.x_data, x_new])
+        else: raise Exception("x_data or x_new is not of a permissible format.")
+
+    def compute_covariance(self, x_data, hyperparameters, client):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
+        self.cov_initialized = True
+        self.point_number = len(x_data)
+        self.num_batches = self.point_number // self.batch_size
         NUM_RANGES = self.num_batches
-        ranges = self.ranges(len(self.x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
+        self.x_data = x_data
+        self.x_data_scatter_future = client.scatter(
+            x_data, workers=self.compute_workers, broadcast=False)
+        ranges = self.ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
-        if batched:
-            # number of batches shouldn't be less than the number of workers
-            batches = min(len(client.cluster.workers), len(ranges_ij))
-            # split ranges_ij into roughly equal batches
-            ranges_ij = [ranges_ij[i::batches] for i in range(batches)]
+        kernel_caller = kernel_function
 
-            kernel_caller = kernel_function_batched
-        else:
-            kernel_caller = kernel_function
-
-        ##scattering
         results = list(map(self.harvest_result, distributed.as_completed(client.map(
                         partial(kernel_caller,
                                 hyperparameters=hyperparameters,
                                 kernel=self.kernel),
                                 ranges_ij,
-                                [self.scatter_future] * len(ranges_ij),
-                                [self.scatter_future] * len(ranges_ij)),
+                                [self.x_data_scatter_future] * len(ranges_ij),
+                                [self.x_data_scatter_future] * len(ranges_ij)),
                               with_results=True)))
 
         #reshape the result set into COO components
@@ -117,63 +105,57 @@ class gp2Scale():
 
         return sparse.coo_matrix((data, (i_s, j_s)))
 
-    def update_covariance(self, hyperparameters, client, cov, batched=False):
+    def update_covariance(self, x_new, hyperparameters, client, cov):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
+        if not self.cov_initialized:
+            raise Exception("Before updating the covariance, you have to compute a covariance.")
+        self.x_new_scatter_future = client.scatter(
+            x_new, workers=self.compute_workers, broadcast=False)
         NUM_RANGES = self.num_batches
         ranges_data = self.ranges(len(self.x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
-        ranges_input = self.ranges(len(self.x_new), NUM_RANGES)
-        print("ranges data")
-        print(ranges_data)
-        print("ranges new")
-        print(ranges_input)
+        num_batches2 = len(x_new) // self.batch_size
+        ranges_input = self.ranges(len(x_new), num_batches2)
         ranges_ij = list(itertools.product(ranges_data, ranges_input))
         ranges_ij2 = list(itertools.product(ranges_input, ranges_input))
 
 
-        if batched:
-            # number of batches shouldn't be less than the number of workers
-            batches = min(len(client.cluster.workers), len(ranges_ij))
-            # split ranges_ij into roughly equal batches
-            ranges_ij = [ranges_ij[i::batches] for i in range(batches)]
+        kernel_caller = kernel_function_update
 
-            kernel_caller = kernel_function_batched
-        else:
-            kernel_caller = kernel_function
-
-        ##scattering
+        #K = np.block([[A, B],
+        #             [B,C]])
+        #Calculate B
         results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
                               partial(kernel_caller,
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
                               ranges_ij,
-                              [self.scatter_future] * len(ranges_ij),
-                              [self.scatter_future2] * len(ranges_ij)),
+                              [self.x_data_scatter_future] * len(ranges_ij),
+                              [self.x_new_scatter_future] * len(ranges_ij)),
                               with_results=True)))
 
-        #reshape the result set into COO components
-        #print(results[3]) ##every entry in results contains data, i index and j index of a sparse matrix
         data, i_s, j_s = map(np.hstack, zip(*results))
-        off_diag = sparse.coo_matrix((data, (i_s, j_s)))
+        B = sparse.coo_matrix((data, (i_s, j_s)))
+
         # mirror across diagonal
-        print(len(ranges_ij2))
-        print(len(ranges_ij))
+
         results = list(map(self.harvest_result,
                           distributed.as_completed(client.map(
                               partial(kernel_caller,
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
                               ranges_ij2,
-                              [self.scatter_future2] * len(ranges_ij2),
-                              [self.scatter_future2] * len(ranges_ij2)),
+                              [self.x_new_scatter_future] * len(ranges_ij2),
+                              [self.x_new_scatter_future] * len(ranges_ij2)),
                               with_results=True)))
-        #data, i_s, j_s = map(np.hstack, zip(*results))
-        #D = sparse.coo_matrix((data, (i_s, j_s)))
-        #res = block_array([[cov,           off_diag],
-        #                   [off_diag.transpose(), None]])
+        data, i_s, j_s = map(np.hstack, zip(*results))
+        D = sparse.coo_matrix((data, (i_s, j_s)))
 
+        res = block_array([[cov,           B],
+                           [B.transpose(), D]])
 
-        return None
+        self.update_x_data(x_new)
+        return res
 
     @staticmethod
     def harvest_result(future_result):
@@ -257,11 +239,6 @@ class gpm2Scale(gp2Scale):  # pragma: no cover
         ##########################################
         # compute the prior########################
         ##########################################
-        covariance_dask_client, self.compute_worker_set, self.actor_worker = self._init_dask_client(
-            covariance_dask_client)
-        ###initiate actor that is a future contain the covariance and methods
-        self.SparsePriorCovariance = covariance_dask_client.submit(gp2ScaleSparseMatrix, self.point_number, actor=True,
-                                                                   workers=self.actor_worker).result()  # Create Actor
 
         self.covariance_dask_client = covariance_dask_client
         scatter_data = {"x_data": self.x_data}  ##data that can be scattered
@@ -281,118 +258,6 @@ class gpm2Scale(gp2Scale):  # pragma: no cover
                 print("Here is an image:")
                 plt.imshow(sp.toarray())
                 plt.show()
-
-    def total_number_of_batches(self):
-        Db = float(self.num_batches)
-        return 0.5 * Db * (Db + 1.)
-
-    def compute_covariance(self, hyperparameters, variances, client):
-        """computes the covariance matrix from the kernel on HPC in sparse format"""
-        ###initialize futures
-        futures = []  ### a list of futures
-        actor_futures = []
-        finished_futures = set()
-        ###get workers
-        compute_workers = set(self.compute_worker_set)
-        idle_workers = set(compute_workers)
-        ###future_worker_assignments
-        self.future_worker_assignments = {}
-        ###scatter data
-        start_time = time.time()
-        count = 0
-        num_batches_i = len(x1) // self.batch_size
-        num_batches_j = len(self.x_data) // self.batch_size
-        last_batch_size_i = len(self.x_data) % self.batch_size
-        last_batch_size_j = len(self.x_data) % self.batch_size
-        if last_batch_size_i != 0: num_batches_i += 1
-        if last_batch_size_j != 0: num_batches_j += 1
-
-        for i in range(num_batches_i):
-            beg_i = i * self.batch_size
-            end_i = min((i + 1) * self.batch_size, self.point_number)
-            batch1 = self.x_data[beg_i: end_i]
-            for j in range(i, num_batches_j):
-                beg_j = j * self.batch_size
-                end_j = min((j + 1) * self.batch_size, self.point_number)
-                batch2 = self.x_data[beg_j: end_j]
-                ##make workers available that are not actively computing
-                while not idle_workers:
-                    idle_workers, futures, finished_futures = self.free_workers(futures, finished_futures)
-                    time.sleep(0.1)
-
-                ####collect finished workers but only if actor is not busy, otherwise do it later
-                if len(finished_futures) >= 1000:
-                    actor_futures.append(self.SparsePriorCovariance.get_future_results(set(finished_futures)))
-                    finished_futures = set()
-
-                # get idle worker and submit work
-                current_worker = self.get_idle_worker(idle_workers)
-                data = {"scattered_data": self.scatter_future, "hps": hyperparameters, "kernel": self.kernel,
-                        "range_i": (beg_i, end_i), "range_j": (beg_j, end_j), "mode": "prior", "gpu": 0}
-                futures.append(client.submit(kernel_function, data, workers=current_worker))
-                self.assign_future_2_worker(futures[-1].key, current_worker)
-                if self.info:
-                    print("    submitted batch. i:", beg_i, end_i, "   j:", beg_j, end_j, "to worker ", current_worker,
-                          " Future: ", futures[-1].key)
-                    print("    current time stamp: ", time.time() - start_time, " percent finished: ",
-                          float(count) / self.total_number_of_batches())
-                    print("")
-                count += 1
-
-        if self.info:
-            print("All tasks submitted after ", time.time() - start_time, flush=True)
-            print("number of computed batches: ", count)
-
-        actor_futures.append(self.SparsePriorCovariance.get_future_results(finished_futures.union(futures)))
-        # actor_futures[-1].result()
-        client.gather(actor_futures)
-        actor_futures.append(self.SparsePriorCovariance.add_to_diag(variances))  ##add to diag on actor
-        actor_futures[-1].result()
-        # clean up
-        # del futures
-        # del actor_futures
-        # del finished_futures
-        # del scatter_future
-
-        #########
-    def free_workers(self, futures, finished_futures):
-        free_workers = set()
-        remaining_futures = []
-        for future in futures:
-            if future.status == "cancelled": print("WARNING: cancelled futures encountered!")
-            if future.status == "finished":
-                finished_futures.add(future)
-                free_workers.add(self.future_worker_assignments[future.key])
-                del self.future_worker_assignments[future.key]
-            else:
-                remaining_futures.append(future)
-        return free_workers, remaining_futures, finished_futures
-
-    def assign_future_2_worker(self, future_key, worker_address):
-        self.future_worker_assignments[future_key] = worker_address
-
-    def get_idle_worker(self, idle_workers):
-        return idle_workers.pop()
-
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    ######################DASK########################################################
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    def _init_dask_client(self, dask_client):
-        if dask_client is None: dask_client = distributed.Client()
-        worker_info = list(dask_client.scheduler_info()["workers"].keys())
-        if not worker_info: raise Exception("No workers available")
-        actor_worker = worker_info[0]
-        compute_worker_set = set(worker_info[1:])
-        print("We have ", len(compute_worker_set), " compute workers ready to go.")
-        print("Actor on", actor_worker)
-        print("Scheduler Address: ", dask_client.scheduler_info()["address"])
-        return dask_client, compute_worker_set, actor_worker
 
     def train(self,
               hyperparameter_bounds,
@@ -488,24 +353,12 @@ class gpm2Scale(gp2Scale):  # pragma: no cover
         """
         computes the marginal log-likelihood
         input:
-            hyper parameters
+            hyperparameters
         output:
             negative marginal log-likelihood (scalar)
         """
-        client = self.covariance_dask_client
-        dim = float(self.input_dim)
-        y1 = y2 = y[0:-2].reshape(self.point_number, self.output_dim)
-        self.SparsePriorCovariance.reset_prior().result()
-        hps = y[-2:]
-        self.compute_covariance(y1, y2, hps, self.variances, client)
-        logdet = self.SparsePriorCovariance.logdet().result()
-        n = len(y)
-        x = self.x_data
-        traceKXX = self.SparsePriorCovariance.traceKXX(x).result()
-        res = (0.5 * traceKXX) + (dim * 0.5 * logdet) + (0.5 * dim * n * np.log(2.0 * np.pi))
-        print("res")
-        print("")
-        return res
+
+        return -log_likelihood(y)
 
 
 #########################################################################
@@ -519,12 +372,11 @@ def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
     covariance matrix being calculated.
     Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
     """
-    st = time.time()
+
     hps = hyperparameters
     range_i, range_j = range_ij
     x1 = x1_future[range_i[0]:range_i[1]]
     x2 = x2_future[range_j[0]:range_j[1]]
-
     k = kernel(x1, x2, hps, None)
     k_sparse = sparse.coo_matrix(k)
 
@@ -539,20 +391,22 @@ def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
         return data, rows, cols
 
 
-def kernel_function_batched(range_ijs, x1_future, x2_future, hyperparameters, kernel):
+def kernel_function_update(range_ij, x1_future, x2_future, hyperparameters, kernel):
     """
     Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the
     covariance matrix being calculated.
     Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
     """
-    data = []
-    rows = []
-    cols = []
 
-    for range_ij in range_ijs:
-        data_ij, rows_ij, cols_ij = kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel)
-        data.append(data_ij)
-        rows.append(rows_ij)
-        cols.append(cols_ij)
+    hps = hyperparameters
+    range_i, range_j = range_ij
+    x1 = x1_future[range_i[0]:range_i[1]]
+    x2 = x2_future[range_j[0]:range_j[1]]
+    #print(x1, flush=True)
+    k = kernel(x1, x2, hps, None)
+    k_sparse = sparse.coo_matrix(k)
 
-    return np.hstack(data), np.hstack(rows), np.hstack(cols)
+    #print("kernel compute time: ", time.time() - st, flush = True)
+    data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
+
+    return data, rows, cols

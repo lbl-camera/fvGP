@@ -34,7 +34,7 @@ import warnings
 # *
 
 
-class gpMCMC:  # pragma: no cover
+class gpMCMC:
     """
     This class provides allows the user to customize an MCMC via user-defined proposal distributions and a prior.
 
