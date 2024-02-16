@@ -1168,6 +1168,8 @@ class GP:
             K = self.gp2Scale_obj.compute_covariance(x_data, hyperparameters, self.gp2Scale_dask_client)
             #K = self.gp2Scale_obj.update_covariance(hyperparameters, self.gp2Scale_dask_client)
             Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
+            if isinstance(V,np.ndarray): raise Exception("You are running gp2Scale. \
+            Your noise model has to return a `scipy.sparse.coo_matrix`.")
             if len(x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
             if self.info: print("Transferring the covariance matrix to host done after ", time.time() - st,
                                 " seconds. sparsity = ", Ksparsity, flush=True)
