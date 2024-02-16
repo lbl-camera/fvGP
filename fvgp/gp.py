@@ -2,7 +2,6 @@
 import inspect
 import time
 import warnings
-from scipy.sparse import csc_matrix
 from scipy.sparse.linalg import splu
 from scipy.sparse.linalg import minres
 import dask.distributed as distributed
