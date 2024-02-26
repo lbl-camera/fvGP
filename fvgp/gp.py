@@ -19,6 +19,7 @@ from scipy.stats import norm
 
 
 # TODO: search below "TODO"
+#   self.V is calculated at init and then again in calculate/update gp prior. That's not good. --> has to be because of training. Can we take it out of the init/update?
 
 class GP:
     """
@@ -413,9 +414,8 @@ class GP:
         else:
             raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
 
-
         ##########################################
-        # compute the prior########################
+        # compute the prior#######################
         ##########################################
         self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
             self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
@@ -456,6 +456,7 @@ class GP:
             if self.input_space_dim != len(x_new[0]): raise ValueError(
                 "The input space dimension is not in agreement with the provided x_data.")
         if np.ndim(y_new) == 2: y_new = y_new[:, 0]
+        if callable(noise_variances): raise Exception("The update noise_variances cannot be a callable")
 
         #update class instance x_data, and y_data, and set noise
         if overwrite:
@@ -469,6 +470,7 @@ class GP:
             self.y_data = np.append(self.y_data, y_new)
             if noise_variances is not None: noise_variances = np.append(np.diag(self.V), noise_variances)
         self.point_number = len(self.x_data)
+
         ##########################################
         #######prepare noise covariances##########
         ##########################################
@@ -504,7 +506,7 @@ class GP:
         else:
             self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
                 self.KVinv, self.prior_mean_vec, self.V = self._update_GPpriorV(
-                x_data_old, x_new,  y_data_old, y_new, self.hyperparameters, calc_inv=self.store_inv)
+                x_data_old, x_new, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
 
     ###################################################################################
     ###################################################################################
@@ -1154,7 +1156,7 @@ class GP:
     ##################################################################################
     def _compute_GPpriorV(self, x_data, y_data, hyperparameters, calc_inv=False):
         # get the prior mean
-        prior_mean_vec = self.mean_function(x_data, hyperparameters, self) #only update if overwrite=False
+        prior_mean_vec = self.mean_function(x_data, hyperparameters, self)
         assert np.ndim(prior_mean_vec) == 1
         # get the latest noise
         if callable(self.noise_function): V = self.noise_function(x_data, hyperparameters, self)
@@ -1166,13 +1168,12 @@ class GP:
         if self.gp2Scale:
             st = time.time()
             K = self.gp2Scale_obj.compute_covariance(x_data, hyperparameters, self.gp2Scale_dask_client)
-            #K = self.gp2Scale_obj.update_covariance(hyperparameters, self.gp2Scale_dask_client)
             Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
-            if isinstance(V,np.ndarray): raise Exception("You are running gp2Scale. \
+            if isinstance(V, np.ndarray): raise Exception("You are running gp2Scale. \
             Your noise model has to return a `scipy.sparse.coo_matrix`.")
             if len(x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
-            if self.info: print("Transferring the covariance matrix to host done after ", time.time() - st,
-                                " seconds. sparsity = ", Ksparsity, flush=True)
+            if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
+                                " seconds | sparsity = ", Ksparsity, flush=True)
         else:
             K = self._compute_K(x_data, x_data, hyperparameters)
 
@@ -1190,7 +1191,10 @@ class GP:
 
     ##################################################################################
 
-    def _update_GPpriorV(self, x_data, x_new, y_data, y_new, hyperparameters, calc_inv=False):
+    def _update_GPpriorV(self, x_data_old, x_new, y_data, hyperparameters, calc_inv=False):
+        #where is the new variance?
+        #do I need the x_data here? Or can it be self.x_data
+
         # get the prior mean
         prior_mean_vec = np.append(self.prior_mean_vec, self.mean_function(x_new, hyperparameters, self))
         assert np.ndim(prior_mean_vec) == 1
@@ -1203,12 +1207,12 @@ class GP:
         if self.gp2Scale:
             st = time.time()
             K = self.gp2Scale_obj.update_covariance(x_new, hyperparameters, self.gp2Scale_dask_client, self.K)
-            Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
-            if len(x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
-            if self.info: print("Transferring the covariance matrix to host done after ", time.time() - st,
-                                " seconds. sparsity = ", Ksparsity, flush=True)
+            Ksparsity = float(K.nnz) / float(len(self.x_data) ** 2)
+            if len(self.x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
+            if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
+                                " seconds | sparsity = ", Ksparsity, flush=True)
         else:
-            off_diag = self._compute_K(x_data, x_new, hyperparameters)
+            off_diag = self._compute_K(x_data_old, x_new, hyperparameters)
             K = np.block([
                          [self.K,          off_diag],
                          [off_diag.T,      self._compute_K(x_new, x_new, hyperparameters)]
@@ -1218,7 +1222,7 @@ class GP:
 
         # get K + V
         KV = K + V
-        y_data = np.append(y_data, y_new)
+        #y_data = np.append(y_data, y_new)
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
 
         KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
@@ -1228,8 +1232,9 @@ class GP:
 
     ##################################################################################
     def _compute_gp_linalg(self, vec, KV, calc_inv=False, try_sparse_LU=False):
-        st = time.time()
+
         if self.gp2Scale:
+            st = time.time()
             from imate import logdet
             # try fast but RAM intensive SuperLU first
             if try_sparse_LU:
@@ -1239,7 +1244,7 @@ class GP:
                     KVinvY = LU.solve(vec)
                     upper_diag = abs(LU.U.diagonal())
                     KVlogdet = np.sum(np.log(upper_diag))
-                    if self.info: print("LU done after", time.time() - st, "seconds.")
+                    if self.info: print("LU compute time: ", time.time() - st, "seconds.")
                 # if that did not work, do random lin algebra magic
                 except:
                     KVinvY, exit_code = minres(KV.tocsc(), vec)
@@ -1250,20 +1255,20 @@ class GP:
                     KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                                                 lanczos_degree=20, error_rtol=0.1, gpu=gpu,
                                                 return_info=True, plot=False, verbose=self.info)
-                    if self.info: print("logdet/LU done after ", time.time() - st, "seconds.")
+                    if self.info: print("logdet/LU compute time: ", time.time() - st, "seconds.")
             # if the problem is large go with rand. lin. algebra straight away
             else:
                 if self.info: print("MINRES solve in progress ...", time.time() - st, "seconds.")
                 factorization_obj = ("gp2Scale", None)
                 KVinvY, exit_code = minres(KV.tocsc(), vec)
-                if self.info: print("MINRES solve done after ", time.time() - st, "seconds.")
+                if self.info: print("MINRES solve compute time: ", time.time() - st, "seconds.")
                 if self.compute_device == "gpu": gpu = True
                 else: gpu = False
                 if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
                 KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                                             lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu=gpu,
                                             return_info=True, plot=False, verbose=self.info)
-                if self.info: print("logdet/LU done after ", time.time() - st, "seconds.")
+                if self.info: print("logdet/LU compute time: ", time.time() - st, "seconds.")
             KVinv = None
         else:
             c, l = cho_factor(KV)

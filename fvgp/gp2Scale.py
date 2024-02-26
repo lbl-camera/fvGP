@@ -36,10 +36,6 @@ class gp2Scale():
         if not worker_info: raise Exception("No workers available")
         self.compute_workers = list(worker_info)
 
-        #scatter_data = self.x_data
-        #self.scatter_future = covariance_dask_client.scatter(
-        #    scatter_data, workers=self.compute_workers, broadcast=False)
-        ##scatter the data to compute workers, TEST if broadcast is better
         self.x_data_scatter_future = None
         self.x_new_scatter_future = None
         self.x_data = None
@@ -178,90 +174,9 @@ class gp2Scale():
 #########################################################################
 #########################################################################
 #########################################################################
-#########################################################################
-#########################################################################
-#########################################################################
-#########################################################################
-#########################################################################
-#########################################################################
-#########################################################################
-#########################################################################
-#########################################################################
 class gpm2Scale(gp2Scale):  # pragma: no cover
-    def __init__(self, input_space_dim,
-                 output_space_dim,
-                 x_data,  ##data in the original input space
-                 init_hyperparameters,
-                 batch_size,
-                 variances=None,
-                 init_y_data=None,  # initial latent space positions
-                 gp_kernel_function=None,
-                 gp_mean_function=None, covariance_dask_client=None,
-                 info=False):
-
-        if input_space_dim != len(x_data[0]): raise ValueError(
-            "input space dimensions are not in agreement with the point positions given")
-        self.input_dim = input_space_dim
-        self.output_dim = output_space_dim
-        self.x_data = x_data
-        self.point_number = len(self.x_data)
-        if init_y_data is None: init_y_data = np.random.rand(len(x_data), self.output_dim)
-        self.y_data = init_y_data
-        self.batch_size = batch_size
-        self.num_batches = self.point_number // self.batch_size
-        self.info = info
-        ##########################################
-        #######prepare variances##################
-        ##########################################
-        if variances is None:
-            self.variances = np.ones((self.x_data.shape[0])) * \
-                             abs(np.mean(self.x_data) / 100.0)
-            print("CAUTION: you have not provided data variances in fvGP,")
-            print("they will be set to 1 percent of the data values!")
-        if len(self.variances[self.variances < 0]) > 0: raise Exception(
-            "Negative measurement variances communicated to fvgp.")
-        ##########################################
-        #######define kernel and mean function####
-        ##########################################
-        if gp_kernel_function == "robust":
-            self.kernel = sparse_stat_kernel_robust
-        elif callable(gp_kernel_function):
-            self.kernel = gp_kernel_function
-        else:
-            raise Exception("A kernel callable has to be provided!")
-
-        self.gp_mean_function = gp_mean_function
-        if callable(gp_mean_function):
-            self.mean_function = gp_mean_function
-        else:
-            self.mean_function = self.default_mean_function
-
-        ##########################################
-        #######prepare hyper parameters###########
-        ##########################################
-        self.hyperparameters = np.array(init_hyperparameters)
-        ##########################################
-        # compute the prior########################
-        ##########################################
-
-        self.covariance_dask_client = covariance_dask_client
-        scatter_data = {"x_data": self.x_data}  ##data that can be scattered
-        self.scatter_future = covariance_dask_client.scatter(scatter_data,
-                                                             workers=self.compute_worker_set)  ##scatter the data
-
-        self.st = time.time()
-        self.compute_covariance(self.y_data, self.y_data, self.hyperparameters, variances, covariance_dask_client)
-        if self.info:
-            sp = self.SparsePriorCovariance.get_result().result()
-            print("gp2Scale successfully initiated, here is some info about the prior covariance matrix:")
-            print("non zero elements: ", sp.nnz)
-            print("Size in GBits:     ", sp.data.nbytes / 1e9)
-            print("Sparsity: ", sp.nnz / float(self.point_number) ** 2)
-
-            if self.point_number <= 5000:
-                print("Here is an image:")
-                plt.imshow(sp.toarray())
-                plt.show()
+    def __init__(self, input_space_dim,):
+        self.input_space = input_space_dim
 
     def train(self,
               hyperparameter_bounds,
