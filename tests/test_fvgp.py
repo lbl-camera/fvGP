@@ -77,8 +77,8 @@ def test_train_basic():
             method = "local", pop_size = 10, tolerance = 0.001,max_iter = 2)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             method = "global", pop_size = 10, tolerance = 0.001,max_iter = 2)
-    #my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-    #        method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 2)
+    my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
+            method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 2)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 2)
 
@@ -134,8 +134,8 @@ def test_train_hgdl():
         compute_device="cpu", store_inv = True, ram_economy = True)
 
 
-    #my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-    #        method = "hgdl", tolerance = 0.001, max_iter = 2)
+    my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
+            method = "hgdl", tolerance = 0.001, max_iter = 2)
 
 
 def test_train_hgdl_async():
