@@ -2890,6 +2890,31 @@ class GP:
         v2 = self.posterior_mean(x_test)["f(x)"]
         return np.sqrt(np.sum((v1 - v2) ** 2) / len(v1))
 
+    def make_2d_x_pred(self, bx, by, resx=100, resy=100):  # pragma: no cover
+        """
+        This is a purely convenience-driven function calculating prediction points
+        on a grid.
+        Parameters
+        ----------
+        bx : np.ndarray
+            A numpy array of shape (2) defining lower and upper bounds in x direction.
+        by : np.ndarray
+            A numpy array of shape (2) defining lower and upper bounds in y direction.
+        resx : int, optional
+            Resolution in x direction. Default = 100.
+        resy : int, optional
+            Resolution in y direction. Default = 100.
+        Return
+        ------
+        prediction points : np.ndarray
+        """
+
+        x = np.linspace(bx[0], bx[1], resx)
+        y = np.linspace(by[0], by[1], resy)
+        from itertools import product
+        x_pred = np.array(list(product(x, y)))
+        return x_pred
+
     def make_1d_x_pred(self, b, res=100):  # pragma: no cover
         """
         This is a purely convenience-driven function calculating prediction points
