@@ -20,6 +20,8 @@ from scipy.stats import norm
 
 # TODO: search below "TODO"
 #   self.V is calculated at init and then again in calculate/update gp prior. That's not good. --> has to be because of training. Can we take it out of the init/update?
+#   Update, dont recompute Kinv
+#   Can we update cholesky instead of recomputing?
 
 class GP:
     """
@@ -146,7 +148,7 @@ class GP:
     store_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
-        which makes computing the posterior covariance faster.
+        which makes computing the posterior covariance faster (5-10 times).
         For larger problems (>2000 data points), the use of inversion should be avoided due
         to computational instability and costs. The default is
         True. Note, the training will always use Cholesky or LU decomposition instead of the
@@ -1271,15 +1273,18 @@ class GP:
                 if self.info: print("logdet/LU compute time: ", time.time() - st, "seconds.")
             KVinv = None
         else:
-            c, l = cho_factor(KV)
-            factorization_obj = ("Chol", c, l)
-            KVinvY = cho_solve((c, l), vec)
-            upper_diag = abs(c.diagonal())
-            KVlogdet = 2.0 * np.sum(np.log(upper_diag))
             if calc_inv:
                 KVinv = self._inv(KV)
+                factorization_obj = ("Inv", None)
+                KVinvY = KVinv @ vec
+                KVlogdet = self._logdet(KV)
             else:
                 KVinv = None
+                c, l = cho_factor(KV)
+                factorization_obj = ("Chol", c, l)
+                KVinvY = cho_solve((c, l), vec)
+                upper_diag = abs(c.diagonal())
+                KVlogdet = 2.0 * np.sum(np.log(upper_diag))
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
     ##################################################################################
