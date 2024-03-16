@@ -1256,7 +1256,7 @@ class GP:
                     if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
                     KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                                                 lanczos_degree=20, error_rtol=0.1, gpu=gpu,
-                                                return_info=True, plot=False, verbose=self.info)
+                                                return_info=True, plot=False, verbose=False)
                     if self.info: print("logdet/LU compute time: ", time.time() - st, "seconds.")
             # if the problem is large go with rand. lin. algebra straight away
             else:
@@ -1269,7 +1269,7 @@ class GP:
                 if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
                 KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                                             lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu=gpu,
-                                            return_info=True, plot=False, verbose=self.info)
+                                            return_info=True, plot=False, verbose=False)
                 if self.info: print("logdet/LU compute time: ", time.time() - st, "seconds.")
             KVinv = None
         else:
@@ -2076,10 +2076,10 @@ class GP:
 
         k = self.kernel(x_data, x_pred, self.hyperparameters, self)
         kk = self.kernel(x_pred, x_pred, self.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
-        joint_covariance = np.asarray(np.block([[K, k], \
+        joint_covariance = np.asarray(np.block([[K, k],
                                                 [k.T, kk]]))
 
-        prod_covariance = np.asarray(np.block([[K, k * 0.], \
+        prod_covariance = np.asarray(np.block([[K, k * 0.],
                                                [k.T * 0., kk * np.identity(len(kk))]]))
 
         return {"x": x_pred,
