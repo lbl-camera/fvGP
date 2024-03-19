@@ -290,7 +290,7 @@ class GP:
                 self.hyperparameter_bounds = hyperparameter_bounds
 
         if init_hyperparameters is None:
-            if self.hyperparameter_bounds is None: raise Exception("hyperparameter_bounds non available.")
+            if self.hyperparameter_bounds is None: raise Exception("hyperparameter_bounds not available.")
             init_hyperparameters = np.random.uniform(low=self.hyperparameter_bounds[:, 0],
                                                      high=self.hyperparameter_bounds[:, 1],
                                                      size=len(self.hyperparameter_bounds))
@@ -1173,7 +1173,7 @@ class GP:
             Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
             if isinstance(V, np.ndarray): raise Exception("You are running gp2Scale. \
             Your noise model has to return a `scipy.sparse.coo_matrix`.")
-            if len(x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
+            if (len(self.x_data) < 50000 and Ksparsity < 0.0001) or len(self.x_data) < 2000: try_sparse_LU = True
             if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
                                 " seconds | sparsity = ", Ksparsity, flush=True)
         else:
@@ -1210,7 +1210,7 @@ class GP:
             st = time.time()
             K = self.gp2Scale_obj.update_covariance(x_new, hyperparameters, self.gp2Scale_dask_client, self.K)
             Ksparsity = float(K.nnz) / float(len(self.x_data) ** 2)
-            if len(self.x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
+            if (len(self.x_data) < 50000 and Ksparsity < 0.0001) or len(self.x_data) < 2000: try_sparse_LU = True
             if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
                                 " seconds | sparsity = ", Ksparsity, flush=True)
         else:
@@ -1257,7 +1257,7 @@ class GP:
                     KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
                                                 lanczos_degree=20, error_rtol=0.1, gpu=gpu,
                                                 return_info=True, plot=False, verbose=False)
-                    if self.info: print("logdet/LU compute time: ", time.time() - st, "seconds.")
+                    if self.info: print("Random logdet() compute time: ", time.time() - st, "seconds.")
             # if the problem is large go with rand. lin. algebra straight away
             else:
                 if self.info: print("MINRES solve in progress ...", time.time() - st, "seconds.")
