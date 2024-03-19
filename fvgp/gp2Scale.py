@@ -12,7 +12,6 @@ from scipy.sparse import block_array
 class gp2Scale():
     def __init__(
         self,
-        #x_data,
         batch_size=10000,
         gp_kernel_function=None,
         covariance_dask_client=None,
@@ -27,7 +26,6 @@ class gp2Scale():
         self.point_number = None
         self.num_batches = None
         self.info = info
-        #self.x_data = x_data
         self.kernel = gp_kernel_function
         self.number_of_workers = len(covariance_dask_client.scheduler_info()['workers'])
         self.cov_initialized = False
@@ -35,6 +33,7 @@ class gp2Scale():
         worker_info = list(covariance_dask_client.scheduler_info()["workers"].keys())
         if not worker_info: raise Exception("No workers available")
         self.compute_workers = list(worker_info)
+        self.client = covariance_dask_client
 
         self.x_data_scatter_future = None
         self.x_new_scatter_future = None
@@ -67,8 +66,9 @@ class gp2Scale():
             self.x_data = np.row_stack([self.x_data, x_new])
         else: raise Exception("x_data or x_new is not of a permissible format.")
 
-    def compute_covariance(self, x_data, hyperparameters, client):
+    def compute_covariance(self, x_data, hyperparameters):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
+        client = self.client
         self.cov_initialized = True
         self.point_number = len(x_data)
         self.num_batches = self.point_number // self.batch_size
@@ -101,7 +101,8 @@ class gp2Scale():
 
         return sparse.coo_matrix((data, (i_s, j_s)))
 
-    def update_covariance(self, x_new, hyperparameters, client, cov):
+    def update_covariance(self, x_new, hyperparameters, cov):
+        client = self.client
         """computes the covariance matrix from the kernel on HPC in sparse format"""
         if not self.cov_initialized:
             raise Exception("Before updating the covariance, you have to compute a covariance.")
@@ -163,7 +164,14 @@ class gp2Scale():
         future.release()
         return result
 
-    def calculate_sparse_noise_covariance(self, vector):
+    def calculate_sparse_noise_covariance(self, x, hyperparameters, obj):
+        vector = obj.noise_variances
+        diag = sparse.eye(len(vector), format="coo")
+        diag.setdiag(vector)
+        return diag
+
+    def calculate_sparse_default_noise_covariance(self, x, hyperparameters, obj):
+        vector = np.ones((len(x))) * (np.mean(abs(obj.y_data)) / 100.0)
         diag = sparse.eye(len(vector), format="coo")
         diag.setdiag(vector)
         return diag

@@ -19,18 +19,16 @@ from scipy.stats import norm
 
 
 # TODO: search below "TODO"
-#   self.V is calculated at init and then again in calculate/update gp prior. That's not good.
-#                                            --> has to be because of training. Can we take it out of the init/update?
-#   Update, don't recompute Kinv and neither the logdet, both should be rank-n updated
+#   self.V is calculated at init and then again in calculate/update gp prior. That's not good. --> has to be because of training. Can we take it out of the init/update?
+#   Update, dont recompute Kinv
 #   Can we update cholesky instead of recomputing?
-#   You compute the logdet even though you are not training. That makes init() and posterior evaluations slow (for new hps) [might be OK]
+#   You compute the logdet even though you are not training. That makes init() and posterior evaluations slow (for new hps)
 #   Kernels should be not in a class but just in a file
-#   in traditional and gp2Scale you should have access to obj and all kernels
-#   neither minres nor random logdet are doing a good job, cg is better but we need a preconditioner, maybe a large LU?
-#   when using gp2Scale but the solution is dense we should go with dense linalg
-#   init hps and bounds should only be initiated for the default kernel
+#   in trad trational and gp2Scale you should have access to obj and all kernels
+#   neither minres nor random logdet are doing a good job, cg is better but we need a preconditioner
+#   when using gp2Scale but the solution is dense we shuld go with dense linalg
 
-class GP:
+class GP(GPdata, Gprior, GPlikelihood, GPtraining):
     """
     This class provides all the tools for a single-task Gaussian Process (GP).
     Use fvGP for multitask GPs. However, the fvGP class inherits all methods from this class.
@@ -225,26 +223,21 @@ class GP:
         args=None,
         info=False
     ):
+        self.compute_device = compute_device
+        self.ram_economy = ram_economy
+        self.args = args
+        self.info = info
+        self.store_inv = store_inv
         ########################################
-        ###assign and check some attributes#####
+        ###init data instance###################
         ########################################
-        assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
-        if isinstance(x_data, np.ndarray):
-            if np.ndim(x_data) == 1: x_data = x_data.reshape(-1, 1)
-            if input_space_dim != len(x_data[0]):
-                raise ValueError("The input space dimension is not in agreement with the provided x_data.")
-            self.non_Euclidean = False
-        else:
-            if not callable(gp_kernel_function):
+        super().__init(x_data, y_data, noise_variances)
+        if not self.Euclidean and not callable(gp_kernel_function):
                 raise Exception(
                     "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters.")
-            if not isinstance(x_data, list): raise Exception("Non-Euclidean data has to be provided as a list")
-            input_space_dim = 1
-            self.non_Euclidean = True
-        if self.non_Euclidean and init_hyperparameters is None:
+        if not self.Euclidean and init_hyperparameters is None:
             raise Exception(
                 "You are running fvGP on non-Euclidean inputs. Please provide initial hyperparameters.")
-        if np.ndim(y_data) == 2: y_data = y_data[:, 0]
         if compute_device == 'gpu':
             try:
                 import torch
@@ -252,16 +245,26 @@ class GP:
                 raise Exception(
                     "You have specified the 'gpu' as your compute device. You need to install pytorch\
                      manually for this to work.")
-        self.input_space_dim = input_space_dim
-        self.x_data = x_data
-        self.point_number = len(self.x_data)
-        self.y_data = y_data
-        self.noise_variances = noise_variances
-        self.compute_device = compute_device
-        self.ram_economy = ram_economy
-        self.args = args
-        self.info = info
-        self.store_inv = store_inv
+        ########################################
+        ###init prior instance#############
+        ########################################
+        #hps, mean function kernel function
+        super().__init__(self.x_data, self.y_data,
+                         init_hyperparameters=init_hyperparameters,
+                         gp_kernel_function=gp_kernel_function,
+                         gp_mean_function=gp_mean_function,
+                         gp_kernel_function_grad=gp_kernel_function_grad,
+                         gp_mean_function_grad=gp_mean_function_grad,
+                         comp_mode='default', online=False)
+
+
+
+        ########################################
+        ###init likelihood instance#############
+        ########################################
+        #likelihood needs hps, noise function,
+
+
         self.KVinv = None
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
@@ -287,14 +290,9 @@ class GP:
         if self.hyperparameter_bounds is None:
             if self.non_Euclidean:
                 if callable(gp_kernel_function):
-                    warnings.warn("You are operating in a non-Euclidean space and have rightfully provided a kernel\
-                                   function. Please provide hyperparameter_bounds to the training.")
-                else: raise Exception("You are operating in a non-Euclidean space and have not provided a kernel.")
+                    warnings.warn("You have not provided hyperparameter bounds but a kernel function. \n \
+                    Make sure you provide hyperparameter bounds to the training.")
             else:
-                if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
-                    warnings.warn("You provided a kernel, a mean, or a noise function.\
-                                  It is likely that the default hyperparameter_bounds are incorrect.\
-                                  Please provide your own at initialization or for the training.")
                 hyperparameter_bounds = np.zeros((input_space_dim + 1, 2))
                 hyperparameter_bounds[0] = np.array([np.var(y_data) / 100., np.var(y_data) * 10.])
                 for i in range(input_space_dim):
@@ -303,9 +301,6 @@ class GP:
                 self.hyperparameter_bounds = hyperparameter_bounds
 
         if init_hyperparameters is None:
-            if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
-                raise Exception("You provided a kernel, a mean, or a noise function. \
-                Please provide init_hyperparameters")
             if self.hyperparameter_bounds is None: raise Exception("hyperparameter_bounds not available.")
             init_hyperparameters = np.random.uniform(low=self.hyperparameter_bounds[:, 0],
                                                      high=self.hyperparameter_bounds[:, 1],
@@ -314,61 +309,24 @@ class GP:
         ###########################################
         #####gp2Scale##############################
         ###########################################
-        if gp2Scale:
-            try:
-                import imate
-            except:
-                raise Exception(
-                    "You have activated `gp2Scale`. You need to install imate\
-                     manually for this to work.")
-            if gp2Scale_dask_client is None:
-                gp2Scale_dask_client = Client()
-                warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. \
-                Set to distributed.Client().", stacklevel=2)
-            self.gp2Scale_dask_client = gp2Scale_dask_client
 
-            if not callable(gp_kernel_function):
-                warnings.warn("You have chosen to activate gp2SCale. A powerful tool! \n \
-                        But you have not supplied a kernel that is compactly supported. \n \
-                        I will use an anisotropic Wendland kernel for now.",
-                              stacklevel=2)
-                if compute_device == "cpu":
-                    gp_kernel_function = wendland_anisotropic_gp2Scale_cpu
-                elif compute_device == "gpu":
-                    gp_kernel_function = wendland_anisotropic_gp2Scale_gpu
-
-            self.gp2Scale_obj = gp2S(batch_size=gp2Scale_batch_size,
-                                     gp_kernel_function=gp_kernel_function,
-                                     covariance_dask_client=gp2Scale_dask_client,
-                                     info=info)
-            self.store_inv = False
-            #self.noise_function = self.gp2Scale_obj.calculate_sparse_noise_covariance
-            warnings.warn("WARNING: gp2Scale activated. Only training via MCMC will be performed. \
-                    Only noise variances (no noise covariances can be considered). \
-                    A customized sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.",
-                          stacklevel=2)
 
         ###########################################
         ###assign kernel, mean and noise functions#
         ###########################################
         # noise
-        if self.noise_variances is not None and callable(gp_noise_function):
+        if noise_variances is not None and callable(gp_noise_function):
             warnings.warn("Noise function and measurement noise provided. noise_variances set to None.", stacklevel=2)
-            self.noise_variances = None
+            noise_variances = None
         if callable(gp_noise_function):
             self.noise_function = gp_noise_function
-        elif self.noise_variances is not None:
-            if gp2Scale: self.noise_function = self.gp2Scale_obj.calculate_sparse_noise_covariance
-            else: self.noise_function = self._measured_noise_function
+        elif noise_variances is not None:
+            self.noise_function = None
         else:
             warnings.warn(
                 "No noise function or measurement noise provided. Noise variances will be set to 1% of mean(y_data).",
                 stacklevel=2)
-            if gp2Scale: self.noise_function = self.gp2Scale_obj.calculate_sparse_default_noise_covariance
-            else: self.noise_function = self._default_noise_function
-
-
-
+            self.noise_function = self._default_noise_function
         if callable(gp_noise_function_grad):
             self.noise_function_grad = gp_noise_function_grad
         elif callable(gp_noise_function):
@@ -382,33 +340,7 @@ class GP:
             else:
                 self.noise_function_grad = self._default_dnoise_dh
 
-        # kernel
-        if callable(gp_kernel_function):
-            self.kernel = gp_kernel_function
-        elif gp_kernel_function is None:
-            self.kernel = self.default_kernel
-        else:
-            raise Exception("No valid kernel function specified")
-        self.d_kernel_dx = self._d_gp_kernel_dx
-        if callable(gp_kernel_function_grad):
-            self.dk_dh = gp_kernel_function_grad
-        else:
-            if self.ram_economy is True:
-                self.dk_dh = self._gp_kernel_derivative
-            else:
-                self.dk_dh = self._gp_kernel_gradient
 
-        # prior mean
-        if callable(gp_mean_function):
-            self.mean_function = gp_mean_function
-        else:
-            self.mean_function = self._default_mean_function
-        if callable(gp_mean_function_grad):
-            self.dm_dh = gp_mean_function_grad
-        elif callable(gp_mean_function):
-            self.dm_dh = self._finitediff_dm_dh
-        else:
-            self.dm_dh = self._default_dm_dh
         if gp_kernel_function is None and (gp_noise_function is not None or gp_mean_function is not None):
             warnings.warn("You are using the default kernel but a user-defined mean or noise function. \
                     Make sure the right hyperparameter indices are used in all functions. \
@@ -417,26 +349,26 @@ class GP:
         ##########################################
         #######prepare noise covariances##########
         ##########################################
-        #if noise_variances is None:
-        #    ##noise covariances are always a square matrix
-        #    self.V = self.noise_function(self.x_data, init_hyperparameters, self)
-        #    if isinstance(self.V, np.ndarray) and np.ndim(self.V) == 1:
-        #        raise Exception(
-        #            "Your noise function did not return a square matrix, it should though, the noise can be correlated.")
-        #    elif isinstance(self.V, np.ndarray) and self.V.shape[0] != self.V.shape[1]:
-        #        raise Exception("Your noise function return is not a square matrix")
-        #elif gp2Scale:
-        #    self.V = gp2Scale_obj.calculate_sparse_noise_covariance(noise_variances)
-        #elif np.ndim(noise_variances) == 2:
-        #    if any(noise_variances <= 0.0): raise Exception(
-        #        "Negative or zero measurement variances communicated to fvgp or derived from the data.")
-        #    self.V = np.diag(noise_variances[:, 0])
-        #elif np.ndim(noise_variances) == 1:
-        #    if any(noise_variances <= 0.0): raise Exception(
-        #        "Negative or zero measurement variances communicated to fvgp or derived from the data.")
-        #    self.V = np.diag(noise_variances)
-        #else:
-        #    raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
+        if noise_variances is None:
+            ##noise covariances are always a square matrix
+            self.V = self.noise_function(self.x_data, init_hyperparameters, self)
+            if isinstance(self.V, np.ndarray) and np.ndim(self.V) == 1:
+                raise Exception(
+                    "Your noise function did not return a square matrix, it should though, the noise can be correlated.")
+            elif isinstance(self.V, np.ndarray) and self.V.shape[0] != self.V.shape[1]:
+                raise Exception("Your noise function return is not a square matrix")
+        elif gp2Scale:
+            self.V = gp2Scale_obj.calculate_sparse_noise_covariance(noise_variances)
+        elif np.ndim(noise_variances) == 2:
+            if any(noise_variances <= 0.0): raise Exception(
+                "Negative or zero measurement variances communicated to fvgp or derived from the data.")
+            self.V = np.diag(noise_variances[:, 0])
+        elif np.ndim(noise_variances) == 1:
+            if any(noise_variances <= 0.0): raise Exception(
+                "Negative or zero measurement variances communicated to fvgp or derived from the data.")
+            self.V = np.diag(noise_variances)
+        else:
+            raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
 
         ##########################################
         # compute the prior#######################
@@ -492,8 +424,7 @@ class GP:
             if self.non_Euclidean: self.x_data = self.x_data + x_new
             else: self.x_data = np.row_stack([self.x_data, x_new])
             self.y_data = np.append(self.y_data, y_new)
-            if self.noise_variances is not None: self.noise_variances = np.append(np.diag(self.noise_variances),
-                                                                                  noise_variances)
+            if noise_variances is not None: noise_variances = np.append(np.diag(self.V), noise_variances)
         self.point_number = len(self.x_data)
 
         ##########################################
@@ -503,6 +434,23 @@ class GP:
             warnings.warn("Noise function and measurement noise provided. \
             This can happen if no measurement noise was provided at initialization.\
             New noise_variances set to None", stacklevel=2)
+            noise_variances = None
+
+        if noise_variances is None:
+            ##noise covariances are always a square matrix
+            if not callable(self.noise_function): raise Exception(
+                "You originally provided noise in the initialization; please provide noise for the updated data.")
+            self.V = self.noise_function(self.x_data, self.hyperparameters, self)
+        elif np.ndim(noise_variances) == 2:
+            if any(noise_variances <= 0.0): raise Exception(
+                "Negative or zero measurement variances communicated to fvgp or derived from the data.")
+            self.V = np.diag(noise_variances[:, 0])
+        elif np.ndim(noise_variances) == 1:
+            if any(noise_variances <= 0.0): raise Exception(
+                "Negative or zero measurement variances communicated to fvgp or derived from the data.")
+            self.V = np.diag(noise_variances)
+        else:
+            raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array.")
 
         ######################################
         #####transform to index set###########
@@ -1156,16 +1104,14 @@ class GP:
         assert np.ndim(prior_mean_vec) == 1
         # get the latest noise
         if callable(self.noise_function): V = self.noise_function(x_data, hyperparameters, self)
-        else:
-            raise Exception("should not happen")
-            V = self.V
+        else: V = self.V
         assert np.ndim(V) == 2
 
         # get K
         try_sparse_LU = False
         if self.gp2Scale:
             st = time.time()
-            K = self.gp2Scale_obj.compute_covariance(x_data, hyperparameters)
+            K = self.gp2Scale_obj.compute_covariance(x_data, hyperparameters, self.gp2Scale_dask_client)
             Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
             if isinstance(V, np.ndarray): raise Exception("You are running gp2Scale. \
             Your noise model has to return a `scipy.sparse.coo_matrix`.")
@@ -1197,15 +1143,13 @@ class GP:
         assert np.ndim(prior_mean_vec) == 1
         # get the latest noise
         if callable(self.noise_function): V = self.noise_function(self.x_data, hyperparameters, self)
-        else:
-            raise Exception("this should not happen")
-            V = self.V
+        else: V = self.V
         assert np.ndim(V) == 2
         # get K
         try_sparse_LU = False
         if self.gp2Scale:
             st = time.time()
-            K = self.gp2Scale_obj.update_covariance(x_new, hyperparameters, self.K)
+            K = self.gp2Scale_obj.update_covariance(x_new, hyperparameters, self.gp2Scale_dask_client, self.K)
             Ksparsity = float(K.nnz) / float(len(self.x_data) ** 2)
             if (len(self.x_data) < 50000 and Ksparsity < 0.0001) or len(self.x_data) < 20: try_sparse_LU = True
             if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
@@ -1232,10 +1176,43 @@ class GP:
     def _compute_gp_linalg(self, vec, KV, calc_inv=False, try_sparse_LU=False):
 
         if self.gp2Scale:
+            st = time.time()
+            from imate import logdet
+            # try fast but RAM intensive SuperLU first
             if try_sparse_LU:
-                try: KVinvY, KVlogdet, factorization_obj = self._LU(KV, vec)
-                except: KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
-            else: KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
+                try:
+                    LU = splu(KV.tocsc())
+                    factorization_obj = ("LU", LU)
+                    KVinvY = LU.solve(vec)
+                    upper_diag = abs(LU.U.diagonal())
+                    KVlogdet = np.sum(np.log(upper_diag))
+                    if self.info: print("LU compute time: ", time.time() - st, "seconds.")
+                # if that did not work, do random lin algebra magic
+                except:
+                    if self.info: print("MINRES solve in progress ...", time.time() - st, "seconds.")
+                    KVinvY, exit_code = minres(KV.tocsc(), vec)
+                    if exit_code ==  1: warnings.warn("CG not successful")
+                    factorization_obj = ("gp2Scale", None)
+                    if self.compute_device == "gpu": gpu = True
+                    else: gpu = False
+                    if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
+                    KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
+                                                lanczos_degree=20, error_rtol=0.001, gpu=gpu,
+                                                return_info=True, plot=False, verbose=False)
+                    if self.info: print("Random logdet() compute time: ", time.time() - st, "seconds.")
+            # if the problem is large go with rand. lin. algebra straight away
+            else:
+                if self.info: print("MINRES solve in progress ...", time.time() - st, "seconds.")
+                factorization_obj = ("gp2Scale", None)
+                KVinvY, exit_code = cg(KV.tocsc(), vec)
+                if self.info: print("MINRES solve compute time: ", time.time() - st, "seconds.")
+                if self.compute_device == "gpu": gpu = True
+                else: gpu = False
+                if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
+                KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
+                                            lanczos_degree=20, error_rtol=0.001, orthogonalize=0, gpu=gpu,
+                                            return_info=True, plot=False, verbose=False)
+                if self.info: print("logdet/LU compute time: ", time.time() - st, "seconds.")
             KVinv = None
         else:
             if calc_inv:
@@ -1259,32 +1236,6 @@ class GP:
         return K
 
     ##################################################################################
-    def _LU(self, KV, vec):
-        st = time.time()
-        LU = splu(KV.tocsc())
-        factorization_obj = ("LU", LU)
-        KVinvY = LU.solve(vec)
-        upper_diag = abs(LU.U.diagonal())
-        KVlogdet = np.sum(np.log(upper_diag))
-        if self.info: print("LU compute time: ", time.time() - st, "seconds.")
-        return KVinvY, KVlogdet, factorization_obj
-
-    def _gp2Scale_linalg(self, KV, vec):
-        from imate import logdet
-        st = time.time()
-        if self.info: print("CG solve in progress ...")
-        KVinvY, exit_code = cg(KV.tocsc(), vec)
-        if exit_code == 1: warnings.warn("CG not successful")
-        factorization_obj = ("gp2Scale", None)
-        if self.compute_device == "gpu": gpu = True
-        else: gpu = False
-        if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
-        KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
-                                    lanczos_degree=20, error_rtol=0.001, gpu=gpu,
-                                    return_info=True, plot=False, verbose=False)
-        if self.info: print("Random logdet() compute time: ", time.time() - st, "seconds.")
-        return KVinvY, KVlogdet, factorization_obj
-    ##################################################################################
     def _KVsolve(self, b):
         if self.factorization_obj[0] == "LU":
             LU = self.factorization_obj[1]
@@ -1295,14 +1246,13 @@ class GP:
         else:
             res = np.empty((len(b), b.shape[1]))
             if b.shape[1] > 100: warnings.warn(
-                "You want to predict at >100 points. \n When using gp2Scale, this takes a while. \n "
-                "Better predict at only a handful of points.")
+                "You want to predict at >100 points. \n When using gp2Scale, this takes a while. \n Better predict at only a handful of points.")
             for i in range(b.shape[1]):
                 res[:, i], exit_status = minres(self.KV, b[:, i])
                 # if exit_status != 0: res[:,i], exit_status = minres(self.KV,b[:,i])
             return res
 
-    def _logdet(self, A):
+    def _logdet(self, A, factorization_obj=None):
         if self.compute_device == "cpu":
             s, logdet = np.linalg.slogdet(A)
             return logdet
@@ -1311,6 +1261,7 @@ class GP:
                 import torch
                 A = torch.from_numpy(A).cuda()
                 sign, logdet = torch.slogdet(A)
+                sign = sign.cpu().numpy()
                 logdet = logdet.cpu().numpy()
                 logdet = np.nan_to_num(logdet)
                 return logdet
@@ -1406,12 +1357,6 @@ class GP:
             return self.gp2Scale_obj.calculate_sparse_noise_covariance(noise)
         else:
             return np.diag(noise)
-
-    def _measured_noise_function(self, x, hyperparameters, gp_obj):
-        if np.ndim(self.noise_variances) == 2:  self.noise_variances=self.noise_variances[:,0]
-        if any(self.noise_variances <= 0.0): raise Exception(
-                "Negative or zero measurement variances communicated or calculated.")
-        return np.diag(self.noise_variances)
 
     ###########################################################################
     ###########################################################################
