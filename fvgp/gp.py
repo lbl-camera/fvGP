@@ -20,14 +20,15 @@ from scipy.stats import norm
 
 # TODO: search below "TODO"
 #   self.V is calculated at init and then again in calculate/update gp prior. That's not good.
-#                                            --> has to be because of training. Can we take it out of the init/update?
-#   Update, don't recompute Kinv and neither the logdet, both should be rank-n updated
+#                                    --> has to be because of training. Can we take it out of the init/update? [DONE]
+#   Update, don't recompute Kinv and neither the logdet, both should be rank-n updated in online mode
 #   Can we update cholesky instead of recomputing?
-#   You compute the logdet even though you are not training. That makes init() and posterior evaluations slow (for new hps) [might be OK]
+#   You compute the logdet even though you are not training.
+#                                   That makes init() and posterior evaluations slow (for new hps) [might be OK]
 #   Kernels should be not in a class but just in a file
 #   in traditional and gp2Scale you should have access to obj and all kernels
 #   neither minres nor random logdet are doing a good job, cg is better but we need a preconditioner, maybe a large LU?
-#   when using gp2Scale but the solution is dense we should go with dense linalg
+#   when using gp2Scale but the solution is dense we should go with dense linalg [Done]
 #   init hps and bounds should only be initiated for the default kernel
 
 class GP:
@@ -268,11 +269,17 @@ class GP:
         self.gp2Scale_batch_size = gp2Scale_batch_size
         self.hyperparameter_bounds = hyperparameter_bounds
 
+
+
+        ##########################################
+        #######prepare hyper parameters###########
+        ##########################################
+
         if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(
             gp_noise_function)) and init_hyperparameters is None:
-            warnings.warn(
+            raise Exception(
                 "You have provided callables for kernel, mean, or noise functions but no initial \n \
-                hyperparameters. It is likely they have to be defined for a success initialization",
+                hyperparameters. Please define them.",
                 stacklevel=2)
         if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(
             gp_noise_function)) and hyperparameter_bounds is None:
@@ -281,9 +288,6 @@ class GP:
                 hyperparameter_bounds. That means they have to provided to the training.",
                 stacklevel=2)
 
-        ##########################################
-        #######prepare hyper parameters###########
-        ##########################################
         if self.hyperparameter_bounds is None:
             if self.non_Euclidean:
                 if callable(gp_kernel_function):
@@ -328,7 +332,7 @@ class GP:
             self.gp2Scale_dask_client = gp2Scale_dask_client
 
             if not callable(gp_kernel_function):
-                warnings.warn("You have chosen to activate gp2SCale. A powerful tool! \n \
+                warnings.warn("You have chosen to activate gp2Scale. A powerful tool! \n \
                         But you have not supplied a kernel that is compactly supported. \n \
                         I will use an anisotropic Wendland kernel for now.",
                               stacklevel=2)
@@ -413,30 +417,6 @@ class GP:
             warnings.warn("You are using the default kernel but a user-defined mean or noise function. \
                     Make sure the right hyperparameter indices are used in all functions. \
                     The default kernel function uses the first D + 1 hyperparameters", stacklevel=2)
-
-        ##########################################
-        #######prepare noise covariances##########
-        ##########################################
-        #if noise_variances is None:
-        #    ##noise covariances are always a square matrix
-        #    self.V = self.noise_function(self.x_data, init_hyperparameters, self)
-        #    if isinstance(self.V, np.ndarray) and np.ndim(self.V) == 1:
-        #        raise Exception(
-        #            "Your noise function did not return a square matrix, it should though, the noise can be correlated.")
-        #    elif isinstance(self.V, np.ndarray) and self.V.shape[0] != self.V.shape[1]:
-        #        raise Exception("Your noise function return is not a square matrix")
-        #elif gp2Scale:
-        #    self.V = gp2Scale_obj.calculate_sparse_noise_covariance(noise_variances)
-        #elif np.ndim(noise_variances) == 2:
-        #    if any(noise_variances <= 0.0): raise Exception(
-        #        "Negative or zero measurement variances communicated to fvgp or derived from the data.")
-        #    self.V = np.diag(noise_variances[:, 0])
-        #elif np.ndim(noise_variances) == 1:
-        #    if any(noise_variances <= 0.0): raise Exception(
-        #        "Negative or zero measurement variances communicated to fvgp or derived from the data.")
-        #    self.V = np.diag(noise_variances)
-        #else:
-        #    raise Exception("Variances are not given in an allowed format. Give variances as 1d numpy array")
 
         ##########################################
         # compute the prior#######################
@@ -1155,10 +1135,7 @@ class GP:
         prior_mean_vec = self.mean_function(x_data, hyperparameters, self)
         assert np.ndim(prior_mean_vec) == 1
         # get the latest noise
-        if callable(self.noise_function): V = self.noise_function(x_data, hyperparameters, self)
-        else:
-            raise Exception("should not happen")
-            V = self.V
+        V = self.noise_function(x_data, hyperparameters, self)
         assert np.ndim(V) == 2
 
         # get K
@@ -1169,7 +1146,6 @@ class GP:
             Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
             if isinstance(V, np.ndarray): raise Exception("You are running gp2Scale. \
             Your noise model has to return a `scipy.sparse.coo_matrix`.")
-            if (len(self.x_data) < 50000 and Ksparsity < 0.0001) or len(self.x_data) < 20: try_sparse_LU = True
             if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
                                 " seconds | sparsity = ", Ksparsity, flush=True)
         else:
@@ -1183,7 +1159,7 @@ class GP:
 
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
         KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                calc_inv=calc_inv, try_sparse_LU=try_sparse_LU)
+                                                calc_inv=calc_inv)
         return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
 
     ##################################################################################
@@ -1196,10 +1172,7 @@ class GP:
         prior_mean_vec = np.append(self.prior_mean_vec, self.mean_function(x_new, hyperparameters, self))
         assert np.ndim(prior_mean_vec) == 1
         # get the latest noise
-        if callable(self.noise_function): V = self.noise_function(self.x_data, hyperparameters, self)
-        else:
-            raise Exception("this should not happen")
-            V = self.V
+        V = self.noise_function(self.x_data, hyperparameters, self)
         assert np.ndim(V) == 2
         # get K
         try_sparse_LU = False
@@ -1207,7 +1180,6 @@ class GP:
             st = time.time()
             K = self.gp2Scale_obj.update_covariance(x_new, hyperparameters, self.K)
             Ksparsity = float(K.nnz) / float(len(self.x_data) ** 2)
-            if (len(self.x_data) < 50000 and Ksparsity < 0.0001) or len(self.x_data) < 20: try_sparse_LU = True
             if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
                                 " seconds | sparsity = ", Ksparsity, flush=True)
         else:
@@ -1225,16 +1197,23 @@ class GP:
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
 
         KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                     calc_inv=calc_inv, try_sparse_LU=try_sparse_LU)
+                                                                             calc_inv=calc_inv)
         return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
 
     ##################################################################################
-    def _compute_gp_linalg(self, vec, KV, calc_inv=False, try_sparse_LU=False):
-
+    def _compute_gp_linalg(self, vec, KV, calc_inv=False):
         if self.gp2Scale:
-            if try_sparse_LU:
+            Ksparsity = float(KV.nnz) / float(len(self.x_data) ** 2)
+            if (len(self.x_data) < 50000 and Ksparsity < 0.0001): mode = "sparse_LU"
+            elif (len(self.x_data) < 2000 and Ksparsity >= 0.0001): mode = "dense_Chol"
+            else: mode = 'gp2Scale'
+
+            if mode == "sparse_LU":
                 try: KVinvY, KVlogdet, factorization_obj = self._LU(KV, vec)
                 except: KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
+            elif mode == "dense_Chol":
+                KV = KV.toarray()
+                KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
             else: KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
             KVinv = None
         else:
@@ -1245,11 +1224,7 @@ class GP:
                 KVlogdet = self._logdet(KV)
             else:
                 KVinv = None
-                c, l = cho_factor(KV)
-                factorization_obj = ("Chol", c, l)
-                KVinvY = cho_solve((c, l), vec)
-                upper_diag = abs(c.diagonal())
-                KVlogdet = 2.0 * np.sum(np.log(upper_diag))
+                KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
     ##################################################################################
@@ -1267,6 +1242,14 @@ class GP:
         upper_diag = abs(LU.U.diagonal())
         KVlogdet = np.sum(np.log(upper_diag))
         if self.info: print("LU compute time: ", time.time() - st, "seconds.")
+        return KVinvY, KVlogdet, factorization_obj
+
+    def _Chol(self, KV, vec):
+        c, l = cho_factor(KV)
+        factorization_obj = ("Chol", c, l)
+        KVinvY = cho_solve((c, l), vec)
+        upper_diag = abs(c.diagonal())
+        KVlogdet = 2.0 * np.sum(np.log(upper_diag))
         return KVinvY, KVlogdet, factorization_obj
 
     def _gp2Scale_linalg(self, KV, vec):
