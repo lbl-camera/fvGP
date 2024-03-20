@@ -162,6 +162,10 @@ class GP:
         True. Note, the training will always use Cholesky or LU decomposition instead of the
         inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
+    online_mode : bool, Optional
+        Default = False. Online mode tells the algorithm that the KVinv should be stored, only
+        computed at initialization and afterward only updated. The same holds for the log determinant.
+        This makes online applications of GPs very fast because the two most costly steps are avoided.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
         If True, components of the derivative of the marginal log-likelihood are
@@ -222,6 +226,7 @@ class GP:
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
         store_inv=True,
+        online_mode = False,
         ram_economy=False,
         args=None,
         info=False
@@ -268,6 +273,7 @@ class GP:
         self.gp2Scale = gp2Scale
         self.gp2Scale_batch_size = gp2Scale_batch_size
         self.hyperparameter_bounds = hyperparameter_bounds
+        self.online_mode = online_mode
 
 
 
@@ -1139,7 +1145,6 @@ class GP:
         assert np.ndim(V) == 2
 
         # get K
-        try_sparse_LU = False
         if self.gp2Scale:
             st = time.time()
             K = self.gp2Scale_obj.compute_covariance(x_data, hyperparameters)
@@ -1172,10 +1177,9 @@ class GP:
         prior_mean_vec = np.append(self.prior_mean_vec, self.mean_function(x_new, hyperparameters, self))
         assert np.ndim(prior_mean_vec) == 1
         # get the latest noise
-        V = self.noise_function(self.x_data, hyperparameters, self)
+        V = self.noise_function(self.x_data, hyperparameters, self) #can be avoided by update
         assert np.ndim(V) == 2
         # get K
-        try_sparse_LU = False
         if self.gp2Scale:
             st = time.time()
             K = self.gp2Scale_obj.update_covariance(x_new, hyperparameters, self.K)
@@ -1183,10 +1187,11 @@ class GP:
             if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
                                 " seconds | sparsity = ", Ksparsity, flush=True)
         else:
-            off_diag = self._compute_K(x_data_old, x_new, hyperparameters)
+            k = self._compute_K(x_data_old, x_new, hyperparameters)
+            kk = self._compute_K(x_new, x_new, hyperparameters)
             K = np.block([
-                         [self.K,          off_diag],
-                         [off_diag.T,      self._compute_K(x_new, x_new, hyperparameters)]
+                         [self.K,          k],
+                         [k.T   ,         kk]
                          ])
         # check if shapes are correct
         if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
@@ -1196,7 +1201,9 @@ class GP:
         #y_data = np.append(y_data, y_new)
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
 
-        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
+        if self.online_mode is True and self.gp2Scale is False: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(
+            y_data - prior_mean_vec, k, kk)
+        else: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
                                                                              calc_inv=calc_inv)
         return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
 
@@ -1204,8 +1211,8 @@ class GP:
     def _compute_gp_linalg(self, vec, KV, calc_inv=False):
         if self.gp2Scale:
             Ksparsity = float(KV.nnz) / float(len(self.x_data) ** 2)
-            if (len(self.x_data) < 50000 and Ksparsity < 0.0001): mode = "sparse_LU"
-            elif (len(self.x_data) < 2000 and Ksparsity >= 0.0001): mode = "dense_Chol"
+            if len(self.x_data) < 50000 and Ksparsity < 0.0001: mode = "sparse_LU"
+            elif len(self.x_data) < 2000 and Ksparsity >= 0.0001: mode = "dense_Chol"
             else: mode = 'gp2Scale'
 
             if mode == "sparse_LU":
@@ -1227,6 +1234,15 @@ class GP:
                 KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
+    def _update_gp_linalg(self, vec, k, kk):
+        X = self._inv(kk - C @ self.KVinv @ B)
+        F = -self.KVinv @ k @ X
+        KVinv = np.block([[self.KVinv + self.KVinv @ B @ X @ C @ self.KVinv, F],
+                          [F.T,                                              X]])
+        factorization_obj = ("Inv", None)
+        KVinvY = KVinv @ vec
+        KVlogdet = self.KVlogdet + self._logdet(kk - k.T @ self.KVinv @ k)
+        return KVinvY, KVlogdet, factorization_obj, KVinv
     ##################################################################################
     def _compute_K(self, x1, x2, hyperparameters):
         """computes the covariance matrix from the kernel"""
@@ -1236,6 +1252,7 @@ class GP:
     ##################################################################################
     def _LU(self, KV, vec):
         st = time.time()
+        if self.info: print("LU in progress ...")
         LU = splu(KV.tocsc())
         factorization_obj = ("LU", LU)
         KVinvY = LU.solve(vec)
@@ -1259,9 +1276,10 @@ class GP:
         KVinvY, exit_code = cg(KV.tocsc(), vec)
         if exit_code == 1: warnings.warn("CG not successful")
         factorization_obj = ("gp2Scale", None)
+        if self.info: print("CG compute time: ", time.time() - st, "seconds, exit status (0:=successful)", exit_code)
         if self.compute_device == "gpu": gpu = True
         else: gpu = False
-        if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
+        if self.info: print("Random logdet() in progress ... ", time.time() - st, "seconds.")
         KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
                                     lanczos_degree=20, error_rtol=0.001, gpu=gpu,
                                     return_info=True, plot=False, verbose=False)

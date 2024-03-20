@@ -11,6 +11,41 @@ class GPtraining:  # pragma: no cover
 
         self.init_hyperparameters = init_hyperparameters
         self.hyperparameters = None
+        # self.mcmc_info = None
+
+        if (callable(gp_kernel_function) or callable(gp_mean_function)) and hyperparameter_bounds is None:
+            warnings.warn(
+                "You have provided callables for kernel, mean, or noise functions but no \n \
+                hyperparameter_bounds. That means they have to provided to the training.",
+                stacklevel=2)
+
+        if self.hyperparameter_bounds is None:
+            if self.non_Euclidean:
+                if callable(gp_kernel_function):
+                    warnings.warn("You are operating in a non-Euclidean space and have rightfully provided a kernel\
+                                   function. Please provide hyperparameter_bounds to the training.")
+                else: raise Exception("You are operating in a non-Euclidean space and have not provided a kernel.")
+            else:
+                if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
+                    warnings.warn("You provided a kernel, a mean, or a noise function.\
+                                  It is likely that the default hyperparameter_bounds are incorrect.\
+                                  Please provide your own at initialization or for the training.")
+                hyperparameter_bounds = np.zeros((input_space_dim + 1, 2))
+                hyperparameter_bounds[0] = np.array([np.var(y_data) / 100., np.var(y_data) * 10.])
+                for i in range(input_space_dim):
+                    range_xi = np.max(x_data[:, i]) - np.min(x_data[:, i])
+                    hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
+                self.hyperparameter_bounds = hyperparameter_bounds
+
+        if init_hyperparameters is None:
+            if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
+                raise Exception("You provided a kernel, a mean, or a noise function. \
+                Please provide init_hyperparameters")
+            if self.hyperparameter_bounds is None: raise Exception("hyperparameter_bounds not available.")
+            init_hyperparameters = np.random.uniform(low=self.hyperparameter_bounds[:, 0],
+                                                     high=self.hyperparameter_bounds[:, 1],
+                                                     size=len(self.hyperparameter_bounds))
+        self.hyperparameters = init_hyperparameters
 
     def train(self,
               objective_function=None,

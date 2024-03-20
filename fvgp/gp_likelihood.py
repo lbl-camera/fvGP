@@ -5,6 +5,30 @@ class GPlikelihood:  # pragma: no cover
     def __init__(self, K, noise_variances, gp_noise_function):
         assert isinstance(K, np.ndarray) and np.ndim(K) == 2
 
+        if noise_variances is not None and callable(gp_noise_function):
+            warnings.warn("Noise function and measurement noise provided. noise_variances set to None.", stacklevel=2)
+            noise_variances = None
+        if callable(gp_noise_function):
+            self.noise_function = gp_noise_function
+        elif noise_variances is not None:
+            self.noise_function = None
+        else:
+            warnings.warn(
+                "No noise function or measurement noise provided. Noise variances will be set to 1% of mean(y_data).",
+                stacklevel=2)
+            self.noise_function = self._default_noise_function
+        if callable(gp_noise_function_grad):
+            self.noise_function_grad = gp_noise_function_grad
+        elif callable(gp_noise_function):
+            if self.ram_economy is True:
+                self.noise_function_grad = self._finitediff_dnoise_dh_econ
+            else:
+                self.noise_function_grad = self._finitediff_dnoise_dh
+        else:
+            if self.ram_economy is True:
+                self.noise_function_grad = self._default_dnoise_dh_econ
+            else:
+                self.noise_function_grad = self._default_dnoise_dh
 
     ##################################################################################
     def _KVsolve(self, b):

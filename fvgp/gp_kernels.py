@@ -2,39 +2,39 @@ import torch
 from torch import nn
 
 
-
-
-class Network(nn.Module): # pragma: no cover
-    def __init__( dim, layer_width):
+class Network(nn.Module):  # pragma: no cover
+    def __init__(dim, layer_width):
         super().__init__()
         # Inputs to hidden layer linear transformation
         layer1 = nn.Linear(dim, layer_width)
         layer2 = nn.Linear(layer_width, layer_width)
         layer3 = nn.Linear(layer_width, dim)
 
-    def forward( x):
+    def forward(x):
         x = torch.Tensor(x)
         x = torch.nn.functional.relu(layer1(x))
         x = torch.nn.functional.relu(layer2(x))
         x = torch.nn.functional.relu(layer3(x))
         return x.detach().numpy()
 
-    def set_weights(w1,w2,w3):
+    def set_weights(w1, w2, w3):
         with torch.no_grad(): layer1.weight = nn.Parameter(torch.from_numpy(w1).float())
         with torch.no_grad(): layer2.weight = nn.Parameter(torch.from_numpy(w2).float())
         with torch.no_grad(): layer3.weight = nn.Parameter(torch.from_numpy(w3).float())
-    def set_biases(b1,b2,b3):
+
+    def set_biases(b1, b2, b3):
         with torch.no_grad(): layer1.bias = nn.Parameter(torch.from_numpy(b1).float())
         with torch.no_grad(): layer2.bias = nn.Parameter(torch.from_numpy(b2).float())
         with torch.no_grad(): layer3.bias = nn.Parameter(torch.from_numpy(b3).float())
 
     def get_weights(self):
         return layer1.weight, layer2.weight, layer3.weight
+
     def get_biases(self):
         return layer1.bias, layer2.bias, layer3.bias
 
 
-def squared_exponential_kernel( distance, length):
+def squared_exponential_kernel(distance, length):
     """
     Function for the squared exponential kernel.
     kernel = np.exp(-(distance ** 2) / (2.0 * (length ** 2)))
@@ -53,7 +53,8 @@ def squared_exponential_kernel( distance, length):
     kernel = np.exp(-(distance ** 2) / (2.0 * (length ** 2)))
     return kernel
 
-def squared_exponential_kernel_robust( distance, phi):
+
+def squared_exponential_kernel_robust(distance, phi):
     """
     Function for the squared exponential kernel (robust version)
     kernel = np.exp(-(distance ** 2) * (phi ** 2))
@@ -72,7 +73,8 @@ def squared_exponential_kernel_robust( distance, phi):
     kernel = np.exp(-(distance ** 2) * (phi ** 2))
     return kernel
 
-def exponential_kernel( distance, length):
+
+def exponential_kernel(distance, length):
     """
     Function for the exponential kernel.
     kernel = np.exp(-(distance) / (length))
@@ -92,7 +94,8 @@ def exponential_kernel( distance, length):
     kernel = np.exp(-(distance) / (length))
     return kernel
 
-def exponential_kernel_robust( distance, phi):
+
+def exponential_kernel_robust(distance, phi):
     """
     Function for the exponential kernel (robust version)
     kernel = np.exp(-(distance) * (phi**2))
@@ -112,7 +115,8 @@ def exponential_kernel_robust( distance, phi):
     kernel = np.exp(-(distance) * (phi ** 2))
     return kernel
 
-def matern_kernel_diff1( distance, length):
+
+def matern_kernel_diff1(distance, length):
     """
     Function for the Matern kernel, order of differentiability = 1.
     kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
@@ -135,7 +139,8 @@ def matern_kernel_diff1( distance, length):
     )
     return kernel
 
-def matern_kernel_diff1_robust( distance, phi):
+
+def matern_kernel_diff1_robust(distance, phi):
     """
     Function for the Matern kernel, order of differentiability = 1, robust version.
     kernel = (1.0 + ((np.sqrt(3.0) * distance) * (phi**2))) * np.exp(
@@ -157,7 +162,8 @@ def matern_kernel_diff1_robust( distance, phi):
         -(np.sqrt(3.0) * distance) * (phi ** 2))
     return kernel
 
-def matern_kernel_diff2( distance, length):
+
+def matern_kernel_diff2(distance, length):
     """
     Function for the Matern kernel, order of differentiability = 2.
     kernel = (
@@ -185,7 +191,8 @@ def matern_kernel_diff2( distance, length):
              ) * np.exp(-(np.sqrt(5.0) * distance) / length)
     return kernel
 
-def matern_kernel_diff2_robust( distance, phi):
+
+def matern_kernel_diff2_robust(distance, phi):
     """
     Function for the Matern kernel, order of differentiability = 2, robust version.
     kernel = (
@@ -213,7 +220,8 @@ def matern_kernel_diff2_robust( distance, phi):
              ) * np.exp(-(np.sqrt(5.0) * distance) * (phi ** 2))
     return kernel
 
-def sparse_kernel( distance, radius):
+
+def sparse_kernel(distance, radius):
     """
     Function for a compactly supported kernel.
 
@@ -233,11 +241,12 @@ def sparse_kernel( distance, radius):
     d[d == 0.0] = 10e-6
     d[d > radius] = radius
     kernel = (np.sqrt(2.0) / (3.0 * np.sqrt(np.pi))) * \
-             ((3.0 * (d / radius) ** 2 * np.log((d / radius) / (1 + np.sqrt(1.0 - (d / radius) ** 2)))) + \
+             ((3.0 * (d / radius) ** 2 * np.log((d / radius) / (1 + np.sqrt(1.0 - (d / radius) ** 2)))) +
               ((2.0 * (d / radius) ** 2 + 1.0) * np.sqrt(1.0 - (d / radius) ** 2)))
     return kernel
 
-def periodic_kernel( distance, length, p):
+
+def periodic_kernel(distance, length, p):
     """
     Function for a periodic kernel.
     kernel = np.exp(-(2.0/length**2)*(np.sin(np.pi*distance/p)**2))
@@ -259,7 +268,8 @@ def periodic_kernel( distance, length, p):
     kernel = np.exp(-(2.0 / length ** 2) * (np.sin(np.pi * distance / p) ** 2))
     return kernel
 
-def linear_kernel( x1, x2, hp1, hp2, hp3):
+
+def linear_kernel(x1, x2, hp1, hp2, hp3):
     """
     Function for a linear kernel.
     kernel = hp1 + (hp2*(x1-hp3)*(x2-hp3))
@@ -284,7 +294,8 @@ def linear_kernel( x1, x2, hp1, hp2, hp3):
     kernel = hp1 + (hp2 * (x1 - hp3) * (x2 - hp3))
     return kernel
 
-def dot_product_kernel( x1, x2, hp, matrix):
+
+def dot_product_kernel(x1, x2, hp, matrix):
     """
     Function for a dot-product kernel.
     kernel = hp + x1.T @ matrix @ x2
@@ -307,7 +318,8 @@ def dot_product_kernel( x1, x2, hp, matrix):
     kernel = hp + x1.T @ matrix @ x2
     return kernel
 
-def polynomial_kernel( x1, x2, p):
+
+def polynomial_kernel(x1, x2, p):
     """
     Function for a polynomial kernel.
     kernel = (1.0+x1.T @ x2)**p
@@ -328,7 +340,8 @@ def polynomial_kernel( x1, x2, p):
     kernel = (1.0 + x1.T @ x2) ** p
     return p
 
-def default_kernel( x1, x2, hyperparameters, obj):
+
+def default_kernel(x1, x2, hyperparameters, obj):
     """
     Function for the default kernel, a Matern kernel of first-order differentiability.
 
@@ -354,7 +367,8 @@ def default_kernel( x1, x2, hyperparameters, obj):
     distance_matrix = np.sqrt(distance_matrix)
     return hps[0] * obj.matern_kernel_diff1(distance_matrix, 1)
 
-def wendland_anisotropic( x1, x2, hyperparameters, obj):
+
+def wendland_anisotropic(x1, x2, hyperparameters, obj):
     """
     Function for the Wendland kernel.
     The Wendland kernel is compactly supported, leading to sparse covariance matrices.
@@ -382,7 +396,8 @@ def wendland_anisotropic( x1, x2, hyperparameters, obj):
     kernel = (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
     return hps[0] * kernel
 
-def non_stat_kernel( x1, x2, x0, w, l):
+
+def non_stat_kernel(x1, x2, x0, w, l):
     """
     Non-stationary kernel.
     kernel = g(x1) g(x2)
@@ -407,7 +422,8 @@ def non_stat_kernel( x1, x2, x0, w, l):
     non_stat = np.outer(_g(x1, x0, w, l), _g(x2, x0, w, l))
     return non_stat
 
-def non_stat_kernel_gradient( x1, x2, x0, w, l):
+
+def non_stat_kernel_gradient(x1, x2, x0, w, l):
     """
     Non-stationary kernel gradient.
     kernel = g(x1) g(x2)
@@ -430,18 +446,19 @@ def non_stat_kernel_gradient( x1, x2, x0, w, l):
     Covariance matrix : np.ndarray
     """
     dkdw = np.einsum('ij,k->ijk', _dgdw(x1, x0, w, l), _g(x2, x0, w, l)) + np.einsum('ij,k->ikj',
-                                                                                               _dgdw(x2, x0, w,
-                                                                                                          l),
-                                                                                               _g(x1, x0, w,
-                                                                                                       l))
+                                                                                     _dgdw(x2, x0, w,
+                                                                                           l),
+                                                                                     _g(x1, x0, w,
+                                                                                        l))
     dkdl = np.outer(_dgdl(x1, x0, w, l), _g(x2, x0, w, l)) + np.outer(_dgdl(x2, x0, w, l),
-                                                                                _g(x1, x0, w, l)).T
+                                                                      _g(x1, x0, w, l)).T
     res = np.empty((len(w) + 1, len(x1), len(x2)))
     res[0:len(w)] = dkdw
     res[-1] = dkdl
     return res
 
-def get_distance_matrix( x1, x2):
+
+def get_distance_matrix(x1, x2):
     """
     Function to calculate the pairwise distance matrix of
     points in x1 and x2.
@@ -461,17 +478,20 @@ def get_distance_matrix( x1, x2):
     for i in range(x1.shape[1]): d += (x1[:, i].reshape(-1, 1) - x2[:, i]) ** 2
     return np.sqrt(d)
 
-def _g( x, x0, w, l):
+
+def _g(x, x0, w, l):
     d = get_distance_matrix(x, x0)
     e = np.exp(-(d ** 2) / l)
     return np.sum(w * e, axis=1)
 
-def _dgdw( x, x0, w, l):
+
+def _dgdw(x, x0, w, l):
     d = get_distance_matrix(x, x0)
     e = np.exp(-(d ** 2) / l).T
     return e
 
-def _dgdl( x, x0, w, l):
+
+def _dgdl(x, x0, w, l):
     d = get_distance_matrix(x, x0)
     e = np.exp(-(d ** 2) / l)
     return np.sum(w * e * (d ** 2 / l ** 2), axis=1)

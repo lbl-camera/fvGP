@@ -2,16 +2,16 @@ import numpy as np
 from .gp_kernels import *
 
 
-class GPrior: # pragma: no cover
-    def __init__(self, x_data,
+class GPrior:  # pragma: no cover
+    def __init__(self, data,
                  gp_kernel_function=None,
                  gp_kernel_function_grad=None,
                  gp_mean_function=None,
                  gp_mean_function_grad=None,
                  init_hyperparameters=None,
-                 gp2Scale_dask_client=None,
-                 cov_comp_mode='default', #default, gp2SCale, ...
+                 ram_economy=False,
                  online=False):
+
         assert callable(gp_kernel_function) or gp_kernel_function is None
         assert callable(gp_mean_function) or gp_mean_function is None
         assert isinstance(init_hyperparameters, np.ndarray)
@@ -19,46 +19,35 @@ class GPrior: # pragma: no cover
         assert isinstance(cov_comp_mode, str)
         assert isinstance(online, bool)
 
+        self.data = data
         self.gp_kernel_function = gp_kernel_function
         self.gp_mean_function = gp_mean_function
         self.init_hyperparameters = init_hyperparameters
-        self.cov_comp_mode = comp_mode
         self.online = online
+        self.ram_economy = ram_economy
 
-        if cov_comp_mode == 'gp2Scale':
+        if not data.Euclidean and not callable(gp_kernel_function):
+            raise Exception(
+                "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters.")
+        if not data.Euclidean and init_hyperparameters is None:
+            raise Exception(
+                "You are running fvGP on non-Euclidean inputs. Please provide initial hyperparameters.")
+        if compute_device == 'gpu':
             try:
-                import imate
+                import torch
             except:
                 raise Exception(
-                    "You have activated `gp2Scale`. You need to install imate manually for this to work.")
-            if gp2Scale_dask_client is None:
-                gp2Scale_dask_client = Client()
-                warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. \
-                Set to distributed.Client().", stacklevel=2)
-            self.gp2Scale_dask_client = gp2Scale_dask_client
+                    "You have specified the 'gpu' as your compute device. You need to install pytorch\
+                     manually for this to work.")
 
-            if not callable(gp_kernel_function):
-                warnings.warn("You have chosen to activate gp2Scale. A powerful tool! \n \
-                        But you have not supplied a kernel that is compactly supported. \n \
-                        I will use an anisotropic Wendland kernel for now.",
-                              stacklevel=2)
-                if compute_device == "cpu":
-                    gp_kernel_function = wendland_anisotropic_gp2Scale_cpu
-                elif compute_device == "gpu":
-                    gp_kernel_function = wendland_anisotropic_gp2Scale_gpu
+        if (callable(gp_kernel_function) or callable(gp_mean_function)) and init_hyperparameters is None:
+            warnings.warn(
+                "You have provided callables for kernel, mean, or noise functions but no initial \n \
+                hyperparameters. It is likely they have to be defined for a success initialization",
+                stacklevel=2)
 
-            self.gp2Scale_obj = gp2S(batch_size=gp2Scale_batch_size,
-                                     gp_kernel_function=gp_kernel_function,
-                                     covariance_dask_client=gp2Scale_dask_client,
-                                     info=info)
-            self.cov_function = self.gp2Scale_obj.compute_covariance
-            self.store_inv = False
-            warnings.warn("WARNING: gp2Scale activated. Only training via MCMC will be performed. \
-                    Only noise variances (no noise covariances can be considered). \
-                    A customized sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.",
-                          stacklevel=2)
-        elif cov_comp_mode == "default":
-            self.cov_function = self.compute_K
+        if init_hyperparameters is None: init_hyperparameters = np.ones((data.input_space_dim + 1))
+        self.hyperparameters = init_hyperparameters
 
         # kernel
         if callable(gp_kernel_function):
@@ -102,130 +91,84 @@ class GPrior: # pragma: no cover
         prior_mean_vec = self.mean_function(x_data, hyperparameters, self)
         assert np.ndim(prior_mean_vec) == 1
         # get the latest noise
-        if callable(self.noise_function): V = self.noise_function(x_data, hyperparameters, self)
-        else: V = self.V
+        V = self.noise_function(x_data, hyperparameters, self)
         assert np.ndim(V) == 2
-
-        # get K
-        try_sparse_LU = False
-        if self.gp2Scale:
-            st = time.time()
-            K = self.gp2Scale_obj.compute_covariance(x_data, hyperparameters, self.gp2Scale_dask_client)
-            Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
-            if isinstance(V, np.ndarray): raise Exception("You are running gp2Scale. \
-            Your noise model has to return a `scipy.sparse.coo_matrix`.")
-            if len(x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
-            if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
-                                " seconds | sparsity = ", Ksparsity, flush=True)
-        else:
-            K = self._compute_K(x_data, x_data, hyperparameters)
-
+        K = self._compute_K(x_data, x_data, hyperparameters)
         # check if shapes are correct
         if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
-
         # get K + V
         KV = K + V
 
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
         KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                calc_inv=calc_inv, try_sparse_LU=try_sparse_LU)
-
+                                                calc_inv=calc_inv)
         return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
 
     ##################################################################################
 
     def _update_GPpriorV(self, x_data_old, x_new, y_data, hyperparameters, calc_inv=False):
-        #where is the new variance?
-        #do I need the x_data here? Or can it be self.x_data
-
         # get the prior mean
         prior_mean_vec = np.append(self.prior_mean_vec, self.mean_function(x_new, hyperparameters, self))
         assert np.ndim(prior_mean_vec) == 1
         # get the latest noise
-        if callable(self.noise_function): V = self.noise_function(self.x_data, hyperparameters, self)
-        else: V = self.V
+        V = self.noise_function(self.data.x_data, hyperparameters, self) #can be avoided by update
         assert np.ndim(V) == 2
         # get K
-        try_sparse_LU = False
-        if self.gp2Scale:
-            st = time.time()
-            K = self.gp2Scale_obj.update_covariance(x_new, hyperparameters, self.gp2Scale_dask_client, self.K)
-            Ksparsity = float(K.nnz) / float(len(self.x_data) ** 2)
-            if len(self.x_data) < 50000 and Ksparsity < 0.0001: try_sparse_LU = True
-            if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
-                                " seconds | sparsity = ", Ksparsity, flush=True)
-        else:
-            off_diag = self._compute_K(x_data_old, x_new, hyperparameters)
-            K = np.block([
-                         [self.K,          off_diag],
-                         [off_diag.T,      self._compute_K(x_new, x_new, hyperparameters)]
-                         ])
+        K = self.update_K(x_data_old, x_new, hyperparameters)
+
         # check if shapes are correct
         if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
 
         # get K + V
         KV = K + V
-        #y_data = np.append(y_data, y_new)
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
 
-        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                     calc_inv=calc_inv, try_sparse_LU=try_sparse_LU)
-
+        if self.online_mode is True: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(
+            y_data - prior_mean_vec, k, kk)
+        else: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
+                                                                             calc_inv=calc_inv)
         return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
 
     ##################################################################################
-    def _compute_gp_linalg(self, vec, KV, calc_inv=False, try_sparse_LU=False):
-        if self.gp2Scale:
-            st = time.time()
-            from imate import logdet
-            # try fast but RAM intensive SuperLU first
-            if try_sparse_LU:
-                try:
-                    LU = splu(KV.tocsc())
-                    factorization_obj = ("LU", LU)
-                    KVinvY = LU.solve(vec)
-                    upper_diag = abs(LU.U.diagonal())
-                    KVlogdet = np.sum(np.log(upper_diag))
-                    if self.info: print("LU compute time: ", time.time() - st, "seconds.")
-                # if that did not work, do random lin algebra magic
-                except:
-                    KVinvY, exit_code = minres(KV.tocsc(), vec)
-                    factorization_obj = ("gp2Scale", None)
-                    if self.compute_device == "gpu": gpu = True
-                    else: gpu = False
-                    if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
-                    KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
-                                                lanczos_degree=20, error_rtol=0.1, gpu=gpu,
-                                                return_info=True, plot=False, verbose=False)
-                    if self.info: print("logdet/LU compute time: ", time.time() - st, "seconds.")
-            # if the problem is large go with rand. lin. algebra straight away
-            else:
-                if self.info: print("MINRES solve in progress ...", time.time() - st, "seconds.")
-                factorization_obj = ("gp2Scale", None)
-                KVinvY, exit_code = minres(KV.tocsc(), vec)
-                if self.info: print("MINRES solve compute time: ", time.time() - st, "seconds.")
-                if self.compute_device == "gpu": gpu = True
-                else: gpu = False
-                if self.info: print("logdet() in progress ... ", time.time() - st, "seconds.")
-                KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
-                                            lanczos_degree=20, error_rtol=0.1, orthogonalize=0, gpu=gpu,
-                                            return_info=True, plot=False, verbose=False)
-                if self.info: print("logdet/LU compute time: ", time.time() - st, "seconds.")
-            KVinv = None
+    def _compute_gp_linalg(self, vec, KV, calc_inv=False):
+        if calc_inv:
+            KVinv = self._inv(KV)
+            factorization_obj = ("Inv", None)
+            KVinvY = KVinv @ vec
+            KVlogdet = self._logdet(KV)
         else:
-            if calc_inv:
-                KVinv = self._inv(KV)
-                factorization_obj = ("Inv", None)
-                KVinvY = KVinv @ vec
-                KVlogdet = self._logdet(KV)
-            else:
-                KVinv = None
-                c, l = cho_factor(KV)
-                factorization_obj = ("Chol", c, l)
-                KVinvY = cho_solve((c, l), vec)
-                upper_diag = abs(c.diagonal())
-                KVlogdet = 2.0 * np.sum(np.log(upper_diag))
+            KVinv = None
+            KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
         return KVinvY, KVlogdet, factorization_obj, KVinv
+
+    def _update_gp_linalg(self, vec, k, kk):
+        X = self._inv(kk - C @ self.KVinv @ B)
+        F = -self.KVinv @ k @ X
+        KVinv = np.block([[self.KVinv + self.KVinv @ B @ X @ C @ self.KVinv, F],
+                          [F.T,                                              X]])
+        factorization_obj = ("Inv", None)
+        KVinvY = KVinv @ vec
+        KVlogdet = self.KVlogdet + self._logdet(kk - k.T @ self.KVinv @ k)
+        return KVinvY, KVlogdet, factorization_obj, KVinv
+
+    def _LU(self, KV, vec):
+        st = time.time()
+        if self.info: print("LU in progress ...")
+        LU = splu(KV.tocsc())
+        factorization_obj = ("LU", LU)
+        KVinvY = LU.solve(vec)
+        upper_diag = abs(LU.U.diagonal())
+        KVlogdet = np.sum(np.log(upper_diag))
+        if self.info: print("LU compute time: ", time.time() - st, "seconds.")
+        return KVinvY, KVlogdet, factorization_obj
+
+    def _Chol(self, KV, vec):
+        c, l = cho_factor(KV)
+        factorization_obj = ("Chol", c, l)
+        KVinvY = cho_solve((c, l), vec)
+        upper_diag = abs(c.diagonal())
+        KVlogdet = 2.0 * np.sum(np.log(upper_diag))
+        return KVinvY, KVlogdet, factorization_obj
 
     ##################################################################################
     def compute_K(self, x, hyperparameters):
@@ -233,11 +176,11 @@ class GPrior: # pragma: no cover
         K = self.kernel(x, hyperparameters, self)
         return K
 
-
-
-
-
-
-
-
-
+    def update_k(self, x_data_old, x_new, hyperparameters):
+        k = self._compute_K(x_data_old, x_new, hyperparameters)
+        kk = self._compute_K(x_new, x_new, hyperparameters)
+        K = np.block([
+                         [self.K,          k],
+                         [k.T,            kk]
+                         ])
+        return K
