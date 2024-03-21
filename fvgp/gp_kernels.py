@@ -341,33 +341,6 @@ def polynomial_kernel(x1, x2, p):
     return p
 
 
-def default_kernel(x1, x2, hyperparameters, obj):
-    """
-    Function for the default kernel, a Matern kernel of first-order differentiability.
-
-    Parameters
-    ----------
-    x1 : np.ndarray
-        Numpy array of shape (U x D).
-    x2 : np.ndarray
-        Numpy array of shape (V x D).
-    hyperparameters : np.ndarray
-        Array of hyperparameters. For this kernel we need D + 1 hyperparameters.
-    obj : object instance
-        GP object instance.
-
-    Return
-    ------
-    Covariance matrix : np.ndarray
-    """
-    hps = hyperparameters
-    distance_matrix = np.zeros((len(x1), len(x2)))
-    for i in range(len(x1[0])):
-        distance_matrix += abs(np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
-    distance_matrix = np.sqrt(distance_matrix)
-    return hps[0] * obj.matern_kernel_diff1(distance_matrix, 1)
-
-
 def wendland_anisotropic(x1, x2, hyperparameters, obj):
     """
     Function for the Wendland kernel.
@@ -504,6 +477,14 @@ def wendland_anisotropic_gp2Scale_cpu(x1, x2, hps, obj):
     d[d > 1.] = 1.
     kernel = hps[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
     return kernel
+
+
+def _get_distance_matrix_gpu(x1, x2, device, hps):  # pragma: no cover
+    import torch
+    d = torch.zeros((len(x1), len(x2))).to(device, dtype=torch.float32)
+    for i in range(x1.shape[1]):
+        d += ((x1[:, i].reshape(-1, 1) - x2[:, i]) / hps[1 + i]) ** 2
+    return torch.sqrt(d)
 
 
 def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps, obj):  # pragma: no cover

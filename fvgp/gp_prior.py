@@ -3,7 +3,7 @@ from .gp_kernels import *
 
 
 class GPrior:  # pragma: no cover
-    def __init__(self, data,
+    def __init__(self,
                  gp_kernel_function=None,
                  gp_kernel_function_grad=None,
                  gp_mean_function=None,
@@ -19,12 +19,14 @@ class GPrior:  # pragma: no cover
         assert isinstance(cov_comp_mode, str)
         assert isinstance(online, bool)
 
-        self.data = data
+        # self.data = data
         self.gp_kernel_function = gp_kernel_function
         self.gp_mean_function = gp_mean_function
         self.init_hyperparameters = init_hyperparameters
         self.online = online
         self.ram_economy = ram_economy
+        self.m = None
+        self.K = None
 
         if not data.Euclidean and not callable(gp_kernel_function):
             raise Exception(
@@ -79,108 +81,134 @@ class GPrior:  # pragma: no cover
 
         self.prior_mean_vector, self.K = self.compute_prior(x_data, hyperparameters)
 
+    def update(self, x_data, x_new):
+        self.prior_mean_vector, self.K = self.update_prior(x_data, x_new, hyperparameters)
+
     def compute_prior(self, x_data, hyperparameters):
-        m = self.mean_function(x_data, hyperparameters, self)
-        K = self.cov_function(x_data, hyperparameters)
+        self.m = self.compute_mean(x_data, hyperparameters)
+        self.K = self.compute_K(x_data, hyperparameters)
         assert np.ndim(prior_mean_vec) == 1
         assert np.ndim(K) == 2
-        return m, K
+        return self.m, self.K
 
-    def _compute_GPpriorV(self, x_data, y_data, hyperparameters, calc_inv=False):
-        # get the prior mean
-        prior_mean_vec = self.mean_function(x_data, hyperparameters, self)
+    def update_prior(self, x_data, x_new, hyperparameters):
+        self.m = self.update_mean(x_new, hyperparameters)
+        self.K = self.update_K(x_data, x_new, hyperparameters)
         assert np.ndim(prior_mean_vec) == 1
-        # get the latest noise
-        V = self.noise_function(x_data, hyperparameters, self)
-        assert np.ndim(V) == 2
-        K = self._compute_K(x_data, x_data, hyperparameters)
-        # check if shapes are correct
-        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
-        # get K + V
-        KV = K + V
+        assert np.ndim(K) == 2
+        return self.m, self.K
 
-        # get Kinv/KVinvY, LU, Chol, logdet(KV)
-        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                calc_inv=calc_inv)
-        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
-
-    ##################################################################################
-
-    def _update_GPpriorV(self, x_data_old, x_new, y_data, hyperparameters, calc_inv=False):
-        # get the prior mean
-        prior_mean_vec = np.append(self.prior_mean_vec, self.mean_function(x_new, hyperparameters, self))
-        assert np.ndim(prior_mean_vec) == 1
-        # get the latest noise
-        V = self.noise_function(self.data.x_data, hyperparameters, self) #can be avoided by update
-        assert np.ndim(V) == 2
-        # get K
-        K = self.update_K(x_data_old, x_new, hyperparameters)
-
-        # check if shapes are correct
-        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
-
-        # get K + V
-        KV = K + V
-        # get Kinv/KVinvY, LU, Chol, logdet(KV)
-
-        if self.online_mode is True: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(
-            y_data - prior_mean_vec, k, kk)
-        else: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                                             calc_inv=calc_inv)
-        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
-
-    ##################################################################################
-    def _compute_gp_linalg(self, vec, KV, calc_inv=False):
-        if calc_inv:
-            KVinv = self._inv(KV)
-            factorization_obj = ("Inv", None)
-            KVinvY = KVinv @ vec
-            KVlogdet = self._logdet(KV)
-        else:
-            KVinv = None
-            KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
-        return KVinvY, KVlogdet, factorization_obj, KVinv
-
-    def _update_gp_linalg(self, vec, k, kk):
-        X = self._inv(kk - C @ self.KVinv @ B)
-        F = -self.KVinv @ k @ X
-        KVinv = np.block([[self.KVinv + self.KVinv @ B @ X @ C @ self.KVinv, F],
-                          [F.T,                                              X]])
-        factorization_obj = ("Inv", None)
-        KVinvY = KVinv @ vec
-        KVlogdet = self.KVlogdet + self._logdet(kk - k.T @ self.KVinv @ k)
-        return KVinvY, KVlogdet, factorization_obj, KVinv
-
-    def _LU(self, KV, vec):
-        st = time.time()
-        if self.info: print("LU in progress ...")
-        LU = splu(KV.tocsc())
-        factorization_obj = ("LU", LU)
-        KVinvY = LU.solve(vec)
-        upper_diag = abs(LU.U.diagonal())
-        KVlogdet = np.sum(np.log(upper_diag))
-        if self.info: print("LU compute time: ", time.time() - st, "seconds.")
-        return KVinvY, KVlogdet, factorization_obj
-
-    def _Chol(self, KV, vec):
-        c, l = cho_factor(KV)
-        factorization_obj = ("Chol", c, l)
-        KVinvY = cho_solve((c, l), vec)
-        upper_diag = abs(c.diagonal())
-        KVlogdet = 2.0 * np.sum(np.log(upper_diag))
-        return KVinvY, KVlogdet, factorization_obj
-
-    ##################################################################################
     def compute_K(self, x, hyperparameters):
         """computes the covariance matrix from the kernel"""
+        # if gp2Scale:
+        # else:
         K = self.kernel(x, hyperparameters, self)
         return K
 
-    def update_k(self, x_data_old, x_new, hyperparameters):
-        k = self._compute_K(x_data_old, x_new, hyperparameters)
+    def update_K(self, x_data, x_new, hyperparameters):
+        # if gp2Scale: ...
+        # else:
+        k = self._compute_K(x_data, x_new, hyperparameters)
         kk = self._compute_K(x_new, x_new, hyperparameters)
         K = np.block([
-                         [self.K,          k],
-                         [k.T,            kk]
-                         ])
+            [self.K, k],
+            [k.T, kk]
+        ])
         return K
+
+    def compute_mean(self, x_data, hyperparameters):
+        """computes the covariance matrix from the kernel"""
+        # if gp2Scale:
+        # else:
+        m = self.mean_function(x_data, hyperparameters, self)
+        return m
+
+    def update_mean(self, x_new, hyperparameters):
+        # if gp2Scale: ...
+        # else:
+        m = np.append(self.prior_mean_vec, self.mean_function(x_new, hyperparameters, self))
+        return m
+
+    ####################################################
+    ####################################################
+    ####################################################
+    ####################################################
+
+    def default_kernel(self, x1, x2, hyperparameters, obj):
+        """
+        Function for the default kernel, a Matern kernel of first-order differentiability.
+
+        Parameters
+        ----------
+        x1 : np.ndarray
+            Numpy array of shape (U x D).
+        x2 : np.ndarray
+            Numpy array of shape (V x D).
+        hyperparameters : np.ndarray
+            Array of hyperparameters. For this kernel we need D + 1 hyperparameters.
+        obj : object instance
+            GP object instance.
+
+        Return
+        ------
+        Covariance matrix : np.ndarray
+        """
+        hps = hyperparameters
+        distance_matrix = np.zeros((len(x1), len(x2)))
+        for i in range(len(x1[0])):
+            distance_matrix += abs(np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
+        distance_matrix = np.sqrt(distance_matrix)
+        return hps[0] * matern_kernel_diff1(distance_matrix, 1)
+
+    def _d_gp_kernel_dx(self, points1, points2, direction, hyperparameters):
+        new_points = np.array(points1)
+        epsilon = 1e-8
+        new_points[:, direction] += epsilon
+        a = self.kernel(new_points, points2, hyperparameters, self)
+        b = self.kernel(points1, points2, hyperparameters, self)
+        derivative = (a - b) / epsilon
+        return derivative
+
+    def _gp_kernel_gradient(self, points1, points2, hyperparameters, obj):
+        gradient = np.empty((len(hyperparameters), len(points1), len(points2)))
+        for direction in range(len(hyperparameters)):
+            gradient[direction] = self._dkernel_dh(points1, points2, direction, hyperparameters)
+        return gradient
+
+    def _gp_kernel_derivative(self, points1, points2, direction, hyperparameters, obj):
+        # gradient = np.empty((len(hyperparameters), len(points1),len(points2)))
+        derivative = self._dkernel_dh(points1, points2, direction, hyperparameters)
+        return derivative
+
+    def _dkernel_dh(self, points1, points2, direction, hyperparameters):
+        new_hyperparameters1 = np.array(hyperparameters)
+        new_hyperparameters2 = np.array(hyperparameters)
+        epsilon = 1e-8
+        new_hyperparameters1[direction] += epsilon
+        new_hyperparameters2[direction] -= epsilon
+        a = self.kernel(points1, points2, new_hyperparameters1, self)
+        b = self.kernel(points1, points2, new_hyperparameters2, self)
+        derivative = (a - b) / (2.0 * epsilon)
+        return derivative
+
+    def _default_mean_function(self, x, hyperparameters, gp_obj):
+        """evaluates the gp mean function at the data points """
+        mean = np.zeros((len(x)))
+        mean[:] = np.mean(self.y_data)
+        return mean
+
+    def _finitediff_dm_dh(self, x, hps, gp_obj):
+        gr = np.empty((len(hps), len(x)))
+        for i in range(len(hps)):
+            temp_hps1 = np.array(hps)
+            temp_hps1[i] = temp_hps1[i] + 1e-6
+            temp_hps2 = np.array(hps)
+            temp_hps2[i] = temp_hps2[i] - 1e-6
+            a = self.mean_function(x, temp_hps1, self)
+            b = self.mean_function(x, temp_hps2, self)
+            gr[i] = (a - b) / 2e-6
+        return gr
+
+    def _default_dm_dh(self, x, hps, gp_obj):
+        gr = np.zeros((len(hps), len(x)))
+        return gr

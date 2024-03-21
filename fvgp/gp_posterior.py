@@ -1,7 +1,30 @@
-
-class GPosterior: # pragma: no cover
-    def __init__(self, KVinvY=None):
+class GPosterior:  # pragma: no cover
+    def __init__(self, prior_obj, data_obj):
         assert isinstance(KVinvY, np.ndarray)
+        self.KV = prior_obj.KV
+        self.factorization_obj = prior_obj.factorization_obj
+        self.prior_obj = prior_obj
+        self.data_obj = data_obj
+
+    def _KVsolve(self, b):
+        if self.factorization_obj[0] == "LU":
+            LU = self.factorization_obj[1]
+            return LU.solve(b)
+        elif self.factorization_obj[0] == "Chol":
+            c, l = self.factorization_obj[1], self.factorization_obj[2]
+            return cho_solve((c, l), b)
+        elif self.factorization_obj[0] == "gp2Scale":
+            res = np.empty((len(b), b.shape[1]))
+            if b.shape[1] > 100: warnings.warn(
+                "You want to predict at >100 points. \n When using gp2Scale, this takes a while. \n \
+                Better predict at only a handful of points.")
+            for i in range(b.shape[1]):
+                res[:, i], exit_status = cg(self.KV, b[:, i])
+            return res
+        elif self.factorization_obj[0] == "Inv":
+            return self.KVinv @ b
+        else:
+            raise Exception("Non-permitted factorization object encountered.")
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
         """

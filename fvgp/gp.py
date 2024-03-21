@@ -30,6 +30,7 @@ from scipy.stats import norm
 #   neither minres nor random logdet are doing a good job, cg is better but we need a preconditioner, maybe a large LU?
 #   when using gp2Scale but the solution is dense we should go with dense linalg [Done]
 #   init hps and bounds should only be initiated for the default kernel
+#   the mcmc in default mode should not need proposal distributions explicitly
 
 class GP:
     """
@@ -1221,7 +1222,8 @@ class GP:
             elif mode == "dense_Chol":
                 KV = KV.toarray()
                 KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
-            else: KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
+            elif mode == "gp2Scale": KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
+            else: raise Exception("No linear algebra mode applicable in '_compute_gp_linalg'")
             KVinv = None
         else:
             if calc_inv:
@@ -1262,11 +1264,13 @@ class GP:
         return KVinvY, KVlogdet, factorization_obj
 
     def _Chol(self, KV, vec):
+        if self.info: print("Dense Cholesky in progress ...")
         c, l = cho_factor(KV)
         factorization_obj = ("Chol", c, l)
         KVinvY = cho_solve((c, l), vec)
         upper_diag = abs(c.diagonal())
         KVlogdet = 2.0 * np.sum(np.log(upper_diag))
+        if self.info: print("Dense Cholesky compute time: ", time.time() - st, "seconds.")
         return KVinvY, KVlogdet, factorization_obj
 
     def _gp2Scale_linalg(self, KV, vec):

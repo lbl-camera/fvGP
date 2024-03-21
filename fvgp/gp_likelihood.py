@@ -2,8 +2,8 @@ import numpy
 
 
 class GPlikelihood:  # pragma: no cover
-    def __init__(self, K, noise_variances, gp_noise_function):
-        assert isinstance(K, np.ndarray) and np.ndim(K) == 2
+    def __init__(self, prior_obj, noise_variances, gp_noise_function):
+        self.prior_obj = prior_obj
 
         if noise_variances is not None and callable(gp_noise_function):
             warnings.warn("Noise function and measurement noise provided. noise_variances set to None.", stacklevel=2)
@@ -31,22 +31,6 @@ class GPlikelihood:  # pragma: no cover
                 self.noise_function_grad = self._default_dnoise_dh
 
     ##################################################################################
-    def _KVsolve(self, b):
-        if self.factorization_obj[0] == "LU":
-            LU = self.factorization_obj[1]
-            return LU.solve(b)
-        elif self.factorization_obj[0] == "Chol":
-            c, l = self.factorization_obj[1], self.factorization_obj[2]
-            return cho_solve((c, l), b)
-        else:
-            res = np.empty((len(b), b.shape[1]))
-            if b.shape[1] > 100: warnings.warn(
-                "You want to predict at >100 points. \n When using gp2Scale, this takes a while. \n \
-                Better predict at only a handful of points.")
-            for i in range(b.shape[1]):
-                res[:, i], exit_status = minres(self.KV, b[:, i])
-                # if exit_status != 0: res[:,i], exit_status = minres(self.KV,b[:,i])
-            return res
 
     def log_likelihood(self, hyperparameters=None):
         """
@@ -211,3 +195,35 @@ class GPlikelihood:  # pragma: no cover
             return self.gp2Scale_obj.calculate_sparse_noise_covariance(noise)
         else:
             return np.diag(noise)
+
+    def _default_dnoise_dh(self, x, hps, gp_obj):
+        gr = np.zeros((len(hps), len(x), len(x)))
+        return gr
+
+    def _default_dnoise_dh_econ(self, x, i, hps, gp_obj):
+        gr = np.zeros((len(x), len(x)))
+        return gr
+
+    ##########################
+    def _finitediff_dnoise_dh(self, x, hps, gp_obj):
+        gr = np.zeros((len(hps), len(x), len(x)))
+        for i in range(len(hps)):
+            temp_hps1 = np.array(hps)
+            temp_hps1[i] = temp_hps1[i] + 1e-6
+            temp_hps2 = np.array(hps)
+            temp_hps2[i] = temp_hps2[i] - 1e-6
+            a = self.noise_function(x, temp_hps1, self)
+            b = self.noise_function(x, temp_hps2, self)
+            gr[i] = (a - b) / 2e-6
+        return gr
+
+    ##########################
+    def _finitediff_dnoise_dh_econ(self, x, i, hps, gp_obj):
+        temp_hps1 = np.array(hps)
+        temp_hps1[i] = temp_hps1[i] + 1e-6
+        temp_hps2 = np.array(hps)
+        temp_hps2[i] = temp_hps2[i] - 1e-6
+        a = self.noise_function(x, temp_hps1, self)
+        b = self.noise_function(x, temp_hps2, self)
+        gr = (a - b) / 2e-6
+        return gr
