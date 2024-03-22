@@ -2,53 +2,67 @@ import numpy as np
 
 
 class GPMarginalDensity:
-    def __init__(self, data_obj, prior_obj, likelihood_obj):
+    def __init__(self,
+                 data_obj,
+                 prior_obj,
+                 likelihood_obj,
+                 store_inv=False):
         self.data_obj = data_obj
         self.prior_obj = prior_obj
         self.likelihood_obj = likelihood_obj
+        self.store_inv = store_inv
+        self.K = prior_obj.K
+        self.k = None
+        self.kk = None
+        self.V = likelihood_obj.V
+        self.y_data = data_obj.y_data
+        self.y_mean = data_obj.y_data - prior_obj.prior_mean_vector
 
-    def _compute_GPpriorV(self, x_data, y_data, hyperparameters, calc_inv=False):
-        # get the prior mean
-        prior_mean_vec = self.mean_function(x_data, hyperparameters, self)
-        assert np.ndim(prior_mean_vec) == 1
-        # get the latest noise
-        V = self.noise_function(x_data, hyperparameters, self)
-        assert np.ndim(V) == 2
-        K = self._compute_K(x_data, x_data, hyperparameters)
-        # check if shapes are correct
-        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
+        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv = self._compute_GPpriorV()
+
+    def update(self):
+        self.K = prior_obj.K
+        self.k = prior_obj.k
+        self.kk = prior_obj.kk
+        self.V = likelihood_obj.V
+        self.y_data = data_obj.y_data
+        self.y_mean = data_obj.y_data - prior_obj.prior_mean_vector
+        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv = self._update_GPpriorV()
+
+    def _compute_GPpriorV(self):
+
         # get K + V
+        K = self.prior_obj.K
+        V = self.likelihood_obj.V
+        # check if shapes are correct
+        assert K.shape == V.shape
         KV = K + V
-
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
-        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                calc_inv=calc_inv)
-        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
+        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(self.y_mean, KV,
+                                                                             calc_inv=calc_inv)
+        return KV, KVinvY, KVlogdet, factorization_obj, KVinv
 
     ##################################################################################
 
-    def _update_GPpriorV(self, x_data_old, x_new, y_data, hyperparameters, calc_inv=False):
-        # get the prior mean
-        prior_mean_vec = np.append(self.prior_mean_vec, self.mean_function(x_new, hyperparameters, self))
-        assert np.ndim(prior_mean_vec) == 1
-        # get the latest noise
-        V = self.noise_function(self.data.x_data, hyperparameters, self) #can be avoided by update
-        assert np.ndim(V) == 2
+    def _update_GPpriorV(self):
         # get K
-        K = self.update_K(x_data_old, x_new, hyperparameters)
-
+        K = self.prior_obj.K
+        k = self.prior_obj.k #this should be kk + the right part of V
+        kk = self.prior_obj.kk #this should be kk + the right part of V
+        V = self.likelihood_obj.V
         # check if shapes are correct
-        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
+        assert K.shape == V.shape
 
         # get K + V
         KV = K + V
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
 
-        if self.online_mode is True: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(
-            y_data - prior_mean_vec, k, kk)
-        else: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                                             calc_inv=calc_inv)
-        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
+        if self.online_mode is True:
+            KVinvY, KVlogdet, factorization_obj, KVinv = self._update_gp_linalg(
+                self.y_mean, k, kk)
+        else:
+            KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(self.y_mean, KV)
+        return KV, KVinvY, KVlogdet, factorization_obj, KVinv
 
     ##################################################################################
     def _compute_gp_linalg(self, vec, KV, calc_inv=False):
@@ -66,7 +80,7 @@ class GPMarginalDensity:
         X = self._inv(kk - C @ self.KVinv @ B)
         F = -self.KVinv @ k @ X
         KVinv = np.block([[self.KVinv + self.KVinv @ B @ X @ C @ self.KVinv, F],
-                          [F.T,                                              X]])
+                          [F.T, X]])
         factorization_obj = ("Inv", None)
         KVinvY = KVinv @ vec
         KVlogdet = self.KVlogdet + self._logdet(kk - k.T @ self.KVinv @ k)

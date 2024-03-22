@@ -251,8 +251,8 @@ class GP():
         ###init likelihood instance#############
         ########################################
         # likelihood needs hps, noise function
-        self.likelihood = GPlikelihood(hyperparameters=self.prior.hyperparameters,
-                                       noise_variances=noise_variances,
+        self.likelihood = GPlikelihood(self.data,
+                                       hyperparameters=self.prior.hyperparameters,
                                        gp_noise_function=gp_noise_function,
                                        gp_noise_function_grad=gp_noise_function_grad,
                                        ram_economy=ram_economy,
@@ -272,7 +272,7 @@ class GP():
                                   gp_kernel_function,
                                   gp_mean_function,
                                   gp_noise_function,
-                                  init_hyperparameters=self.prior.hyperparameters,
+                                  init_hyperparameters=self.prior.hyperparameters, ##random init_hyperparameters will not be abailable in the prior_obj
                                   hyperparameter_bounds=hyperparameter_bounds)
 
         ##########################################

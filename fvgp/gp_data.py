@@ -25,7 +25,7 @@ class GPdata:
         self.noise_variances = noise_variances
         self.point_number = len(self.x_data)
 
-    def update_data(self, x_data_new, y_data_new, noise_variances_new=None, append=True):
+    def update(self, x_data_new, y_data_new, noise_variances_new=None, append=True):
         assert isinstance(x_data_new, np.ndarray) or isinstance(x_data_new, list)
         assert isinstance(y_data_new, np.ndarray) and np.ndim(y_data_new) == 1
         assert ((isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1)

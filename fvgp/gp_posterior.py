@@ -1,6 +1,7 @@
 class GPosterior:  # pragma: no cover
-    def __init__(self, prior_obj, data_obj):
-        assert isinstance(KVinvY, np.ndarray)
+    def __init__(self, marginal_density_obj, data_obj):
+        assert isinstance(marginal_density_obj.KVinvY, np.ndarray)
+
         self.KV = prior_obj.KV
         self.factorization_obj = prior_obj.factorization_obj
         self.prior_obj = prior_obj
