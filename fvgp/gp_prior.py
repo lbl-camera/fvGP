@@ -3,35 +3,36 @@ from .gp_kernels import *
 
 
 class GPrior:  # pragma: no cover
-    def __init__(self,
+    def __init__(self, data_obj,
                  gp_kernel_function=None,
                  gp_kernel_function_grad=None,
                  gp_mean_function=None,
                  gp_mean_function_grad=None,
                  init_hyperparameters=None,
                  ram_economy=False,
+                 cov_comp_mode="trad",
+                 compute_device='cpu',
                  online=False):
 
         assert callable(gp_kernel_function) or gp_kernel_function is None
         assert callable(gp_mean_function) or gp_mean_function is None
-        assert isinstance(init_hyperparameters, np.ndarray)
-        assert np.ndim(init_hyperparameters) == 1
+        assert isinstance(init_hyperparameters, np.ndarray) or init_hyperparameters is None
+        if isinstance(init_hyperparameters, np.ndarray): assert np.ndim(init_hyperparameters) == 1
         assert isinstance(cov_comp_mode, str)
         assert isinstance(online, bool)
 
-        # self.data = data
+        self.x_data = data_obj.x_data
+        self.y_data = data_obj.y_data
         self.gp_kernel_function = gp_kernel_function
         self.gp_mean_function = gp_mean_function
-        self.init_hyperparameters = init_hyperparameters
+        self.hyperparameters = init_hyperparameters
         self.online = online
         self.ram_economy = ram_economy
-        self.m = None
-        self.K = None
 
-        if not data.Euclidean and not callable(gp_kernel_function):
+        if not data_obj.Euclidean and not callable(gp_kernel_function):
             raise Exception(
                 "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters.")
-        if not data.Euclidean and init_hyperparameters is None:
+        if not data_obj.Euclidean and init_hyperparameters is None:
             raise Exception(
                 "You are running fvGP on non-Euclidean inputs. Please provide initial hyperparameters.")
         if compute_device == 'gpu':
@@ -48,7 +49,7 @@ class GPrior:  # pragma: no cover
                 hyperparameters. It is likely they have to be defined for a success initialization",
                 stacklevel=2)
 
-        if init_hyperparameters is None: init_hyperparameters = np.ones((data.input_space_dim + 1))
+        if init_hyperparameters is None: init_hyperparameters = np.ones((data_obj.input_space_dim + 1))
         self.hyperparameters = init_hyperparameters
 
         # kernel
@@ -72,6 +73,7 @@ class GPrior:  # pragma: no cover
             self.mean_function = gp_mean_function
         else:
             self.mean_function = self._default_mean_function
+
         if callable(gp_mean_function_grad):
             self.dm_dh = gp_mean_function_grad
         elif callable(gp_mean_function):
@@ -79,7 +81,7 @@ class GPrior:  # pragma: no cover
         else:
             self.dm_dh = self._default_dm_dh
 
-        self.prior_mean_vector, self.K = self.compute_prior(x_data, hyperparameters)
+        self.prior_mean_vector, self.K = self.compute_prior(self.x_data, self.hyperparameters)
 
     def update(self, x_data, x_new):
         self.prior_mean_vector, self.K = self.update_prior(x_data, x_new, hyperparameters)
@@ -87,8 +89,8 @@ class GPrior:  # pragma: no cover
     def compute_prior(self, x_data, hyperparameters):
         self.m = self.compute_mean(x_data, hyperparameters)
         self.K = self.compute_K(x_data, hyperparameters)
-        assert np.ndim(prior_mean_vec) == 1
-        assert np.ndim(K) == 2
+        assert np.ndim(self.m ) == 1
+        assert np.ndim(self.K) == 2
         return self.m, self.K
 
     def update_prior(self, x_data, x_new, hyperparameters):
@@ -102,7 +104,7 @@ class GPrior:  # pragma: no cover
         """computes the covariance matrix from the kernel"""
         # if gp2Scale:
         # else:
-        K = self.kernel(x, hyperparameters, self)
+        K = self.kernel(x, x, hyperparameters, self)
         return K
 
     def update_K(self, x_data, x_new, hyperparameters):

@@ -1,7 +1,7 @@
 import numpy as np
 
 
-class Data:
+class GPdata:
     def __init__(self, x_data, y_data, noise_variances=None):
         # make sure the inputs are in the right format
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)

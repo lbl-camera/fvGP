@@ -1,38 +1,4 @@
-import torch
-from torch import nn
-
-
-class Network(nn.Module):  # pragma: no cover
-    def __init__(dim, layer_width):
-        super().__init__()
-        # Inputs to hidden layer linear transformation
-        layer1 = nn.Linear(dim, layer_width)
-        layer2 = nn.Linear(layer_width, layer_width)
-        layer3 = nn.Linear(layer_width, dim)
-
-    def forward(x):
-        x = torch.Tensor(x)
-        x = torch.nn.functional.relu(layer1(x))
-        x = torch.nn.functional.relu(layer2(x))
-        x = torch.nn.functional.relu(layer3(x))
-        return x.detach().numpy()
-
-    def set_weights(w1, w2, w3):
-        with torch.no_grad(): layer1.weight = nn.Parameter(torch.from_numpy(w1).float())
-        with torch.no_grad(): layer2.weight = nn.Parameter(torch.from_numpy(w2).float())
-        with torch.no_grad(): layer3.weight = nn.Parameter(torch.from_numpy(w3).float())
-
-    def set_biases(b1, b2, b3):
-        with torch.no_grad(): layer1.bias = nn.Parameter(torch.from_numpy(b1).float())
-        with torch.no_grad(): layer2.bias = nn.Parameter(torch.from_numpy(b2).float())
-        with torch.no_grad(): layer3.bias = nn.Parameter(torch.from_numpy(b3).float())
-
-    def get_weights(self):
-        return layer1.weight, layer2.weight, layer3.weight
-
-    def get_biases(self):
-        return layer1.bias, layer2.bias, layer3.bias
-
+import numpy as np
 
 def squared_exponential_kernel(distance, length):
     """

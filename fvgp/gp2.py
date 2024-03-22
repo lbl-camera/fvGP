@@ -16,7 +16,12 @@ from hgdl.hgdl import HGDL
 from .gp2Scale import gp2Scale as gp2S
 from dask.distributed import Client
 from scipy.stats import norm
-
+from .gp_prior import GPrior
+from .gp_data import GPdata
+from .gp_marginal_density import GPMarginalDensity
+from .gp_likelihood import GPlikelihood
+from .gp_training import GPtraining
+from .gp_posterior import GPosterior
 
 # TODO: search below "TODO"
 #   self.V is calculated at init and then again in calculate/update gp prior. That's not good. --> has to be because of training. Can we take it out of the init/update?
@@ -28,7 +33,7 @@ from scipy.stats import norm
 #   neither minres nor random logdet are doing a good job, cg is better but we need a preconditioner
 #   when using gp2Scale but the solution is dense we should go with dense linalg
 
-class GP(Gprior, GPlikelihood, GPtraining):
+class GP():
     """
     This class provides all the tools for a single-task Gaussian Process (GP).
     Use fvGP for multitask GPs. However, the fvGP class inherits all methods from this class.
@@ -215,6 +220,7 @@ class GP(Gprior, GPlikelihood, GPtraining):
         gp_mean_function=None,
         gp_mean_function_grad=None,
         store_inv=True,
+        online=False,
         ram_economy=False,
         args=None,
         info=False
@@ -233,32 +239,41 @@ class GP(Gprior, GPlikelihood, GPtraining):
         ###init prior instance##################
         ########################################
         # hps, mean function kernel function
-        self.prior = GPdata(self.data,
+        self.prior = GPrior(self.data,
                             init_hyperparameters=init_hyperparameters,
                             gp_kernel_function=gp_kernel_function,
                             gp_mean_function=gp_mean_function,
                             gp_kernel_function_grad=gp_kernel_function_grad,
                             gp_mean_function_grad=gp_mean_function_grad,
-                            online=False)
+                            online=online)
 
         ########################################
         ###init likelihood instance#############
         ########################################
         # likelihood needs hps, noise function
-        self.likelihood(self.data,
-                        init_hyperparameters=init_hyperparameters,
-                        gp_noise_function=gp_noise_function,
-                        gp_noise_function_grad=gp_noise_function_grad,
-                        online=False)
+        self.likelihood = GPlikelihood(hyperparameters=self.prior.hyperparameters,
+                                       noise_variances=noise_variances,
+                                       gp_noise_function=gp_noise_function,
+                                       gp_noise_function_grad=gp_noise_function_grad,
+                                       ram_economy=ram_economy,
+                                       online=online)
+
+        ##########################################
+        #######prepare marginal density###########
+        ##########################################
+        self.marginal_density = GPMarginalDensity(self.data, self.prior, self.likelihood)
+
 
         ##########################################
         #######prepare training###################
         ##########################################
         # needs init hps, bounds
         self.trainer = GPtraining(self.data,
-                                  self.prior,
-                                  self.likelihood,
-                                  hyperparameter_bounds)
+                                  gp_kernel_function,
+                                  gp_mean_function,
+                                  gp_noise_function,
+                                  init_hyperparameters=self.prior.hyperparameters,
+                                  hyperparameter_bounds=hyperparameter_bounds)
 
         ##########################################
         #######prepare posterior evaluations######

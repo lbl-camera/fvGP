@@ -31,6 +31,7 @@ from scipy.stats import norm
 #   when using gp2Scale but the solution is dense we should go with dense linalg [Done]
 #   init hps and bounds should only be initiated for the default kernel
 #   the mcmc in default mode should not need proposal distributions explicitly
+#   reshape posteriors if x_out
 
 class GP:
     """

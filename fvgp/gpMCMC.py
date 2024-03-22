@@ -245,6 +245,9 @@ class ProposalDistribution:  # pragma: no cover
             Arguments that will be available as obj attribute in `prop_dist`and `adapt_callable`.
 
         """
+        #consider:
+        #axis_std = np.linalg.norm(hps_bounds, axis=1) / 10.
+        #init_s = np.diag(axis_std ** 2)
 
         self.prop_dist = prop_dist
         self.indices = indices
