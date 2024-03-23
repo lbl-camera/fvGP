@@ -1,11 +1,26 @@
+import numpy as np
+
+
 class GPosterior:  # pragma: no cover
-    def __init__(self, marginal_density_obj, data_obj):
+    def __init__(self,
+                 x_data,
+                 y_data,
+                 marginal_density_obj):
         assert isinstance(marginal_density_obj.KVinvY, np.ndarray)
 
-        self.KV = prior_obj.KV
-        self.factorization_obj = prior_obj.factorization_obj
-        self.prior_obj = prior_obj
-        self.data_obj = data_obj
+        self.KVinvY = marginal_density_obj.KVinvY
+        self.KVinv  = marginal_density_obj.KVinv
+        self.factorization_obj = marginal_density_obj.factorization_obj
+        self.x_data = x_data
+        self.y_data = y_data
+
+    def update(self,
+               x_data,
+               y_data):
+        self.KVinvY = marginal_density_obj.KVinvY
+        self.factorization_obj = marginal_density_obj.factorization_obj
+        self.x_data = x_data
+        self.y_data = y_data
 
     def _KVsolve(self, b):
         if self.factorization_obj[0] == "LU":

@@ -23,6 +23,7 @@ from .gp_likelihood import GPlikelihood
 from .gp_training import GPtraining
 from .gp_posterior import GPosterior
 
+
 # TODO: search below "TODO"
 #   self.V is calculated at init and then again in calculate/update gp prior. That's not good. --> has to be because of training. Can we take it out of the init/update?
 #   Update, dont recompute Kinv
@@ -155,15 +156,20 @@ class GP():
         A local client is used as default.
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
-    store_inv : bool, optional
+    calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster (5-10 times).
         For larger problems (>2000 data points), the use of inversion should be avoided due
         to computational instability and costs. The default is
-        True. Note, the training will always use Cholesky or LU decomposition instead of the
+        False. Note, the training will always use Cholesky or LU decomposition instead of the
         inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
+    online : bool, optional
+        A new setting that allows optimization for online applications. Default=False. If True,
+        calc_inv will be set to true, and the inverse and the logdet() of full dataset will only be computed
+        once in the beginning and after that only updated. This leads to a significant speedup because
+        the most costly aspects of a GP are entirely avoided.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
         If True, components of the derivative of the marginal log-likelihood are
@@ -219,7 +225,7 @@ class GP():
         gp_noise_function_grad=None,
         gp_mean_function=None,
         gp_mean_function_grad=None,
-        store_inv=True,
+        calc_inv=False,
         online=False,
         ram_economy=False,
         args=None,
@@ -229,72 +235,83 @@ class GP():
         self.ram_economy = ram_economy
         self.args = args
         self.info = info
-        self.store_inv = store_inv
+        self.calc_inv = calc_inv
         ########################################
         ###init data instance###################
         ########################################
         self.data = GPdata(x_data, y_data, noise_variances)
-
+        ########################################
+        # prep hyperparameter stuff
+        if self.data.Euclidean and init_hyperparameters is None:
+            if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function)) and \
+               hyperparameter_bounds is None:
+                raise Exception(
+                    "You have provided callables for kernel, mean, or noise functions but no \
+                    initial hyperparameters or hyperparameter bounds. Please provide \
+                    at least one of them at initialization.")
+            self.hyperparameters, self.hyperparameter_bounds = \
+                self._get_default_hyperparameters(hyperparameter_bounds)
+        else:
+            self.hyperparameters, self.hyperparameter_bounds = init_hyperparameters, hyperparameter_bounds
         ########################################
         ###init prior instance##################
         ########################################
-        # hps, mean function kernel function
-        self.prior = GPrior(self.data,
-                            init_hyperparameters=init_hyperparameters,
+        self.prior = GPrior(self.data.input_space_dim,
+                            self.data.x_data,
+                            self.data.Euclidean,
+                            hyperparameters=self.hyperparameters,
                             gp_kernel_function=gp_kernel_function,
                             gp_mean_function=gp_mean_function,
                             gp_kernel_function_grad=gp_kernel_function_grad,
                             gp_mean_function_grad=gp_mean_function_grad,
-                            online=online)
-
+                            constant_mean=np.mean(y_data),
+                            #online=online
+                            )
         ########################################
         ###init likelihood instance#############
         ########################################
-        # likelihood needs hps, noise function
-        self.likelihood = GPlikelihood(self.data,
+        self.likelihood = GPlikelihood(self.data.x_data,
+                                       self.data.y_data,
+                                       self.data.noise_variances,
                                        hyperparameters=self.prior.hyperparameters,
                                        gp_noise_function=gp_noise_function,
                                        gp_noise_function_grad=gp_noise_function_grad,
                                        ram_economy=ram_economy,
-                                       online=online)
+                                       #online=online
+                                       )
 
         ##########################################
         #######prepare marginal density###########
         ##########################################
-        self.marginal_density = GPMarginalDensity(self.data, self.prior, self.likelihood)
-
+        self.marginal_density = GPMarginalDensity(
+            self.data,
+            self.prior,
+            self.likelihood,
+            online=online,
+            calc_inv=calc_inv,
+            info=info
+            )
 
         ##########################################
         #######prepare training###################
         ##########################################
-        # needs init hps, bounds
-        self.trainer = GPtraining(self.data,
-                                  gp_kernel_function,
-                                  gp_mean_function,
-                                  gp_noise_function,
-                                  init_hyperparameters=self.prior.hyperparameters, ##random init_hyperparameters will not be abailable in the prior_obj
-                                  hyperparameter_bounds=hyperparameter_bounds)
+        self.trainer = GPtraining(init_hyperparameters=self.prior.hyperparameters,
+                                  hyperparameter_bounds=self.hyperparameter_bounds)
 
         ##########################################
         #######prepare posterior evaluations######
         ##########################################
-        self.posterior = GPosterior(
-            self.prior,
-            self.likelihood,
+        self.posterior = GPosterior(self.data.x_data,
+                                    self.data.y_data,
+                                    self.marginal_density
         )
-
-        ##########################################
-        # compute the prior#######################
-        ##########################################
-        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
-            self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
 
     def update_gp_data(
         self,
         x_new,
         y_new,
         noise_variances=None,
-        overwrite=False
+        append=True
     ):
         """
         This function updates the data in the gp object instance.
@@ -316,10 +333,13 @@ class GP():
             callable will be used; if the callable is not provided the noise variances
             will be set to `abs(np.mean(y_data)) / 100.0`. If you provided a noise function,
             the noise_variances will be ignored.
-        overwrite : bool, optional
-            Indication whether to overwrite the existing dataset. Default = False.
+        append : bool, optional
+            Indication whether to append to or overwrite the existing dataset. Default = True.
             In the default case, data will be appended.
         """
+        self.data.update(x_new, y_new, noise_variances, append=append)
+
+
         if isinstance(x_new, np.ndarray):
             if np.ndim(x_new) == 1: x_new = x_new.reshape(-1, 1)
             if self.input_space_dim != len(x_new[0]): raise ValueError(
@@ -378,6 +398,23 @@ class GP():
             self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
                 self.KVinv, self.prior_mean_vec, self.V = self._update_GPpriorV(
                 x_data_old, x_new, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
+
+    def _get_default_hyperparameters(self, hyperparameter_bounds):
+        """
+        This function will create hyperparameter bounds and init hyperparameters
+        for the default kernel.
+        """
+        if hyperparameter_bounds is None:
+            hyperparameter_bounds = np.zeros((self.data.input_space_dim + 1, 2))
+            hyperparameter_bounds[0] = np.array([np.var(self.data.y_data) / 100., np.var(self.data.y_data) * 10.])
+            for i in range(self.data.input_space_dim):
+                range_xi = np.max(self.data.x_data[:, i]) - np.min(self.data.x_data[:, i])
+                hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
+
+        init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
+                                                 high=hyperparameter_bounds[:, 1],
+                                                 size=len(hyperparameter_bounds))
+        return init_hyperparameters, hyperparameter_bounds
 
     ###################################################################################
     ###################################################################################
@@ -469,9 +506,11 @@ class GP():
         if objective_function is not None and objective_function_gradient is None and (method == 'local' or 'hgdl'):
             raise Exception("For user-defined objective functions and local or hybrid optimization, a gradient and\
                              Hessian function of the objective function have to be defined.")
-        if objective_function is None: objective_function = self.neg_log_likelihood
-        if objective_function_gradient is None: objective_function_gradient = self.neg_log_likelihood_gradient
-        if objective_function_hessian is None: objective_function_hessian = self.neg_log_likelihood_hessian
+        if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
+        if objective_function_gradient is None: objective_function_gradient = \
+            self.marginal_density.neg_log_likelihood_gradient
+        if objective_function_hessian is None: objective_function_hessian = \
+            self.marginal_density.neg_log_likelihood_hessian
 
         self.hyperparameters = self._optimize_log_likelihood(
             objective_function,
@@ -1630,7 +1669,6 @@ class GP():
     def _how_sparse_is(self, A):
         return float(np.count_nonzero(A)) / float(len(A) ** 2)
 
-
     def _normalize(self, data):
         min_d = np.min(data)
         max_d = np.max(data)
@@ -1789,10 +1827,8 @@ class GP():
         if any(v < bounds[:, 0]) or any(v > bounds[:, 1]): return False
         return True
 
-
 ####################################################################################
 ####################################################################################
 ####################################################################################
 ####################################################################################
 ####################################################################################
-

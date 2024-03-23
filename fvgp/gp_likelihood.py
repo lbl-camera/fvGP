@@ -3,19 +3,22 @@ import warnings
 
 
 class GPlikelihood:  # pragma: no cover
-    def __init__(self, data_obj,
+    def __init__(self,
+                 x_data,
+                 y_data,
+                 noise_variances,
                  hyperparameters=None,
                  gp_noise_function=None,
                  gp_noise_function_grad=None,
                  ram_economy=False,
                  gp2Scale=False,
-                 online=False):
+                 ):
 
         assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
-        self.data_obj = data_obj
-        self.x_data = self.data_obj.x_data
-        self.y_data = self.data_obj.y_data
-        self.noise_variances = self.data_obj.noise_variances
+
+        self.x_data = x_data
+        self.y_data = y_data
+        self.noise_variances = noise_variances
         assert self.noise_variances is None or isinstance(self.noise_variances, np.ndarray)
 
         if isinstance(self.noise_variances, np.ndarray):
@@ -50,13 +53,12 @@ class GPlikelihood:  # pragma: no cover
                 self.noise_function_grad = self._default_dnoise_dh
 
         self.V = self.noise_function(self.x_data, hyperparameters, self)
-        self.online = online
 
     ##################################################################################
-    def update(self, hyperparameters=None):
-        self.x_data = self.data_obj.x_data
-        self.y_data = self.data_obj.y_data
-        self.noise_variances = self.data_obj.noise_variances
+    def update(self, x_data, y_data, noise_variances, hyperparameters):
+        self.x_data = x_data
+        self.y_data = y_data
+        self.noise_variances = noise_variances
         self.V = self.noise_function(self.x_data, hyperparameters, self)
 
     def _default_noise_function(self, x, hyperparameters, gp_obj):

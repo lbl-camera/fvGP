@@ -3,36 +3,40 @@ from .gp_kernels import *
 
 
 class GPrior:  # pragma: no cover
-    def __init__(self, data_obj,
+    def __init__(self,
+                 input_space_dim,
+                 x_data,
+                 Euclidean,
                  gp_kernel_function=None,
                  gp_kernel_function_grad=None,
                  gp_mean_function=None,
                  gp_mean_function_grad=None,
-                 init_hyperparameters=None,
+                 hyperparameters=None,
                  ram_economy=False,
                  cov_comp_mode="trad",
                  compute_device='cpu',
-                 online=False):
+                 constant_mean=0.0
+                 ):
 
         assert callable(gp_kernel_function) or gp_kernel_function is None
         assert callable(gp_mean_function) or gp_mean_function is None
-        assert isinstance(init_hyperparameters, np.ndarray) or init_hyperparameters is None
-        if isinstance(init_hyperparameters, np.ndarray): assert np.ndim(init_hyperparameters) == 1
+        assert isinstance(hyperparameters, np.ndarray) or hyperparameters is None
+        if isinstance(hyperparameters, np.ndarray): assert np.ndim(hyperparameters) == 1
         assert isinstance(cov_comp_mode, str)
-        assert isinstance(online, bool)
+        assert isinstance(constant_mean, float)
 
-        self.x_data = data_obj.x_data
-        self.y_data = data_obj.y_data
+        self.input_space_dim = input_space_dim
+        self.Euclidean = Euclidean
         self.gp_kernel_function = gp_kernel_function
         self.gp_mean_function = gp_mean_function
-        self.hyperparameters = init_hyperparameters
-        self.online = online
+        self.hyperparameters = hyperparameters
         self.ram_economy = ram_economy
+        self.constant_mean = constant_mean
 
-        if not data_obj.Euclidean and not callable(gp_kernel_function):
+        if not self.Euclidean and not callable(gp_kernel_function):
             raise Exception(
                 "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters.")
-        if not data_obj.Euclidean and init_hyperparameters is None:
+        if not self.Euclidean and self.hyperparameters is None:
             raise Exception(
                 "You are running fvGP on non-Euclidean inputs. Please provide initial hyperparameters.")
         if compute_device == 'gpu':
@@ -43,20 +47,17 @@ class GPrior:  # pragma: no cover
                     "You have specified the 'gpu' as your compute device. You need to install pytorch\
                      manually for this to work.")
 
-        if (callable(gp_kernel_function) or callable(gp_mean_function)) and init_hyperparameters is None:
+        if (callable(gp_kernel_function) or callable(gp_mean_function)) and self.hyperparameters is None:
             warnings.warn(
                 "You have provided callables for kernel, mean, or noise functions but no initial \n \
                 hyperparameters. It is likely they have to be defined for a success initialization",
                 stacklevel=2)
 
-        if init_hyperparameters is None: init_hyperparameters = np.ones((data_obj.input_space_dim + 1))
-        self.hyperparameters = init_hyperparameters
-
         # kernel
         if callable(gp_kernel_function):
             self.kernel = gp_kernel_function
         elif gp_kernel_function is None:
-            self.kernel = self.default_kernel
+            self.kernel = self._default_kernel
         else:
             raise Exception("No valid kernel function specified")
         self.d_kernel_dx = self._d_gp_kernel_dx
@@ -81,38 +82,41 @@ class GPrior:  # pragma: no cover
         else:
             self.dm_dh = self._default_dm_dh
 
-        self.prior_mean_vector, self.K = self.compute_prior(self.x_data)
-        self.k = None
-        self.kk = None
+        self.prior_mean_vector, self.K = self._compute_prior(x_data)
 
-    def update(self, x_data, x_new):
-        self.prior_mean_vector, self.K, self.k, self.kk = self.update_prior(x_data, x_new)
+    def augment_data(self, x_data, x_new):
+        self.prior_mean_vector, self.K = self._update_prior(x_data, x_new)
 
-    def set_hyperparameters(self, hyperparameters):
+    def update_data(self, x_data, constant_mean=0.0):
+        self.constant_mean = constant_mean
+        self.prior_mean_vector, self.K = self._compute_prior(x_data)
+
+    def update_hyperparameters(self, x_data, hyperparameters):
         self.hyperparameters = hyperparameters
+        self.prior_mean_vector, self.K = self._compute_prior(x_data)
 
-    def compute_prior(self, x_data):
+    def _compute_prior(self, x_data):
         m = self.compute_mean(x_data)
-        K = self.compute_K(x_data)
+        K = self.compute_K(x_data, x_data)
         assert np.ndim(m) == 1
         assert np.ndim(K) == 2
         return m, K
 
-    def update_prior(self, x_data, x_new):
+    def _update_prior(self, x_data, x_new):
         m = self.update_mean(x_new)
-        K, k, kk = self.update_K(x_data, x_new)
+        K = self.update_K(x_data, x_new)
         assert np.ndim(prior_mean_vec) == 1
         assert np.ndim(K) == 2
-        return m, K, k, kk
+        return m, K
 
-    def compute_K(self, x):
+    def _compute_K(self, x1, x2):
         """computes the covariance matrix from the kernel"""
         # if gp2Scale:
         # else:
-        K = self.kernel(x, x, self.hyperparameters, self)
+        K = self.kernel(x1, x2, self.hyperparameters, self)
         return K
 
-    def update_K(self, x_data, x_new):
+    def _update_K(self, x_data, x_new):
         # if gp2Scale: ...
         # else:
         k = self._compute_K(x_data, x_new)
@@ -121,16 +125,16 @@ class GPrior:  # pragma: no cover
             [self.K, k],
             [k.T, kk]
         ])
-        return K, k, kk
+        return K
 
-    def compute_mean(self, x_data):
+    def _compute_mean(self, x_data):
         """computes the covariance matrix from the kernel"""
         # if gp2Scale:
         # else:
         m = self.mean_function(x_data,self. hyperparameters, self)
         return m
 
-    def update_mean(self, x_new):
+    def _update_mean(self, x_new):
         # if gp2Scale: ...
         # else:
         m = np.append(self.prior_mean_vec, self.mean_function(x_new, self.hyperparameters, self))
@@ -141,7 +145,7 @@ class GPrior:  # pragma: no cover
     ####################################################
     ####################################################
 
-    def default_kernel(self, x1, x2, hyperparameters, obj):
+    def _default_kernel(self, x1, x2, hyperparameters, obj):
         """
         Function for the default kernel, a Matern kernel of first-order differentiability.
 
@@ -201,7 +205,7 @@ class GPrior:  # pragma: no cover
     def _default_mean_function(self, x, hyperparameters, gp_obj):
         """evaluates the gp mean function at the data points """
         mean = np.zeros((len(x)))
-        mean[:] = np.mean(self.y_data)
+        mean[:] = self.constant_mean
         return mean
 
     def _finitediff_dm_dh(self, x, hps, gp_obj):

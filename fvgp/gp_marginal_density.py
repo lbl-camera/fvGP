@@ -1,36 +1,37 @@
 import numpy as np
-
+from scipy.sparse.linalg import splu
+from scipy.sparse.linalg import minres, cg
+from scipy.linalg import cho_factor, cho_solve
 
 class GPMarginalDensity:
     def __init__(self,
                  data_obj,
                  prior_obj,
                  likelihood_obj,
-                 store_inv=False):
+                 online=False,
+                 calc_inv=False,
+                 info=False):
         self.data_obj = data_obj
         self.prior_obj = prior_obj
         self.likelihood_obj = likelihood_obj
-        self.store_inv = store_inv
+        self.calc_inv = calc_inv
+        self.info = info
         self.K = prior_obj.K
-        self.k = None
-        self.kk = None
         self.V = likelihood_obj.V
         self.y_data = data_obj.y_data
         self.y_mean = data_obj.y_data - prior_obj.prior_mean_vector
+        if online: self.calc_inv = True
 
         self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv = self._compute_GPpriorV()
 
     def update(self):
         self.K = prior_obj.K
-        self.k = prior_obj.k
-        self.kk = prior_obj.kk
         self.V = likelihood_obj.V
         self.y_data = data_obj.y_data
         self.y_mean = data_obj.y_data - prior_obj.prior_mean_vector
         self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv = self._update_GPpriorV()
 
     def _compute_GPpriorV(self):
-
         # get K + V
         K = self.prior_obj.K
         V = self.likelihood_obj.V
@@ -38,8 +39,7 @@ class GPMarginalDensity:
         assert K.shape == V.shape
         KV = K + V
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
-        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(self.y_mean, KV,
-                                                                             calc_inv=calc_inv)
+        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(self.y_mean, KV)
         return KV, KVinvY, KVlogdet, factorization_obj, KVinv
 
     ##################################################################################
@@ -47,36 +47,38 @@ class GPMarginalDensity:
     def _update_GPpriorV(self):
         # get K
         K = self.prior_obj.K
-        k = self.prior_obj.k #this should be kk + the right part of V
-        kk = self.prior_obj.kk #this should be kk + the right part of V
         V = self.likelihood_obj.V
         # check if shapes are correct
         assert K.shape == V.shape
 
         # get K + V
         KV = K + V
-        # get Kinv/KVinvY, LU, Chol, logdet(KV)
 
-        if self.online_mode is True:
+        # get KVinv/KVinvY, LU, Chol, logdet(KV)
+        if self.online is True:
             KVinvY, KVlogdet, factorization_obj, KVinv = self._update_gp_linalg(
-                self.y_mean, k, kk)
+                self.y_mean, KV)
         else:
             KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(self.y_mean, KV)
         return KV, KVinvY, KVlogdet, factorization_obj, KVinv
 
     ##################################################################################
-    def _compute_gp_linalg(self, vec, KV, calc_inv=False):
-        if calc_inv:
+    def _compute_gp_linalg(self, vec, KV):
+        if self.calc_inv:
             KVinv = self._inv(KV)
             factorization_obj = ("Inv", None)
             KVinvY = KVinv @ vec
             KVlogdet = self._logdet(KV)
-        else:
+        elif not self.calc_inv:
             KVinv = None
             KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
+        else: raise Exception("calc_inv unspecified")
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
-    def _update_gp_linalg(self, vec, k, kk):
+    def _update_gp_linalg(self, vec, KV):
+        size_KVinv = np.len(self.KVinv)
+        kk = KV[size_KVinv:, size_KVinv:]
+        k = KV[size_KVinv:, 0:size_KVinv]
         X = self._inv(kk - C @ self.KVinv @ B)
         F = -self.KVinv @ k @ X
         KVinv = np.block([[self.KVinv + self.KVinv @ B @ X @ C @ self.KVinv, F],
