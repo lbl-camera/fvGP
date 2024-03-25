@@ -1265,6 +1265,7 @@ class GP:
         return KVinvY, KVlogdet, factorization_obj
 
     def _Chol(self, KV, vec):
+        st = time.time()
         if self.info: print("Dense Cholesky in progress ...")
         c, l = cho_factor(KV)
         factorization_obj = ("Chol", c, l)

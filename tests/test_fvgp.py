@@ -40,10 +40,10 @@ x_pred = np.random.rand(10, input_dim)
 
 """Tests for `fvgp` package."""
 def test_single_task_init_basic():
-    my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu')
-    my_gp1 = GP(input_dim, x_data, y_data)
+    my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu', info = True)
+    my_gp1 = GP(input_dim, x_data, y_data, info = True)
     my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
-    my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), store_inv = False)
+    my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), store_inv = False, info = True)
     my_gp1 = GP(input_dim, x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), args = {'a':2.})
 
 
