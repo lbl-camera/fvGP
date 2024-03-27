@@ -7,10 +7,11 @@ from . import _version
 from loguru import logger
 import sys
 from .gp import GP
+from .gp2 import GP as GP2
 from .fvgp import fvGP
 from .gpMCMC import gpMCMC
 
-__all__ = ['GP', 'fvGP']
+__all__ = ['GP','GP2', 'fvGP']
 __version__ = _version.get_versions()['version']
 
 logger.disable('fvgp')

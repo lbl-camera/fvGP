@@ -2,6 +2,12 @@ import numpy as np
 from scipy.sparse.linalg import splu
 from scipy.sparse.linalg import minres, cg
 from scipy.linalg import cho_factor, cho_solve
+import time
+from loguru import logger
+from .misc import solve
+from .misc import logdet
+from .misc import inv
+
 
 class GPMarginalDensity:
     def __init__(self,
@@ -11,43 +17,63 @@ class GPMarginalDensity:
                  online=False,
                  calc_inv=False,
                  info=False):
+
         self.data_obj = data_obj
         self.prior_obj = prior_obj
         self.likelihood_obj = likelihood_obj
         self.calc_inv = calc_inv
+        self.online = online
         self.info = info
         self.K = prior_obj.K
         self.V = likelihood_obj.V
         self.y_data = data_obj.y_data
         self.y_mean = data_obj.y_data - prior_obj.prior_mean_vector
-        if online: self.calc_inv = True
+        if self.online: self.calc_inv = True
 
-        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv = self._compute_GPpriorV()
+        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, mean = \
+            self.compute_GPpriorV(self.prior_obj.hyperparameters)
 
-    def update(self):
-        self.K = prior_obj.K
-        self.V = likelihood_obj.V
-        self.y_data = data_obj.y_data
-        self.y_mean = data_obj.y_data - prior_obj.prior_mean_vector
-        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv = self._update_GPpriorV()
+    def update_data(self):
+        """Update the marginal PDF when the data has changed in data likelihood or prior objects"""
+        self.K = self.prior_obj.K
+        self.V = self.likelihood_obj.V
+        self.y_data = self.data_obj.y_data
+        self.y_mean = self.data_obj.y_data - self.prior_obj.prior_mean_vector
+        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv = self.update_GPpriorV()
 
-    def _compute_GPpriorV(self):
+    def update_hyperparameters(self):
+        """Update the marginal PDF when if hyperparameters have changed"""
+        self.K = self.prior_obj.K
+        self.V = self.likelihood_obj.V
+
+        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_obj.prior_mean_vector = \
+            self.compute_GPpriorV(self.prior_obj.hyperparameters)
+
+        self.y_mean = self.y_data - self.prior_obj.prior_mean_vector
+
+    def compute_GPpriorV(self, hyperparameters, calc_inv=None):
+        """Recomputed the prior mean for new hyperparameters (e.g. during training)"""
         # get K + V
-        K = self.prior_obj.K
-        V = self.likelihood_obj.V
+        if calc_inv is None: calc_inv = self.calc_inv
+        K = self.prior_obj.compute_kernel(self.data_obj.x_data, self.data_obj.x_data, hyperparameters=hyperparameters)
+        m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+        V = self.likelihood_obj.calculate_V(hyperparameters)
+        y_mean = self.data_obj.y_data - m
         # check if shapes are correct
         assert K.shape == V.shape
         KV = K + V
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
-        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(self.y_mean, KV)
-        return KV, KVinvY, KVlogdet, factorization_obj, KVinv
+        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_mean, KV, calc_inv)
+        return KV, KVinvY, KVlogdet, factorization_obj, KVinv, m
 
     ##################################################################################
 
-    def _update_GPpriorV(self):
+    def update_GPpriorV(self):
+        """This updates the prior after new data was communicated"""
         # get K
         K = self.prior_obj.K
         V = self.likelihood_obj.V
+
         # check if shapes are correct
         assert K.shape == V.shape
 
@@ -59,17 +85,17 @@ class GPMarginalDensity:
             KVinvY, KVlogdet, factorization_obj, KVinv = self._update_gp_linalg(
                 self.y_mean, KV)
         else:
-            KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(self.y_mean, KV)
+            KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(self.y_mean, KV, self.calc_inv)
         return KV, KVinvY, KVlogdet, factorization_obj, KVinv
 
     ##################################################################################
-    def _compute_gp_linalg(self, vec, KV):
-        if self.calc_inv:
-            KVinv = self._inv(KV)
+    def _compute_gp_linalg(self, vec, KV, calc_inv):
+        if calc_inv:
+            KVinv = inv(KV)
             factorization_obj = ("Inv", None)
             KVinvY = KVinv @ vec
-            KVlogdet = self._logdet(KV)
-        elif not self.calc_inv:
+            KVlogdet = logdet(KV)
+        elif not calc_inv:
             KVinv = None
             KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
         else: raise Exception("calc_inv unspecified")
@@ -79,13 +105,13 @@ class GPMarginalDensity:
         size_KVinv = np.len(self.KVinv)
         kk = KV[size_KVinv:, size_KVinv:]
         k = KV[size_KVinv:, 0:size_KVinv]
-        X = self._inv(kk - C @ self.KVinv @ B)
+        X = inv(kk - C @ self.KVinv @ B)
         F = -self.KVinv @ k @ X
         KVinv = np.block([[self.KVinv + self.KVinv @ B @ X @ C @ self.KVinv, F],
                           [F.T, X]])
         factorization_obj = ("Inv", None)
         KVinvY = KVinv @ vec
-        KVlogdet = self.KVlogdet + self._logdet(kk - k.T @ self.KVinv @ k)
+        KVlogdet = self.KVlogdet + logdet(kk - k.T @ self.KVinv @ k)
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
     def _LU(self, KV, vec):
@@ -100,6 +126,7 @@ class GPMarginalDensity:
         return KVinvY, KVlogdet, factorization_obj
 
     def _Chol(self, KV, vec):
+        st = time.time()
         if self.info: print("Dense Cholesky in progress ...")
         c, l = cho_factor(KV)
         factorization_obj = ("Chol", c, l)
@@ -126,12 +153,8 @@ class GPMarginalDensity:
         log marginal likelihood of the data : float
         """
         if hyperparameters is None:
-            K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                (self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj,
-                 self.KVinv, self.prior_mean_vec, self.V)
-        else:
-            K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv=False)
+            KVinvY, KVlogdet, mean = self.KVinvY, self.KVlogdet, self.prior_obj.prior_mean_vector
+        else: KV, KVinvY, KVlogdet, factorization_obj, KVinv, mean = self.compute_GPpriorV(hyperparameters)
         n = len(self.y_data)
         return -(0.5 * ((self.y_data - mean).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
 
@@ -169,19 +192,15 @@ class GPMarginalDensity:
         """
         logger.debug("log-likelihood gradient is being evaluated...")
         if hyperparameters is None:
-            K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
-                    self.KVinv, self.prior_mean_vec, self.V
-        else:
-            K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv=False)
+            KVinvY, KVlogdet, mean = self.KVinvY, self.KVlogdet, self.prior_obj.prior_mean_vector
+        else: KV, KVinvY, KVlogdet, factorization_obj, KVinv, mean = self.compute_GPpriorV(hyperparameters)
 
         b = KVinvY
         y = self.y_data - mean
-        if self.ram_economy is False:
+        if self.prior_obj.ram_economy is False:
             try:
-                dK_dH = self.dk_dh(self.x_data, self.x_data, hyperparameters, self) + self.noise_function_grad(
-                    self.x_data, hyperparameters, self)
+                dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, hyperparameters, self) + \
+                        self.likelihood_obj.noise_function_grad(self.data_obj.x_data, hyperparameters, self)
             except Exception as e:
                 raise Exception(
                     "The gradient evaluation dK/dh + dNoise/dh was not successful. \n \
@@ -189,28 +208,28 @@ class GPMarginalDensity:
                     of the gradient function is wrong. ",
                     str(e))
             KV = np.array([KV, ] * len(hyperparameters))
-            a = self._solve(KV, dK_dH)
+            a = solve(KV, dK_dH)
         bbT = np.outer(b, b.T)
         dL_dH = np.zeros((len(hyperparameters)))
         dL_dHm = np.zeros((len(hyperparameters)))
-        dm_dh = self.dm_dh(self.x_data, hyperparameters, self)
+        dm_dh = self.prior_obj.dm_dh(self.data_obj.x_data, hyperparameters, self)
 
         for i in range(len(hyperparameters)):
             dL_dHm[i] = -dm_dh[i].T @ b
-            if self.ram_economy is False:
+            if self.prior_obj.ram_economy is False:
                 matr = a[i]
             else:
                 try:
-                    dK_dH = self.dk_dh(self.x_data, self.x_data, i, hyperparameters, self) + self.noise_function_grad(
-                        self.x_data, i, hyperparameters, self)
+                    dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters, self)+\
+                            self.noise_function_grad(self.data_obj.x_data, i, hyperparameters, self)
                 except:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. \n \
                         That normally means the combination of ram_economy and definition of \
                         the gradient function is wrong.")
-                matr = np.linalg.solve(KV, dK_dH)
+                matr = solve(KV, dK_dH)
             if dL_dHm[i] == 0.0:
-                if self.ram_economy is False:
+                if self.prior_obj.ram_economy is False:
                     mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
                 else:
                     mtrace = np.einsum('ij,ji->', bbT, dK_dH)

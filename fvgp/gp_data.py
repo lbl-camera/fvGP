@@ -32,20 +32,30 @@ class GPdata:
         assert ((isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1)
                 or noise_variances_new is None)
         if self.Euclidean: assert isinstance(x_data_new, np.ndarray) and np.ndim(x_data_new) == 2
-        else: assert isinstance(x_data_new, list)
-        if self.noise_variances and noise_variances_new is None:
-            raise Exception("Please provide noise_variances in the data update.")
+        else: assert (isinstance(x_data_new, list) and
+                      np.ndim(x_data_new) == 2 and
+                      self.input_space_dim == x_data_new.shape[1])
+
+        if self.noise_variances is not None and noise_variances_new is None:
+            print(self.noise_variances, noise_variances_new)
+            raise Exception("Please provide noise_variances in the data update because you did at initialization"
+                            "or during a previous update.")
+        if self.noise_variances is None and noise_variances_new is not None:
+            raise Exception("You did not initialize noise and but included noise in the update"
+                            "but this changes the settings. Please reinitialize in this case.")
+        if callable(noise_variances_new): raise Exception("The update noise_variances cannot be a callable.")
+        if noise_variances_new is not None:
+            assert isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1
 
         if append is False:
             self.x_data = x_data_new
             self.y_data = y_data_new
+            self.noise_variances = noise_variances_new
         else:
-            if self.Euclidean:
-                np.row_stack([self.x_data, x_data_new])
-            else:
-                self.x_data = self.x_data + x_data_new
+            if self.Euclidean: self.x_data = np.row_stack([self.x_data, x_data_new])
+            else: self.x_data = self.x_data + x_data_new
             self.y_data = np.append(self.y_data, y_data_new)
-            if noise_variances_new is not None:
+            if isinstance(noise_variances_new, np.ndarray):
                 self.noise_variances = np.append(self.noise_variances, noise_variances_new)
         self.point_number = len(self.x_data)
         self._check_for_nan()
@@ -53,3 +63,5 @@ class GPdata:
     def _check_for_nan(self):
         if self.Euclidean:
             if np.isnan(np.sum(self.x_data) + np.sum(self.y_data)): raise Exception("NaNs encountered in dataset.")
+
+

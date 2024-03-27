@@ -2,7 +2,7 @@ import numpy as np
 import warnings
 
 
-class GPlikelihood:  # pragma: no cover
+class GPlikelihood:
     def __init__(self,
                  x_data,
                  y_data,
@@ -28,7 +28,7 @@ class GPlikelihood:  # pragma: no cover
         self.gp2Scale = gp2Scale
 
         if self.noise_variances is not None and callable(gp_noise_function):
-            raise Exception("Noise function and measurement noise provided. Decide which one to use.", stacklevel=2)
+            raise Exception("Noise function and measurement noise provided. Decide which one to use.")
         if callable(gp_noise_function):
             self.noise_function = gp_noise_function
         elif self.noise_variances is not None:
@@ -59,7 +59,10 @@ class GPlikelihood:  # pragma: no cover
         self.x_data = x_data
         self.y_data = y_data
         self.noise_variances = noise_variances
-        self.V = self.noise_function(self.x_data, hyperparameters, self)
+        self.V = self.calculate_V(hyperparameters)
+
+    def calculate_V(self, hyperparameters):
+        return self.noise_function(self.x_data, hyperparameters, self)
 
     def _default_noise_function(self, x, hyperparameters, gp_obj):
         noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)

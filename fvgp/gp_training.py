@@ -1,12 +1,15 @@
 import warnings
-
+from loguru import logger
 import numpy as np
-
+from scipy.optimize import differential_evolution
+from hgdl.hgdl import HGDL
+from .mcmc import mcmc
 
 class GPtraining:  # pragma: no cover
     def __init__(self,
                  init_hyperparameters=None,
-                 hyperparameter_bounds=None):
+                 hyperparameter_bounds=None,
+                 info=False):
 
         assert isinstance(init_hyperparameters, np.ndarray) and np.ndim(init_hyperparameters) == 1
 
@@ -20,6 +23,8 @@ class GPtraining:  # pragma: no cover
         if self.hyperparameter_bounds is None:
             warnings.warn("hyperparameter bounds not provided.\
                            They will have to be provided in the training call.")
+        self.gp2Scale = False
+        self.info = info
 
     def train(self,
               objective_function=None,
@@ -95,21 +100,6 @@ class GPtraining:  # pragma: no cover
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
         """
-        if hyperparameter_bounds is None:
-            if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
-            hyperparameter_bounds = self.hyperparameter_bounds.copy()
-        if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
-                                                                                  high=hyperparameter_bounds[:, 1],
-                                                                                  size=len(hyperparameter_bounds))
-        if objective_function is not None and method == 'mcmc':
-            warnings.warn("MCMC will ignore the user-defined objective function")
-        if objective_function is not None and objective_function_gradient is None and (method == 'local' or 'hgdl'):
-            raise Exception("For user-defined objective functions and local or hybrid optimization, a gradient and\
-                             Hessian function of the objective function have to be defined.")
-        if objective_function is None: objective_function = self.neg_log_likelihood
-        if objective_function_gradient is None: objective_function_gradient = self.neg_log_likelihood_gradient
-        if objective_function_hessian is None: objective_function_hessian = self.neg_log_likelihood_hessian
-
         hyperparameters = self._optimize_log_likelihood(
             objective_function,
             objective_function_gradient,
@@ -194,17 +184,7 @@ class GPtraining:  # pragma: no cover
         Optimization object that can be given to `fvgp.GP.update_hyperparameters()`
         to update the prior GP : object instance
         """
-        if self.gp2Scale: raise Exception("gp2Scale does not allow asynchronous training!")
-        if dask_client is None: dask_client = distributed.Client()
-        if hyperparameter_bounds is None:
-            if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
-            hyperparameter_bounds = self.hyperparameter_bounds.copy()
-        if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
-                                                                                  high=hyperparameter_bounds[:, 1],
-                                                                                  size=len(hyperparameter_bounds))
-        if objective_function is None: objective_function = self.neg_log_likelihood
-        if objective_function_gradient is None: objective_function_gradient = self.neg_log_likelihood_gradient
-        if objective_function_hessian is None: objective_function_hessian = self.neg_log_likelihood_hessian
+
 
         opt_obj = self._optimize_log_likelihood_async(
             objective_function,
@@ -272,13 +252,14 @@ class GPtraining:  # pragma: no cover
         """
 
         try:
-            hyperparameters = opt_obj.get_latest()[0]["x"]
+            updated_hyperparameters = opt_obj.get_latest()[0]["x"]
         except:
             logger.debug("      The optimizer object could not be queried")
             logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
             warnings.warn("     Hyperparameter update failed")
-        self.init_hyperparameters=hyperparameters
-        return hyperparameters
+            updated_hyperparameters = None
+
+        return updated_hyperparameters
 
     def _optimize_log_likelihood_async(self,
                                        objective_function,
@@ -329,8 +310,7 @@ class GPtraining:  # pragma: no cover
         if not self._in_bounds(starting_hps, hp_bounds):
             raise Exception("Starting positions outside of optimization bounds.")
 
-        if self.gp2Scale:
-            method = 'mcmc'
+        if self.gp2Scale: method = 'mcmc'
         # else:
         #    start_log_likelihood = self.log_likelihood(starting_hps)
         #    logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: ",
@@ -359,8 +339,8 @@ class GPtraining:  # pragma: no cover
                 workers=1,
             )
             hyperparameters = np.array(res["x"])
-            Eval = self.neg_log_likelihood(hyperparameters)
-            logger.debug(f"fvGP found hyperparameters {hyperparameters} with likelihood {Eval} via global optimization")
+            logger.debug(f"fvGP found hyperparameters {hyperparameters} with objective function eval {res['fun']} \
+            via global optimization")
         ############################
         ####local optimization:#####
         ############################
@@ -407,12 +387,14 @@ class GPtraining:  # pragma: no cover
                            constraints=constraints)
 
             opt_obj.optimize(dask_client=dask_client, x0=starting_hps.reshape(1, -1))
-            hyperparameters = opt_obj.get_final()[0]["x"]
+            print(opt_obj.get_final())
+            try: hyperparameters = opt_obj.get_final()[0]["x"]
+            except: raise Exception("Something has gone wrong with the objective function evaluation.")
             opt_obj.kill_client()
         elif method == "mcmc":
             logger.debug("MCMC started in fvGP")
             logger.debug('bounds are {}', hp_bounds)
-            res = mcmc(self.log_likelihood, hp_bounds, x0=starting_hps, n_updates=max_iter, info=self.info)
+            res = mcmc(objective_function, hp_bounds, x0=starting_hps, n_updates=max_iter, info=self.info)
             hyperparameters = np.array(res["distribution mean"])
             self.mcmc_info = res
         elif callable(method):
@@ -420,6 +402,10 @@ class GPtraining:  # pragma: no cover
         else:
             raise ValueError("No optimization mode specified in fvGP")
         return hyperparameters
+
+    def _in_bounds(self, v, bounds):
+        if any(v < bounds[:, 0]) or any(v > bounds[:, 1]): return False
+        return True
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def squared_exponential_kernel(distance, length):
     """
     Function for the squared exponential kernel.
@@ -418,6 +419,29 @@ def get_distance_matrix(x1, x2):
     return np.sqrt(d)
 
 
+def get_anisotropic_distance_matrix(x1, x2, hps):
+    """
+    Function to calculate the pairwise axial-anisotropic distance matrix of
+    points in x1 and x2.
+
+    Parameters
+    ----------
+    x1 : np.ndarray
+        Numpy array of shape (U x D).
+    x2 : np.ndarray
+        Numpy array of shape (V x D).
+    hps : np.ndarray
+        1d array of values. The diagonal of the metric tensor describing the axial anisotropy.
+
+    Return
+    ------
+    distance matrix : np.ndarray
+    """
+    d = np.zeros((len(x1), len(x2)))
+    for i in range(len(x1[0])): d += abs(np.subtract.outer(x1[:, i], x2[:, i]) / hps[i]) ** 2
+    return np.sqrt(d)
+
+
 def _g(x, x0, w, l):
     d = get_distance_matrix(x, x0)
     e = np.exp(-(d ** 2) / l)
@@ -463,3 +487,40 @@ def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps, obj):  # pragma: no cover
     d[d > 1.] = 1.
     kernel = hps[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
     return kernel.cpu().numpy()
+
+
+def example_deep_kernel(x1, x2, hps, obj):
+    hps_nn_weights_l1 = hps[0:49]
+    hps_nn_weights_l2 = hps[49:98]
+    hps_nn_weights_l3 = hps[98:147]
+    hps_nn_weights_l4 = hps[147:196]
+    hps_nn_weights_l5 = hps[196:245]
+
+    hps_nn_biases_l1 = hps[245:252]
+    hps_nn_biases_l2 = hps[252:259]
+    hps_nn_biases_l3 = hps[259:266]
+    hps_nn_biases_l4 = hps[266:273]
+    hps_nn_biases_l5 = hps[273:280]
+
+    gp_deep_kernel_layer_width = 7
+    iset_dim = 7
+
+    n.set_weights(hps_nn_weights_l1.reshape(gp_deep_kernel_layer_width, iset_dim),
+                  hps_nn_weights_l2.reshape(gp_deep_kernel_layer_width, gp_deep_kernel_layer_width),
+                  hps_nn_weights_l3.reshape(gp_deep_kernel_layer_width, gp_deep_kernel_layer_width),
+                  hps_nn_weights_l4.reshape(gp_deep_kernel_layer_width, gp_deep_kernel_layer_width),
+                  hps_nn_weights_l5.reshape(iset_dim, gp_deep_kernel_layer_width)
+                  )
+    n.set_biases(hps_nn_biases_l1.reshape(gp_deep_kernel_layer_width),
+                 hps_nn_biases_l2.reshape(gp_deep_kernel_layer_width),
+                 hps_nn_biases_l3.reshape(gp_deep_kernel_layer_width),
+                 hps_nn_biases_l4.reshape(gp_deep_kernel_layer_width),
+                 hps_nn_biases_l5.reshape(iset_dim)
+                 )
+    signal_var = hps[280]
+    length_scale = hps[281]
+    x1_nn = n.forward(x1)
+    x2_nn = n.forward(x2)
+    d = obj.get_distance_matrix(x1_nn, x2_nn)
+    k = signal_var * obj.matern_kernel_diff1(d, length_scale)
+    return k

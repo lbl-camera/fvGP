@@ -44,13 +44,13 @@ class GPrior:  # pragma: no cover
                 import torch
             except:
                 raise Exception(
-                    "You have specified the 'gpu' as your compute device. You need to install pytorch\
-                     manually for this to work.")
+                    "You have specified the 'gpu' as your compute device. You need to install pytorch"
+                    "manually for this to work.")
 
         if (callable(gp_kernel_function) or callable(gp_mean_function)) and self.hyperparameters is None:
             warnings.warn(
-                "You have provided callables for kernel, mean, or noise functions but no initial \n \
-                hyperparameters. It is likely they have to be defined for a success initialization",
+                "You have provided callables for kernel, mean, or noise functions but no initial"
+                "hyperparameters. It is likely they have to be defined for a success initialization",
                 stacklevel=2)
 
         # kernel
@@ -97,47 +97,50 @@ class GPrior:  # pragma: no cover
 
     def _compute_prior(self, x_data):
         m = self.compute_mean(x_data)
-        K = self.compute_K(x_data, x_data)
+        K = self.compute_kernel(x_data, x_data)
         assert np.ndim(m) == 1
         assert np.ndim(K) == 2
         return m, K
 
     def _update_prior(self, x_data, x_new):
-        m = self.update_mean(x_new)
-        K = self.update_K(x_data, x_new)
-        assert np.ndim(prior_mean_vec) == 1
+        m = self._update_mean(x_new)
+        K = self._update_kernel(x_data, x_new)
+        assert np.ndim(m) == 1
         assert np.ndim(K) == 2
         return m, K
 
-    def _compute_K(self, x1, x2):
+    def compute_kernel(self, x1, x2, hyperparameters=None):
         """computes the covariance matrix from the kernel"""
+        if hyperparameters is None: hyperparameters = self.hyperparameters
         # if gp2Scale:
         # else:
-        K = self.kernel(x1, x2, self.hyperparameters, self)
+        K = self.kernel(x1, x2, hyperparameters, self)
         return K
 
-    def _update_K(self, x_data, x_new):
+    def _update_kernel(self, x_data, x_new):
+        """This updated K based on new data"""
         # if gp2Scale: ...
         # else:
-        k = self._compute_K(x_data, x_new)
-        kk = self._compute_K(x_new, x_new)
+        k = self.compute_kernel(x_data, x_new)
+        kk = self.compute_kernel(x_new, x_new)
         K = np.block([
             [self.K, k],
             [k.T, kk]
         ])
         return K
 
-    def _compute_mean(self, x_data):
+    def compute_mean(self, x_data, hyperparameters=None):
         """computes the covariance matrix from the kernel"""
+        if hyperparameters is None: hyperparameters = self.hyperparameters
         # if gp2Scale:
         # else:
-        m = self.mean_function(x_data,self. hyperparameters, self)
+        m = self.mean_function(x_data, hyperparameters, self)
         return m
 
     def _update_mean(self, x_new):
         # if gp2Scale: ...
         # else:
-        m = np.append(self.prior_mean_vec, self.mean_function(x_new, self.hyperparameters, self))
+        m = np.append(self.prior_mean_vector, self.mean_function(x_new, self.hyperparameters, self))
         return m
 
     ####################################################
