@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import numpy as np
 import warnings
-from .gp2 import GP
+from .gp import GP
 
 
 class fvGP(GP):
