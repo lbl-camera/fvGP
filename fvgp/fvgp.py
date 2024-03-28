@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 import numpy as np
 import warnings
-from .gp import GP
+from .gp2 import GP
 
 
 class fvGP(GP):
@@ -141,7 +141,7 @@ class fvGP(GP):
         This is an advanced feature for HPC GPs up to 10
         million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wendland
         kernel which is compactly supported. The noise function will have
-        to return a scipy.sparse matrix instead of a numpy array. There are a few more things
+        to return a `scipy.sparse` matrix instead of a numpy array. There are a few more things
         to consider (read on); this is an advanced option.
         If no kernel is provided, the compute_device option should be revisited. The kernel will
         use the specified device to compute covariances.
