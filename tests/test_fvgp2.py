@@ -19,7 +19,7 @@ import datetime
 import sys
 from dask.distributed import performance_report
 from distributed.utils_test import gen_cluster, client, loop, cluster_fixture, loop_in_thread, cleanup
-
+from fvgp.gp_kernels import *
 
 
 
@@ -58,24 +58,24 @@ def test_single_task_init_basic():
     res = my_gp1.posterior_covariance(x_pred)
     res = my_gp1.posterior_covariance_grad(x_pred,direction=0)
     res = my_gp1.gp_entropy(x_pred)
-    res = my_gp1.squared_exponential_kernel(1,1)
-    res = my_gp1.squared_exponential_kernel_robust(1,1)
-    res = my_gp1.exponential_kernel(1,1)
-    res = my_gp1.exponential_kernel_robust(1,1)
-    res = my_gp1.matern_kernel_diff1(1,1)
-    res = my_gp1.matern_kernel_diff1_robust(1,1)
-    res = my_gp1.matern_kernel_diff2(1,1)
-    res = my_gp1.matern_kernel_diff2_robust(1,1)
-    res = my_gp1.sparse_kernel(1,1)
-    res = my_gp1.periodic_kernel(1,1,1)
-    res = my_gp1.default_kernel(x_data,x_data,np.array([1.,1.,1.,1.,1.,1.]),my_gp1)
+    res = squared_exponential_kernel(1,1)
+    res = squared_exponential_kernel_robust(1,1)
+    res = exponential_kernel(1,1)
+    res = exponential_kernel_robust(1,1)
+    res = matern_kernel_diff1(1,1)
+    res = matern_kernel_diff1_robust(1,1)
+    res = matern_kernel_diff2(1,1)
+    res = matern_kernel_diff2_robust(1,1)
+    res = sparse_kernel(1,1)
+    res = periodic_kernel(1,1,1)
+    res = my_gp1.prior._default_kernel(x_data,x_data,np.array([1.,1.,1.,1.,1.,1.]),my_gp1)
 
 def test_single_task_init_advanced():
-    my_gp2 = GP(input_dim, x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
+    my_gp2 = GP(x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
         compute_device="cpu", calc_inv = True, ram_economy = True)
 
 def test_train_basic():
-    my_gp1 = GP(input_dim, x_data, y_data, np.array([1., 1., 1., 1., 1., 1.]))
+    my_gp1 = GP(x_data, y_data, np.array([1., 1., 1., 1., 1., 1.]))
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             method = "local", pop_size = 10, tolerance = 0.001,max_iter = 2)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
@@ -104,10 +104,10 @@ def test_train_basic():
     res = my_gp1.posterior_probability(np.random.rand(10,len(x_data[0])), np.random.rand(10), B)
     res = my_gp1.posterior_probability_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B, direction = 0)
 
-    res = my_gp1.squared_exponential_kernel(1.,1.)
-    res = my_gp1.squared_exponential_kernel_robust(1.,1.)
-    res = my_gp1.exponential_kernel(1.,1.)
-    res = my_gp1.exponential_kernel_robust(1.,1.)
+    res = squared_exponential_kernel(1.,1.)
+    res = squared_exponential_kernel_robust(1.,1.)
+    res = exponential_kernel(1.,1.)
+    res = exponential_kernel_robust(1.,1.)
     distance = 1.
     length = 1.5
     phi = 2.
@@ -116,24 +116,24 @@ def test_train_basic():
     p = 1.
     radius = 3.
 
-    res = my_gp1.matern_kernel_diff1(distance, length)
-    res = my_gp1.matern_kernel_diff1_robust(distance, phi)
-    res = my_gp1.matern_kernel_diff2(distance, length)
+    res = matern_kernel_diff1(distance, length)
+    res = matern_kernel_diff1_robust(distance, phi)
+    res = matern_kernel_diff2(distance, length)
 
-    res = my_gp1.matern_kernel_diff2_robust(distance, phi)
-    res = my_gp1.sparse_kernel(distance, radius)
-    res = my_gp1.periodic_kernel(distance, length, p)
+    res = matern_kernel_diff2_robust(distance, phi)
+    res = sparse_kernel(distance, radius)
+    res = periodic_kernel(distance, length, p)
 
-    res = my_gp1.linear_kernel(2.,2.2, 1.,1.,1.)
-    res = my_gp1.dot_product_kernel(np.random.rand(2),np.random.rand(2),1.,np.array([[1.,0.],[0.,2.]]))
-    res = my_gp1.polynomial_kernel(np.random.rand(2),np.random.rand(2), 2)
-    res = my_gp1.default_kernel(x_data,x_data,np.ones((6)),my_gp1)
-    res = my_gp1.non_stat_kernel(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
-    res = my_gp1.non_stat_kernel_gradient(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
-    res = my_gp1.wendland_anisotropic(x_data,x_data,np.ones((6)), my_gp1)
+    res = linear_kernel(2.,2.2, 1.,1.,1.)
+    res = dot_product_kernel(np.random.rand(2),np.random.rand(2),1.,np.array([[1.,0.],[0.,2.]]))
+    res = polynomial_kernel(np.random.rand(2),np.random.rand(2), 2)
+    res = _default_kernel(x_data,x_data,np.ones((6)),my_gp1)
+    res = non_stat_kernel(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
+    res = non_stat_kernel_gradient(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
+    res = wendland_anisotropic(x_data,x_data,np.ones((6)), my_gp1)
 
 def test_train_hgdl():
-    my_gp2 = GP(input_dim, x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]), noise_variances=np.zeros(y_data.shape) + 0.01,
+    my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]), noise_variances=np.zeros(y_data.shape) + 0.01,
         compute_device="cpu", calc_inv = True, ram_economy = True)
 
 
@@ -142,11 +142,11 @@ def test_train_hgdl():
 
 
 def test_train_hgdl_async():
-    my_gp2 = GP(input_dim, x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]),noise_variances=np.zeros(y_data.shape) + 0.01,
+    my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]),noise_variances=np.zeros(y_data.shape) + 0.01,
         compute_device="cpu", calc_inv = True, ram_economy = True)
 
     opt_obj = my_gp2.train_async(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            max_iter = 5000)
+            max_iter = 50)
 
     time.sleep(3)
     my_gp2.update_hyperparameters(opt_obj)

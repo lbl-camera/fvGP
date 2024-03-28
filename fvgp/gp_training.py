@@ -4,25 +4,12 @@ import numpy as np
 from scipy.optimize import differential_evolution
 from hgdl.hgdl import HGDL
 from .mcmc import mcmc
+from scipy.optimize import minimize
+
 
 class GPtraining:  # pragma: no cover
-    def __init__(self,
-                 init_hyperparameters=None,
-                 hyperparameter_bounds=None,
-                 info=False):
-
-        assert isinstance(init_hyperparameters, np.ndarray) and np.ndim(init_hyperparameters) == 1
-
-        self.hyperparameters = init_hyperparameters
-        self.hyperparameter_bounds = hyperparameter_bounds
+    def __init__(self,info=False):
         self.mcmc_info = None
-        self.init_hyperparameters = init_hyperparameters
-        if self.init_hyperparameters is None:
-            warnings.warn("init hyperparameters not provided.\
-                          They will have to be provided in the training call.")
-        if self.hyperparameter_bounds is None:
-            warnings.warn("hyperparameter bounds not provided.\
-                           They will have to be provided in the training call.")
         self.gp2Scale = False
         self.info = info
 
@@ -115,9 +102,7 @@ class GPtraining:  # pragma: no cover
             global_optimizer,
             dask_client
         )
-        self.init_hyperparameters = hyperparameters
         return hyperparameters
-
 
     ##################################################################################
     def train_async(self,
@@ -184,7 +169,6 @@ class GPtraining:  # pragma: no cover
         Optimization object that can be given to `fvgp.GP.update_hyperparameters()`
         to update the prior GP : object instance
         """
-
 
         opt_obj = self._optimize_log_likelihood_async(
             objective_function,
@@ -387,9 +371,10 @@ class GPtraining:  # pragma: no cover
                            constraints=constraints)
 
             opt_obj.optimize(dask_client=dask_client, x0=starting_hps.reshape(1, -1))
-            print(opt_obj.get_final())
-            try: hyperparameters = opt_obj.get_final()[0]["x"]
-            except: raise Exception("Something has gone wrong with the objective function evaluation.")
+            try:
+                hyperparameters = opt_obj.get_final()[0]["x"]
+            except:
+                raise Exception("Something has gone wrong with the objective function evaluation.")
             opt_obj.kill_client()
         elif method == "mcmc":
             logger.debug("MCMC started in fvGP")
@@ -409,4 +394,4 @@ class GPtraining:  # pragma: no cover
 
 
 if __name__ == "__main__":
-    a = GPtraining(init_hyperparameters=np.array([2., 2.]))
+    a = GPtraining()

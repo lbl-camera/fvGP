@@ -2,6 +2,9 @@ import numpy as np
 from .misc import solve
 from .misc import logdet
 from .misc import inv
+from loguru import logger
+import warnings
+from scipy.linalg import cho_factor, cho_solve
 
 
 def cartesian_product(x, y):
@@ -33,24 +36,28 @@ class GPosterior:  # pragma: no cover
         self.marginal_density_obj = marginal_density_obj
         self.prior_obj = prior_obj
         self.data_obj = data_obj
+        self.kernel = self.prior_obj.kernel
+        self.mean_function = self.prior_obj.mean_function
+        self.d_kernel_dx = self.prior_obj.d_kernel_dx
+        # self.dk_dh = self.prior_obj.dk_dh
 
     def _KVsolve(self, b):
         if self.marginal_density_obj.factorization_obj[0] == "LU":
             LU = self.marginal_density_obj.factorization_obj[1]
             return LU.solve(b)
         elif self.marginal_density_obj.factorization_obj[0] == "Chol":
-            c, l = self.marginal_density_obj.factorization_obj[1], self.marginal_density_obj.factorization_obj[2]
-            return cho_solve((c, l), b)
+            c, ll = self.marginal_density_obj.factorization_obj[1], self.marginal_density_obj.factorization_obj[2]
+            return cho_solve((c, ll), b)
         elif self.marginal_density_obj.factorization_obj[0] == "gp2Scale":
             res = np.empty((len(b), b.shape[1]))
             if b.shape[1] > 100: warnings.warn(
-                "You want to predict at >100 points. When using gp2Scale, this takes a while. \n"
+                "You want to predict at >100 points. When using gp2Scale, this takes a while."
                 "Better predict at only a handful of points.")
             for i in range(b.shape[1]):
                 res[:, i], exit_status = cg(self.KV, b[:, i])
             return res
-        elif self.marginal_density_obj.marginal_density_obj.factorization_obj[0] == "Inv":
-            return self.KVinv @ b
+        elif self.marginal_density_obj.factorization_obj[0] == "Inv":
+            return self.marginal_density_obj.KVinv @ b
         else:
             raise Exception("Non-permitted factorization object encountered.")
 
@@ -58,14 +65,16 @@ class GPosterior:  # pragma: no cover
         x_data, y_data, KVinvY = \
             self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
         if hyperparameters is not None:
-            KV, KVinvY, KVlogdet, factorization_obj, KVinv, m = compute_GPpriorV (hyperparameters, calc_inv=False)
+            KV, KVinvY, KVlogdet, factorization_obj, KVinv, m = compute_GPpriorV(hyperparameters, calc_inv=False)
+        else:
+            hyperparameters = self.prior_obj.hyperparameters
 
         self._perform_input_checks(x_pred, x_out)
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, hps, self)
+        k = self.kernel(x_data, x_pred, hyperparameters, self)
         A = k.T @ KVinvY
-        posterior_mean = self.mean_function(x_pred, hps, self) + A
+        posterior_mean = self.mean_function(x_pred, hyperparameters, self) + A
 
         return {"x": x_pred,
                 "f(x)": posterior_mean}
@@ -73,28 +82,31 @@ class GPosterior:  # pragma: no cover
     def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None):
         x_data, y_data, KVinvY = \
             self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
+
         if hyperparameters is not None:
-            KV, KVinvY, KVlogdet, factorization_obj, KVinv, m = compute_GPpriorV (hyperparameters, calc_inv=False)
+            KV, KVinvY, KVlogdet, factorization_obj, KVinv, m = compute_GPpriorV(hyperparameters, calc_inv=False)
+        else:
+            hyperparameters = self.prior_obj.hyperparameters
 
         self._perform_input_checks(x_pred, x_out)
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
-        f = self.mean_function(x_pred, hps, self)
+        f = self.mean_function(x_pred, hyperparameters, self)
         eps = 1e-6
         if direction is not None:
             x1 = np.array(x_pred)
             x1[:, direction] = x1[:, direction] + eps
-            mean_der = (self.mean_function(x1, hps, self) - f) / eps
-            k = self.kernel(x_data, x_pred, hps, self)
-            k_g = self.d_kernel_dx(x_pred, x_data, direction, hps)
+            mean_der = (self.mean_function(x1, hyperparameters, self) - f) / eps
+            k = self.kernel(x_data, x_pred, hyperparameters, self)
+            k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
             posterior_mean_grad = mean_der + (k_g @ KVinvY)
         else:
             posterior_mean_grad = np.zeros(x_pred.shape)
             for direction in range(len(x_pred[0])):
                 x1 = np.array(x_pred)
                 x1[:, direction] = x1[:, direction] + eps
-                mean_der = (self.mean_function(x1, hps, self) - f) / eps
-                k_g = self.d_kernel_dx(x_pred, x_data, direction, hps)
+                mean_der = (self.mean_function(x1, hyperparameters, self) - f) / eps
+                k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
                 posterior_mean_grad[:, direction] = mean_der + (k_g @ KVinvY)
             direction = "ALL"
 
@@ -105,15 +117,17 @@ class GPosterior:  # pragma: no cover
     ###########################################################################
     def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
         x_data = self.data_obj.x_data.copy()
+
         self._perform_input_checks(x_pred, x_out)
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
+        k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
+        kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
+
         if self.marginal_density_obj.KVinv is not None:
             if variance_only:
                 S = None
-                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.KVinv, k)
+                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.marginal_density_obj.KVinv, k)
             else:
                 S = kk - (k.T @ self.marginal_density_obj.KVinv @ k)
                 v = np.array(np.diag(S))
@@ -121,18 +135,18 @@ class GPosterior:  # pragma: no cover
             k_cov_prod = self._KVsolve(k)
             S = kk - (k_cov_prod.T @ k)
             v = np.array(np.diag(S))
-        if np.any(v < -0.001):
-            logger.warning(inspect.cleandoc("""#
-            Negative variances encountered. That normally means that the model is unstable.
-            Rethink the kernel definitions, add more noise to the data,
-            or double check the hyperparameter optimization bounds. This will not
-            terminate the algorithm, but expect anomalies."""))
+        if np.any(v < -0.0001):
+            warnings.warn(
+                "Negative variances encountered. That normally means that the model is unstable. "
+                "Rethink the kernel definition, add more noise to the data, "
+                "or double check the hyperparameter optimization bounds. This will not "
+                "terminate the algorithm, but expect anomalies.")
+            logger.debug("Negative variances encountered.")
             v[v < 0.0] = 0.0
-            if not variance_only:
-                np.fill_diagonal(S, v)
+            if not variance_only: np.fill_diagonal(S, v)
 
         if add_noise and callable(self.likelihood.noise_function):
-            noise = self.noise_function(x_pred, self.hyperparameters, self)
+            noise = self.noise_function(x_pred, self.prior_obj.hyperparameters, self)
             if scipy.sparse.issparse(noise): noise = noise.toarray()
             v = v + np.diag(noise)
             if S is not None: S = S + noise
@@ -142,26 +156,21 @@ class GPosterior:  # pragma: no cover
                 "S": S}
 
     def posterior_covariance_grad(self, x_pred, x_out=None, direction=None):
-        x_data = self.x_data.copy()
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        x_data = self.data_obj.x_data.copy()
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
+        k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
         k_covariance_prod = self._KVsolve(k)
         if direction is not None:
-            k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
-            kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
+            k_g = self.d_kernel_dx(x_pred, x_data, direction, self.prior_obj.hyperparameters).T
+            kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
             x1 = np.array(x_pred)
             x2 = np.array(x_pred)
             eps = 1e-6
             x1[:, direction] = x1[:, direction] + eps
-            kk_g = (self.kernel(x1, x1, self.hyperparameters, self) -
-                    self.kernel(x2, x2, self.hyperparameters, self)) / eps
+            kk_g = (self.kernel(x1, x1, self.prior_obj.hyperparameters, self) -
+                    self.kernel(x2, x2, self.prior_obj.hyperparameters, self)) / eps
             a = kk_g - (2.0 * k_g.T @ k_covariance_prod)
             return {"x": x_pred,
                     "dv/dx": np.diag(a),
@@ -169,32 +178,28 @@ class GPosterior:  # pragma: no cover
         else:
             grad_v = np.zeros((len(x_pred), len(x_pred[0])))
             for direction in range(len(x_pred[0])):
-                k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
-                kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
+                k_g = self.d_kernel_dx(x_pred, x_data, direction, self.prior_obj.hyperparameters).T
+                kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
                 x1 = np.array(x_pred)
                 x2 = np.array(x_pred)
                 eps = 1e-6
                 x1[:, direction] = x1[:, direction] + eps
-                kk_g = (self.kernel(x1, x1, self.hyperparameters, self) -
-                        self.kernel(x2, x2, self.hyperparameters, self)) / eps
+                kk_g = (self.kernel(x1, x1, self.prior_obj.hyperparameters, self) -
+                        self.kernel(x2, x2, self.prior_obj.hyperparameters, self)) / eps
                 grad_v[:, direction] = np.diag(kk_g - (2.0 * k_g.T @ k_covariance_prod))
             return {"x": x_pred,
                     "dv/dx": grad_v}
 
     ###########################################################################
     def joint_gp_prior(self, x_pred, x_out=None):
-        x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        x_data, K, prior_mean_vec = (self.data_obj.x_data.copy(), self.prior_obj.K.copy(),
+                                     self.prior_obj.m.copy())
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
-        post_mean = self.mean_function(x_pred, self.hyperparameters, self)
+        k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
+        kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
+        post_mean = self.mean_function(x_pred, self.prior_obj.hyperparameters, self)
         joint_gp_prior_mean = np.append(prior_mean_vec, post_mean)
         return {"x": x_pred,
                 "K": K,
@@ -205,27 +210,23 @@ class GPosterior:  # pragma: no cover
 
     ###########################################################################
     def joint_gp_prior_grad(self, x_pred, direction, x_out=None):
-        x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        x_data, K, prior_mean_vec = (self.data_obj.x_data.copy(), self.prior_obj.K.copy(),
+                                     self.prior_obj.m.copy())
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
-        k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
+        # k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
+        # kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
+        k_g = self.d_kernel_dx(x_pred, x_data, direction, self.prior_obj.hyperparameters).T
         x1 = np.array(x_pred)
         x2 = np.array(x_pred)
         eps = 1e-6
         x1[:, direction] = x1[:, direction] + eps
         x2[:, direction] = x2[:, direction] - eps
-        kk_g = (self.kernel(x1, x1, self.hyperparameters, self) - self.kernel(x2, x2, self.hyperparameters, self)) / (
+        kk_g = (self.kernel(x1, x1, self.prior_obj.hyperparameters, self) - self.kernel(x2, x2, self.prior_obj.hyperparameters, self)) / (
             2.0 * eps)
-        post_mean = self.mean_function(x_pred, self.hyperparameters, self)
-        mean_der = (self.mean_function(x1, self.hyperparameters, self) - self.mean_function(x2, self.hyperparameters,
+        # post_mean = self.mean_function(x_pred, self.prior_obj.hyperparameters, self)
+        mean_der = (self.mean_function(x1, self.prior_obj.hyperparameters, self) - self.mean_function(x2, self.prior_obj.hyperparameters,
                                                                                             self)) / (2.0 * eps)
         full_gp_prior_mean_grad = np.append(np.zeros(prior_mean_vec.shape), mean_der)
         prior_cov_grad = np.zeros(K.shape)
@@ -260,13 +261,8 @@ class GPosterior:  # pragma: no cover
         ------
         Entropy : float
         """
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         priors = self.joint_gp_prior(x_pred, x_out=None)
         S = priors["S"]
@@ -276,13 +272,8 @@ class GPosterior:  # pragma: no cover
 
     ###########################################################################
     def gp_entropy_grad(self, x_pred, direction, x_out=None):
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         priors1 = self.joint_gp_prior(x_pred, x_out=None)
         priors2 = self.joint_gp_prior_grad(x_pred, direction, x_out=None)
@@ -309,22 +300,17 @@ class GPosterior:  # pragma: no cover
         dim = len(mu)
         kld = 0.5 * (np.trace(x1) + (x2.T @ mu)[0] - float(dim) + (logdet2 - logdet1))
         if kld < -1e-4:
-            warnings.warn("Negative KL divergence encountered. That happens when \n \
-                    one of the covariance matrices is close to positive semi definite \n\
-                    and therefore the logdet() calculation becomes unstable.\n \
-                    Returning abs(KLD)")
+            warnings.warn("Negative KL divergence encountered. That happens when "
+                          "one of the covariance matrices is close to positive semi definite "
+                          "and therefore the logdet() calculation becomes unstable. "
+                          "Returning abs(KLD)")
             logger.debug("Negative KL divergence encountered")
         return abs(kld)
 
     ###########################################################################
     def gp_kl_div(self, x_pred, comp_mean, comp_cov, x_out=None):
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         res = self.posterior_mean(x_pred, x_out=None)
         gp_mean = res["f(x)"]
@@ -339,13 +325,8 @@ class GPosterior:  # pragma: no cover
 
     ###########################################################################
     def gp_kl_div_grad(self, x_pred, comp_mean, comp_cov, direction, x_out=None):
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         gp_mean = self.posterior_mean(x_pred, x_out=None)["f(x)"]
         gp_mean_grad = self.posterior_mean_grad(x_pred, direction=direction, x_out=None)["df/dx"]
@@ -368,16 +349,11 @@ class GPosterior:  # pragma: no cover
     ###########################################################################
     def gp_mutual_information(self, x_pred, x_out=None):
         x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
+        k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
+        kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
 
         joint_covariance = \
             np.asarray(np.block([[K, k],
@@ -388,16 +364,11 @@ class GPosterior:  # pragma: no cover
     ###########################################################################
     def gp_total_correlation(self, x_pred, x_out=None):
         x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
+        k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
+        kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
         joint_covariance = np.asarray(np.block([[K, k],
                                                 [k.T, kk]]))
 
@@ -410,27 +381,17 @@ class GPosterior:  # pragma: no cover
 
     ###########################################################################
     def gp_relative_information_entropy(self, x_pred, x_out=None):
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
+        kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
         post_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + (np.identity(len(x_pred)) * 1e-9)
         return {"x": x_pred,
                 "RIE": self.kl_div(np.zeros((len(x_pred))), np.zeros((len(x_pred))), kk, post_cov)}
 
     ###########################################################################
     def gp_relative_information_entropy_set(self, x_pred, x_out=None):
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
         RIE = np.zeros((len(x_pred)))
         for i in range(len(x_pred)):
             RIE[i] = self.gp_relative_information_entropy(x_pred[i].reshape(1, len(x_pred[i])), x_out=None)["RIE"]
@@ -440,13 +401,8 @@ class GPosterior:  # pragma: no cover
 
     ###########################################################################
     def posterior_probability(self, x_pred, comp_mean, comp_cov, x_out=None):
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         res = self.posterior_mean(x_pred, x_out=None)
         gp_mean = res["f(x)"]
@@ -470,13 +426,8 @@ class GPosterior:  # pragma: no cover
                 }
 
     def posterior_probability_grad(self, x_pred, comp_mean, comp_cov, direction, x_out=None):
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = cartesian_product(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
+        self._perform_input_checks(x_pred, x_out)
+        if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         x1 = np.array(x_pred)
         x2 = np.array(x_pred)
@@ -495,7 +446,7 @@ class GPosterior:  # pragma: no cover
         assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list)
         if isinstance(x_pred, np.ndarray):
             assert np.ndim(x_pred) == 2
-            assert x_pred.shape[1] != self.input_space_dim
+            assert x_pred.shape[1] == self.data_obj.input_space_dim
 
         assert isinstance(x_out, np.ndarray) or x_out is None
         if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 2
@@ -518,6 +469,3 @@ class GPosterior:  # pragma: no cover
             return np.array(res)
         else:
             raise Exception("Cartesian product out of options")
-
-
-

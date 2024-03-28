@@ -24,44 +24,37 @@ class GPMarginalDensity:
         self.calc_inv = calc_inv
         self.online = online
         self.info = info
-        self.K = prior_obj.K
-        self.V = likelihood_obj.V
         self.y_data = data_obj.y_data
-        self.y_mean = data_obj.y_data - prior_obj.prior_mean_vector
         if self.online: self.calc_inv = True
 
-        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, mean = \
+        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, m = \
             self.compute_GPpriorV(self.prior_obj.hyperparameters)
 
     def update_data(self):
         """Update the marginal PDF when the data has changed in data likelihood or prior objects"""
-        self.K = self.prior_obj.K
-        self.V = self.likelihood_obj.V
         self.y_data = self.data_obj.y_data
-        self.y_mean = self.data_obj.y_data - self.prior_obj.prior_mean_vector
         self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv = self.update_GPpriorV()
 
     def update_hyperparameters(self):
         """Update the marginal PDF when if hyperparameters have changed"""
-        self.K = self.prior_obj.K
-        self.V = self.likelihood_obj.V
-
-        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_obj.prior_mean_vector = \
+        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, m = \
             self.compute_GPpriorV(self.prior_obj.hyperparameters)
-
-        self.y_mean = self.y_data - self.prior_obj.prior_mean_vector
 
     def compute_GPpriorV(self, hyperparameters, calc_inv=None):
         """Recomputed the prior mean for new hyperparameters (e.g. during training)"""
-        # get K + V
+
         if calc_inv is None: calc_inv = self.calc_inv
-        K = self.prior_obj.compute_kernel(self.data_obj.x_data, self.data_obj.x_data, hyperparameters=hyperparameters)
+        K = self.prior_obj.compute_covariance_matrix(self.data_obj.x_data, self.data_obj.x_data,
+                                                     hyperparameters=hyperparameters)
         m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
         V = self.likelihood_obj.calculate_V(hyperparameters)
         y_mean = self.data_obj.y_data - m
         # check if shapes are correct
         assert K.shape == V.shape
+
+        # get K + V
         KV = K + V
+
         # get Kinv/KVinvY, LU, Chol, logdet(KV)
         KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_mean, KV, calc_inv)
         return KV, KVinvY, KVlogdet, factorization_obj, KVinv, m
@@ -70,9 +63,11 @@ class GPMarginalDensity:
 
     def update_GPpriorV(self):
         """This updates the prior after new data was communicated"""
-        # get K
+        # get K and V
         K = self.prior_obj.K
+        m = self.prior_obj.m
         V = self.likelihood_obj.V
+        y_mean = self.data_obj.y_data - m
 
         # check if shapes are correct
         assert K.shape == V.shape
@@ -83,14 +78,15 @@ class GPMarginalDensity:
         # get KVinv/KVinvY, LU, Chol, logdet(KV)
         if self.online is True:
             KVinvY, KVlogdet, factorization_obj, KVinv = self._update_gp_linalg(
-                self.y_mean, KV)
+                y_mean, KV)
         else:
-            KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(self.y_mean, KV, self.calc_inv)
+            KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_mean, KV, self.calc_inv)
         return KV, KVinvY, KVlogdet, factorization_obj, KVinv
 
     ##################################################################################
     def _compute_gp_linalg(self, vec, KV, calc_inv):
         if calc_inv:
+            print("KVinv recomputed")
             KVinv = inv(KV)
             factorization_obj = ("Inv", None)
             KVinvY = KVinv @ vec
@@ -98,20 +94,21 @@ class GPMarginalDensity:
         elif not calc_inv:
             KVinv = None
             KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
-        else: raise Exception("calc_inv unspecified")
+        else:
+            raise Exception("calc_inv unspecified")
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
     def _update_gp_linalg(self, vec, KV):
-        size_KVinv = np.len(self.KVinv)
+        size_KVinv = len(self.KVinv)
         kk = KV[size_KVinv:, size_KVinv:]
         k = KV[size_KVinv:, 0:size_KVinv]
-        X = inv(kk - C @ self.KVinv @ B)
-        F = -self.KVinv @ k @ X
-        KVinv = np.block([[self.KVinv + self.KVinv @ B @ X @ C @ self.KVinv, F],
+        X = inv(kk - k @ self.KVinv @ k.T)
+        F = -self.KVinv @ k.T @ X
+        KVinv = np.block([[self.KVinv + self.KVinv @ k.T @ X @ k @ self.KVinv, F],
                           [F.T, X]])
         factorization_obj = ("Inv", None)
         KVinvY = KVinv @ vec
-        KVlogdet = self.KVlogdet + logdet(kk - k.T @ self.KVinv @ k)
+        KVlogdet = self.KVlogdet + logdet(kk - k @ self.KVinv @ k.T)
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
     def _LU(self, KV, vec):
@@ -153,8 +150,10 @@ class GPMarginalDensity:
         log marginal likelihood of the data : float
         """
         if hyperparameters is None:
-            KVinvY, KVlogdet, mean = self.KVinvY, self.KVlogdet, self.prior_obj.prior_mean_vector
-        else: KV, KVinvY, KVlogdet, factorization_obj, KVinv, mean = self.compute_GPpriorV(hyperparameters)
+            KVinvY, KVlogdet, mean = self.KVinvY, self.KVlogdet, self.prior_obj.m
+        else:
+            KV, KVinvY, KVlogdet, factorization_obj, KVinv, mean = (
+                self.compute_GPpriorV(hyperparameters, calc_inv=False))
         n = len(self.y_data)
         return -(0.5 * ((self.y_data - mean).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
 
@@ -192,11 +191,13 @@ class GPMarginalDensity:
         """
         logger.debug("log-likelihood gradient is being evaluated...")
         if hyperparameters is None:
-            KVinvY, KVlogdet, mean = self.KVinvY, self.KVlogdet, self.prior_obj.prior_mean_vector
-        else: KV, KVinvY, KVlogdet, factorization_obj, KVinv, mean = self.compute_GPpriorV(hyperparameters)
+            KVinvY, KVlogdet, mean = self.KVinvY, self.KVlogdet, self.prior_obj.m
+        else:
+            KV, KVinvY, KVlogdet, factorization_obj, KVinv, mean = (
+                self.compute_GPpriorV(hyperparameters, calc_inv=False))
 
         b = KVinvY
-        y = self.y_data - mean
+        #y = self.y_data - mean
         if self.prior_obj.ram_economy is False:
             try:
                 dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, hyperparameters, self) + \
@@ -220,8 +221,9 @@ class GPMarginalDensity:
                 matr = a[i]
             else:
                 try:
-                    dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters, self)+\
-                            self.noise_function_grad(self.data_obj.x_data, i, hyperparameters, self)
+                    dK_dH = \
+                        self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters, self) + \
+                        self.noise_function_grad(self.data_obj.x_data, i, hyperparameters, self)
                 except:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. \n \

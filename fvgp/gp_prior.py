@@ -72,8 +72,10 @@ class GPrior:  # pragma: no cover
         # prior mean
         if callable(gp_mean_function):
             self.mean_function = gp_mean_function
+            self.default_m = False
         else:
             self.mean_function = self._default_mean_function
+            self.default_m = True
 
         if callable(gp_mean_function_grad):
             self.dm_dh = gp_mean_function_grad
@@ -82,34 +84,35 @@ class GPrior:  # pragma: no cover
         else:
             self.dm_dh = self._default_dm_dh
 
-        self.prior_mean_vector, self.K = self._compute_prior(x_data)
+        self.m, self.K = self._compute_prior(x_data)
 
-    def augment_data(self, x_data, x_new):
-        self.prior_mean_vector, self.K = self._update_prior(x_data, x_new)
+    def augment_data(self, x_data_old, x_new, constant_mean=0.0):
+        self.constant_mean = constant_mean
+        self.m, self.K = self._update_prior(x_data_old, x_new)
 
     def update_data(self, x_data, constant_mean=0.0):
         self.constant_mean = constant_mean
-        self.prior_mean_vector, self.K = self._compute_prior(x_data)
+        self.m, self.K = self._compute_prior(x_data)
 
     def update_hyperparameters(self, x_data, hyperparameters):
         self.hyperparameters = hyperparameters
-        self.prior_mean_vector, self.K = self._compute_prior(x_data)
+        self.m, self.K = self._compute_prior(x_data)
 
     def _compute_prior(self, x_data):
         m = self.compute_mean(x_data)
-        K = self.compute_kernel(x_data, x_data)
+        K = self.compute_covariance_matrix(x_data, x_data)
         assert np.ndim(m) == 1
         assert np.ndim(K) == 2
         return m, K
 
     def _update_prior(self, x_data, x_new):
-        m = self._update_mean(x_new)
-        K = self._update_kernel(x_data, x_new)
+        m = self._update_mean(x_data, x_new)
+        K = self._update_covariance_matrix(x_data, x_new)
         assert np.ndim(m) == 1
         assert np.ndim(K) == 2
         return m, K
 
-    def compute_kernel(self, x1, x2, hyperparameters=None):
+    def compute_covariance_matrix(self, x1, x2, hyperparameters=None):
         """computes the covariance matrix from the kernel"""
         if hyperparameters is None: hyperparameters = self.hyperparameters
         # if gp2Scale:
@@ -117,12 +120,12 @@ class GPrior:  # pragma: no cover
         K = self.kernel(x1, x2, hyperparameters, self)
         return K
 
-    def _update_kernel(self, x_data, x_new):
+    def _update_covariance_matrix(self, x_data, x_new):
         """This updated K based on new data"""
         # if gp2Scale: ...
         # else:
-        k = self.compute_kernel(x_data, x_new)
-        kk = self.compute_kernel(x_new, x_new)
+        k = self.compute_covariance_matrix(x_data, x_new)
+        kk = self.compute_covariance_matrix(x_new, x_new)
         K = np.block([
             [self.K, k],
             [k.T, kk]
@@ -137,10 +140,12 @@ class GPrior:  # pragma: no cover
         m = self.mean_function(x_data, hyperparameters, self)
         return m
 
-    def _update_mean(self, x_new):
+    def _update_mean(self, x_data, x_new):
         # if gp2Scale: ...
         # else:
-        m = np.append(self.prior_mean_vector, self.mean_function(x_new, self.hyperparameters, self))
+
+        if self.default_m: self.m[:] = self.constant_mean
+        m = np.append(self.m, self.mean_function(x_new, self.hyperparameters, self))
         return m
 
     ####################################################

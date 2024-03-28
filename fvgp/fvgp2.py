@@ -235,6 +235,13 @@ class fvGP(GP):
         self.orig_input_space_dim = input_space_dim
         self.output_num, self.output_dim = output_number, output_space_dim
         ###check the output dims
+        U
+        x
+        output_number
+        x
+        output_dim
+        assert isinstance(output_positions, np.ndarray) and np.ndim(output_positions) == 3
+
 
         if not isinstance(x_data, np.ndarray):
             raise Exception("Multi-task GPs on non-Euclidean input spaces are not implemented yet.")
