@@ -1,5 +1,11 @@
 import numpy as np
 from .gp_kernels import *
+import dask.distributed as distributed
+import warnings
+import itertools
+from functools import partial
+import scipy.sparse as sparse
+from scipy.sparse import block_array
 
 
 class GPrior:  # pragma: no cover
@@ -15,13 +21,16 @@ class GPrior:  # pragma: no cover
                  ram_economy=False,
                  cov_comp_mode="trad",
                  compute_device='cpu',
-                 constant_mean=0.0
+                 constant_mean=0.0,
+                 gp2Scale=False,
+                 gp2Scale_dask_client=None,
+                 gp2Scale_batch_size=10000
                  ):
 
         assert callable(gp_kernel_function) or gp_kernel_function is None
         assert callable(gp_mean_function) or gp_mean_function is None
-        assert isinstance(hyperparameters, np.ndarray) or hyperparameters is None
-        if isinstance(hyperparameters, np.ndarray): assert np.ndim(hyperparameters) == 1
+        assert isinstance(hyperparameters, np.ndarray)
+        assert np.ndim(hyperparameters) == 1
         assert isinstance(cov_comp_mode, str)
         assert isinstance(constant_mean, float)
 
@@ -32,26 +41,27 @@ class GPrior:  # pragma: no cover
         self.hyperparameters = hyperparameters
         self.ram_economy = ram_economy
         self.constant_mean = constant_mean
+        self.gp2Scale = gp2Scale
+        self.client = gp2Scale_dask_client
+        self.batch_size = gp2Scale_batch_size
 
         if not self.Euclidean and not callable(gp_kernel_function):
             raise Exception(
                 "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters.")
-        if not self.Euclidean and self.hyperparameters is None:
-            raise Exception(
-                "You are running fvGP on non-Euclidean inputs. Please provide initial hyperparameters.")
-        if compute_device == 'gpu':
-            try:
-                import torch
-            except:
-                raise Exception(
-                    "You have specified the 'gpu' as your compute device. You need to install pytorch"
-                    "manually for this to work.")
 
-        if (callable(gp_kernel_function) or callable(gp_mean_function)) and self.hyperparameters is None:
-            warnings.warn(
-                "You have provided callables for kernel, mean, or noise functions but no initial"
-                "hyperparameters. It is likely they have to be defined for a success initialization",
-                stacklevel=2)
+        if gp2Scale:
+            if not callable(gp_kernel_function):
+                warnings.warn("You have chosen to activate gp2Scale. A powerful tool! \n \
+                        But you have not supplied a kernel that is compactly supported. \n \
+                        I will use an anisotropic Wendland kernel for now.",
+                              stacklevel=2)
+                if compute_device == "cpu":
+                    gp_kernel_function = wendland_anisotropic_gp2Scale_cpu
+                elif compute_device == "gpu":
+                    gp_kernel_function = wendland_anisotropic_gp2Scale_gpu
+            worker_info = list(self.client.scheduler_info()["workers"].keys())
+            if not worker_info: raise Exception("No workers available")
+            self.compute_workers = list(worker_info)
 
         # kernel
         if callable(gp_kernel_function):
@@ -86,9 +96,9 @@ class GPrior:  # pragma: no cover
 
         self.m, self.K = self._compute_prior(x_data)
 
-    def augment_data(self, x_data_old, x_new, constant_mean=0.0):
+    def augment_data(self, x_old, x_new, constant_mean=0.0):
         self.constant_mean = constant_mean
-        self.m, self.K = self._update_prior(x_data_old, x_new)
+        self.m, self.K = self._update_prior(x_old, x_new)
 
     def update_data(self, x_data, constant_mean=0.0):
         self.constant_mean = constant_mean
@@ -100,53 +110,165 @@ class GPrior:  # pragma: no cover
 
     def _compute_prior(self, x_data):
         m = self.compute_mean(x_data)
-        K = self.compute_covariance_matrix(x_data, x_data)
+        K = self.compute_prior_covariance_matrix(x_data)
         assert np.ndim(m) == 1
         assert np.ndim(K) == 2
         return m, K
 
-    def _update_prior(self, x_data, x_new):
-        m = self._update_mean(x_data, x_new)
-        K = self._update_covariance_matrix(x_data, x_new)
+    def _update_prior(self, x_old, x_new):
+        m = self._update_mean(x_new)
+        K = self._update_prior_covariance_matrix(x_old, x_new)
         assert np.ndim(m) == 1
         assert np.ndim(K) == 2
         return m, K
 
-    def compute_covariance_matrix(self, x1, x2, hyperparameters=None):
+    def compute_prior_covariance_matrix(self, x, hyperparameters=None):
         """computes the covariance matrix from the kernel"""
         if hyperparameters is None: hyperparameters = self.hyperparameters
-        # if gp2Scale:
-        # else:
-        K = self.kernel(x1, x2, hyperparameters, self)
+        if self.gp2Scale:
+            K = self._compute_prior_covariance_gp2Scale(x, hyperparameters)
+        else:
+            K = self.kernel(x, x, hyperparameters, self)
         return K
 
-    def _update_covariance_matrix(self, x_data, x_new):
+    def _update_prior_covariance_matrix(self, x_old, x_new):
         """This updated K based on new data"""
-        # if gp2Scale: ...
-        # else:
-        k = self.compute_covariance_matrix(x_data, x_new)
-        kk = self.compute_covariance_matrix(x_new, x_new)
-        K = np.block([
-            [self.K, k],
-            [k.T, kk]
-        ])
+        if self.gp2Scale:
+            K = self._update_prior_covariance_gp2Scale(x_old, x_new, self.hyperparameters)
+        else:
+            k = self.kernel(x_old, x_new, self.hyperparameters, self)
+            kk = self.kernel(x_new, x_new, self.hyperparameters, self)
+            K = np.block([
+                [self.K, k],
+                [k.T, kk]
+            ])
         return K
 
     def compute_mean(self, x_data, hyperparameters=None):
         """computes the covariance matrix from the kernel"""
         if hyperparameters is None: hyperparameters = self.hyperparameters
-        # if gp2Scale:
-        # else:
         m = self.mean_function(x_data, hyperparameters, self)
         return m
 
-    def _update_mean(self, x_data, x_new):
-        # if gp2Scale: ...
-        # else:
-
+    def _update_mean(self, x_new):
         if self.default_m: self.m[:] = self.constant_mean
         m = np.append(self.m, self.mean_function(x_new, self.hyperparameters, self))
         return m
+
+    @staticmethod
+    def ranges(N, nb):
+        """ splits a range(N) into nb chunks defined by chunk_start, chunk_end """
+        if nb == 0: nb = 1
+        step = N / nb
+        return [(round(step * i), round(step * (i + 1))) for i in range(nb)]
+
+    def _compute_prior_covariance_gp2Scale(self, x_data, hyperparameters):
+        """computes the covariance matrix from the kernel on HPC in sparse format"""
+        client = self.client
+        point_number = len(x_data)
+        num_batches = point_number // self.batch_size
+        NUM_RANGES = num_batches
+
+        self.x_data_scatter_future = client.scatter(
+            x_data, workers=self.compute_workers, broadcast=False)
+        ranges = self.ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
+        ranges_ij = list(
+            itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
+        ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
+
+        results = list(map(self.harvest_result, distributed.as_completed(client.map(
+            partial(kernel_function,
+                    hyperparameters=hyperparameters,
+                    kernel=self.kernel),
+            ranges_ij,
+            [self.x_data_scatter_future] * len(ranges_ij),
+            [self.x_data_scatter_future] * len(ranges_ij)),
+            with_results=True)))
+
+        # reshape the result set into COO components
+        data, i_s, j_s = map(np.hstack, zip(*results))
+        # mirror across diagonal
+        diagonal_mask = i_s != j_s
+        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
+            np.hstack([i_s, j_s[diagonal_mask]]), \
+            np.hstack([j_s, i_s[diagonal_mask]])
+
+        return sparse.coo_matrix((data, (i_s, j_s)))
+
+    def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
+        client = self.client
+        """computes the covariance matrix from the kernel on HPC in sparse format"""
+
+        self.x_new_scatter_future = client.scatter(
+            x_new, workers=self.compute_workers, broadcast=False)
+        self.x_old_scatter_future = client.scatter(
+            x_old, workers=self.compute_workers, broadcast=False)
+
+        point_number = len(x_old)
+        num_batches = point_number // self.batch_size
+        NUM_RANGES = num_batches
+        ranges_data = self.ranges(len(x_old), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
+        num_batches2 = len(x_new) // self.batch_size
+        ranges_input = self.ranges(len(x_new), num_batches2)
+        ranges_ij = list(itertools.product(ranges_data, ranges_input))
+
+        # K = np.block([[self.K, B],
+        #               [B,      C]])
+        # Calculate B
+
+        results = list(map(self.harvest_result,
+                           distributed.as_completed(client.map(
+                               partial(kernel_function_update,
+                                       hyperparameters=hyperparameters,
+                                       kernel=self.kernel),
+                               ranges_ij,
+                               [self.x_old_scatter_future] * len(ranges_ij),
+                               [self.x_new_scatter_future] * len(ranges_ij)),
+                               with_results=True)))
+
+        data, i_s, j_s = map(np.hstack, zip(*results))
+        B = sparse.coo_matrix((data, (i_s, j_s)))
+        print("num batches: ", NUM_RANGES)
+        print("range data: ", ranges_data)
+        print("num batches: ", num_batches2)
+        print("ranges input: ", ranges_input)
+        print("ranges ij : ", ranges_ij)
+        print("B shape")
+        print(B.shape)
+
+        # mirror across diagonal
+        ranges_ij2 = list(itertools.product(ranges_input, ranges_input))
+        ranges_ij2 = [range_ij2 for range_ij2 in ranges_ij2 if
+                      range_ij2[0][0] <= range_ij2[1][0]]  # filter lower diagonal
+
+        results = list(map(self.harvest_result,
+                           distributed.as_completed(client.map(
+                               partial(kernel_function,
+                                       hyperparameters=hyperparameters,
+                                       kernel=self.kernel),
+                               ranges_ij2,
+                               [self.x_new_scatter_future] * len(ranges_ij2),
+                               [self.x_new_scatter_future] * len(ranges_ij2)),
+                               with_results=True)))
+        data, i_s, j_s = map(np.hstack, zip(*results))
+        diagonal_mask = i_s != j_s
+        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
+            np.hstack([i_s, j_s[diagonal_mask]]), \
+            np.hstack([j_s, i_s[diagonal_mask]])
+        D = sparse.coo_matrix((data, (i_s, j_s)))
+        print("D shape")
+        print(D.shape)
+
+        res = block_array([[self.K, B],
+                           [B.transpose(), D]])
+
+        return res
+
+    @staticmethod
+    def harvest_result(future_result):
+        future, result = future_result
+        future.release()
+        return result
 
     ####################################################
     ####################################################
@@ -231,3 +353,54 @@ class GPrior:  # pragma: no cover
     def _default_dm_dh(self, x, hps, gp_obj):
         gr = np.zeros((len(hps), len(x)))
         return gr
+
+
+########################################################
+########################################################
+########################################################
+
+
+def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
+    """
+    Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the
+    covariance matrix being calculated.
+    Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
+    """
+
+    hps = hyperparameters
+    range_i, range_j = range_ij
+    x1 = x1_future[range_i[0]:range_i[1]]
+    x2 = x2_future[range_j[0]:range_j[1]]
+    k = kernel(x1, x2, hps, None)
+    k_sparse = sparse.coo_matrix(k)
+
+    # print("kernel compute time: ", time.time() - st, flush = True)
+    data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
+
+    # mask lower triangular values when current chunk spans diagonal
+    if range_i[0] == range_j[0]:
+        mask = [row <= col for (row, col) in zip(rows, cols)]
+        return data[mask], rows[mask], cols[mask]
+    else:
+        return data, rows, cols
+
+
+def kernel_function_update(range_ij, x1_future, x2_future, hyperparameters, kernel):
+    """
+    Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the
+    covariance matrix being calculated.
+    Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
+    """
+
+    hps = hyperparameters
+    range_i, range_j = range_ij
+    x1 = x1_future[range_i[0]:range_i[1]]
+    x2 = x2_future[range_j[0]:range_j[1]]
+    # print(x1, flush=True)
+    k = kernel(x1, x2, hps, None)
+    k_sparse = sparse.coo_matrix(k)
+
+    # print("kernel compute time: ", time.time() - st, flush = True)
+    data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
+
+    return data, rows, cols

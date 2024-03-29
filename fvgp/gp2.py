@@ -1,16 +1,9 @@
 #!/usr/bin/env python
-import inspect
-import time
+
 import warnings
-from scipy.sparse.linalg import splu
-from scipy.sparse.linalg import minres, cg
 import dask.distributed as distributed
 import numpy as np
-import scipy
-from scipy.optimize import differential_evolution
-from scipy.linalg import cho_factor, cho_solve
 from loguru import logger
-from .gp2Scale import gp2Scale as gp2S
 from dask.distributed import Client
 from scipy.stats import norm
 from .gp_prior import GPrior
@@ -23,13 +16,17 @@ from .gp_posterior import GPosterior
 
 # TODO: search below "TODO"
 #   Can we update cholesky instead of recomputing?
-#   You compute the logdet even though you are not training. That makes init() and posterior evaluations slow (for new hps)
+#   You compute the logdet even though you are not training. That makes the posterior mean slow for new hps [might be OK]
 #   in traditional and gp2Scale you should have access to obj and all kernels
-#   neither minres nor random logdet are doing a good job, cg is better but we need a preconditioner
+#   neither minres nor random logdet are doing a good job, cg is better but we might need a preconditioner , maybe a large LU?
 #   make non-Euclidean work for multi-task
 #   include gp2Scale
 #   for Ron's situation, make x_data, x_data optional and None by default, if not communicated, they will be asssigned simple dummy_data and dummy_data = True. This should be overwritten in the update_data and used for warning in train and posteriors.
 #                the noise will have to be either given as a function or iitialized randmoly too with a warning that noise will have to be commnitaed in the update.
+#   fvgp is not updated
+#   the mcmc in default mode should not need proposal distributions explicitly
+#   reshape posteriors if x_out
+#   when are we really using gu vs cpu when compute_device is changed
 
 class GP:
     """
@@ -239,30 +236,55 @@ class GP:
         self.gp2Scale = gp2Scale
         self.gp2Scale_dask_client = gp2Scale_dask_client
         self.gp2Scale_batch_size = gp2Scale_batch_size
+        hyperparameters = init_hyperparameters
         ########################################
         ###init data instance###################
         ########################################
         self.data = GPdata(x_data, y_data, noise_variances)
         ########################################
         # prepare initial hyperparameters and bounds
-        if self.data.Euclidean and init_hyperparameters is None:
-            if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function)) and \
-               hyperparameter_bounds is None:
-                raise Exception(
-                    "You have provided callables for kernel, mean, or noise functions but no"
-                    "initial hyperparameters or hyperparameter bounds. Please provide"
-                    "at least one of them at initialization.")
-            hyperparameters, hyperparameter_bounds = \
-                self._get_default_hyperparameters(hyperparameter_bounds)
+        if self.data.Euclidean:
+            if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
+                if hyperparameter_bounds is None and init_hyperparameters is None:
+                    raise Exception(
+                        "You have provided callables for kernel, mean, or noise functions but no"
+                        "initial hyperparameters or hyperparameter bounds. Please provide"
+                        "at least one of them at initialization.")
+                else:
+                    if initial_hyperparameters is None:
+                        hyperparameters, hyperparameter_bounds = self._get_default_hyperparameters(
+                            hyperparameter_bounds)
+            else:
+                if init_hyperparameters is None: hyperparameters, hyperparameter_bounds = \
+                    self._get_default_hyperparameters(hyperparameter_bounds)
         else:
             hyperparameters, hyperparameter_bounds = init_hyperparameters, hyperparameter_bounds
-        #warn if they could not be prepared
+
+        # warn if they could not be prepared
         if hyperparameters is None:
-            warnings.warn("init hyperparameters not provided. "
-                          "They will have to be provided in the training call.")
+            raise Exception("'init_hyperparameters' not provided and could not be calculated. Please provide them ")
+
         if hyperparameter_bounds is None:
             warnings.warn("hyperparameter_bounds not provided. "
                           "They will have to be provided in the training call.")
+        self.hyperparameter_bounds = hyperparameter_bounds
+
+        if gp2Scale:
+            try:
+                import imate
+            except:
+                raise Exception(
+                    "You have activated `gp2Scale`. You need to install imate\
+                     manually for this to work.")
+            if gp2Scale_dask_client is None: gp2Scale_dask_client = Client()
+
+        if compute_device == 'gpu':
+            try:
+                import torch
+            except:
+                raise Exception(
+                    "You have specified the 'gpu' as your compute device. You need to install pytorch "
+                    "manually for this to work.")
         ########################################
         ###init prior instance##################
         ########################################
@@ -274,7 +296,10 @@ class GP:
                             gp_mean_function=gp_mean_function,
                             gp_kernel_function_grad=gp_kernel_function_grad,
                             gp_mean_function_grad=gp_mean_function_grad,
-                            constant_mean=np.mean(y_data)
+                            constant_mean=np.mean(y_data),
+                            gp2Scale=gp2Scale,
+                            gp2Scale_dask_client=gp2Scale_dask_client,
+                            gp2Scale_batch_size=gp2Scale_batch_size
                             )
         ########################################
         ###init likelihood instance#############
@@ -285,7 +310,8 @@ class GP:
                                        hyperparameters=self.prior.hyperparameters,
                                        gp_noise_function=gp_noise_function,
                                        gp_noise_function_grad=gp_noise_function_grad,
-                                       ram_economy=ram_economy
+                                       ram_economy=ram_economy,
+                                       gp2Scale=gp2Scale
                                        )
 
         ##########################################
@@ -297,13 +323,15 @@ class GP:
             self.likelihood,
             online=online,
             calc_inv=calc_inv,
-            info=info
+            info=info,
+            gp2Scale=gp2Scale,
+            compute_device=compute_device
         )
 
         ##########################################
         #######prepare training###################
         ##########################################
-        self.trainer = GPtraining(info=info)
+        self.trainer = GPtraining(info=info, gp2Scale=gp2Scale)
 
         ##########################################
         #######prepare posterior evaluations######
@@ -357,7 +385,8 @@ class GP:
             self.prior.update_data(self.data.x_data, constant_mean=np.mean(self.data.y_data))
 
         # update likelihood
-        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances, self.prior.hyperparameters)
+        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
+                               self.prior.hyperparameters)
 
         # update marginal density
         self.marginal_density.update_data()
@@ -462,8 +491,8 @@ class GP:
             `dask.distributed.Client` instance is constructed.
         """
         if hyperparameter_bounds is None:
-            if self.prior.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
-            hyperparameter_bounds = self.prior.hyperparameter_bounds
+            if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
+            hyperparameter_bounds = self.hyperparameter_bounds
         if init_hyperparameters is None: init_hyperparameters = self.prior.hyperparameters
         if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
                                                                                   high=hyperparameter_bounds[:, 1],
@@ -495,7 +524,8 @@ class GP:
         )
 
         self.prior.update_hyperparameters(self.data.x_data, hyperparameters)
-        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances, self.prior.hyperparameters)
+        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
+                               self.prior.hyperparameters)
         self.marginal_density.update_hyperparameters()
 
     ##################################################################################
@@ -566,8 +596,8 @@ class GP:
         if self.gp2Scale: raise Exception("gp2Scale does not allow asynchronous training!")
         if dask_client is None: dask_client = distributed.Client()
         if hyperparameter_bounds is None:
-            if self.prior.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
-            hyperparameter_bounds = self.prior.hyperparameter_bounds
+            if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
+            hyperparameter_bounds = self.hyperparameter_bounds
         if init_hyperparameters is None: init_hyperparameters = self.prior.hyperparameters
         if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
                                                                                   high=hyperparameter_bounds[:, 1],
@@ -668,7 +698,8 @@ class GP:
             A 1-d numpy array of hyperparameters.
         """
         self.prior.update_hyperparameters(self.data.x_data, hyperparameters)
-        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances, self.prior.hyperparameters)
+        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
+                               self.prior.hyperparameters)
         self.marginal_density.update_hyperparameters()
 
     ##################################################################################

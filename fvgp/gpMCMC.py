@@ -2,6 +2,7 @@ import numpy as np
 import time
 import warnings
 
+
 ## --------------------------------------------------------------------- ##
 #  A generic Metropolis sampler.  You have to supply the log likelihood   #
 #  function, which need not really be a likelihood function at all.       #
@@ -82,7 +83,7 @@ class gpMCMC:
                  x0=None,
                  info=False,
                  break_condition=None,
-                 run_in_every_iteration=None):  # pragma: no cover
+                 run_in_every_iteration=None):
         """
         This function runs the mcmc.
 
@@ -100,6 +101,8 @@ class gpMCMC:
             mcmc will run until `n_updates` is reached. If callable will get the mcmc object instance as
             input: def break(obj). The only allowed string is `default` and in that case the mcmc
             will be terminated if the mean of the position has not changed significantly in the lsat 200 iterations.
+        run_in_every_iteration : callable, optional
+            A callable that is executed in every iteration. Form: func(obj). Default no-op.
 
         Return
         ------
@@ -113,8 +116,10 @@ class gpMCMC:
         if x0 is None: x0 = np.ones(self.dim)
         if not isinstance(x0, np.ndarray): raise Exception("x0 is not a numpy array")
         if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
-        if break_condition is None: break_condition = lambda a: False
-        elif break_condition == "default": break_condition = self._default_break_condition
+        if break_condition is None:
+            break_condition = lambda a: False
+        elif break_condition == "default":
+            break_condition = self._default_break_condition
         if run_in_every_iteration is None: run_in_every_iteration = lambda a: False
 
         self.trace = {"f(x)": [], "x": [], "time stamp": []}
@@ -160,8 +165,9 @@ class gpMCMC:
                           "var(x)": np.var(x[dist_index:], axis=0)}
 
         return self.mcmc_info
+
     ###############################################################
-    def _default_break_condition(self,obj):
+    def _default_break_condition(self, obj):
         x = obj.trace["x"]
 
         if len(x) > 201:
@@ -170,9 +176,13 @@ class gpMCMC:
             abs_diff = abs(latest_mean - earlier_mean)
             max_index = np.argmax(abs_diff)
             ratio = (abs_diff[max_index] / abs(latest_mean[max_index])) * 100.
-            if ratio < 0.1: return True
-            else: return False
-        else: return False
+            if ratio < 0.1:
+                return True
+            else:
+                return False
+        else:
+            return False
+
     ###############################################################
     def _jump(self, x_old, obj, prior_eval, likelihood):  # pragma: no cover
         x_star = x_old.copy()
@@ -198,7 +208,6 @@ class gpMCMC:
                 x = x_old
         else:
             x = x_old
-
 
         return x, prior_eval, likelihood, jump_trace
 
@@ -245,9 +254,9 @@ class ProposalDistribution:  # pragma: no cover
             Arguments that will be available as obj attribute in `prop_dist`and `adapt_callable`.
 
         """
-        #consider:
-        #axis_std = np.linalg.norm(hps_bounds, axis=1) / 10.
-        #init_s = np.diag(axis_std ** 2)
+        # consider:
+        # axis_std = np.linalg.norm(hps_bounds, axis=1) / 10.
+        # init_s = np.diag(axis_std ** 2)
 
         self.prop_dist = prop_dist
         self.indices = indices
@@ -263,9 +272,12 @@ class ProposalDistribution:  # pragma: no cover
             warnings.warn("You are using the normal adaption mechanism for normal distributions\n \
                            but did not provide `init_prop_sigma`. This can lead to slow convergence")
 
-        if callable(adapt_callable): self.adapt = adapt_callable
-        elif adapt_callable == "normal": self.adapt = self._adapt
-        else: self.adapt = self._no_adapt
+        if callable(adapt_callable):
+            self.adapt = adapt_callable
+        elif adapt_callable == "normal":
+            self.adapt = self._adapt
+        else:
+            self.adapt = self._no_adapt
 
         if prop_args is None:
             self.prop_args = {"prop_Sigma": init_prop_Sigma, "sigma_m": 2.4 ** 2 / dim}
@@ -276,6 +288,7 @@ class ProposalDistribution:  # pragma: no cover
                 self.prop_args["sigma_m"] = 2.4 ** 2 / dim
 
             #########################################################
+
     def _adapt(self, end, mcmc_obj):  # pragma: no cover
         K = self.K
         if (end % K) == 0:

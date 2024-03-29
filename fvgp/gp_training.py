@@ -8,9 +8,9 @@ from scipy.optimize import minimize
 
 
 class GPtraining:  # pragma: no cover
-    def __init__(self,info=False):
+    def __init__(self,info=False, gp2Scale=False):
         self.mcmc_info = None
-        self.gp2Scale = False
+        self.gp2Scale = gp2Scale
         self.info = info
 
     def train(self,
@@ -294,12 +294,9 @@ class GPtraining:  # pragma: no cover
         if not self._in_bounds(starting_hps, hp_bounds):
             raise Exception("Starting positions outside of optimization bounds.")
 
-        if self.gp2Scale: method = 'mcmc'
-        # else:
-        #    start_log_likelihood = self.log_likelihood(starting_hps)
-        #    logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: ",
-        #                 starting_hps, " with old log likelihood: ", start_log_likelihood)
-        logger.debug("method: ", method)
+        if self.gp2Scale:
+            method = 'mcmc'
+            warnings.warn("gp2Scale activated. Only MCMC training will be performed.")
 
         ############################
         ####global optimization:##

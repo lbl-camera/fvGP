@@ -5,6 +5,7 @@ from .misc import inv
 from loguru import logger
 import warnings
 from scipy.linalg import cho_factor, cho_solve
+from scipy.sparse.linalg import minres, cg
 
 
 def cartesian_product(x, y):
@@ -54,7 +55,7 @@ class GPosterior:  # pragma: no cover
                 "You want to predict at >100 points. When using gp2Scale, this takes a while."
                 "Better predict at only a handful of points.")
             for i in range(b.shape[1]):
-                res[:, i], exit_status = cg(self.KV, b[:, i])
+                res[:, i], exit_status = cg(self.marginal_density_obj.KV, b[:, i])
             return res
         elif self.marginal_density_obj.factorization_obj[0] == "Inv":
             return self.marginal_density_obj.KVinv @ b

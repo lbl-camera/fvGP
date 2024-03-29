@@ -18,21 +18,6 @@ from dask.distributed import Client
 from scipy.stats import norm
 
 
-# TODO: search below "TODO"
-#   self.V is calculated at init and then again in calculate/update gp prior. That's not good.
-#                                    --> has to be because of training. Can we take it out of the init/update? [DONE]
-#   Update, don't recompute Kinv and neither the logdet, both should be rank-n updated in online mode
-#   Can we update cholesky instead of recomputing?
-#   You compute the logdet even though you are not training.
-#                                   That makes init() and posterior evaluations slow (for new hps) [might be OK]
-#   Kernels should be not in a class but just in a file
-#   in traditional and gp2Scale you should have access to obj and all kernels
-#   neither minres nor random logdet are doing a good job, cg is better but we need a preconditioner, maybe a large LU?
-#   when using gp2Scale but the solution is dense we should go with dense linalg [Done]
-#   init hps and bounds should only be initiated for the default kernel
-#   the mcmc in default mode should not need proposal distributions explicitly
-#   reshape posteriors if x_out
-
 class GP:
     """
     This class provides all the tools for a single-task Gaussian Process (GP).

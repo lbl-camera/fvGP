@@ -1,6 +1,6 @@
 import numpy as np
 import warnings
-
+import scipy.sparse as sparse
 
 class GPlikelihood:
     def __init__(self,
@@ -66,12 +66,28 @@ class GPlikelihood:
 
     def _default_noise_function(self, x, hyperparameters, gp_obj):
         noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)
-        if self.gp2Scale: return self.gp2Scale_obj.calculate_sparse_noise_covariance(noise)
-        else: return np.diag(noise)
+        if self.gp2Scale:
+            return self._calculate_sparse_default_noise_covariance(x)
+        else:
+            return np.diag(noise)
 
     def _measured_noise_function(self, x, hyperparameters, gp_obj):
-        if self.gp2Scale: return self.gp2Scale_obj.calculate_sparse_default_noise_covariance(noise) #should be here
-        else: return np.diag(self.noise_variances)
+        if self.gp2Scale:
+            return self._calculate_sparse_measured_noise_covariance(self.noise_variances)
+        else:
+            return np.diag(self.noise_variances)
+
+    def _calculate_sparse_measured_noise_covariance(self, noise):
+        vector = noise
+        diag = sparse.eye(len(vector), format="coo")
+        diag.setdiag(self.noise_variances)
+        return diag
+
+    def _calculate_sparse_default_noise_covariance(self, x):
+        vector = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)
+        diag = sparse.eye(len(vector), format="coo")
+        diag.setdiag(vector)
+        return diag
 
     def _default_dnoise_dh(self, x, hps, gp_obj):
         gr = np.zeros((len(hps), len(x), len(x)))
