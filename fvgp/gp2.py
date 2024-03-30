@@ -181,7 +181,6 @@ class GP:
         Provides a way how to see the progress of gp2Scale, Default is False
 
 
-
     Attributes
     ----------
     x_data : np.ndarray
@@ -190,7 +189,7 @@ class GP:
         Datapoint values
     noise_variances : np.ndarray
         Datapoint observation (co)variances
-    hyperparameters : np.ndarray
+    prior.hyperparameters : np.ndarray
         Current hyperparameters in use.
     prior.K : np.ndarray
         Current prior covariance matrix of the GP
@@ -251,7 +250,7 @@ class GP:
                         "initial hyperparameters or hyperparameter bounds. Please provide"
                         "at least one of them at initialization.")
                 else:
-                    if initial_hyperparameters is None:
+                    if init_hyperparameters is None:
                         hyperparameters, hyperparameter_bounds = self._get_default_hyperparameters(
                             hyperparameter_bounds)
             else:

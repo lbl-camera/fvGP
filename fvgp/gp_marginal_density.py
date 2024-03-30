@@ -8,6 +8,8 @@ from .misc import solve
 from .misc import logdet
 from .misc import inv
 import warnings
+from scipy.sparse import identity
+from scipy.sparse.linalg import onenormest
 
 
 class GPMarginalDensity:
@@ -127,6 +129,9 @@ class GPMarginalDensity:
         if self.info: print("KV sparsity = ", Ksparsity)
         if self.info: print("CG solve in progress ...")
         KVinvY, exit_code = cg(KV.tocsc(), vec)
+        if exit_code == 1:
+            M = self.spai(KV, 20)
+            KVinvY, exit_code = cg(KV.tocsc(), vec, M=M)
         if exit_code == 1: warnings.warn("CG not successful")
         if self.info: print("CG compute time:", time.time() - st, "seconds, exit status ", exit_code, "(0:=successful)")
         factorization_obj = ("gp2Scale", None)
@@ -160,6 +165,24 @@ class GPMarginalDensity:
         KVlogdet = 2.0 * np.sum(np.log(upper_diag))
         if self.info: print("Dense Cholesky compute time: ", time.time() - st, "seconds.")
         return KVinvY, KVlogdet, factorization_obj
+
+    def spai(self, A, m):
+        """Perform m step of the SPAI iteration."""
+        n = A.shape[0]
+
+        ident = identity(n, format='csr')
+        alpha = 2 / onenormest(A @ A.T)
+        M = alpha * A
+
+        for index in range(m):
+            C = A @ M
+            G = ident - C
+            AG = A @ G
+            trace = (G.T @ AG).diagonal().sum()
+            alpha = trace / np.linalg.norm(AG.data) ** 2
+            M = M + alpha * G
+
+        return M
 
     ##################################################################################
 
