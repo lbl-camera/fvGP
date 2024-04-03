@@ -77,7 +77,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
     # If the supplied proposal covariance matrix is either not given or invalid,
     # just use the identity.
     if np.any(np.isnan(prop_Sigma)) or prop_Sigma.size != p**2:
-        axis_std = np.linalg.norm(bounds, axis = 1)/10.
+        axis_std = (bounds[:, 1] - bounds[:, 0])/10.
         prop_Sigma = np.diag(axis_std**2)
         prop_C = np.linalg.cholesky(prop_Sigma)
     else:

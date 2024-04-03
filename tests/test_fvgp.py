@@ -223,7 +223,7 @@ def test_gp2Scale(client):
         else: 
             return -np.inf
     pd = ProposalDistribution(proposal_distribution, [0,1], 
-                            init_prop_Sigma = init_s, adapt_callable="default")
+                            init_prop_Sigma = init_s, adapt_callable="normal")
 
 
 

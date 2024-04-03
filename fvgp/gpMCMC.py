@@ -53,6 +53,8 @@ class gpMCMC:
         A list of object instances of ProposalDistribution.
     args : Any, optional
         Arguments that will be communicated to all Callables.
+    bounds : np.ndarray, optional
+        Bounds for MCMC. Not needed but encouraged. Default is [-1e6,1e6] in all directions.
 
 
     Attributes
@@ -67,7 +69,8 @@ class gpMCMC:
                  dim,
                  prior_function,
                  proposal_distributions,
-                 args=None
+                 args=None,
+                 bounds=None,
                  ):  # pragma: no cover
         self.log_likelihood_function = log_likelihood_function
         self.dim = dim
@@ -76,6 +79,10 @@ class gpMCMC:
         self.args = args
         self.trace = None
         self.mcmc_info = None
+        if bounds is None:
+            self.bounds = np.zeros((dim, 2))
+            self.bounds[:] = np.array([-1e6, 1e6])
+        else: self.bounds = bounds
         warnings.warn("Thank you for trying our new MCMC. While we tested it quite a lot it's still in\n \
          its experimental stage. Use caution.")
 
@@ -129,8 +136,7 @@ class gpMCMC:
         # Initialize Metropolis
         x = x0.copy()
         likelihood = self.log_likelihood_function(x, self.args)
-        if info:
-            print("Starting likelihood. f(x)=", likelihood)
+        if info: print("Starting likelihood. f(x)=", likelihood)
         prior = self.prior_function(x, self.args)
         #########################################################
         # Begin main loop
@@ -186,13 +192,16 @@ class gpMCMC:
     ###############################################################
     def _jump(self, x_old, obj, prior_eval, likelihood):  # pragma: no cover
         x_star = x_old.copy()
-        if callable(obj.prop_dist):
-            x_star[obj.indices] = obj.prop_dist(x_old[obj.indices].copy(), obj)
-        else:
-            raise Exception("A proposal distribution is not callable.")
+        assert callable(obj.prop_dist)
 
+        # get proposed x (x_star)
+        x_star[obj.indices] = obj.prop_dist(x_old[obj.indices].copy(), obj)
+
+        # evaluate prior(x_star)
         prior_evaluation_x_star = self.prior_function(x_star, self.args)
         jump_trace = 0.
+
+        # if prior(x_start) is not -inf, get likelihood
         if prior_evaluation_x_star != -np.inf:
             likelihood_star = self.log_likelihood_function(x_star, self.args)
             if np.isnan(likelihood_star): raise Exception("Likelihood evaluated to NaN in gpMCMC")
@@ -277,6 +286,7 @@ class ProposalDistribution:  # pragma: no cover
         elif adapt_callable == "normal":
             self.adapt = self._adapt
         else:
+            if isinstance(adapt_callable, str): raise Exception("Invalid string provided for adapt callable.")
             self.adapt = self._no_adapt
 
         if prop_args is None:
