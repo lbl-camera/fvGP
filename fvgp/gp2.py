@@ -15,18 +15,13 @@ from .gp_posterior import GPosterior
 
 
 # TODO: search below "TODO"
-#   Can we update cholesky instead of recomputing?
-#   You compute the logdet even though you are not training. That makes the posterior mean slow for new hps [might be OK]
-#   in traditional and gp2Scale you should have access to obj and all kernels
 #   neither minres nor random logdet are doing a good job, cg is better but we might need a preconditioner , maybe a large LU?
-#   make non-Euclidean work for multi-task
-#   include gp2Scale
-#   for Ron's situation, make x_data, x_data optional and None by default, if not communicated, they will be asssigned simple dummy_data and dummy_data = True. This should be overwritten in the update_data and used for warning in train and posteriors.
-#                the noise will have to be either given as a function or iitialized randmoly too with a warning that noise will have to be commnitaed in the update.
-#   fvgp is not updated
+#   for Ron's situation, make x_data, x_data optional and None by default, if not communicated, they will be asssigned simple dummy_data (with given dimensionality)
+#                and self.dummy_data = True. This should be overwritten in the update_data and used for warning in train and posteriors.
+#                the noise will have to be either given as a function or itialized randomly too with a warning that noise will have to be communited in the update.
 #   the mcmc in default mode should not need proposal distributions explicitly
 #   reshape posteriors if x_out
-#   when are we really using gu vs cpu when compute_device is changed
+#   when are we really using gpu vs cpu as compute_device
 
 class GP:
     """
@@ -228,7 +223,6 @@ class GP:
         info=False
     ):
         self.compute_device = compute_device
-        self.ram_economy = ram_economy
         self.args = args
         self.info = info
         self.calc_inv = calc_inv
@@ -298,7 +292,8 @@ class GP:
                             constant_mean=np.mean(y_data),
                             gp2Scale=gp2Scale,
                             gp2Scale_dask_client=gp2Scale_dask_client,
-                            gp2Scale_batch_size=gp2Scale_batch_size
+                            gp2Scale_batch_size=gp2Scale_batch_size,
+                            ram_economy=ram_economy
                             )
         ########################################
         ###init likelihood instance#############
@@ -696,7 +691,7 @@ class GP:
         hps : np.ndarray
             A 1-d numpy array of hyperparameters.
         """
-        self.prior.update_hyperparameters(self.data.x_data, hyperparameters)
+        self.prior.update_hyperparameters(self.data.x_data, hps)
         self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
                                self.prior.hyperparameters)
         self.marginal_density.update_hyperparameters()
@@ -731,7 +726,38 @@ class GP:
 
         return {"prior covariance (K)": self.prior.K, "log(|KV|)": self.marginal_density.KVlogdet,
                 "inv(KV)": self.marginal_density.KVinv,
-                "prior mean": self.prior_mean_vector}
+                "prior mean": self.prior.m}
+
+    def log_likelihood(self, hyperparameters=None):
+        """
+        Function that computes the marginal log-likelihood
+
+        Parameters
+        ----------
+        hyperparameters : np.ndarray, optional
+            Vector of hyperparameters of shape (N).
+            If not provided, the covariance will not be recomputed.
+
+        Return
+        ------
+        log marginal likelihood of the data : float
+        """
+        return self.marginal_density.log_likelihood(hyperparameters=hyperparameters)
+
+    def test_log_likelihood_gradient(self, hyperparameters):
+        """
+        Function to test your gradient of the log-likelihood and therefore of the kernel function.
+
+        Parameters
+        ----------
+        hyperparameters : np.ndarray, optional
+            Vector of hyperparameters of shape (N).
+
+        Return
+        ------
+        analytical and finite difference gradient to compare
+        """
+        return self.marginal_density.test_log_likelihood_gradient(hyperparameters)
 
     ##################################################################################
     ##################################################################################
@@ -1268,9 +1294,10 @@ class GP:
     #######################VALIDATION###################################################
     ####################################################################################
     def _crps_s(self, x, mu, sigma):
-        return np.mean(abs(sigma * ((1. / np.sqrt(np.pi))
+        res = abs(sigma * ((1. / np.sqrt(np.pi))
                                     - 2. * norm.pdf((x - mu) / sigma)
-                                    - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.)))))
+                                    - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.))))
+        return np.mean(res), np.sqrt(np.var(res))
 
     def crps(self, x_test, y_test):
         """

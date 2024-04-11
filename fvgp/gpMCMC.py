@@ -127,6 +127,7 @@ class gpMCMC:
             break_condition = lambda a: False
         elif break_condition == "default":
             break_condition = self._default_break_condition
+        else: raise Exception("No valid input for break condition provided!")
         if run_in_every_iteration is None: run_in_every_iteration = lambda a: False
 
         self.trace = {"f(x)": [], "x": [], "time stamp": []}

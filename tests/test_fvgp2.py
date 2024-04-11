@@ -5,7 +5,7 @@
 
 import unittest
 import numpy as np
-from fvgp import fvGP
+from fvgp import fvGP2 as fvGP
 from fvgp import GP2 as GP
 import matplotlib.pyplot as plt
 import time
@@ -127,7 +127,7 @@ def test_train_basic():
     res = linear_kernel(2.,2.2, 1.,1.,1.)
     res = dot_product_kernel(np.random.rand(2),np.random.rand(2),1.,np.array([[1.,0.],[0.,2.]]))
     res = polynomial_kernel(np.random.rand(2),np.random.rand(2), 2)
-    res = _default_kernel(x_data,x_data,np.ones((6)),my_gp1)
+    res = my_gp1.prior._default_kernel(x_data,x_data,np.ones((6)),my_gp1)
     res = non_stat_kernel(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
     res = non_stat_kernel_gradient(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
     res = wendland_anisotropic(x_data,x_data,np.ones((6)), my_gp1)
@@ -155,25 +155,24 @@ def test_train_hgdl_async():
     my_gp2.set_hyperparameters(np.array([1., 1., 1., 1., 1., 1.]))
     my_gp2.get_hyperparameters()
     my_gp2.get_prior_pdf()
-    my_gp2.test_log_likelihood_gradient(np.array([1., 1., 1., 1., 1., 1.]))
+    my_gp2.marginal_density.test_log_likelihood_gradient(np.array([1., 1., 1., 1., 1., 1.]))
 
 
 def test_multi_task():
     def mkernel(x1,x2,hps,obj):
-        d = obj.get_distance_matrix(x1,x2)
-        return hps[0] * obj.matern_kernel_diff1(d,hps[1])
+        d = get_distance_matrix(x1,x2)
+        return hps[0] * matern_kernel_diff1(d,hps[1])
     y_data = np.zeros((N,2))
     y_data[:,0] = np.sin(np.linalg.norm(x_data, axis=1))
     y_data[:,1] = np.cos(np.linalg.norm(x_data, axis=1))
 
-    my_fvgp = fvGP(input_dim,1,2, x_data, y_data, init_hyperparameters = np.array([1, 1]), hyperparameter_bounds = np.array([[0.,1.],[0.,1.]]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(x_data, y_data, init_hyperparameters = np.array([1, 1]), hyperparameter_bounds = np.array([[0.,1.],[0.,1.]]), gp_kernel_function=mkernel)
     my_fvgp.update_gp_data(x_data, y_data, append = True)
     my_fvgp.update_gp_data(x_data, y_data, append = False)
     my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10]]),
             method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2)
-    my_fvgp.posterior_mean(np.random.rand(2,5), x_out = np.zeros((1,1)))["f(x)"]
+    my_fvgp.posterior_mean(np.random.rand(10,5), x_out = np.zeros((1)))["f(x)"]
     
-    #my_fvgp = fvGP(input_dim,1,2, x_data, y_data, init_hyperparameters = np.array([1, 1]))
 
 
 def test_gp2Scale(client):
@@ -193,9 +192,9 @@ def test_gp2Scale(client):
                             ])
 
     init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
-    my_gp2S = GP(1, x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client)
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client)
     
-    my_gp2S.update_gp_data(x_data,y_data, append = True)
+    my_gp2S.update_gp_data(x_data,y_data, append = False)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
 
     my_gp2S.train(hyperparameter_bounds=hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
@@ -203,9 +202,7 @@ def test_gp2Scale(client):
     def obj_func(hps,args):
         return my_gp2S.log_likelihood(hyperparameters=hps[0:2])
 
-
     from fvgp.gpMCMC import ProposalDistribution
-
     init_s = (np.diag(hps_bounds[:,1]-hps_bounds[:,0])/100.)**2
 
     from fvgp import gpMCMC
@@ -226,7 +223,7 @@ def test_gp2Scale(client):
         else: 
             return -np.inf
     pd = ProposalDistribution(proposal_distribution, [0,1], 
-                            init_prop_Sigma = init_s, adapt_callable="default")
+                            init_prop_Sigma = init_s, adapt_callable="normal")
 
 
 

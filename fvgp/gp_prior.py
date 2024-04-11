@@ -192,8 +192,9 @@ class GPrior:  # pragma: no cover
         data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
             np.hstack([i_s, j_s[diagonal_mask]]), \
             np.hstack([j_s, i_s[diagonal_mask]])
-
-        return sparse.coo_matrix((data, (i_s, j_s)))
+        K = sparse.coo_matrix((data, (i_s, j_s)))
+        K.resize((len(x_data), len(x_data)))
+        return K
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
         client = self.client
@@ -228,13 +229,7 @@ class GPrior:  # pragma: no cover
 
         data, i_s, j_s = map(np.hstack, zip(*results))
         B = sparse.coo_matrix((data, (i_s, j_s)))
-        print("num batches: ", NUM_RANGES)
-        print("range data: ", ranges_data)
-        print("num batches: ", num_batches2)
-        print("ranges input: ", ranges_input)
-        print("ranges ij : ", ranges_ij)
-        print("B shape")
-        print(B.shape)
+        B.resize(len(x_old), len(x_new))
 
         # mirror across diagonal
         ranges_ij2 = list(itertools.product(ranges_input, ranges_input))
@@ -256,8 +251,7 @@ class GPrior:  # pragma: no cover
             np.hstack([i_s, j_s[diagonal_mask]]), \
             np.hstack([j_s, i_s[diagonal_mask]])
         D = sparse.coo_matrix((data, (i_s, j_s)))
-        print("D shape")
-        print(D.shape)
+        D.resize(len(x_new), len(x_new))
 
         res = block_array([[self.K, B],
                            [B.transpose(), D]])
@@ -374,7 +368,6 @@ def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
     k = kernel(x1, x2, hps, None)
     k_sparse = sparse.coo_matrix(k)
 
-    # print("kernel compute time: ", time.time() - st, flush = True)
     data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
 
     # mask lower triangular values when current chunk spans diagonal
@@ -396,11 +389,9 @@ def kernel_function_update(range_ij, x1_future, x2_future, hyperparameters, kern
     range_i, range_j = range_ij
     x1 = x1_future[range_i[0]:range_i[1]]
     x2 = x2_future[range_j[0]:range_j[1]]
-    # print(x1, flush=True)
     k = kernel(x1, x2, hps, None)
     k_sparse = sparse.coo_matrix(k)
 
-    # print("kernel compute time: ", time.time() - st, flush = True)
     data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
 
     return data, rows, cols

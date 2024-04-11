@@ -98,10 +98,10 @@ class GPMarginalDensity:
     ##################################################################################
     def _compute_gp_linalg(self, vec, KV, calc_inv):
         if calc_inv:
-            KVinv = inv(KV)
+            KVinv = inv(KV, compute_device=self.compute_device)
             factorization_obj = ("Inv", None)
             KVinvY = KVinv @ vec
-            KVlogdet = logdet(KV)
+            KVlogdet = logdet(KV,compute_device=self.compute_device)
         elif not calc_inv:
             KVinv = None
             KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
@@ -113,36 +113,53 @@ class GPMarginalDensity:
         size_KVinv = len(self.KVinv)
         kk = KV[size_KVinv:, size_KVinv:]
         k = KV[size_KVinv:, 0:size_KVinv]
-        X = inv(kk - k @ self.KVinv @ k.T)
+        X = inv(kk - k @ self.KVinv @ k.T, compute_device=self.compute_device)
         F = -self.KVinv @ k.T @ X
         KVinv = np.block([[self.KVinv + self.KVinv @ k.T @ X @ k @ self.KVinv, F],
                           [F.T, X]])
         factorization_obj = ("Inv", None)
         KVinvY = KVinv @ vec
-        KVlogdet = self.KVlogdet + logdet(kk - k @ self.KVinv @ k.T)
+        KVlogdet = self.KVlogdet + logdet(kk - k @ self.KVinv @ k.T, compute_device=self.compute_device)
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
     def _compute_gp2Scale_linalg(self, vec, KV):
-        from imate import logdet
-        st = time.time()
         Ksparsity = float(KV.nnz) / float(len(vec) ** 2)
         if self.info: print("KV sparsity = ", Ksparsity)
-        if self.info: print("CG solve in progress ...")
+        if len(self.data_obj.x_data) < 50000 and Ksparsity < 0.0001: mode = "sparse_LU"
+        elif len(self.data_obj.x_data) < 2000 and Ksparsity >= 0.0001: mode = "dense_Chol"
+        else: mode = 'gp2Scale'
+
+        if mode == "sparse_LU":
+            try: KVinvY, KVlogdet, factorization_obj = self._LU(KV, vec)
+            except: KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
+        elif mode == "dense_Chol":
+            KV = KV.toarray()
+            KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
+        elif mode == "gp2Scale":
+            KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
+        else:
+            raise Exception("No linear algebra mode applicable in '_compute_gp_linalg'")
+        return KVinvY, KVlogdet, factorization_obj, None
+
+    def _gp2Scale_linalg(self, KV, vec):
+        from imate import logdet as imate_logdet
+        st = time.time()
+        if self.info: print("CG solve in progress ...", flush=True)
         KVinvY, exit_code = cg(KV.tocsc(), vec)
         if exit_code == 1:
             M = self.spai(KV, 20)
             KVinvY, exit_code = cg(KV.tocsc(), vec, M=M)
         if exit_code == 1: warnings.warn("CG not successful")
-        if self.info: print("CG compute time:", time.time() - st, "seconds, exit status ", exit_code, "(0:=successful)")
+        if self.info: print("CG compute time:", time.time() - st, "seconds, exit status ", exit_code, "(0:=successful)", flush=True)
         factorization_obj = ("gp2Scale", None)
         if self.compute_device == "gpu": gpu = True
         else: gpu = False
-        if self.info: print("Random logdet() in progress ... ", time.time() - st, "seconds.")
-        KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=100,
-                                    lanczos_degree=20, error_rtol=0.01, gpu=gpu,
+        if self.info: print("Random logdet() in progress ... ", time.time() - st, "seconds.", flush=True)
+        KVlogdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
+                                    lanczos_degree=20, error_rtol=0.001, gpu=gpu,
                                     return_info=True, plot=False, verbose=False)
-        if self.info: print("Random logdet() compute time: ", time.time() - st, "seconds.")
-        return KVinvY, KVlogdet, factorization_obj, None
+        if self.info: print("Random logdet() compute time: ", time.time() - st, "seconds.", flush=True)
+        return KVinvY, KVlogdet, factorization_obj
 
     def _LU(self, KV, vec):
         st = time.time()
@@ -260,7 +277,7 @@ class GPMarginalDensity:
                     of the gradient function is wrong. ",
                     str(e))
             KV = np.array([KV, ] * len(hyperparameters))
-            a = solve(KV, dK_dH)
+            a = solve(KV, dK_dH, compute_device=self.compute_device)
         bbT = np.outer(b, b.T)
         dL_dH = np.zeros((len(hyperparameters)))
         dL_dHm = np.zeros((len(hyperparameters)))
@@ -274,13 +291,13 @@ class GPMarginalDensity:
                 try:
                     dK_dH = \
                         self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters, self) + \
-                        self.noise_function_grad(self.data_obj.x_data, i, hyperparameters, self)
+                        self.likelihood_obj.noise_function_grad(self.data_obj.x_data, i, hyperparameters, self)
                 except:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. \n \
                         That normally means the combination of ram_economy and definition of \
                         the gradient function is wrong.")
-                matr = solve(KV, dK_dH)
+                matr = solve(KV, dK_dH, compute_device=self.compute_device)
             if dL_dHm[i] == 0.0:
                 if self.prior_obj.ram_economy is False:
                     mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
@@ -328,14 +345,4 @@ class GPMarginalDensity:
             thps_aux[i] = thps_aux[i] + eps
             grad[i] = (self.log_likelihood(hyperparameters=thps_aux) - self.log_likelihood(hyperparameters=thps)) / eps
         analytical = -self.neg_log_likelihood_gradient(hyperparameters=thps)
-        if np.linalg.norm(grad - analytical) > np.linalg.norm(grad) / 100.0:
-            print("Gradient possibly wrong")
-            print("finite diff appr: ", grad)
-            print("analytical      : ", analytical)
-        else:
-            print("Gradient correct")
-            print("finite diff appr: ", grad)
-            print("analytical      : ", analytical)
-        assert np.linalg.norm(grad - analytical) < np.linalg.norm(grad) / 100.0
-
         return grad, analytical

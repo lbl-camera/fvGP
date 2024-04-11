@@ -447,10 +447,11 @@ class GPosterior:  # pragma: no cover
         assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list)
         if isinstance(x_pred, np.ndarray):
             assert np.ndim(x_pred) == 2
-            assert x_pred.shape[1] == self.data_obj.input_space_dim
+            if isinstance(x_out, np.ndarray): assert x_pred.shape[1] == self.data_obj.input_space_dim - 1
+            else: assert x_pred.shape[1] == self.data_obj.input_space_dim
 
         assert isinstance(x_out, np.ndarray) or x_out is None
-        if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 2
+        if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1
 
     def cartesian_product(self, x, y):
         """
@@ -461,7 +462,7 @@ class GPosterior:  # pragma: no cover
         if isinstance(x, list) or isinstance(y, list):
             for i in range(len(y)):
                 for j in range(len(x)):
-                    res.append((y[i], x[j]))
+                    res.append([x[j], y[i]])
             return res
         elif isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
             for i in range(len(y)):

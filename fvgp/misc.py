@@ -2,7 +2,7 @@ import numpy as np
 import warnings
 
 
-def logdet(A, factorization_obj=None, compute_device='cpu'):
+def logdet(A, compute_device='cpu'):
     if compute_device == "cpu":
         s, logdet = np.linalg.slogdet(A)
         return logdet

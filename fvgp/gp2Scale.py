@@ -121,7 +121,7 @@ class gp2Scale():
         #             [B,C]])
         #Calculate B
         results = list(map(self.harvest_result,
-                          distributed.as_completed(client.map(
+                           distributed.as_completed(client.map(
                               partial(kernel_caller,
                                       hyperparameters=hyperparameters,
                                       kernel=self.kernel),
@@ -131,7 +131,7 @@ class gp2Scale():
                               with_results=True)))
 
         data, i_s, j_s = map(np.hstack, zip(*results))
-        B = sparse.coo_matrix((data, (i_s, j_s)))
+        B = sparse.coo_matrix((len(self.x_data), len(x_new))) + sparse.coo_matrix((data, (i_s, j_s)))
 
         # mirror across diagonal
         ranges_ij2 = [range_ij2 for range_ij2 in ranges_ij2 if range_ij2[0][0] <= range_ij2[1][0]]  # filter lower diagonal
@@ -150,8 +150,10 @@ class gp2Scale():
         data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
             np.hstack([i_s, j_s[diagonal_mask]]), \
             np.hstack([j_s, i_s[diagonal_mask]])
-        D = sparse.coo_matrix((data, (i_s, j_s)))
+        D = sparse.coo_matrix((len(x_new),len(x_new))) + sparse.coo_matrix((data, (i_s, j_s)))
 
+
+        ###these are not necessarily the right size, right?
         res = block_array([[cov,           B],
                            [B.transpose(), D]])
 

@@ -379,14 +379,11 @@ class fvGP(GP):
                 new_points[i * point_number: (i + 1) * point_number] = np.column_stack([x_data, output_positions[:, i]])
             if isinstance(x_data, list):
                 for j in range(len(x_data)):
-                    new_points[i * point_number: (i + 1) * point_number] = (x_data[i], output_positions[j, i])
-                    print(new_points[i * point_number: (i + 1) * point_number])
+                    new_points[i*point_number+j] = [x_data[j], output_positions[j, i]]
             new_values[i * point_number: (i + 1) * point_number] = y_data[:, i]
             if noise_variances is not None:
                 new_variances[i * point_number: (i + 1) * point_number] = noise_variances[:, i]
 
-        print(new_points)
-        print(new_values)
         return new_points, new_values, new_variances
 
     ################################################################################################
