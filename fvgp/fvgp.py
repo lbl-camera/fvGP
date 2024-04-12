@@ -2,6 +2,8 @@
 import numpy as np
 import warnings
 from .gp import GP
+from .gp_kernels import get_distance_matrix
+from .gp_kernels import matern_kernel_diff1
 
 
 class fvGP(GP):
@@ -28,7 +30,7 @@ class fvGP(GP):
     prior-mean function, noise function, and kernel function definitions, you will
     see that the input ``x'' is defined over this combined space.
     For example, if your input space is a Euclidean 2d space and your output
-    is labelled [[0],[1]], the input to the mean, kernel, and noise function might be
+    is labelled [0,1], the input to the mean, kernel, and noise function might be
 
     x =
 
@@ -41,14 +43,6 @@ class fvGP(GP):
 
     Parameters
     ----------
-    input_space_dim : int
-        Dimensionality of the input space (D). If the input is non-Euclidean, the input dimensionality will be ignored.
-    output_space_dim : int
-        Integer specifying the number of dimensions of the output space. Most often 1.
-        This is not the number of outputs/tasks.
-        For instance, a spectrum as output at each input is itself a function over a 1d space but has many outputs.
-    output_number : int
-        Number of output values.
     x_data : np.ndarray
         The input point positions. Shape (V x D), where D is the `input_space_dim`.
     y_data : np.ndarray
@@ -67,10 +61,9 @@ class fvGP(GP):
         The default is None, in that case hyperparameter_bounds have to be specified
         in the train calls or default bounds are used. Those only work for the default kernel.
     output_positions : np.ndarray, optional
-        A 3-D numpy array of shape (U x output_number x output_dim), so that for each measurement position, the outputs
+        A 2-D numpy array of shape (U x output_number), so that for each measurement position, the outputs
         are clearly defined by their positions in the output space. The default is
-        np.array([[0],[1],[2],[3],...,[output_number - 1]]) for each
-        point in the input space. The default is only permissible if output_dim is 1.
+        np.array([[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...]).
     noise_variances : np.ndarray, optional
         An numpy array defining the uncertainties/noise in the data
         `y_data` in form of a point-wise variance. Shape y_data.shape.
@@ -98,7 +91,7 @@ class fvGP(GP):
         If no kernel is provided, fvGP will use a deep kernel of depth 2 and width gp_deep_kernel_layer_width.
         If a user defined kernel is provided this parameter is irrelevant. The default is 5.
     gp_kernel_function_grad : Callable, optional
-        A function that calculates the derivative of the ``gp_kernel_function'' with respect to the hyperparameters.
+        A function that calculates the derivative of the `gp_kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
         It accepts as input x1 (a N1 x Di+Do array of positions),
         x2 (a N2 x Di+Do array of positions),
@@ -141,7 +134,7 @@ class fvGP(GP):
         This is an advanced feature for HPC GPs up to 10
         million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wendland
         kernel which is compactly supported. The noise function will have
-        to return a `scipy.sparse` matrix instead of a numpy array. There are a few more things
+        to return a scipy.sparse matrix instead of a numpy array. There are a few more things
         to consider (read on); this is an advanced option.
         If no kernel is provided, the compute_device option should be revisited. The kernel will
         use the specified device to compute covariances.
@@ -152,16 +145,20 @@ class fvGP(GP):
         A local client is used as default.
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
-    store_inv : bool, optional
-        If True, the algorithm calculates and stores the inverse of the covariance matrix
-        after each training or update of the dataset or hyperparameters,
-        which makes computing the posterior covariance faster.
-        For larger problems (>2000 data points), the use of inversion should be avoided due to
-        computational instability and costs. The default is
-        True. Note, the training will always use Cholesky or LU decomposition instead of the inverse
-        for stability reasons. Storing the inverse is
+    calc_inv : bool, optional
+        If True, the algorithm calculates and stores the inverse of the covariance
+        matrix after each training or update of the dataset or hyperparameters,
+        which makes computing the posterior covariance faster (5-10 times).
+        For larger problems (>2000 data points), the use of inversion should be avoided due
+        to computational instability and costs. The default is
+        False. Note, the training will always use Cholesky or LU decomposition instead of the
+        inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
-        If gp2Scale is used, store_inv will be set to False.
+    online : bool, optional
+        A new setting that allows optimization for online applications. Default=False. If True,
+        calc_inv will be set to true, and the inverse and the logdet() of full dataset will only be computed
+        once in the beginning and after that only updated. This leads to a significant speedup because
+        the most costly aspects of a GP are entirely avoided.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood
         is/are used for the training.
@@ -193,22 +190,23 @@ class fvGP(GP):
         Datapoint values as seen by fvgp
     noise_variances : np.ndarray
         Datapoint observation (co)variances.
-    hyperparameters : np.ndarray
+    prior.hyperparameters : np.ndarray
         Current hyperparameters in use.
-    K : np.ndarray
+    prior.K : np.ndarray
         Current prior covariance matrix of the GP
-    KVinv : np.ndarray
+    prior.m : np.ndarray
+        Current prior mean vector.
+    marginal_density.KVinv : np.ndarray
         If enabled, the inverse of the prior covariance + nose matrix V
         inv(K+V)
-    KVlogdet : float
+    marginal_density.KVlogdet : float
         logdet(K+V)
+    likelihood.V : np.ndarray
+        the noise covariance matrix
     """
 
     def __init__(
         self,
-        input_space_dim,
-        output_space_dim,
-        output_number,
         x_data,
         y_data,
         init_hyperparameters=None,
@@ -226,33 +224,31 @@ class fvGP(GP):
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
-        store_inv=True,
+        calc_inv=False,
+        online=False,
         ram_economy=False,
         args=None,
         info=False,
     ):
 
-        self.orig_input_space_dim = input_space_dim
-        self.output_num, self.output_dim = output_number, output_space_dim
+        if isinstance(x_data, np.ndarray): self.orig_input_space_dim = x_data.shape[1]
+        else: self.orig_input_space_dim = 1
+
+        self.output_num = y_data.shape[1]
+        output_space_dim = 1
         ###check the output dims
 
-        if not isinstance(x_data, np.ndarray):
-            raise Exception("Multi-task GPs on non-Euclidean input spaces are not implemented yet.")
+
 
         if np.ndim(y_data) == 1:
             raise ValueError("The output number is 1, you can use GP for single-task GPs")
-        if output_number != len(y_data[0]):
-            raise ValueError("The output number is not in agreement with the data values given")
         if output_space_dim == 1 and isinstance(output_positions, np.ndarray) is False:
             self.output_positions = self._compute_standard_output_positions(len(x_data))
-        elif self.output_dim > 1 and not isinstance(output_positions, np.ndarray):
-            raise Exception(
-                "If the dimensionality of the output space is > 1, \
-                the value positions have to be given to the fvGP class")
         else:
             self.output_positions = output_positions
 
-        self.iset_dim = self.orig_input_space_dim + self.output_dim
+        assert isinstance(self.output_positions, np.ndarray) and np.ndim(self.output_positions) == 2
+        self.iset_dim = self.orig_input_space_dim + output_space_dim
         ####transform the space
         self.fvgp_x_data = x_data
         self.fvgp_y_data = y_data
@@ -261,7 +257,7 @@ class fvGP(GP):
                                                                     self.output_positions)
         init_hps = init_hyperparameters
 
-        if gp_kernel_function is None:
+        if gp_kernel_function is None and isinstance(x_data, np.ndarray):
             gp_kernel_function = self._default_multi_task_kernel
             try:
                 from .deep_kernel_network import Network
@@ -283,10 +279,11 @@ class fvGP(GP):
                     \n for the default kernel in fvgp. They will automatically used for the training.\
                     \n However, you can also define and provide new bounds.")
             hyperparameter_bounds = self.hps_bounds
+        else:
+            warnings.warn("Default kernel could not be defined.")
 
         ####init GP
         super().__init__(
-            self.iset_dim,
             x_data,
             y_data,
             init_hyperparameters=init_hps,
@@ -302,18 +299,19 @@ class fvGP(GP):
             gp2Scale=gp2Scale,
             gp2Scale_dask_client=gp2Scale_dask_client,
             gp2Scale_batch_size=gp2Scale_batch_size,
-            store_inv=store_inv,
+            calc_inv=calc_inv,
+            online = online,
             ram_economy=ram_economy,
             args=args,
             info=info)
 
     def update_gp_data(
         self,
-        x_data,
-        y_data,
-        output_positions=None,
-        noise_variances=None,
-        overwrite=False
+        x_new,
+        y_new,
+        noise_variances_new=None,
+        append=True,
+        output_positions_new=None,
     ):
 
         """
@@ -323,69 +321,69 @@ class fvGP(GP):
 
         Parameters
         ----------
-        x_data : np.ndarray
+        x_new : np.ndarray
             The point positions. Shape (V x D), where D is the `input_space_dim`.
-        y_data : np.ndarray
-            The values of the data points. Shape (V,Do).
-        output_positions : np.ndarray, optional
+        y_new : np.ndarray
+            The values of the data points. Shape (V,1) or (V).
+        noise_variances_new : np.ndarray, optional
+            An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance.
+            Shape (len(y_data), 1) or (len(y_data)).
+            Note: if no variances are provided here, the noise_covariance
+            callable will be used; if the callable is not provided the noise variances
+            will be set to `abs(np.mean(y_data)) / 100.0`. If you provided a noise function,
+            the noise_variances_new will be ignored.
+        append : bool, optional
+            Indication whether to append to or overwrite the existing dataset. Default = True.
+            In the default case, data will be appended.
+        output_positions_new : np.ndarray, optional
             A 3-D numpy array of shape (U x output_number x output_dim), so that
             for each measurement position, the outputs
             are clearly defined by their positions in the output space.
-            The default is np.array([[0],[1],[2],[3],...,[output_number - 1]]) for each
-            point in the input space. The default is only permissible if output_dim is 1.
-        noise_variances : np.ndarray, optional
-            An numpy array defining the uncertainties in the data `y_data`
-            in form of a point-wise variance. Shape (y_data).
-            Note: if no variances are provided here, the noise_covariance callable
-            will be used; if the callable is not provided the noise variances
-            will be set to `abs(np.mean(y_data)) / 100.0`. If you provided a noise function,
-            the noise_variances will be ignored.
+            The default is np.array([[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...]).
         """
-        self.fvgp_x_data = np.array(x_data)
-        self.fvgp_y_data = np.array(y_data)
+
         ##########################################
         #######prepare value positions############
         ##########################################
-        if self.output_dim == 1 and isinstance(output_positions, np.ndarray) == False:
-            self.output_positions = self._compute_standard_output_positions(len(x_data))
-        elif self.output_dim > 1 and isinstance(output_positions, np.ndarray) == False:
-            raise ValueError(
-                "If the dimensionality of the output space is > 1, \
-                the value positions have to be given to the fvGP class. EXIT"
-            )
-        else:
-            self.output_positions = output_positions
+        if not isinstance(output_positions_new, np.ndarray):
+            output_positions_new = self._compute_standard_output_positions(len(x_new))
         ######################################
         #####transform to index set###########
         ######################################
-        x_data, y_data, noise_variances = self._transform_index_set(x_data, y_data, noise_variances,
-                                                                    self.output_positions)
-        super().update_gp_data(self.x_data, self.y_data, noise_variances, overwrite=overwrite)
+        x_data, y_data, noise_variances = self._transform_index_set(x_new, y_new, noise_variances_new,
+                                                                    output_positions_new)
+        super().update_gp_data(self.x_data, self.y_data, noise_variances, append=append)
+        self.output_positions = np.row_stack([self.output_positions, output_positions_new])
 
     ################################################################################################
     def _compute_standard_output_positions(self, point_number):
-        value_pos = np.zeros((point_number, self.output_num, self.output_dim))
+        value_pos = np.zeros((point_number, self.output_num))
         for j in range(self.output_num):
-            value_pos[:, j, :] = j
+            value_pos[:, j] = j
         return value_pos
 
+    def get_fvgp_data(self, labels):
+        for i in range(len(self.output_num)):
+            pass
     ################################################################################################
     def _transform_index_set(self, x_data, y_data, noise_variances, output_positions):
         point_number = len(x_data)
-        new_points = np.zeros((point_number * self.output_num, self.iset_dim))
+        assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
+        if isinstance(x_data, np.ndarray): new_points = np.zeros((point_number * self.output_num, self.iset_dim))
+        else: new_points = [0.] * point_number * self.output_num
         new_values = np.zeros((point_number * self.output_num))
-        if noise_variances is not None:
-            new_variances = np.zeros((point_number * self.output_num))
-        else:
-            new_variances = None
+        if noise_variances is not None: new_variances = np.zeros((point_number * self.output_num))
+        else: new_variances = None
         for i in range(self.output_num):
-            new_points[i * point_number: (i + 1) * point_number] = \
-                np.column_stack([x_data, output_positions[:, i, :]])
-            #if isinstance(x_data, list):
-            #    new_points
+            if isinstance(x_data, np.ndarray):
+                new_points[i * point_number: (i + 1) * point_number] = np.column_stack([x_data, output_positions[:, i]])
+            if isinstance(x_data, list):
+                for j in range(len(x_data)):
+                    new_points[i*point_number+j] = [x_data[j], output_positions[j, i]]
             new_values[i * point_number: (i + 1) * point_number] = y_data[:, i]
             if noise_variances is not None:
                 new_variances[i * point_number: (i + 1) * point_number] = noise_variances[:, i]
+
         return new_points, new_values, new_variances
 
     ################################################################################################
@@ -413,6 +411,6 @@ class fvGP(GP):
                           hps_nn[b3_indices].reshape(self.iset_dim))
         x1_nn = self.n.forward(x1)
         x2_nn = self.n.forward(x2)
-        d = obj.get_distance_matrix(x1_nn, x2_nn)
-        k = signal_var * obj.matern_kernel_diff1(d, length_scale)
+        d = get_distance_matrix(x1_nn, x2_nn)
+        k = signal_var * matern_kernel_diff1(d, length_scale)
         return k

@@ -6,6 +6,7 @@ from loguru import logger
 import warnings
 from scipy.linalg import cho_factor, cho_solve
 from scipy.sparse.linalg import minres, cg
+from scipy.sparse import issparse
 
 
 def cartesian_product(x, y):
@@ -28,14 +29,16 @@ def cartesian_product(x, y):
         raise Exception("Cartesian product out of options")
 
 
-class GPosterior:  # pragma: no cover
+class GPposterior:  # pragma: no cover
     def __init__(self,
                  data_obj,
                  prior_obj,
-                 marginal_density_obj):
+                 marginal_density_obj,
+                 likelihood_obj):
 
         self.marginal_density_obj = marginal_density_obj
         self.prior_obj = prior_obj
+        self.likelihood_obj = likelihood_obj
         self.data_obj = data_obj
         self.kernel = self.prior_obj.kernel
         self.mean_function = self.prior_obj.mean_function
@@ -146,11 +149,14 @@ class GPosterior:  # pragma: no cover
             v[v < 0.0] = 0.0
             if not variance_only: np.fill_diagonal(S, v)
 
-        if add_noise and callable(self.likelihood.noise_function):
-            noise = self.noise_function(x_pred, self.prior_obj.hyperparameters, self)
-            if scipy.sparse.issparse(noise): noise = noise.toarray()
-            v = v + np.diag(noise)
-            if S is not None: S = S + noise
+        if add_noise and callable(self.likelihood_obj.noise_function):
+            noise = self.likelihood_obj.noise_function(x_pred, self.prior_obj.hyperparameters, self)
+            if issparse(noise): noise = noise.toarray()
+            if len(x_pred) == len(noise):
+                v = v + np.diag(noise)
+                if S is not None: S = S + noise
+            else:
+                warnings.warn("Noise could not be added, you did not provide a noise callable at initialization")
 
         return {"x": x_pred,
                 "v(x)": v,
@@ -193,7 +199,8 @@ class GPosterior:  # pragma: no cover
 
     ###########################################################################
     def joint_gp_prior(self, x_pred, x_out=None):
-        x_data, K, prior_mean_vec = (self.data_obj.x_data.copy(), self.prior_obj.K.copy(),
+        x_data, K, prior_mean_vec = (self.data_obj.x_data.copy(),
+                                     self.prior_obj.K.copy() + (np.identity(len(self.prior_obj.K)) * 1e-9),
                                      self.prior_obj.m.copy())
         self._perform_input_checks(x_pred, x_out)
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
@@ -202,16 +209,18 @@ class GPosterior:  # pragma: no cover
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
         post_mean = self.mean_function(x_pred, self.prior_obj.hyperparameters, self)
         joint_gp_prior_mean = np.append(prior_mean_vec, post_mean)
+        joint_gp_prior_cov = np.block([[K, k], [k.T, kk]])
         return {"x": x_pred,
-                "K": K,
+                "K": K + np.identity(len(K)) * 1e-9,
                 "k": k,
                 "kappa": kk,
                 "prior mean": joint_gp_prior_mean,
-                "S": np.block([[K, k], [k.T, kk]])}
+                "S": joint_gp_prior_cov + np.identity(len(joint_gp_prior_cov)) * 1e-9}
 
     ###########################################################################
     def joint_gp_prior_grad(self, x_pred, direction, x_out=None):
-        x_data, K, prior_mean_vec = (self.data_obj.x_data.copy(), self.prior_obj.K.copy(),
+        x_data, K, prior_mean_vec = (self.data_obj.x_data.copy(),
+                                     self.prior_obj.K.copy() + (np.identity(len(self.prior_obj.K)) * 1e-9),
                                      self.prior_obj.m.copy())
         self._perform_input_checks(x_pred, x_out)
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
@@ -224,11 +233,14 @@ class GPosterior:  # pragma: no cover
         eps = 1e-6
         x1[:, direction] = x1[:, direction] + eps
         x2[:, direction] = x2[:, direction] - eps
-        kk_g = (self.kernel(x1, x1, self.prior_obj.hyperparameters, self) - self.kernel(x2, x2, self.prior_obj.hyperparameters, self)) / (
-            2.0 * eps)
+        kk_g = (self.kernel(x1, x1, self.prior_obj.hyperparameters, self) - self.kernel(x2, x2,
+                                                                                        self.prior_obj.hyperparameters,
+                                                                                        self)) / (2.0 * eps)
         # post_mean = self.mean_function(x_pred, self.prior_obj.hyperparameters, self)
-        mean_der = (self.mean_function(x1, self.prior_obj.hyperparameters, self) - self.mean_function(x2, self.prior_obj.hyperparameters,
-                                                                                            self)) / (2.0 * eps)
+        mean_der = (self.mean_function(x1, self.prior_obj.hyperparameters, self) - self.mean_function(x2,
+                                                                                                      self.prior_obj.hyperparameters,
+                                                                                                      self)) / (
+                           2.0 * eps)
         full_gp_prior_mean_grad = np.append(np.zeros(prior_mean_vec.shape), mean_der)
         prior_cov_grad = np.zeros(K.shape)
         return {"x": x_pred,
@@ -349,7 +361,7 @@ class GPosterior:  # pragma: no cover
 
     ###########################################################################
     def gp_mutual_information(self, x_pred, x_out=None):
-        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
+        x_data, K = self.data_obj.x_data.copy(), self.prior_obj.K.copy() + (np.identity(len(self.prior_obj.K)) * 1e-9)
         self._perform_input_checks(x_pred, x_out)
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
@@ -364,7 +376,7 @@ class GPosterior:  # pragma: no cover
 
     ###########################################################################
     def gp_total_correlation(self, x_pred, x_out=None):
-        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
+        x_data, K = self.data_obj.x_data.copy(), self.prior_obj.K.copy() + (np.identity(len(self.prior_obj.K)) * 1e-9)
         self._perform_input_checks(x_pred, x_out)
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
@@ -407,7 +419,7 @@ class GPosterior:  # pragma: no cover
 
         res = self.posterior_mean(x_pred, x_out=None)
         gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"]
+        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + (np.identity(len(x_pred)) * 1e-9)
         gp_cov_inv = inv(gp_cov)
         comp_cov_inv = inv(comp_cov)
         cov = inv(gp_cov_inv + comp_cov_inv)
@@ -447,8 +459,10 @@ class GPosterior:  # pragma: no cover
         assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list)
         if isinstance(x_pred, np.ndarray):
             assert np.ndim(x_pred) == 2
-            if isinstance(x_out, np.ndarray): assert x_pred.shape[1] == self.data_obj.input_space_dim - 1
-            else: assert x_pred.shape[1] == self.data_obj.input_space_dim
+            if isinstance(x_out, np.ndarray):
+                assert x_pred.shape[1] == self.data_obj.input_space_dim - 1
+            else:
+                assert x_pred.shape[1] == self.data_obj.input_space_dim
 
         assert isinstance(x_out, np.ndarray) or x_out is None
         if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1

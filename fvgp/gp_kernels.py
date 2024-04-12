@@ -524,3 +524,14 @@ def example_deep_kernel(x1, x2, hps, obj):
     d = obj.get_distance_matrix(x1_nn, x2_nn)
     k = signal_var * obj.matern_kernel_diff1(d, length_scale)
     return k
+
+
+def cory(x1, x2, hps, obj):
+    d = get_anisotropic_distance_matrix(x1[:, 0:6], x2[:, 0:6], hps[1:7])
+    k1 = hps[0] * obj.matern_kernel_diff1(d, 1.)
+    l1 = x1[:, 6]
+    l2 = x2[:, 6]
+    c = hps[7]
+    delta = hps[8]
+    k2 = c + ((1. - l1) ** (1. + delta)) * ((1. - l2) ** (1. + delta))
+    return k1 * k2

@@ -1,22 +1,27 @@
 #!/usr/bin/env python
-import inspect
-import time
+
 import warnings
-from scipy.sparse.linalg import splu
-from scipy.sparse.linalg import minres, cg
 import dask.distributed as distributed
 import numpy as np
-import scipy
-from scipy.optimize import differential_evolution
-from scipy.optimize import minimize
-from scipy.linalg import cho_factor, cho_solve
 from loguru import logger
-from .mcmc import mcmc
-from hgdl.hgdl import HGDL
-from .gp2Scale import gp2Scale as gp2S
 from dask.distributed import Client
 from scipy.stats import norm
+from .gp_prior import GPprior
+from .gp_data import GPdata
+from .gp_marginal_density import GPMarginalDensity
+from .gp_likelihood import GPlikelihood
+from .gp_training import GPtraining
+from .gp_posterior import GPposterior
 
+
+# TODO: search below "TODO"
+#   neither minres nor random logdet are doing a good job, cg is better but we might need a preconditioner , maybe a large LU?
+#   for Ron's situation, make x_data, x_data optional and None by default, if not communicated, they will be asssigned simple dummy_data (with given dimensionality)
+#                and self.dummy_data = True. This should be overwritten in the update_data and used for warning in train and posteriors.
+#                the noise will have to be either given as a function or itialized randomly too with a warning that noise will have to be communited in the update.
+#   the mcmc in default mode should not need proposal distributions explicitly
+#   reshape posteriors if x_out
+#   when are we really using gpu vs cpu as compute_device
 
 class GP:
     """
@@ -33,8 +38,6 @@ class GP:
 
     Parameters
     ----------
-    input_space_dim : int
-        Dimensionality of the input space (D). If the input is non-Euclidean, the input dimensionality will be ignored.
     x_data : np.ndarray or list of tuples
         The input point positions. Shape (V x D), where D is the `input_space_dim`.
         If dealing with non-Euclidean inputs
@@ -140,19 +143,20 @@ class GP:
         A local client is used as default.
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
-    store_inv : bool, optional
+    calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster (5-10 times).
         For larger problems (>2000 data points), the use of inversion should be avoided due
         to computational instability and costs. The default is
-        True. Note, the training will always use Cholesky or LU decomposition instead of the
+        False. Note, the training will always use Cholesky or LU decomposition instead of the
         inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
-    online_mode : bool, Optional
-        Default = False. Online mode tells the algorithm that the KVinv should be stored, only
-        computed at initialization and afterward only updated. The same holds for the log determinant.
-        This makes online applications of GPs very fast because the two most costly steps are avoided.
+    online : bool, optional
+        A new setting that allows optimization for online applications. Default=False. If True,
+        calc_inv will be set to true, and the inverse and the logdet() of full dataset will only be computed
+        once in the beginning and after that only updated. This leads to a significant speedup because
+        the most costly aspects of a GP are entirely avoided.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
         If True, components of the derivative of the marginal log-likelihood are
@@ -172,7 +176,6 @@ class GP:
         Provides a way how to see the progress of gp2Scale, Default is False
 
 
-
     Attributes
     ----------
     x_data : np.ndarray
@@ -181,22 +184,23 @@ class GP:
         Datapoint values
     noise_variances : np.ndarray
         Datapoint observation (co)variances
-    hyperparameters : np.ndarray
+    prior.hyperparameters : np.ndarray
         Current hyperparameters in use.
-    K : np.ndarray
+    prior.K : np.ndarray
         Current prior covariance matrix of the GP
-    KVinv : np.ndarray
+    prior.m : np.ndarray
+        Current prior mean vector.
+    marginal_density.KVinv : np.ndarray
         If enabled, the inverse of the prior covariance + nose matrix V
         inv(K+V)
-    KVlogdet : float
+    marginal_density.KVlogdet : float
         logdet(K+V)
-    V : np.ndarray
+    likelihood.V : np.ndarray
         the noise covariance matrix
     """
 
     def __init__(
         self,
-        input_space_dim,
         x_data,
         y_data,
         init_hyperparameters=None,
@@ -212,105 +216,52 @@ class GP:
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
-        store_inv=True,
-        online_mode = False,
+        calc_inv=False,
+        online=False,
         ram_economy=False,
         args=None,
         info=False
     ):
-        ########################################
-        ###assign and check some attributes#####
-        ########################################
-        assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
-        if isinstance(x_data, np.ndarray):
-            if np.ndim(x_data) == 1: x_data = x_data.reshape(-1, 1)
-            if input_space_dim != len(x_data[0]):
-                raise ValueError("The input space dimension is not in agreement with the provided x_data.")
-            self.non_Euclidean = False
-        else:
-            if not callable(gp_kernel_function):
-                raise Exception(
-                    "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters.")
-            if not isinstance(x_data, list): raise Exception("Non-Euclidean data has to be provided as a list")
-            input_space_dim = 1
-            self.non_Euclidean = True
-        if self.non_Euclidean and init_hyperparameters is None:
-            raise Exception(
-                "You are running fvGP on non-Euclidean inputs. Please provide initial hyperparameters.")
-        if np.ndim(y_data) == 2: y_data = y_data[:, 0]
-        if compute_device == 'gpu':
-            try:
-                import torch
-            except:
-                raise Exception(
-                    "You have specified the 'gpu' as your compute device. You need to install pytorch\
-                     manually for this to work.")
-        self.input_space_dim = input_space_dim
-        self.x_data = x_data
-        self.point_number = len(self.x_data)
-        self.y_data = y_data
-        self.noise_variances = noise_variances
         self.compute_device = compute_device
-        self.ram_economy = ram_economy
         self.args = args
         self.info = info
-        self.store_inv = store_inv
-        self.KVinv = None
-        self.mcmc_info = None
+        self.calc_inv = calc_inv
         self.gp2Scale = gp2Scale
+        self.gp2Scale_dask_client = gp2Scale_dask_client
         self.gp2Scale_batch_size = gp2Scale_batch_size
-        self.hyperparameter_bounds = hyperparameter_bounds
-        self.online_mode = online_mode
-
-
-
-        ##########################################
-        #######prepare hyper parameters###########
-        ##########################################
-
-        if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(
-            gp_noise_function)) and init_hyperparameters is None:
-            raise Exception(
-                "You have provided callables for kernel, mean, or noise functions but no initial \n \
-                hyperparameters. Please define them.",
-                stacklevel=2)
-        if (callable(gp_kernel_function) or callable(gp_mean_function) or callable(
-            gp_noise_function)) and hyperparameter_bounds is None:
-            warnings.warn(
-                "You have provided callables for kernel, mean, or noise functions but no \n \
-                hyperparameter_bounds. That means they have to provided to the training.",
-                stacklevel=2)
-
-        if self.hyperparameter_bounds is None:
-            if self.non_Euclidean:
-                if callable(gp_kernel_function):
-                    warnings.warn("You are operating in a non-Euclidean space and have rightfully provided a kernel\
-                                   function. Please provide hyperparameter_bounds to the training.")
-                else: raise Exception("You are operating in a non-Euclidean space and have not provided a kernel.")
-            else:
-                if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
-                    warnings.warn("You provided a kernel, a mean, or a noise function.\
-                                  It is likely that the default hyperparameter_bounds are incorrect.\
-                                  Please provide your own at initialization or for the training.")
-                hyperparameter_bounds = np.zeros((input_space_dim + 1, 2))
-                hyperparameter_bounds[0] = np.array([np.var(y_data) / 100., np.var(y_data) * 10.])
-                for i in range(input_space_dim):
-                    range_xi = np.max(x_data[:, i]) - np.min(x_data[:, i])
-                    hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
-                self.hyperparameter_bounds = hyperparameter_bounds
-
-        if init_hyperparameters is None:
+        hyperparameters = init_hyperparameters
+        ########################################
+        ###init data instance###################
+        ########################################
+        self.data = GPdata(x_data, y_data, noise_variances)
+        ########################################
+        # prepare initial hyperparameters and bounds
+        if self.data.Euclidean:
             if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
-                raise Exception("You provided a kernel, a mean, or a noise function. \
-                Please provide init_hyperparameters")
-            if self.hyperparameter_bounds is None: raise Exception("hyperparameter_bounds not available.")
-            init_hyperparameters = np.random.uniform(low=self.hyperparameter_bounds[:, 0],
-                                                     high=self.hyperparameter_bounds[:, 1],
-                                                     size=len(self.hyperparameter_bounds))
-        self.hyperparameters = init_hyperparameters
-        ###########################################
-        #####gp2Scale##############################
-        ###########################################
+                if hyperparameter_bounds is None and init_hyperparameters is None:
+                    raise Exception(
+                        "You have provided callables for kernel, mean, or noise functions but no"
+                        "initial hyperparameters or hyperparameter bounds. Please provide"
+                        "at least one of them at initialization.")
+                else:
+                    if init_hyperparameters is None:
+                        hyperparameters, hyperparameter_bounds = self._get_default_hyperparameters(
+                            hyperparameter_bounds)
+            else:
+                if init_hyperparameters is None: hyperparameters, hyperparameter_bounds = \
+                    self._get_default_hyperparameters(hyperparameter_bounds)
+        else:
+            hyperparameters, hyperparameter_bounds = init_hyperparameters, hyperparameter_bounds
+
+        # warn if they could not be prepared
+        if hyperparameters is None:
+            raise Exception("'init_hyperparameters' not provided and could not be calculated. Please provide them ")
+
+        if hyperparameter_bounds is None:
+            warnings.warn("hyperparameter_bounds not provided. "
+                          "They will have to be provided in the training call.")
+        self.hyperparameter_bounds = hyperparameter_bounds
+
         if gp2Scale:
             try:
                 import imate
@@ -318,111 +269,81 @@ class GP:
                 raise Exception(
                     "You have activated `gp2Scale`. You need to install imate\
                      manually for this to work.")
-            if gp2Scale_dask_client is None:
-                gp2Scale_dask_client = Client()
-                warnings.warn("gp2Scale needs a 'gp2Scale_dask_client'. \
-                Set to distributed.Client().", stacklevel=2)
-            self.gp2Scale_dask_client = gp2Scale_dask_client
+            if gp2Scale_dask_client is None: gp2Scale_dask_client = Client()
 
-            if not callable(gp_kernel_function):
-                warnings.warn("You have chosen to activate gp2Scale. A powerful tool! \n \
-                        But you have not supplied a kernel that is compactly supported. \n \
-                        I will use an anisotropic Wendland kernel for now.",
-                              stacklevel=2)
-                if compute_device == "cpu":
-                    gp_kernel_function = wendland_anisotropic_gp2Scale_cpu
-                elif compute_device == "gpu":
-                    gp_kernel_function = wendland_anisotropic_gp2Scale_gpu
-
-            self.gp2Scale_obj = gp2S(batch_size=gp2Scale_batch_size,
-                                     gp_kernel_function=gp_kernel_function,
-                                     covariance_dask_client=gp2Scale_dask_client,
-                                     info=info)
-            self.store_inv = False
-            #self.noise_function = self.gp2Scale_obj.calculate_sparse_noise_covariance
-            warnings.warn("WARNING: gp2Scale activated. Only training via MCMC will be performed. \
-                    Only noise variances (no noise covariances can be considered). \
-                    A customized sparse kernel should be used, otherwise an anisotropic Wendland kernel is used.",
-                          stacklevel=2)
-
-        ###########################################
-        ###assign kernel, mean and noise functions#
-        ###########################################
-        # noise
-        if self.noise_variances is not None and callable(gp_noise_function):
-            warnings.warn("Noise function and measurement noise provided. noise_variances set to None.", stacklevel=2)
-            self.noise_variances = None
-        if callable(gp_noise_function):
-            self.noise_function = gp_noise_function
-        elif self.noise_variances is not None:
-            if gp2Scale: self.noise_function = self.gp2Scale_obj.calculate_sparse_noise_covariance
-            else: self.noise_function = self._measured_noise_function
-        else:
-            warnings.warn(
-                "No noise function or measurement noise provided. Noise variances will be set to 1% of mean(y_data).",
-                stacklevel=2)
-            if gp2Scale: self.noise_function = self.gp2Scale_obj.calculate_sparse_default_noise_covariance
-            else: self.noise_function = self._default_noise_function
-
-
-
-        if callable(gp_noise_function_grad):
-            self.noise_function_grad = gp_noise_function_grad
-        elif callable(gp_noise_function):
-            if self.ram_economy is True:
-                self.noise_function_grad = self._finitediff_dnoise_dh_econ
-            else:
-                self.noise_function_grad = self._finitediff_dnoise_dh
-        else:
-            if self.ram_economy is True:
-                self.noise_function_grad = self._default_dnoise_dh_econ
-            else:
-                self.noise_function_grad = self._default_dnoise_dh
-
-        # kernel
-        if callable(gp_kernel_function):
-            self.kernel = gp_kernel_function
-        elif gp_kernel_function is None:
-            self.kernel = self.default_kernel
-        else:
-            raise Exception("No valid kernel function specified")
-        self.d_kernel_dx = self._d_gp_kernel_dx
-        if callable(gp_kernel_function_grad):
-            self.dk_dh = gp_kernel_function_grad
-        else:
-            if self.ram_economy is True:
-                self.dk_dh = self._gp_kernel_derivative
-            else:
-                self.dk_dh = self._gp_kernel_gradient
-
-        # prior mean
-        if callable(gp_mean_function):
-            self.mean_function = gp_mean_function
-        else:
-            self.mean_function = self._default_mean_function
-        if callable(gp_mean_function_grad):
-            self.dm_dh = gp_mean_function_grad
-        elif callable(gp_mean_function):
-            self.dm_dh = self._finitediff_dm_dh
-        else:
-            self.dm_dh = self._default_dm_dh
-        if gp_kernel_function is None and (gp_noise_function is not None or gp_mean_function is not None):
-            warnings.warn("You are using the default kernel but a user-defined mean or noise function. \
-                    Make sure the right hyperparameter indices are used in all functions. \
-                    The default kernel function uses the first D + 1 hyperparameters", stacklevel=2)
+        if compute_device == 'gpu':
+            try:
+                import torch
+            except:
+                raise Exception(
+                    "You have specified the 'gpu' as your compute device. You need to install pytorch "
+                    "manually for this to work.")
+        ########################################
+        ###init prior instance##################
+        ########################################
+        self.prior = GPprior(self.data.input_space_dim,
+                            self.data.x_data,
+                            self.data.Euclidean,
+                            hyperparameters=hyperparameters,
+                            gp_kernel_function=gp_kernel_function,
+                            gp_mean_function=gp_mean_function,
+                            gp_kernel_function_grad=gp_kernel_function_grad,
+                            gp_mean_function_grad=gp_mean_function_grad,
+                            constant_mean=np.mean(y_data),
+                            gp2Scale=gp2Scale,
+                            gp2Scale_dask_client=gp2Scale_dask_client,
+                            gp2Scale_batch_size=gp2Scale_batch_size,
+                            ram_economy=ram_economy
+                            )
+        ########################################
+        ###init likelihood instance#############
+        ########################################
+        self.likelihood = GPlikelihood(self.data.x_data,
+                                       self.data.y_data,
+                                       self.data.noise_variances,
+                                       hyperparameters=self.prior.hyperparameters,
+                                       gp_noise_function=gp_noise_function,
+                                       gp_noise_function_grad=gp_noise_function_grad,
+                                       ram_economy=ram_economy,
+                                       gp2Scale=gp2Scale
+                                       )
 
         ##########################################
-        # compute the prior#######################
+        #######prepare marginal density###########
         ##########################################
-        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
-            self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
+        self.marginal_density = GPMarginalDensity(
+            self.data,
+            self.prior,
+            self.likelihood,
+            online=online,
+            calc_inv=calc_inv,
+            info=info,
+            gp2Scale=gp2Scale,
+            compute_device=compute_device
+        )
+
+        ##########################################
+        #######prepare training###################
+        ##########################################
+        self.trainer = GPtraining(info=info, gp2Scale=gp2Scale)
+
+        ##########################################
+        #######prepare posterior evaluations######
+        ##########################################
+        self.posterior = GPposterior(self.data,
+                                     self.prior,
+                                     self.marginal_density,
+                                     self.likelihood
+                                     )
+        self.x_data = self.data.x_data
+        self.y_data = self.data.y_data
 
     def update_gp_data(
         self,
         x_new,
         y_new,
-        noise_variances=None,
-        overwrite=False
+        noise_variances_new=None,
+        append=True
     ):
         """
         This function updates the data in the gp object instance.
@@ -437,57 +358,53 @@ class GP:
             The point positions. Shape (V x D), where D is the `input_space_dim`.
         y_new : np.ndarray
             The values of the data points. Shape (V,1) or (V).
-        noise_variances : np.ndarray, optional
+        noise_variances_new : np.ndarray, optional
             An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance.
             Shape (len(y_data), 1) or (len(y_data)).
             Note: if no variances are provided here, the noise_covariance
             callable will be used; if the callable is not provided the noise variances
             will be set to `abs(np.mean(y_data)) / 100.0`. If you provided a noise function,
-            the noise_variances will be ignored.
-        overwrite : bool, optional
-            Indication whether to overwrite the existing dataset. Default = False.
+            the noise_variances_new will be ignored.
+        append : bool, optional
+            Indication whether to append to or overwrite the existing dataset. Default = True.
             In the default case, data will be appended.
         """
-        if isinstance(x_new, np.ndarray):
-            if np.ndim(x_new) == 1: x_new = x_new.reshape(-1, 1)
-            if self.input_space_dim != len(x_new[0]): raise ValueError(
-                "The input space dimension is not in agreement with the provided x_data.")
-        if np.ndim(y_new) == 2: y_new = y_new[:, 0]
-        if callable(noise_variances): raise Exception("The update noise_variances cannot be a callable")
+        old_x_data = self.data.x_data.copy()
+        # update data
+        self.data.update(x_new, y_new, noise_variances_new, append=append)
 
-        #update class instance x_data, and y_data, and set noise
-        if overwrite:
-            self.x_data = x_new
-            self.y_data = y_new
+        # update prior
+        if append:
+            self.prior.augment_data(old_x_data, x_new, constant_mean=np.mean(self.data.y_data))
         else:
-            x_data_old = self.x_data.copy()
-            y_data_old = self.y_data.copy()
-            if self.non_Euclidean: self.x_data = self.x_data + x_new
-            else: self.x_data = np.row_stack([self.x_data, x_new])
-            self.y_data = np.append(self.y_data, y_new)
-            if self.noise_variances is not None: self.noise_variances = np.append(np.diag(self.noise_variances),
-                                                                                  noise_variances)
-        self.point_number = len(self.x_data)
+            self.prior.update_data(self.data.x_data, constant_mean=np.mean(self.data.y_data))
 
-        ##########################################
-        #######prepare noise covariances##########
-        ##########################################
-        if noise_variances is not None and callable(self.noise_function):
-            warnings.warn("Noise function and measurement noise provided. \
-            This can happen if no measurement noise was provided at initialization.\
-            New noise_variances set to None", stacklevel=2)
+        # update likelihood
+        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
+                               self.prior.hyperparameters)
 
-        ######################################
-        #####transform to index set###########
-        ######################################
-        if overwrite:
-            self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
-                self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
-                self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
-        else:
-            self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
-                self.KVinv, self.prior_mean_vec, self.V = self._update_GPpriorV(
-                x_data_old, x_new, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
+        # update marginal density
+        self.marginal_density.update_data()
+        ##########################################
+        self.x_data = self.data.x_data
+        self.y_data = self.data.y_data
+
+    def _get_default_hyperparameters(self, hyperparameter_bounds):
+        """
+        This function will create hyperparameter bounds and init hyperparameters
+        for the default kernel.
+        """
+        if hyperparameter_bounds is None:
+            hyperparameter_bounds = np.zeros((self.data.input_space_dim + 1, 2))
+            hyperparameter_bounds[0] = np.array([np.var(self.data.y_data) / 100., np.var(self.data.y_data) * 10.])
+            for i in range(self.data.input_space_dim):
+                range_xi = np.max(self.data.x_data[:, i]) - np.min(self.data.x_data[:, i])
+                hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
+
+        init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
+                                                 high=hyperparameter_bounds[:, 1],
+                                                 size=len(hyperparameter_bounds))
+        return init_hyperparameters, hyperparameter_bounds
 
     ###################################################################################
     ###################################################################################
@@ -570,7 +487,8 @@ class GP:
         """
         if hyperparameter_bounds is None:
             if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
-            hyperparameter_bounds = self.hyperparameter_bounds.copy()
+            hyperparameter_bounds = self.hyperparameter_bounds
+        if init_hyperparameters is None: init_hyperparameters = self.prior.hyperparameters
         if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
                                                                                   high=hyperparameter_bounds[:, 1],
                                                                                   size=len(hyperparameter_bounds))
@@ -579,28 +497,31 @@ class GP:
         if objective_function is not None and objective_function_gradient is None and (method == 'local' or 'hgdl'):
             raise Exception("For user-defined objective functions and local or hybrid optimization, a gradient and\
                              Hessian function of the objective function have to be defined.")
-        if objective_function is None: objective_function = self.neg_log_likelihood
-        if objective_function_gradient is None: objective_function_gradient = self.neg_log_likelihood_gradient
-        if objective_function_hessian is None: objective_function_hessian = self.neg_log_likelihood_hessian
+        if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
+        if objective_function is None and method == 'mcmc': objective_function = self.marginal_density.log_likelihood
+        if objective_function_gradient is None: objective_function_gradient = self.marginal_density.neg_log_likelihood_gradient
+        if objective_function_hessian is None: objective_function_hessian = self.marginal_density.neg_log_likelihood_hessian
 
-        self.hyperparameters = self._optimize_log_likelihood(
-            objective_function,
-            objective_function_gradient,
-            objective_function_hessian,
-            init_hyperparameters,
-            np.array(hyperparameter_bounds),
-            method,
-            max_iter,
-            pop_size,
-            tolerance,
-            constraints,
-            local_optimizer,
-            global_optimizer,
-            dask_client
+        hyperparameters = self.trainer.train(
+            objective_function=objective_function,
+            objective_function_gradient=objective_function_gradient,
+            objective_function_hessian=objective_function_hessian,
+            hyperparameter_bounds=hyperparameter_bounds,
+            init_hyperparameters=init_hyperparameters,
+            method=method,
+            pop_size=pop_size,
+            tolerance=tolerance,
+            max_iter=max_iter,
+            local_optimizer=local_optimizer,
+            global_optimizer=global_optimizer,
+            constraints=constraints,
+            dask_client=dask_client
         )
-        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
-            self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
-            self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
+
+        self.prior.update_hyperparameters(self.data.x_data, hyperparameters)
+        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
+                               self.prior.hyperparameters)
+        self.marginal_density.update_hyperparameters()
 
     ##################################################################################
     def train_async(self,
@@ -671,25 +592,27 @@ class GP:
         if dask_client is None: dask_client = distributed.Client()
         if hyperparameter_bounds is None:
             if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
-            hyperparameter_bounds = self.hyperparameter_bounds.copy()
+            hyperparameter_bounds = self.hyperparameter_bounds
+        if init_hyperparameters is None: init_hyperparameters = self.prior.hyperparameters
         if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
                                                                                   high=hyperparameter_bounds[:, 1],
                                                                                   size=len(hyperparameter_bounds))
-        if objective_function is None: objective_function = self.neg_log_likelihood
-        if objective_function_gradient is None: objective_function_gradient = self.neg_log_likelihood_gradient
-        if objective_function_hessian is None: objective_function_hessian = self.neg_log_likelihood_hessian
+        if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
+        if objective_function_gradient is None: objective_function_gradient = self.marginal_density.neg_log_likelihood_gradient
+        if objective_function_hessian is None: objective_function_hessian = self.marginal_density.neg_log_likelihood_hessian
 
-        opt_obj = self._optimize_log_likelihood_async(
-            objective_function,
-            objective_function_gradient,
-            objective_function_hessian,
-            init_hyperparameters,
-            hyperparameter_bounds,
-            max_iter,
-            constraints,
-            local_optimizer,
-            global_optimizer,
-            dask_client)
+        opt_obj = self.trainer.train_async(
+            objective_function=objective_function,
+            objective_function_gradient=objective_function_gradient,
+            objective_function_hessian=objective_function_hessian,
+            hyperparameter_bounds=hyperparameter_bounds,
+            init_hyperparameters=init_hyperparameters,
+            max_iter=max_iter,
+            local_optimizer=local_optimizer,
+            global_optimizer=global_optimizer,
+            constraints=constraints,
+            dask_client=dask_client
+        )
         return opt_obj
 
     ##################################################################################
@@ -702,12 +625,7 @@ class GP:
         opt_obj : HGDL object instance
             HGDL object instance returned by `fvgp.GP.train_async()`
         """
-        try:
-            opt_obj.cancel_tasks()
-            logger.debug("fvGP successfully cancelled the current training.")
-        except:
-            warnings.warn("No asynchronous training to be cancelled in fvGP, \
-            no training is running.", stacklevel=2)
+        self.trainer.stop_training(opt_obj)
 
     ###################################################################################
     def kill_training(self, opt_obj):
@@ -719,12 +637,7 @@ class GP:
         opt_obj : HGDL object instance
             HGDL object instance returned by `fvgp.GP.train_async()`
         """
-
-        try:
-            opt_obj.kill_client()
-            logger.debug("fvGP successfully killed the training.")
-        except:
-            warnings.warn("No asynchronous training to be killed, no training is running.", stacklevel=2)
+        self.trainer.kill_training(opt_obj)
 
     ##################################################################################
     def update_hyperparameters(self, opt_obj):
@@ -745,33 +658,29 @@ class GP:
         The current hyperparameters : np.ndarray
         """
 
-        try:
-            res = opt_obj.get_latest()[0]["x"]
-        except:
-            logger.debug("      The optimizer object could not be queried")
-            logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
+        res = self.trainer.update_hyperparameters(opt_obj)
+        if res is not None:
+            l_n = self.marginal_density.neg_log_likelihood(res)
+            l_o = self.marginal_density.neg_log_likelihood(self.prior.hyperparameters)
+            if l_n - l_o < 0.000001:
+                hyperparameters = res
+                self.prior.update_hyperparameters(self.data.x_data, hyperparameters)
+                self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
+                                       self.prior.hyperparameters)
+                self.marginal_density.update_hyperparameters()
+                logger.debug("    fvGP async hyperparameter update successful")
+                logger.debug("    Latest hyperparameters: {}", hyperparameters)
+            else:
+                logger.debug(
+                    "    The update was attempted but the new hyperparameters led to a \n \
+                    lower likelihood, so I kept the old ones")
+                logger.debug(f"Old likelihood: {-l_o} at {self.prior.hyperparameters}")
+                logger.debug(f"New likelihood: {-l_n} at {res}")
         else:
-            try:
-                l_n = self.neg_log_likelihood(res)
-                l_o = self.neg_log_likelihood(self.hyperparameters)
-                if l_n - l_o < 0.000001:
-                    self.hyperparameters = res
-                    (self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv,
-                     self.prior_mean_vec, self.V) = self._compute_GPpriorV(
-                        self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
-                    logger.debug("    fvGP async hyperparameter update successful")
-                    logger.debug("    Latest hyperparameters: {}", self.hyperparameters)
-                else:
-                    logger.debug(
-                        "    The update was attempted but the new hyperparameters led to a \n \
-                        lower likelihood, so I kept the old ones")
-                    logger.debug(f"Old likelihood: {-l_o} at {self.hyperparameters}")
-                    logger.debug(f"New likelihood: {-l_n} at {res}")
-            except Exception as e:
-                logger.debug("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
-                logger.debug("    hyperparameters: {}", self.hyperparameters)
+            logger.debug("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
+            logger.debug("    hyperparameters: {}", self.prior.hyperparameters)
 
-        return self.hyperparameters
+        return self.prior.hyperparameters
 
     ##################################################################################
     def set_hyperparameters(self, hps):
@@ -783,9 +692,10 @@ class GP:
         hps : np.ndarray
             A 1-d numpy array of hyperparameters.
         """
-        self.hyperparameters = np.array(hps)
-        self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, self.prior_mean_vec, self.V = self._compute_GPpriorV(
-            self.x_data, self.y_data, self.hyperparameters, calc_inv=self.store_inv)
+        self.prior.update_hyperparameters(self.data.x_data, hps)
+        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
+                               self.prior.hyperparameters)
+        self.marginal_density.update_hyperparameters()
 
     ##################################################################################
     def get_hyperparameters(self):
@@ -800,7 +710,7 @@ class GP:
         hyperparameters : np.ndarray
         """
 
-        return self.hyperparameters
+        return self.prior.hyperparameters
 
     ##################################################################################
     def get_prior_pdf(self):
@@ -809,156 +719,16 @@ class GP:
 
         Parameters
         ----------
-        None
 
         Return
         ------
         A dictionary containing information about the GP prior distribution : dict
         """
 
-        return {"prior corvariance (K)": self.K, "log(|KV|)": self.KVlogdet, "inv(KV)": self.KVinv,
-                "prior mean": self.prior_mean_vec}
+        return {"prior covariance (K)": self.prior.K, "log(|KV|)": self.marginal_density.KVlogdet,
+                "inv(KV)": self.marginal_density.KVinv,
+                "prior mean": self.prior.m}
 
-    ##################################################################################
-    def _optimize_log_likelihood_async(self,
-                                       objective_function,
-                                       objective_function_gradient,
-                                       objective_function_hessian,
-                                       starting_hps,
-                                       hp_bounds,
-                                       max_iter,
-                                       constraints,
-                                       local_optimizer,
-                                       global_optimizer,
-                                       dask_client):
-
-        logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: {}", starting_hps)
-        if not self._in_bounds(starting_hps, hp_bounds):
-            raise Exception("Starting positions outside of optimization bounds.")
-
-        opt_obj = HGDL(objective_function,
-                       objective_function_gradient,
-                       hp_bounds,
-                       hess=objective_function_hessian,
-                       local_optimizer=local_optimizer,
-                       global_optimizer=global_optimizer,
-                       num_epochs=max_iter,
-                       constraints=constraints)
-
-        logger.debug("HGDL successfully initialized. Calling optimize()")
-        opt_obj.optimize(dask_client=dask_client, x0=np.array(starting_hps).reshape(1, -1))
-        logger.debug("optimize() called")
-        return opt_obj
-
-    ##################################################################################
-    def _optimize_log_likelihood(self,
-                                 objective_function,
-                                 objective_function_gradient,
-                                 objective_function_hessian,
-                                 starting_hps,
-                                 hp_bounds,
-                                 method,
-                                 max_iter,
-                                 pop_size,
-                                 tolerance,
-                                 constraints,
-                                 local_optimizer,
-                                 global_optimizer,
-                                 dask_client):
-
-        if not self._in_bounds(starting_hps, hp_bounds):
-            raise Exception("Starting positions outside of optimization bounds.")
-
-        if self.gp2Scale:
-            method = 'mcmc'
-        logger.debug("method: ", method)
-
-        ############################
-        ####global optimization:##
-        ############################
-        if method == "global":
-            logger.debug(
-                "fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
-            logger.debug("maximum number of iterations: {}", max_iter)
-            logger.debug("termination tolerance: {}", tolerance)
-            logger.debug("bounds: {}", hp_bounds)
-            res = differential_evolution(
-                objective_function,
-                hp_bounds,
-                maxiter=max_iter,
-                popsize=pop_size,
-                tol=tolerance,
-                disp=self.info,
-                polish=False,
-                x0=starting_hps.reshape(1, -1),
-                constraints=constraints,
-                workers=1,
-            )
-            hyperparameters = np.array(res["x"])
-            Eval = self.neg_log_likelihood(hyperparameters)
-            logger.debug(f"fvGP found hyperparameters {hyperparameters} with likelihood {Eval} via global optimization")
-        ############################
-        ####local optimization:#####
-        ############################
-        elif method == "local":
-            logger.debug("fvGP is performing a local update of the hyper parameters.")
-            logger.debug("starting hyperparameters: {}", starting_hps)
-            logger.debug("Attempting a BFGS optimization.")
-            logger.debug("maximum number of iterations: {}", max_iter)
-            logger.debug("termination tolerance: {}", tolerance)
-            logger.debug("bounds: {}", hp_bounds)
-            OptimumEvaluation = minimize(
-                objective_function,
-                starting_hps,
-                method=local_optimizer,
-                jac=objective_function_gradient,
-                hess=objective_function_hessian,
-                bounds=hp_bounds,
-                tol=tolerance,
-                callback=None,
-                constraints=constraints,
-                options={"maxiter": max_iter})
-
-            if OptimumEvaluation["success"] == True:
-                logger.debug(f"fvGP local optimization successfully concluded with result: "
-                             f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
-            else:
-                logger.debug("fvGP local optimization not successful.")
-            hyperparameters = OptimumEvaluation["x"]
-        ############################
-        ####hybrid optimization:####
-        ############################
-        elif method == "hgdl":
-            logger.debug("fvGP submitted HGDL optimization")
-            logger.debug("starting hyperparameters: {}", starting_hps)
-            logger.debug('bounds are', hp_bounds)
-
-            opt_obj = HGDL(objective_function,
-                           objective_function_gradient,
-                           hp_bounds,
-                           hess=objective_function_hessian,
-                           local_optimizer=local_optimizer,
-                           global_optimizer=global_optimizer,
-                           num_epochs=max_iter,
-                           constraints=constraints)
-
-            opt_obj.optimize(dask_client=dask_client, x0=starting_hps.reshape(1, -1))
-            hyperparameters = opt_obj.get_final()[0]["x"]
-            opt_obj.kill_client()
-        elif method == "mcmc":
-            logger.debug("MCMC started in fvGP")
-            logger.debug('bounds are {}', hp_bounds)
-            res = mcmc(self.log_likelihood, hp_bounds, x0=starting_hps, n_updates=max_iter, info=self.info)
-            hyperparameters = np.array(res["distribution mean"])
-            self.mcmc_info = res
-        elif callable(method):
-            hyperparameters = method(self)
-        else:
-            raise ValueError("No optimization mode specified in fvGP")
-        ###################################################
-        return hyperparameters
-
-    ##################################################################################
     def log_likelihood(self, hyperparameters=None):
         """
         Function that computes the marginal log-likelihood
@@ -973,453 +743,28 @@ class GP:
         ------
         log marginal likelihood of the data : float
         """
-        if hyperparameters is None:
-            K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                (self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj,
-                 self.KVinv, self.prior_mean_vec, self.V)
-        else:
-            K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv=False)
-        n = len(self.y_data)
-        return -(0.5 * ((self.y_data - mean).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
-
-    ##################################################################################
-    def neg_log_likelihood(self, hyperparameters=None):
-        """
-        Function that computes the marginal log-likelihood
-
-        Parameters
-        ----------
-        hyperparameters : np.ndarray, optional
-            Vector of hyperparameters of shape (N)
-            If not provided, the covariance will not be recomputed.
-
-        Return
-        ------
-        negative log marginal likelihood of the data : float
-        """
-        return -self.log_likelihood(hyperparameters=hyperparameters)
-
-    ##################################################################################
-    def neg_log_likelihood_gradient(self, hyperparameters=None):
-        """
-        Function that computes the gradient of the marginal log-likelihood.
-
-        Parameters
-        ----------
-        hyperparameters : np.ndarray, optional
-            Vector of hyperparameters of shape (N).
-            If not provided, the covariance will not be recomputed.
-
-        Return
-        ------
-        Gradient of the negative log marginal likelihood : np.ndarray
-        """
-        logger.debug("log-likelihood gradient is being evaluated...")
-        if hyperparameters is None:
-            K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                self.K, self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, \
-                    self.KVinv, self.prior_mean_vec, self.V
-        else:
-            K, KV, KVinvY, KVlogdet, FO, KVinv, mean, cov = \
-                self._compute_GPpriorV(self.x_data, self.y_data, hyperparameters, calc_inv=False)
-
-        b = KVinvY
-        y = self.y_data - mean
-        if self.ram_economy is False:
-            try:
-                dK_dH = self.dk_dh(self.x_data, self.x_data, hyperparameters, self) + self.noise_function_grad(
-                    self.x_data, hyperparameters, self)
-            except Exception as e:
-                raise Exception(
-                    "The gradient evaluation dK/dh + dNoise/dh was not successful. \n \
-                    That normally means the combination of ram_economy and definition \
-                    of the gradient function is wrong. ",
-                    str(e))
-            KV = np.array([KV, ] * len(hyperparameters))
-            a = self._solve(KV, dK_dH)
-        bbT = np.outer(b, b.T)
-        dL_dH = np.zeros((len(hyperparameters)))
-        dL_dHm = np.zeros((len(hyperparameters)))
-        dm_dh = self.dm_dh(self.x_data, hyperparameters, self)
-
-        for i in range(len(hyperparameters)):
-            dL_dHm[i] = -dm_dh[i].T @ b
-            if self.ram_economy is False:
-                matr = a[i]
-            else:
-                try:
-                    dK_dH = self.dk_dh(self.x_data, self.x_data, i, hyperparameters, self) + self.noise_function_grad(
-                        self.x_data, i, hyperparameters, self)
-                except:
-                    raise Exception(
-                        "The gradient evaluation dK/dh + dNoise/dh was not successful. \n \
-                        That normally means the combination of ram_economy and definition of \
-                        the gradient function is wrong.")
-                matr = np.linalg.solve(KV, dK_dH)
-            if dL_dHm[i] == 0.0:
-                if self.ram_economy is False:
-                    mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
-                else:
-                    mtrace = np.einsum('ij,ji->', bbT, dK_dH)
-                dL_dH[i] = - 0.5 * (mtrace - np.trace(matr))
-            else:
-                dL_dH[i] = 0.0
-        logger.debug("gradient norm: {}", np.linalg.norm(dL_dH + dL_dHm))
-        return dL_dH + dL_dHm
-
-    ##################################################################################
-    def neg_log_likelihood_hessian(self, hyperparameters=None):
-        """
-        Function that computes the Hessian of the marginal log-likelihood.
-        It does so by a first-order approximation of the exact gradient.
-
-        Parameters
-        ----------
-        hyperparameters : np.ndarray
-            Vector of hyperparameters of shape (N).
-            If not provided, the covariance will not be recomputed.
-
-        Return
-        ------
-        Hessian of the negative log marginal likelihood : np.ndarray
-        """
-        ##implemented as first-order approximation
-        len_hyperparameters = len(hyperparameters)
-        d2L_dmdh = np.zeros((len_hyperparameters, len_hyperparameters))
-        epsilon = 1e-6
-        grad_at_hps = self.neg_log_likelihood_gradient(hyperparameters=hyperparameters)
-        for i in range(len_hyperparameters):
-            hps_temp = np.array(hyperparameters)
-            hps_temp[i] = hps_temp[i] + epsilon
-            d2L_dmdh[i, i:] = ((self.neg_log_likelihood_gradient(hyperparameters=hps_temp) - grad_at_hps) / epsilon)[i:]
-        return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
+        return self.marginal_density.log_likelihood(hyperparameters=hyperparameters)
 
     def test_log_likelihood_gradient(self, hyperparameters):
-        thps = np.array(hyperparameters)
-        grad = np.empty((len(thps)))
-        eps = 1e-6
-        for i in range(len(thps)):
-            thps_aux = np.array(thps)
-            thps_aux[i] = thps_aux[i] + eps
-            grad[i] = (self.log_likelihood(hyperparameters=thps_aux) - self.log_likelihood(hyperparameters=thps)) / eps
-        analytical = -self.neg_log_likelihood_gradient(hyperparameters=thps)
-        if np.linalg.norm(grad - analytical) > np.linalg.norm(grad) / 100.0:
-            print("Gradient possibly wrong")
-            print("finite diff appr: ", grad)
-            print("analytical      : ", analytical)
-        else:
-            print("Gradient correct")
-            print("finite diff appr: ", grad)
-            print("analytical      : ", analytical)
-        assert np.linalg.norm(grad - analytical) < np.linalg.norm(grad) / 100.0
+        """
+        Function to test your gradient of the log-likelihood and therefore of the kernel function.
 
-        return grad, analytical
+        Parameters
+        ----------
+        hyperparameters : np.ndarray, optional
+            Vector of hyperparameters of shape (N).
+
+        Return
+        ------
+        analytical and finite difference gradient to compare
+        """
+        return self.marginal_density.test_log_likelihood_gradient(hyperparameters)
 
     ##################################################################################
     ##################################################################################
     ##################################################################################
     ##################################################################################
-    ######################Compute#Covariance#Matrix###################################
     ##################################################################################
-    ##################################################################################
-    def _compute_GPpriorV(self, x_data, y_data, hyperparameters, calc_inv=False):
-        # get the prior mean
-        prior_mean_vec = self.mean_function(x_data, hyperparameters, self)
-        assert np.ndim(prior_mean_vec) == 1
-        # get the latest noise
-        V = self.noise_function(x_data, hyperparameters, self)
-        assert np.ndim(V) == 2
-
-        # get K
-        if self.gp2Scale:
-            st = time.time()
-            K = self.gp2Scale_obj.compute_covariance(x_data, hyperparameters)
-            Ksparsity = float(K.nnz) / float(len(x_data) ** 2)
-            if isinstance(V, np.ndarray): raise Exception("You are running gp2Scale. \
-            Your noise model has to return a `scipy.sparse.coo_matrix`.")
-            if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
-                                " seconds | sparsity = ", Ksparsity, flush=True)
-        else:
-            K = self._compute_K(x_data, x_data, hyperparameters)
-
-        # check if shapes are correct
-        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
-
-        # get K + V
-        KV = K + V
-
-        # get Kinv/KVinvY, LU, Chol, logdet(KV)
-        KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                calc_inv=calc_inv)
-        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
-
-    ##################################################################################
-
-    def _update_GPpriorV(self, x_data_old, x_new, y_data, hyperparameters, calc_inv=False):
-        #where is the new variance?
-        #do I need the x_data here? Or can it be self.x_data
-
-        # get the prior mean
-        prior_mean_vec = np.append(self.prior_mean_vec, self.mean_function(x_new, hyperparameters, self))
-        assert np.ndim(prior_mean_vec) == 1
-        # get the latest noise
-        V = self.noise_function(self.x_data, hyperparameters, self) #can be avoided by update
-        assert np.ndim(V) == 2
-        # get K
-        if self.gp2Scale:
-            st = time.time()
-            K = self.gp2Scale_obj.update_covariance(x_new, hyperparameters, self.K)
-            Ksparsity = float(K.nnz) / float(len(self.x_data) ** 2)
-            if self.info: print("Computing and transferring the covariance matrix took ", time.time() - st,
-                                " seconds | sparsity = ", Ksparsity, flush=True)
-        else:
-            k = self._compute_K(x_data_old, x_new, hyperparameters)
-            kk = self._compute_K(x_new, x_new, hyperparameters)
-            K = np.block([
-                         [self.K,          k],
-                         [k.T   ,         kk]
-                         ])
-        # check if shapes are correct
-        if K.shape != V.shape: raise Exception("Noise covariance and prior covariance not of the same shape.")
-
-        # get K + V
-        KV = K + V
-        #y_data = np.append(y_data, y_new)
-        # get Kinv/KVinvY, LU, Chol, logdet(KV)
-
-        if self.online_mode is True and self.gp2Scale is False: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(
-            y_data - prior_mean_vec, k, kk)
-        else: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_data-prior_mean_vec, KV,
-                                                                             calc_inv=calc_inv)
-        return K, KV, KVinvY, KVlogdet, factorization_obj, KVinv, prior_mean_vec, V
-
-    ##################################################################################
-    def _compute_gp_linalg(self, vec, KV, calc_inv=False):
-        if self.gp2Scale:
-            Ksparsity = float(KV.nnz) / float(len(self.x_data) ** 2)
-            if len(self.x_data) < 50000 and Ksparsity < 0.0001: mode = "sparse_LU"
-            elif len(self.x_data) < 2000 and Ksparsity >= 0.0001: mode = "dense_Chol"
-            else: mode = 'gp2Scale'
-
-            if mode == "sparse_LU":
-                try: KVinvY, KVlogdet, factorization_obj = self._LU(KV, vec)
-                except: KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
-            elif mode == "dense_Chol":
-                KV = KV.toarray()
-                KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
-            elif mode == "gp2Scale": KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
-            else: raise Exception("No linear algebra mode applicable in '_compute_gp_linalg'")
-            KVinv = None
-        else:
-            if calc_inv:
-                KVinv = self._inv(KV)
-                factorization_obj = ("Inv", None)
-                KVinvY = KVinv @ vec
-                KVlogdet = self._logdet(KV)
-            else:
-                KVinv = None
-                KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
-        return KVinvY, KVlogdet, factorization_obj, KVinv
-
-    def _update_gp_linalg(self, vec, k, kk):
-        X = self._inv(kk - C @ self.KVinv @ B)
-        F = -self.KVinv @ k @ X
-        KVinv = np.block([[self.KVinv + self.KVinv @ B @ X @ C @ self.KVinv, F],
-                          [F.T,                                              X]])
-        factorization_obj = ("Inv", None)
-        KVinvY = KVinv @ vec
-        KVlogdet = self.KVlogdet + self._logdet(kk - k.T @ self.KVinv @ k)
-        return KVinvY, KVlogdet, factorization_obj, KVinv
-    ##################################################################################
-    def _compute_K(self, x1, x2, hyperparameters):
-        """computes the covariance matrix from the kernel"""
-        K = self.kernel(x1, x2, hyperparameters, self)
-        return K
-
-    ##################################################################################
-    def _LU(self, KV, vec):
-        st = time.time()
-        if self.info: print("LU in progress ...")
-        LU = splu(KV.tocsc())
-        factorization_obj = ("LU", LU)
-        KVinvY = LU.solve(vec)
-        upper_diag = abs(LU.U.diagonal())
-        KVlogdet = np.sum(np.log(upper_diag))
-        if self.info: print("LU compute time: ", time.time() - st, "seconds.")
-        return KVinvY, KVlogdet, factorization_obj
-
-    def _Chol(self, KV, vec):
-        st = time.time()
-        if self.info: print("Dense Cholesky in progress ...")
-        c, l = cho_factor(KV)
-        factorization_obj = ("Chol", c, l)
-        KVinvY = cho_solve((c, l), vec)
-        upper_diag = abs(c.diagonal())
-        KVlogdet = 2.0 * np.sum(np.log(upper_diag))
-        if self.info: print("Dense Cholesky compute time: ", time.time() - st, "seconds.")
-        return KVinvY, KVlogdet, factorization_obj
-
-    def _gp2Scale_linalg(self, KV, vec):
-        from imate import logdet
-        st = time.time()
-        if self.info: print("CG solve in progress ...")
-        KVinvY, exit_code = cg(KV.tocsc(), vec)
-        if exit_code == 1: warnings.warn("CG not successful")
-        factorization_obj = ("gp2Scale", None)
-        if self.info: print("CG compute time: ", time.time() - st, "seconds, exit status (0:=successful)", exit_code)
-        if self.compute_device == "gpu": gpu = True
-        else: gpu = False
-        if self.info: print("Random logdet() in progress ... ", time.time() - st, "seconds.")
-        KVlogdet, info_slq = logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
-                                    lanczos_degree=20, error_rtol=0.001, gpu=gpu,
-                                    return_info=True, plot=False, verbose=False)
-        if self.info: print("Random logdet() compute time: ", time.time() - st, "seconds.")
-        return KVinvY, KVlogdet, factorization_obj
-    ##################################################################################
-    def _KVsolve(self, b):
-        if self.factorization_obj[0] == "LU":
-            LU = self.factorization_obj[1]
-            return LU.solve(b)
-        elif self.factorization_obj[0] == "Chol":
-            c, l = self.factorization_obj[1], self.factorization_obj[2]
-            return cho_solve((c, l), b)
-        else:
-            res = np.empty((len(b), b.shape[1]))
-            if b.shape[1] > 100: warnings.warn(
-                "You want to predict at >100 points. \n When using gp2Scale, this takes a while. \n "
-                "Better predict at only a handful of points.")
-            for i in range(b.shape[1]):
-                res[:, i], exit_status = minres(self.KV, b[:, i])
-                # if exit_status != 0: res[:,i], exit_status = minres(self.KV,b[:,i])
-            return res
-
-    def _logdet(self, A):
-        if self.compute_device == "cpu":
-            s, logdet = np.linalg.slogdet(A)
-            return logdet
-        elif self.compute_device == "gpu":
-            try:
-                import torch
-                A = torch.from_numpy(A).cuda()
-                sign, logdet = torch.slogdet(A)
-                logdet = logdet.cpu().numpy()
-                logdet = np.nan_to_num(logdet)
-                return logdet
-            except Exception as e:
-                warnings.warn(
-                    "I encountered a problem using the GPU via pytorch. Falling back to Numpy and the CPU.")
-                s, logdet = np.linalg.slogdet(A)
-                return logdet
-        else:
-            sign, logdet = np.linalg.slogdet(A)
-            return logdet
-
-    def _inv(self, A):
-        if self.compute_device == "cpu":
-            return np.linalg.inv(A)
-        elif self.compute_device == "gpu":
-            import torch
-            A = torch.from_numpy(A)
-            B = torch.inverse(A)
-            return B.numpy()
-        else:
-            return np.linalg.inv(A)
-
-    def _solve(self, A, b):
-        if np.ndim(b) == 1: b = np.expand_dims(b, axis=1)
-        if self.compute_device == "cpu":
-            try:
-                x = np.linalg.solve(A, b)
-            except:
-                x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
-            return x
-        elif self.compute_device == "gpu" or A.ndim < 3:
-            try:
-                import torch
-                A = torch.from_numpy(A).cuda()
-                b = torch.from_numpy(b).cuda()
-                x = torch.linalg.solve(A, b)
-                return x.cpu().numpy()
-            except Exception as e:
-                warnings.warn(
-                    "I encountered a problem using the GPU via pytorch. Falling back to Numpy and the CPU.")
-                try:
-                    x = np.linalg.solve(A, b)
-                except:
-                    x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
-                return x
-        elif self.compute_device == "multi-gpu":
-            try:
-                import torch
-                n = min(len(A), torch.cuda.device_count())
-                split_A = np.array_split(A, n)
-                split_b = np.array_split(b, n)
-                results = []
-                for i, (tmp_A, tmp_b) in enumerate(zip(split_A, split_b)):
-                    cur_device = torch.device("cuda:" + str(i))
-                    tmp_A = torch.from_numpy(tmp_A).cuda(cur_device)
-                    tmp_b = torch.from_numpy(tmp_b).cuda(cur_device)
-                    results.append(torch.linalg.solve(tmp_A, tmp_b)[0])
-                total = results[0].cpu().numpy()
-                for i in range(1, len(results)):
-                    total = np.append(total, results[i].cpu().numpy(), 0)
-                return total
-            except Exception as e:
-                warnings.warn(
-                    "I encountered a problem using the GPU via pytorch. Falling back to Numpy and the CPU.")
-                try:
-                    x = np.linalg.solve(A, b)
-                except:
-                    x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
-                return x
-        else:
-            raise Exception("No valid solve method specified")
-
-    ##################################################################################
-    def _is_sparse(self, A):
-        if float(np.count_nonzero(A)) / float(len(A) ** 2) < 0.01:
-            return True
-        else:
-            return False
-
-    def _how_sparse_is(self, A):
-        return float(np.count_nonzero(A)) / float(len(A) ** 2)
-
-    def _default_mean_function(self, x, hyperparameters, gp_obj):
-        """evaluates the gp mean function at the data points """
-        mean = np.zeros((len(x)))
-        mean[:] = np.mean(self.y_data)
-        return mean
-
-    def _default_noise_function(self, x, hyperparameters, gp_obj):
-        noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)
-        if self.gp2Scale:
-            return self.gp2Scale_obj.calculate_sparse_noise_covariance(noise)
-        else:
-            return np.diag(noise)
-
-    def _measured_noise_function(self, x, hyperparameters, gp_obj):
-        if np.ndim(self.noise_variances) == 2:  self.noise_variances=self.noise_variances[:,0]
-        if any(self.noise_variances <= 0.0): raise Exception(
-                "Negative or zero measurement variances communicated or calculated.")
-        return np.diag(self.noise_variances)
-
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
-    ###############################gp prediction###############################
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
-    ###########################################################################
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
         """
         This function calculates the posterior mean for a set of input points.
@@ -1427,7 +772,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         hyperparameters : np.ndarray, optional
             A numpy array of the correct size depending on the kernel. This is optional in case the posterior mean
             has to be computed with given hyperparameters, which is, for instance, the case if the posterior mean is
@@ -1436,33 +782,13 @@ class GP:
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
-            and L is the dimensionality of the output space.
+            and L is the dimensionality of the output space (most often 1).
 
         Return
         ------
         Solution points and function values : dict
         """
-        x_data, y_data, KVinvY = self.x_data.copy(), self.y_data.copy(), self.KVinvY.copy()
-        if hyperparameters is not None:
-            hps = hyperparameters
-            K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(x_data, y_data, hps, calc_inv=False)
-        else:
-            hps = self.hyperparameters
-
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        k = self.kernel(x_data, x_pred, hps, self)
-        A = k.T @ KVinvY
-        posterior_mean = self.mean_function(x_pred, hps, self) + A
-
-        return {"x": x_pred,
-                "f(x)": posterior_mean}
+        return self.posterior.posterior_mean(x_pred, hyperparameters=hyperparameters, x_out=x_out)
 
     def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None):
         """
@@ -1471,7 +797,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         hyperparameters : np.ndarray, optional
             A numpy array of the correct size depending on the kernel. This is optional in case the posterior mean
             has to be computed with given hyperparameters, which is, for instance, the case if the posterior mean is
@@ -1488,45 +815,8 @@ class GP:
         ------
         Solution : dict
         """
-        x_data, y_data, KVinvY = self.x_data.copy(), self.y_data.copy(), self.KVinvY.copy()
-        if hyperparameters is not None:
-            hps = hyperparameters
-            K, KV, KVinvY, logdet, FO, KVinv, mean, cov = self._compute_GPpriorV(x_data, y_data, hps, calc_inv=False)
-        else:
-            hps = self.hyperparameters
-
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        k = self.kernel(x_data, x_pred, hps, self)
-        f = self.mean_function(x_pred, hps, self)
-        eps = 1e-6
-        if direction is not None:
-            x1 = np.array(x_pred)
-            x1[:, direction] = x1[:, direction] + eps
-            mean_der = (self.mean_function(x1, hps, self) - f) / eps
-            k = self.kernel(x_data, x_pred, hps, self)
-            k_g = self.d_kernel_dx(x_pred, x_data, direction, hps)
-            posterior_mean_grad = mean_der + (k_g @ KVinvY)
-        else:
-            posterior_mean_grad = np.zeros((x_pred.shape))
-            for direction in range(len(x_pred[0])):
-                x1 = np.array(x_pred)
-                x1[:, direction] = x1[:, direction] + eps
-                mean_der = (self.mean_function(x1, hps, self) - f) / eps
-                k = self.kernel(x_data, x_pred, hps, self)
-                k_g = self.d_kernel_dx(x_pred, x_data, direction, hps)
-                posterior_mean_grad[:, direction] = mean_der + (k_g @ KVinvY)
-            direction = "ALL"
-
-        return {"x": x_pred,
-                "direction": direction,
-                "df/dx": posterior_mean_grad}
+        return self.posterior.posterior_mean_grad(x_pred, hyperparameters=hyperparameters,
+                                                  x_out=x_out, direction=direction)
 
     ###########################################################################
     def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
@@ -1536,7 +826,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
@@ -1552,48 +843,8 @@ class GP:
         ------
         Solution : dict
         """
-
-        x_data = self.x_data.copy()
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
-        if self.KVinv is not None:
-            if variance_only:
-                S = None
-                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.KVinv, k)
-            else:
-                S = kk - (k.T @ self.KVinv @ k)
-                v = np.array(np.diag(S))
-        else:
-            k_cov_prod = self._KVsolve(k)
-            S = kk - (k_cov_prod.T @ k)
-            v = np.array(np.diag(S))
-        if np.any(v < -0.001):
-            logger.warning(inspect.cleandoc("""#
-            Negative variances encountered. That normally means that the model is unstable.
-            Rethink the kernel definitions, add more noise to the data,
-            or double check the hyperparameter optimization bounds. This will not
-            terminate the algorithm, but expect anomalies."""))
-            v[v < 0.0] = 0.0
-            if not variance_only:
-                np.fill_diagonal(S, v)
-
-        if add_noise and callable(self.noise_function):
-            noise = self.noise_function(x_pred, self.hyperparameters, self)
-            if scipy.sparse.issparse(noise): noise = noise.toarray()
-            v = v + np.diag(noise)
-            if S is not None: S = S + noise
-
-        return {"x": x_pred,
-                "v(x)": v,
-                "S": S}
+        return self.posterior.posterior_covariance(x_pred, x_out=x_out, variance_only=variance_only,
+                                                   add_noise=add_noise)
 
     def posterior_covariance_grad(self, x_pred, x_out=None, direction=None):
         """
@@ -1602,7 +853,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
@@ -1614,44 +866,7 @@ class GP:
         ------
         Solution : dict
         """
-        x_data = self.x_data.copy()
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        k_covariance_prod = self._KVsolve(k)
-        if direction is not None:
-            k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
-            kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
-            x1 = np.array(x_pred)
-            x2 = np.array(x_pred)
-            eps = 1e-6
-            x1[:, direction] = x1[:, direction] + eps
-            kk_g = (self.kernel(x1, x1, self.hyperparameters, self) - \
-                    self.kernel(x2, x2, self.hyperparameters, self)) / eps
-            a = kk_g - (2.0 * k_g.T @ k_covariance_prod)
-            return {"x": x_pred,
-                    "dv/dx": np.diag(a),
-                    "dS/dx": a}
-        else:
-            grad_v = np.zeros((len(x_pred), len(x_pred[0])))
-            for direction in range(len(x_pred[0])):
-                k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
-                kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
-                x1 = np.array(x_pred)
-                x2 = np.array(x_pred)
-                eps = 1e-6
-                x1[:, direction] = x1[:, direction] + eps
-                kk_g = (self.kernel(x1, x1, self.hyperparameters, self) - \
-                        self.kernel(x2, x2, self.hyperparameters, self)) / eps
-                grad_v[:, direction] = np.diag(kk_g - (2.0 * k_g.T @ k_covariance_prod))
-            return {"x": x_pred,
-                    "dv/dx": grad_v}
+        return self.posterior.posterior_covariance_grad(x_pred, x_out=x_out, direction=direction)
 
     ###########################################################################
     def joint_gp_prior(self, x_pred, x_out=None):
@@ -1660,8 +875,9 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        x_pred : np.ndarray or list
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
@@ -1672,25 +888,7 @@ class GP:
         Solution : dict
         """
 
-        x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
-        post_mean = self.mean_function(x_pred, self.hyperparameters, self)
-        joint_gp_prior_mean = np.append(prior_mean_vec, post_mean)
-        return {"x": x_pred,
-                "K": K,
-                "k": k,
-                "kappa": kk,
-                "prior mean": joint_gp_prior_mean,
-                "S": np.block([[K, k], [k.T, kk]])}
+        return self.posterior.joint_gp_prior(x_pred, x_out=x_out)
 
     ###########################################################################
     def joint_gp_prior_grad(self, x_pred, direction, x_out=None):
@@ -1700,7 +898,8 @@ class GP:
         Parameters
         ------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         direction : int
             Direction of derivative.
         x_out : np.ndarray, optional
@@ -1712,36 +911,7 @@ class GP:
         ------
         Solution : dict
         """
-        x_data, K, prior_mean_vec = self.x_data.copy(), self.K.copy(), self.prior_mean_vec.copy()
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self)
-        k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
-        x1 = np.array(x_pred)
-        x2 = np.array(x_pred)
-        eps = 1e-6
-        x1[:, direction] = x1[:, direction] + eps
-        x2[:, direction] = x2[:, direction] - eps
-        kk_g = (self.kernel(x1, x1, self.hyperparameters, self) - self.kernel(x2, x2, self.hyperparameters, self)) / (
-            2.0 * eps)
-        post_mean = self.mean_function(x_pred, self.hyperparameters, self)
-        mean_der = (self.mean_function(x1, self.hyperparameters, self) - self.mean_function(x2, self.hyperparameters,
-                                                                                            self)) / (2.0 * eps)
-        full_gp_prior_mean_grad = np.append(np.zeros((prior_mean_vec.shape)), mean_der)
-        prior_cov_grad = np.zeros(K.shape)
-        return {"x": x_pred,
-                "K": K,
-                "dk/dx": k_g,
-                "d kappa/dx": kk_g,
-                "d prior mean/x": full_gp_prior_mean_grad,
-                "dS/dx": np.block([[prior_cov_grad, k_g], [k_g.T, kk_g]])}
+        return self.posterior.joint_gp_prior_grad(x_pred, direction, x_out=x_out)
 
     ###########################################################################
     def entropy(self, S):
@@ -1758,9 +928,7 @@ class GP:
         ------
         Entropy : float
         """
-        dim = len(S[0])
-        logdet = self._logdet(S)
-        return (float(dim) / 2.0) + ((float(dim) / 2.0) * np.log(2.0 * np.pi)) + (0.5 * logdet)
+        return self.posterior.entropy(S)
 
     ###########################################################################
     def gp_entropy(self, x_pred, x_out=None):
@@ -1770,8 +938,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
-        x_out : np.ndarray, optional
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
             and L is the dimensionality of the output space.
@@ -1780,19 +948,7 @@ class GP:
         ------
         Entropy : float
         """
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        priors = self.joint_gp_prior(x_pred, x_out=None)
-        S = priors["S"]
-        dim = len(S[0])
-        logdet = self._logdet(S)
-        return (float(dim) / 2.0) + ((float(dim) / 2.0) * np.log(2.0 * np.pi)) + (0.5 * logdet)
+        return self.posterior.gp_entropy(x_pred, x_out=x_out)
 
     ###########################################################################
     def gp_entropy_grad(self, x_pred, direction, x_out=None):
@@ -1802,7 +958,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         direction : int
             Direction of derivative.
         x_out : np.ndarray, optional
@@ -1814,37 +971,17 @@ class GP:
         ------
         Entropy gradient in given direction : float
         """
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        priors1 = self.joint_gp_prior(x_pred, x_out=None)
-        priors2 = self.joint_gp_prior_grad(x_pred, direction, x_out=None)
-        S1 = priors1["S"]
-        S2 = priors2["dS/dx"]
-        return 0.5 * np.trace(self._inv(S1) @ S2)
+        return self.posterior.gp_entropy_grad(x_pred, direction, x_out=x_out)
 
     ###########################################################################
-    def _kl_div_grad(self, mu1, dmu1dx, mu2, S1, dS1dx, S2):
+    def kl_div_grad(self, mu1, dmu1dx, mu2, S1, dS1dx, S2):
         """
         This function computes the gradient of the KL divergence between two normal distributions
         when the gradients of the mean and covariance are given.
         a = kl_div(mu1, dmudx,mu2, S1, dS1dx, S2); S1, S2 are 2d numpy arrays, matrices have to be non-singular,
         mu1, mu2 are mean vectors, given as 2d arrays
         """
-        logdet1 = self._logdet(S1)
-        logdet2 = self._logdet(S2)
-        x1 = self._solve(S2, dS1dx)
-        mu = np.subtract(mu2, mu1)
-        x2 = self._solve(S2, mu)
-        x3 = self._solve(S2, -dmu1dx)
-        dim = len(mu)
-        kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2.T @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
-        return kld
+        return self.posterior.kl_div_grad(mu1, dmu1dx, mu2, S1, dS1dx, S2)
 
     ###########################################################################
     def kl_div(self, mu1, mu2, S1, S2):
@@ -1855,7 +992,7 @@ class GP:
         ----------
         mu1 : np.ndarray
             Mean vector of distribution 1.
-        mu1 : np.ndarray
+        mu2 : np.ndarray
             Mean vector of distribution 2.
         S1 : np.ndarray
             Covariance matrix of distribution 1.
@@ -1866,20 +1003,7 @@ class GP:
         ------
         KL divergence : float
         """
-        logdet1 = self._logdet(S1)
-        logdet2 = self._logdet(S2)
-        x1 = self._solve(S2, S1)
-        mu = np.subtract(mu2, mu1)
-        x2 = self._solve(S2, mu)
-        dim = len(mu)
-        kld = 0.5 * (np.trace(x1) + (x2.T @ mu)[0] - float(dim) + (logdet2 - logdet1))
-        if kld < -1e-4:
-            warnings.warn("Negative KL divergence encountered. That happens when \n \
-                    one of the covariance matrices is close to positive semi definite \n\
-                    and therefore the logdet() calculation becomes unstable.\n \
-                    Returning abs(KLD)")
-            logger.debug("Negative KL divergence encountered")
-        return abs(kld)
+        return self.posterior.kl_div_grad(mu1, dmu1dx, mu2, S1, dS1dx, S2)
 
     ###########################################################################
     def gp_kl_div(self, x_pred, comp_mean, comp_cov, x_out=None):
@@ -1890,7 +1014,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         comp_mean : np.ndarray
             Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
         comp_cov : np.ndarray
@@ -1904,24 +1029,7 @@ class GP:
         -------
         Solution : dict
         """
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        res = self.posterior_mean(x_pred, x_out=None)
-        gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + np.identity(len(x_pred)) * 1e-9
-        comp_cov = comp_cov + np.identity(len(comp_cov)) * 1e-9
-        return {"x": x_pred,
-                "gp posterior mean": gp_mean,
-                "gp posterior covariance": gp_cov,
-                "given mean": comp_mean,
-                "given covariance": comp_cov,
-                "kl-div": self.kl_div(gp_mean, comp_mean, gp_cov, comp_cov)}
+        return self.posterior.gp_kl_div(x_pred, comp_mean, comp_cov, x_out=x_out)
 
     ###########################################################################
     def gp_kl_div_grad(self, x_pred, comp_mean, comp_cov, direction, x_out=None):
@@ -1931,7 +1039,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         comp_mean : np.ndarray
             Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
         comp_cov : np.ndarray
@@ -1947,27 +1056,7 @@ class GP:
         ------
         Solution : dict
         """
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        gp_mean = self.posterior_mean(x_pred, x_out=None)["f(x)"]
-        gp_mean_grad = self.posterior_mean_grad(x_pred, direction=direction, x_out=None)["df/dx"]
-        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + np.identity(len(x_pred)) * 1e-9
-        gp_cov_grad = self.posterior_covariance_grad(x_pred, direction=direction, x_out=None)["dS/dx"]
-        comp_cov = comp_cov + np.identity(len(comp_cov)) * 1e-9
-        return {"x": x_pred,
-                "gp posterior mean": gp_mean,
-                "gp posterior mean grad": gp_mean_grad,
-                "gp posterior covariance": gp_cov,
-                "gp posterior covariance grad": gp_cov_grad,
-                "given mean": comp_mean,
-                "given covariance": comp_cov,
-                "kl-div grad": self._kl_div_grad(gp_mean, gp_mean_grad, comp_mean, gp_cov, gp_cov_grad, comp_cov)}
+        return self.posterior.gp_kl_div_grad(x_pred, comp_mean, comp_cov, direction, x_out=x_out)
 
     ###########################################################################
     def mutual_information(self, joint, m1, m2):
@@ -1988,7 +1077,7 @@ class GP:
         ------
         Mutual information : float
         """
-        return self.entropy(m1) + self.entropy(m2) - self.entropy(joint)
+        return self.posterior.mutual_information(joint, m1, m2)
 
     ###########################################################################
     def gp_mutual_information(self, x_pred, x_out=None):
@@ -2001,7 +1090,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
@@ -2011,23 +1101,7 @@ class GP:
         -------
         Solution : dict
         """
-        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
-
-        joint_covariance = \
-            np.asarray(np.block([[K, k], \
-                                 [k.T, kk]]))
-        return {"x": x_pred,
-                "mutual information": self.mutual_information(joint_covariance, kk, K)}
+        return self.posterior.gp_mutual_information(x_pred, x_out=x_out)
 
     ###########################################################################
     def gp_total_correlation(self, x_pred, x_out=None):
@@ -2043,7 +1117,8 @@ class GP:
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
@@ -2054,39 +1129,21 @@ class GP:
         Solution : dict
             Total correlation between prediction points, as a collective.
         """
-        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        k = self.kernel(x_data, x_pred, self.hyperparameters, self)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
-        joint_covariance = np.asarray(np.block([[K, k],
-                                                [k.T, kk]]))
-
-        prod_covariance = np.asarray(np.block([[K, k * 0.],
-                                               [k.T * 0., kk * np.identity(len(kk))]]))
-
-        return {"x": x_pred,
-                "total correlation": self.kl_div(np.zeros((len(joint_covariance))), np.zeros((len(joint_covariance))),
-                                                 joint_covariance, prod_covariance)}
+        return self.posterior.gp_total_correlation(x_pred, x_out=x_out)
 
     ###########################################################################
     def gp_relative_information_entropy(self, x_pred, x_out=None):
         """
         Function to compute the KL divergence and therefore the relative information entropy
-        of the prior distribution over predicted function values and the posterior distribution.
+        of the prior distribution defined over predicted function values and the posterior distribution.
         The value is a reflection of how much information is predicted to be gained
         through observing a set of data points at x_pred.
 
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
@@ -2097,17 +1154,7 @@ class GP:
         Solution : dict
             Relative information entropy of prediction points, as a collective.
         """
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
-        post_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + (np.identity(len(x_pred)) * 1e-9)
-        return {"x": x_pred,
-                "RIE": self.kl_div(np.zeros((len(x_pred))), np.zeros((len(x_pred))), kk, post_cov)}
+        return self.posterior.gp_relative_information_entropy(x_pred, x_out=x_out)
 
     ###########################################################################
     def gp_relative_information_entropy_set(self, x_pred, x_out=None):
@@ -2116,13 +1163,14 @@ class GP:
         of the prior distribution over predicted function values and the posterior distribution.
         The value is a reflection of how much information is predicted to be gained
         through observing each data point in x_pred separately, not all
-        at once as in `gp_relative_information_entrop`.
+        at once as in `gp_relative_information_entropy`.
 
 
         Parameters
         ----------
         x_pred : np.ndarray
-            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
@@ -2133,32 +1181,23 @@ class GP:
         Solution : dict
             Relative information entropy of prediction points, but not as a collective.
         """
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-        RIE = np.zeros((len(x_pred)))
-        for i in range(len(x_pred)):
-            RIE[i] = self.gp_relative_information_entropy(x_pred[i].reshape(1, len(x_pred[i])), x_out=None)["RIE"]
-
-        return {"x": x_pred,
-                "RIE": RIE}
+        return self.posterior.gp_relative_information_entropy_set(x_pred, x_out=x_out)
 
     ###########################################################################
     def posterior_probability(self, x_pred, comp_mean, comp_cov, x_out=None):
         """
         Function to compute probability of a probabilistic quantity of interest,
-        given the GP posterior at a given point.
+        given the GP posterior at given points.
 
         Parameters
         ----------
-        x_pred: 1d or 2d numpy array of points, note, these are elements of the
-                index set which results from a cartesian product of input and output space
-        comp_mean: a vector of mean values, same length as x_pred
-        comp_cov: covarianve matrix, in R^{len(x_pred)xlen(x_pred)}
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
+        comp_mean: np.ndarray
+            A vector of mean values, same length as x_pred.
+        comp_cov: np.nparray
+            Covariance matrix, in R^{len(x_pred) times len(x_pred)}
         x_out : np.ndarray, optional
             Output coordinates in case of multitask GP use; a numpy array of size (N x L),
             where N is the number of output points,
@@ -2169,34 +1208,7 @@ class GP:
         Solution : dict
             The probability of a probabilistic quantity of interest, given the GP posterior at a given point.
         """
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        res = self.posterior_mean(x_pred, x_out=None)
-        gp_mean = res["f(x)"]
-        gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"]
-        gp_cov_inv = self._inv(gp_cov)
-        comp_cov_inv = self._inv(comp_cov)
-        cov = self._inv(gp_cov_inv + comp_cov_inv)
-        mu = cov @ gp_cov_inv @ gp_mean + cov @ comp_cov_inv @ comp_mean
-        logdet1 = self._logdet(cov)
-        logdet2 = self._logdet(gp_cov)
-        logdet3 = self._logdet(comp_cov)
-        dim = len(mu)
-        C = 0.5 * (((gp_mean.T @ gp_cov_inv + comp_mean.T @ comp_cov_inv).T \
-                    @ cov @ (gp_cov_inv @ gp_mean + comp_cov_inv @ comp_mean)) \
-                   - (gp_mean.T @ gp_cov_inv @ gp_mean + comp_mean.T @ comp_cov_inv @ comp_mean)).squeeze()
-        ln_p = (C + 0.5 * logdet1) - (np.log((2.0 * np.pi) ** (dim / 2.0)) + (0.5 * (logdet2 + logdet3)))
-        return {"mu": mu,
-                "covariance": cov,
-                "probability":
-                    np.exp(ln_p)
-                }
+        return self.posterior.posterior_probability(x_pred, comp_mean, comp_cov, x_out=x_out)
 
     def posterior_probability_grad(self, x_pred, comp_mean, comp_cov, direction, x_out=None):
         """
@@ -2205,10 +1217,13 @@ class GP:
 
         Parameters
         ----------
-        x_pred: 1d or 2d numpy array of points, note, these are elements of the
-                index set which results from a cartesian product of input and output space
-        comp_mean: a vector of mean values, same length as x_pred
-        comp_cov: covarianve matrix, in R^{len(x_pred)xlen(x_pred)}
+        x_pred : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
+            GPs on non-Euclidean input spaces.
+        comp_mean: np.ndarray
+            A vector of mean values, same length as x_pred.
+        comp_cov: np.nparray
+            Covariance matrix, in R^{len(x_pred) times len(x_pred)}
         direction : int
             The direction to compute the gradient in.
         x_out : np.ndarray, optional
@@ -2222,559 +1237,15 @@ class GP:
             The gradient of the probability of a probabilistic quantity of interest,
             given the GP posterior at a given point.
         """
-        if not self.non_Euclidean:
-            if np.ndim(x_pred) == 1: raise Exception("x_pred has to be a 2d numpy array, not 1d")
-            if x_out is not None: x_pred = self._cartesian_product_euclid(x_pred, x_out)
-            if len(x_pred[0]) != self.input_space_dim: raise Exception(
-                "Wrong dimensionality of the input points x_pred.")
-        elif x_out is not None:
-            raise Exception("Multi-task GPs on non-Euclidean spaces not implemented yet.")
-
-        x1 = np.array(x_pred)
-        x2 = np.array(x_pred)
-        x1[:, direction] = x1[:, direction] + 1e-6
-        x2[:, direction] = x2[:, direction] - 1e-6
-
-        probability_grad = (self.posterior_probability(x1, comp_mean, comp_cov, x_out=None)["probability"] - \
-                            self.posterior_probability(x2, comp_mean, comp_cov, x_out=None)["probability"]) / 2e-6
-        return {"probability grad": probability_grad}
-
-    ###########################################################################
-    def _int_gauss(self, S):
-        return ((2.0 * np.pi) ** (len(S) / 2.0)) * np.sqrt(np.linalg.det(S))
+        return self.posterior.posterior_probability_grad(x_pred, comp_mean, comp_cov, direction, x_out=x_out)
 
     ##################################################################################
     ##################################################################################
     ##################################################################################
     ##################################################################################
-    ######################Kernels#####################################################
+    ######################Compute#Covariance#Matrix###################################
     ##################################################################################
     ##################################################################################
-    def squared_exponential_kernel(self, distance, length):
-        """
-        Function for the squared exponential kernel.
-        kernel = np.exp(-(distance ** 2) / (2.0 * (length ** 2)))
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        length : scalar
-            The length scale hyperparameters.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-        kernel = np.exp(-(distance ** 2) / (2.0 * (length ** 2)))
-        return kernel
-
-    def squared_exponential_kernel_robust(self, distance, phi):
-        """
-        Function for the squared exponential kernel (robust version)
-        kernel = np.exp(-(distance ** 2) * (phi ** 2))
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        phi : scalar
-            The length scale hyperparameters.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-        kernel = np.exp(-(distance ** 2) * (phi ** 2))
-        return kernel
-
-    def exponential_kernel(self, distance, length):
-        """
-        Function for the exponential kernel.
-        kernel = np.exp(-(distance) / (length))
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        length : scalar
-            The length scale hyperparameters.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-
-        kernel = np.exp(-(distance) / (length))
-        return kernel
-
-    def exponential_kernel_robust(self, distance, phi):
-        """
-        Function for the exponential kernel (robust version)
-        kernel = np.exp(-(distance) * (phi**2))
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        phi : scalar
-            The length scale hyperparameters.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-
-        kernel = np.exp(-(distance) * (phi ** 2))
-        return kernel
-
-    def matern_kernel_diff1(self, distance, length):
-        """
-        Function for the Matern kernel, order of differentiability = 1.
-        kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
-            -(np.sqrt(3.0) * distance) / length
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        length : scalar
-            The length scale hyperparameters.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-
-        kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
-            -(np.sqrt(3.0) * distance) / length
-        )
-        return kernel
-
-    def matern_kernel_diff1_robust(self, distance, phi):
-        """
-        Function for the Matern kernel, order of differentiability = 1, robust version.
-        kernel = (1.0 + ((np.sqrt(3.0) * distance) * (phi**2))) * np.exp(
-            -(np.sqrt(3.0) * distance) * (phi**2))
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        phi : scalar
-            The length scale hyperparameters.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-        ##1/l --> phi**2
-        kernel = (1.0 + ((np.sqrt(3.0) * distance) * (phi ** 2))) * np.exp(
-            -(np.sqrt(3.0) * distance) * (phi ** 2))
-        return kernel
-
-    def matern_kernel_diff2(self, distance, length):
-        """
-        Function for the Matern kernel, order of differentiability = 2.
-        kernel = (
-            1.0
-            + ((np.sqrt(5.0) * distance) / (length))
-            + ((5.0 * distance ** 2) / (3.0 * length ** 2))
-        ) * np.exp(-(np.sqrt(5.0) * distance) / length)
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        length : scalar
-            The length scale hyperparameters.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-
-        kernel = (
-                     1.0
-                     + ((np.sqrt(5.0) * distance) / (length))
-                     + ((5.0 * distance ** 2) / (3.0 * length ** 2))
-                 ) * np.exp(-(np.sqrt(5.0) * distance) / length)
-        return kernel
-
-    def matern_kernel_diff2_robust(self, distance, phi):
-        """
-        Function for the Matern kernel, order of differentiability = 2, robust version.
-        kernel = (
-            1.0
-            + ((np.sqrt(5.0) * distance) * (phi**2))
-            + ((5.0 * distance ** 2) * (3.0 * phi ** 4))
-        ) * np.exp(-(np.sqrt(5.0) * distance) * (phi**2))
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        phi : scalar
-            The length scale hyperparameters.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-
-        kernel = (
-                     1.0
-                     + ((np.sqrt(5.0) * distance) * (phi ** 2))
-                     + ((5.0 * distance ** 2) * (3.0 * phi ** 4))
-                 ) * np.exp(-(np.sqrt(5.0) * distance) * (phi ** 2))
-        return kernel
-
-    def sparse_kernel(self, distance, radius):
-        """
-        Function for a compactly supported kernel.
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        radius : scalar
-            Radius of support.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-
-        d = np.array(distance)
-        d[d == 0.0] = 10e-6
-        d[d > radius] = radius
-        kernel = (np.sqrt(2.0) / (3.0 * np.sqrt(np.pi))) * \
-                 ((3.0 * (d / radius) ** 2 * np.log((d / radius) / (1 + np.sqrt(1.0 - (d / radius) ** 2)))) + \
-                  ((2.0 * (d / radius) ** 2 + 1.0) * np.sqrt(1.0 - (d / radius) ** 2)))
-        return kernel
-
-    def periodic_kernel(self, distance, length, p):
-        """
-        Function for a periodic kernel.
-        kernel = np.exp(-(2.0/length**2)*(np.sin(np.pi*distance/p)**2))
-
-        Parameters
-        ----------
-        distance : scalar or np.ndarray
-            Distance between a set of points.
-        length : scalar
-            Length scale.
-        p : scalar
-            Period.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-
-        kernel = np.exp(-(2.0 / length ** 2) * (np.sin(np.pi * distance / p) ** 2))
-        return kernel
-
-    def linear_kernel(self, x1, x2, hp1, hp2, hp3):
-        """
-        Function for a linear kernel.
-        kernel = hp1 + (hp2*(x1-hp3)*(x2-hp3))
-
-        Parameters
-        ----------
-        x1 : float
-            Point 1.
-        x2 : float
-            Point 2.
-        hp1 : float
-            Hyperparameter.
-        hp2 : float
-            Hyperparameter.
-        hp3 : float
-            Hyperparameter.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-        kernel = hp1 + (hp2 * (x1 - hp3) * (x2 - hp3))
-        return kernel
-
-    def dot_product_kernel(self, x1, x2, hp, matrix):
-        """
-        Function for a dot-product kernel.
-        kernel = hp + x1.T @ matrix @ x2
-
-        Parameters
-        ----------
-        x1 : np.ndarray
-            Point 1.
-        x2 : np.ndarray
-            Point 2.
-        hp : float
-            Offset hyperparameter.
-        matrix : np.ndarray
-            PSD matrix defining the inner product.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-        kernel = hp + x1.T @ matrix @ x2
-        return kernel
-
-    def polynomial_kernel(self, x1, x2, p):
-        """
-        Function for a polynomial kernel.
-        kernel = (1.0+x1.T @ x2)**p
-
-        Parameters
-        ----------
-        x1 : np.ndarray
-            Point 1.
-        x2 : np.ndarray
-            Point 2.
-        p : float
-            Power hyperparameter.
-
-        Return
-        ------
-        Kernel output : same as distance parameter.
-        """
-        kernel = (1.0 + x1.T @ x2) ** p
-        return p
-
-    def default_kernel(self, x1, x2, hyperparameters, obj):
-        """
-        Function for the default kernel, a Matern kernel of first-order differentiability.
-
-        Parameters
-        ----------
-        x1 : np.ndarray
-            Numpy array of shape (U x D).
-        x2 : np.ndarray
-            Numpy array of shape (V x D).
-        hyperparameters : np.ndarray
-            Array of hyperparameters. For this kernel we need D + 1 hyperparameters.
-        obj : object instance
-            GP object instance.
-
-        Return
-        ------
-        Covariance matrix : np.ndarray
-        """
-        hps = hyperparameters
-        distance_matrix = np.zeros((len(x1), len(x2)))
-        for i in range(len(x1[0])):
-            distance_matrix += abs(np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
-        distance_matrix = np.sqrt(distance_matrix)
-        return hps[0] * obj.matern_kernel_diff1(distance_matrix, 1)
-
-    def wendland_anisotropic(self, x1, x2, hyperparameters, obj):
-        """
-        Function for the Wendland kernel.
-        The Wendland kernel is compactly supported, leading to sparse covariance matrices.
-
-        Parameters
-        ----------
-        x1 : np.ndarray
-            Numpy array of shape (U x D).
-        x2 : np.ndarray
-            Numpy array of shape (V x D).
-        hyperparameters : np.ndarray
-            Array of hyperparameters. For this kernel we need D + 1 hyperparameters.
-        obj : object instance
-            GP object instance.
-
-        Return
-        ------
-        Covariance matrix : np.ndarray
-        """
-        hps = hyperparameters
-        distance_matrix = np.zeros((len(x1), len(x2)))
-        for i in range(len(x1[0])): distance_matrix += abs(np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
-        d = np.sqrt(distance_matrix)
-        d[d > 1.] = 1.
-        kernel = (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
-        return hps[0] * kernel
-
-    def non_stat_kernel(self, x1, x2, x0, w, l):
-        """
-        Non-stationary kernel.
-        kernel = g(x1) g(x2)
-
-        Parameters
-        ----------
-        x1 : np.ndarray
-            Numpy array of shape (U x D).
-        x2 : np.ndarray
-            Numpy array of shape (V x D).
-        x0 : np.ndarray
-            Numpy array of the basis function locations.
-        w : np.ndarray
-            1d np.ndarray of weights. len(w) = len(x0).
-        l : float
-            Width measure of the basis functions.
-
-        Return
-        ------
-        Covariance matrix : np.ndarray
-        """
-        non_stat = np.outer(self._g(x1, x0, w, l), self._g(x2, x0, w, l))
-        return non_stat
-
-    def non_stat_kernel_gradient(self, x1, x2, x0, w, l):
-        """
-        Non-stationary kernel gradient.
-        kernel = g(x1) g(x2)
-
-        Parameters
-        ----------
-        x1 : np.ndarray
-            Numpy array of shape (U x D).
-        x2 : np.ndarray
-            Numpy array of shape (V x D).
-        x0 : np.ndarray
-            Numpy array of the basis function locations.
-        w : np.ndarray
-            1d np.ndarray of weights. len(w) = len(x0).
-        l : float
-            Width measure of the basis functions.
-
-        Return
-        ------
-        Covariance matrix : np.ndarray
-        """
-        dkdw = np.einsum('ij,k->ijk', self._dgdw(x1, x0, w, l), self._g(x2, x0, w, l)) + np.einsum('ij,k->ikj',
-                                                                                                   self._dgdw(x2, x0, w,
-                                                                                                              l),
-                                                                                                   self._g(x1, x0, w,
-                                                                                                           l))
-        dkdl = np.outer(self._dgdl(x1, x0, w, l), self._g(x2, x0, w, l)) + np.outer(self._dgdl(x2, x0, w, l),
-                                                                                    self._g(x1, x0, w, l)).T
-        res = np.empty((len(w) + 1, len(x1), len(x2)))
-        res[0:len(w)] = dkdw
-        res[-1] = dkdl
-        return res
-
-    def get_distance_matrix(self, x1, x2):
-        """
-        Function to calculate the pairwise distance matrix of
-        points in x1 and x2.
-
-        Parameters
-        ----------
-        x1 : np.ndarray
-            Numpy array of shape (U x D).
-        x2 : np.ndarray
-            Numpy array of shape (V x D).
-
-        Return
-        ------
-        distance matrix : np.ndarray
-        """
-        d = np.zeros((len(x1), len(x2)))
-        for i in range(x1.shape[1]): d += (x1[:, i].reshape(-1, 1) - x2[:, i]) ** 2
-        return np.sqrt(d)
-
-    def _g(self, x, x0, w, l):
-        d = self.get_distance_matrix(x, x0)
-        e = np.exp(-(d ** 2) / l)
-        return np.sum(w * e, axis=1)
-
-    def _dgdw(self, x, x0, w, l):
-        d = self.get_distance_matrix(x, x0)
-        e = np.exp(-(d ** 2) / l).T
-        return e
-
-    def _dgdl(self, x, x0, w, l):
-        d = self.get_distance_matrix(x, x0)
-        e = np.exp(-(d ** 2) / l)
-        return np.sum(w * e * (d ** 2 / l ** 2), axis=1)
-
-    ##################################################################################
-    ##################################################################################
-    ###################Kernel and Mean Function Derivatives###########################
-    ##################################################################################
-    def _d_gp_kernel_dx(self, points1, points2, direction, hyperparameters):
-        new_points = np.array(points1)
-        epsilon = 1e-8
-        new_points[:, direction] += epsilon
-        a = self.kernel(new_points, points2, hyperparameters, self)
-        b = self.kernel(points1, points2, hyperparameters, self)
-        derivative = (a - b) / epsilon
-        return derivative
-
-    def _dkernel_dh(self, points1, points2, direction, hyperparameters):
-        new_hyperparameters1 = np.array(hyperparameters)
-        new_hyperparameters2 = np.array(hyperparameters)
-        epsilon = 1e-8
-        new_hyperparameters1[direction] += epsilon
-        new_hyperparameters2[direction] -= epsilon
-        a = self.kernel(points1, points2, new_hyperparameters1, self)
-        b = self.kernel(points1, points2, new_hyperparameters2, self)
-        derivative = (a - b) / (2.0 * epsilon)
-        return derivative
-
-    def _gp_kernel_gradient(self, points1, points2, hyperparameters, obj):
-        gradient = np.empty((len(hyperparameters), len(points1), len(points2)))
-        for direction in range(len(hyperparameters)):
-            gradient[direction] = self._dkernel_dh(points1, points2, direction, hyperparameters)
-        return gradient
-
-    def _gp_kernel_derivative(self, points1, points2, direction, hyperparameters, obj):
-        # gradient = np.empty((len(hyperparameters), len(points1),len(points2)))
-        derivative = self._dkernel_dh(points1, points2, direction, hyperparameters)
-        return derivative
-
-    def _default_dm_dh(self, x, hps, gp_obj):
-        gr = np.zeros((len(hps), len(x)))
-        return gr
-
-    def _default_dnoise_dh(self, x, hps, gp_obj):
-        gr = np.zeros((len(hps), len(x), len(x)))
-        return gr
-
-    def _default_dnoise_dh_econ(self, x, i, hps, gp_obj):
-        gr = np.zeros((len(x), len(x)))
-        return gr
-
-    def _finitediff_dm_dh(self, x, hps, gp_obj):
-        gr = np.empty((len(hps), len(x)))
-        for i in range(len(hps)):
-            temp_hps1 = np.array(hps)
-            temp_hps1[i] = temp_hps1[i] + 1e-6
-            temp_hps2 = np.array(hps)
-            temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.mean_function(x, temp_hps1, self)
-            b = self.mean_function(x, temp_hps2, self)
-            gr[i] = (a - b) / 2e-6
-        return gr
-
-    ##########################
-    def _finitediff_dnoise_dh(self, x, hps, gp_obj):
-        gr = np.zeros((len(hps), len(x), len(x)))
-        for i in range(len(hps)):
-            temp_hps1 = np.array(hps)
-            temp_hps1[i] = temp_hps1[i] + 1e-6
-            temp_hps2 = np.array(hps)
-            temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.noise_function(x, temp_hps1, self)
-            b = self.noise_function(x, temp_hps2, self)
-            gr[i] = (a - b) / 2e-6
-        return gr
-
-    ##########################
-    def _finitediff_dnoise_dh_econ(self, x, i, hps, gp_obj):
-        temp_hps1 = np.array(hps)
-        temp_hps1[i] = temp_hps1[i] + 1e-6
-        temp_hps2 = np.array(hps)
-        temp_hps2[i] = temp_hps2[i] - 1e-6
-        a = self.noise_function(x, temp_hps1, self)
-        b = self.noise_function(x, temp_hps2, self)
-        gr = (a - b) / 2e-6
-        return gr
-
     def _normalize(self, data):
         min_d = np.min(data)
         max_d = np.max(data)
@@ -2808,17 +1279,6 @@ class GP:
             new_x_pred[:, i] = (x_pred[:, i] - x_min[i]) / (x_max[i] - x_min[i])
         return new_x_pred
 
-    def _cartesian_product_euclid(self, x, y):
-        """
-        Input x,y have to be 2d numpy arrays
-        The return is the cartesian product of the two sets
-        """
-        res = []
-        for i in range(len(y)):
-            for j in range(len(x)):
-                res.append(np.append(x[j], y[i]))
-        return np.array(res)
-
     def _cartesian_product_noneuclid(self, x, y):
         """
         Input x,y have to be 2d numpy arrays
@@ -2835,9 +1295,10 @@ class GP:
     #######################VALIDATION###################################################
     ####################################################################################
     def _crps_s(self, x, mu, sigma):
-        return np.mean(abs(sigma * ((1. / np.sqrt(np.pi))
+        res = abs(sigma * ((1. / np.sqrt(np.pi))
                                     - 2. * norm.pdf((x - mu) / sigma)
-                                    - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.)))))
+                                    - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.))))
+        return np.mean(res), np.sqrt(np.var(res))
 
     def crps(self, x_test, y_test):
         """
@@ -2929,40 +1390,8 @@ class GP:
         x_pred = np.linspace(b[0], b[1], res).reshape(res, -1)
         return x_pred
 
-    def _in_bounds(self, v, bounds):
-        if any(v < bounds[:, 0]) or any(v > bounds[:, 1]): return False
-        return True
-
-
 ####################################################################################
 ####################################################################################
 ####################################################################################
 ####################################################################################
 ####################################################################################
-def wendland_anisotropic_gp2Scale_cpu(x1, x2, hps, obj):
-    distance_matrix = np.zeros((len(x1), len(x2)))
-    for i in range(len(x1[0])): distance_matrix += (np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
-    d = np.sqrt(distance_matrix)
-    d[d > 1.] = 1.
-    kernel = hps[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
-    return kernel
-
-
-def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps, obj):  # pragma: no cover
-    import torch
-    cuda_device = torch.device("cuda:0")
-    x1_dev = torch.from_numpy(x1).to(cuda_device, dtype=torch.float32)
-    x2_dev = torch.from_numpy(x2).to(cuda_device, dtype=torch.float32)
-    hps_dev = torch.from_numpy(hps).to(cuda_device, dtype=torch.float32)
-    d = _get_distance_matrix_gpu(x1_dev, x2_dev, cuda_device, hps_dev)
-    d[d > 1.] = 1.
-    kernel = hps[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
-    return kernel.cpu().numpy()
-
-
-def _get_distance_matrix_gpu(x1, x2, device, hps):  # pragma: no cover
-    import torch
-    d = torch.zeros((len(x1), len(x2))).to(device, dtype=torch.float32)
-    for i in range(x1.shape[1]):
-        d += ((x1[:, i].reshape(-1, 1) - x2[:, i]) / hps[1 + i]) ** 2
-    return torch.sqrt(d)

@@ -8,7 +8,7 @@ import scipy.sparse as sparse
 from scipy.sparse import block_array
 
 
-class GPrior:  # pragma: no cover
+class GPprior:  # pragma: no cover
     def __init__(self,
                  input_space_dim,
                  x_data,
