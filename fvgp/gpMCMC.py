@@ -124,7 +124,8 @@ class gpMCMC:
         if not isinstance(x0, np.ndarray): raise Exception("x0 is not a numpy array")
         if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
         if break_condition is None:
-            break_condition = lambda a: False
+            def break_condition(a):
+                return False
         elif break_condition == "default":
             break_condition = self._default_break_condition
         else: raise Exception("No valid input for break condition provided!")
@@ -141,7 +142,6 @@ class gpMCMC:
         prior = self.prior_function(x, self.args)
         #########################################################
         # Begin main loop
-        st = time.time()
         for i in np.arange(1, n_updates):
             for obj in self.proposal_distributions:
                 x, prior, likelihood, jt = self._jump(x, obj, prior, likelihood)
@@ -176,19 +176,15 @@ class gpMCMC:
     ###############################################################
     def _default_break_condition(self, obj):
         x = obj.trace["x"]
-
         if len(x) > 201:
             latest_mean = np.mean(x[-100:], axis=0)
             earlier_mean = np.mean(x[-200:-100], axis=0)
             abs_diff = abs(latest_mean - earlier_mean)
             max_index = np.argmax(abs_diff)
             ratio = (abs_diff[max_index] / abs(latest_mean[max_index])) * 100.
-            if ratio < 0.1:
-                return True
-            else:
-                return False
-        else:
-            return False
+            if ratio < 0.1: return True
+            else: return False
+        else: return False
 
     ###############################################################
     def _jump(self, x_old, obj, prior_eval, likelihood):  # pragma: no cover
@@ -205,7 +201,7 @@ class gpMCMC:
         # if prior(x_start) is not -inf, get likelihood
         if prior_evaluation_x_star != -np.inf:
             likelihood_star = self.log_likelihood_function(x_star, self.args)
-            if np.isnan(likelihood_star): raise Exception("Likelihood evaluated to NaN in gpMCMC")
+            if np.isnan(likelihood_star): raise Exception("Likelihood evaluation = NaN in gpMCMC")
             metr_ratio = np.exp(prior_evaluation_x_star + likelihood_star -
                                 prior_eval - likelihood)
             if np.isnan(metr_ratio):  metr_ratio = 0.
@@ -233,7 +229,7 @@ class ProposalDistribution:  # pragma: no cover
                  r_opt=.234,
                  c_0=10,
                  c_1=.8,
-                 K=100,
+                 K=10,
                  adapt_cov=True,
                  prop_args=None):  # pragma: no cover
         """
