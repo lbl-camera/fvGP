@@ -259,6 +259,8 @@ class fvGP(GP):
 
         if gp_kernel_function is None and isinstance(x_data, np.ndarray):
             gp_kernel_function = self._default_multi_task_kernel
+            if callable(gp_noise_function) or callable(gp_mean_function):
+                raise Exception("The default kernel can only be used without mean and noise functions")
             try:
                 from .deep_kernel_network import Network
             except:
