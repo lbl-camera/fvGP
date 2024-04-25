@@ -201,6 +201,40 @@ class GPMarginalDensity:
 
         return M
 
+    def _cholesky_update_rank_1(self, L, b, c):
+        """
+
+        Parameters
+        ----------
+        L matrix
+        b vector
+        c scalar
+
+        Returns
+        -------
+        updated Cholesky
+
+        """
+        # Solve Lv = b for v
+        v = np.linalg.solve(L, b)
+
+        # Compute d
+        d = np.sqrt(c - np.dot(v, v))
+
+        # Form the new L'
+        L_prime = np.block([
+            [L, np.zeros((len(L), 1))],
+            [v.T, d]
+        ])
+        return L_prime
+
+    def _cholesky_update_rank_n(self, L, b, c):
+        # Solve Lv = b for v
+        L_prime = L.copy()
+        for i in range(b.shape[1]):
+            L_prime = self._cholesky_update_rank_1(L_prime, np.append(b[:, i], c[0:i, i]), c[i, i])
+        return L_prime
+
     ##################################################################################
 
     def log_likelihood(self, hyperparameters=None):

@@ -282,19 +282,19 @@ class GP:
         ###init prior instance##################
         ########################################
         self.prior = GPprior(self.data.input_space_dim,
-                            self.data.x_data,
-                            self.data.Euclidean,
-                            hyperparameters=hyperparameters,
-                            gp_kernel_function=gp_kernel_function,
-                            gp_mean_function=gp_mean_function,
-                            gp_kernel_function_grad=gp_kernel_function_grad,
-                            gp_mean_function_grad=gp_mean_function_grad,
-                            constant_mean=np.mean(y_data),
-                            gp2Scale=gp2Scale,
-                            gp2Scale_dask_client=gp2Scale_dask_client,
-                            gp2Scale_batch_size=gp2Scale_batch_size,
-                            ram_economy=ram_economy
-                            )
+                             self.data.x_data,
+                             self.data.Euclidean,
+                             hyperparameters=hyperparameters,
+                             gp_kernel_function=gp_kernel_function,
+                             gp_mean_function=gp_mean_function,
+                             gp_kernel_function_grad=gp_kernel_function_grad,
+                             gp_mean_function_grad=gp_mean_function_grad,
+                             constant_mean=np.mean(y_data),
+                             gp2Scale=gp2Scale,
+                             gp2Scale_dask_client=gp2Scale_dask_client,
+                             gp2Scale_batch_size=gp2Scale_batch_size,
+                             ram_economy=ram_economy
+                             )
         ########################################
         ###init likelihood instance#############
         ########################################

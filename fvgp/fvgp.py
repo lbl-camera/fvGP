@@ -354,7 +354,7 @@ class fvGP(GP):
         ######################################
         x_data, y_data, noise_variances = self._transform_index_set(x_new, y_new, noise_variances_new,
                                                                     output_positions_new)
-        super().update_gp_data(self.x_data, self.y_data, noise_variances, append=append)
+        super().update_gp_data(x_data, y_data, noise_variances, append=append)
         self.output_positions = np.row_stack([self.output_positions, output_positions_new])
 
     ################################################################################################
