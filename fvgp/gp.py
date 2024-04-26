@@ -1341,8 +1341,8 @@ class GP:
         RMSE : float
         """
 
-        v1 = y_test
-        v2 = self.posterior_mean(x_test)["f(x)"]
+        v1 = y_test.reshape(len(y_test))
+        v2 = self.posterior_mean(x_test)["f(x)"].reshape(len(v1))
         return np.sqrt(np.sum((v1 - v2) ** 2) / len(v1))
 
     def make_2d_x_pred(self, bx, by, resx=100, resy=100):  # pragma: no cover
