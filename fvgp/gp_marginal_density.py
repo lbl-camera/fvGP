@@ -36,7 +36,7 @@ class GPMarginalDensity:
             self.online = False
             self.calc_inv = False
             warnings.warn("gp2Scale use forbids calc_inv=True or online=True. Both have been set to False")
-        if self.online: self.calc_inv = True
+        #if self.online: self.calc_inv = True
 
         self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, m = \
             self.compute_GPpriorV(self.prior_obj.hyperparameters)
@@ -89,7 +89,7 @@ class GPMarginalDensity:
 
         # get KVinv/KVinvY, LU, Chol, logdet(KV)
         if self.online is True:
-            KVinvY, KVlogdet, factorization_obj, KVinv = self._update_gp_linalg(y_mean, KV)
+            KVinvY, KVlogdet, factorization_obj, KVinv = self._update_gp_linalg(y_mean, KV, self.calc_inv)
         else:
             if self.gp2Scale: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp2Scale_linalg(y_mean, KV)
             else: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_mean, KV, self.calc_inv)
@@ -109,16 +109,21 @@ class GPMarginalDensity:
             raise Exception("calc_inv unspecified")
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
-    def _update_gp_linalg(self, vec, KV):
-        size_KVinv = len(self.KVinv)
-        kk = KV[size_KVinv:, size_KVinv:]
-        k = KV[size_KVinv:, 0:size_KVinv]
-        X = inv(kk - k @ self.KVinv @ k.T, compute_device=self.compute_device)
-        F = -self.KVinv @ k.T @ X
-        KVinv = np.block([[self.KVinv + self.KVinv @ k.T @ X @ k @ self.KVinv, F],
+    def _update_gp_linalg(self, vec, KV, calc_inv):
+        size_KV = len(self.KV)
+        kk = KV[size_KV:, size_KV:]
+        k = KV[size_KV:, 0:size_KV]
+        if calc_inv:
+            X = inv(kk - k @ self.KVinv @ k.T, compute_device=self.compute_device)
+            F = -self.KVinv @ k.T @ X
+            KVinv = np.block([[self.KVinv + self.KVinv @ k.T @ X @ k @ self.KVinv, F],
                           [F.T, X]])
-        factorization_obj = ("Inv", None)
-        KVinvY = KVinv @ vec
+            factorization_obj = ("Inv", None)
+            KVinvY = KVinv @ vec
+        else:
+            raise Exception("Cholesky update not implemented yet")
+            KVinv = None
+            factorization_obj["Chol"] = self._cholesky_update_rank_n(factorization_obj["Chol"][0], k, kk), False
         KVlogdet = self.KVlogdet + logdet(kk - k @ self.KVinv @ k.T, compute_device=self.compute_device)
         return KVinvY, KVlogdet, factorization_obj, KVinv
 
@@ -176,6 +181,7 @@ class GPMarginalDensity:
         st = time.time()
         if self.info: print("Dense Cholesky in progress ...")
         c, l = cho_factor(KV)
+        c = np.tril(c.T).T
         factorization_obj = ("Chol", c, l)
         KVinvY = cho_solve((c, l), vec)
         upper_diag = abs(c.diagonal())
@@ -216,15 +222,15 @@ class GPMarginalDensity:
 
         """
         # Solve Lv = b for v
-        v = np.linalg.solve(L, b)
+        v = cho_solve((L, False), b)
 
         # Compute d
         d = np.sqrt(c - np.dot(v, v))
 
         # Form the new L'
         L_prime = np.block([
-            [L, np.zeros((len(L), 1))],
-            [v.T, d]
+            [L, v],
+            [np.zeros((len(L), 1)).T, d]
         ])
         return L_prime
 
