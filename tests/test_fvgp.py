@@ -20,6 +20,8 @@ import sys
 from dask.distributed import performance_report
 from distributed.utils_test import gen_cluster, client, loop, cluster_fixture, loop_in_thread, cleanup
 from fvgp.gp_kernels import *
+from fvgp.gp_lin_alg import *
+from scipy import sparse
 
 
 
@@ -39,6 +41,33 @@ x_pred = np.random.rand(10, input_dim)
 
 
 """Tests for `fvgp` package."""
+
+
+def test_lin_alg():
+    B = np.random.rand(100,100)
+    A = B @ B.T + np.identity(100)
+    B = A[0:90,0:90]
+    c = calculate_Chol_factor(B)
+    k = A[0:90,90:]
+    kk = A[90:,90:]
+    C = cholesky_update_rank_n(c,k,kk)
+    LU = compute_LU_factor(sparse.coo_matrix(A))
+    s = calculate_LU_solve(LU, np.random.rand(len(A)))
+    l = calculate_LU_logdet(LU)
+    dd = update_Chol_factor(c, A)
+    ss = calculate_Chol_solve(dd, np.random.rand(len(A)))
+    ll = calculate_Chol_logdet(dd)
+    ll = spai(A,20)
+    calculate_sparse_conj_grad(sparse.coo_matrix(A),np.random.rand(len(A)))
+    logd = calculate_logdet(B)
+    update_logdet(logd, np.linalg.inv(B), A)
+    i = calculate_inv(B)
+    update_inv(i, A)
+    solve(A, np.random.rand(len(A)))
+    is_sparse(A)
+    how_sparse_is(A)
+
+
 def test_single_task_init_basic():
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu', info = True)
     my_gp1 = GP(x_data, y_data, info = True)
@@ -69,6 +98,11 @@ def test_single_task_init_basic():
     res = sparse_kernel(1,1)
     res = periodic_kernel(1,1,1)
     res = my_gp1.prior._default_kernel(x_data,x_data,np.array([1.,1.,1.,1.,1.,1.]),my_gp1)
+    my_gp1.crps(x_data[0:2] + 1., np.array([1.,2.]))
+    my_gp1.rmse(x_data[0:2] + 1., np.array([1.,2.]))
+    my_gp1.make_2d_x_pred(np.array([1.,2.]),np.array([3.,4]))
+    my_gp1.make_1d_x_pred(np.array([1.,2.]))
+
 
 def test_single_task_init_advanced():
     my_gp2 = GP(x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,

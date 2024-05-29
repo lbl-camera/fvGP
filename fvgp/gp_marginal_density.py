@@ -1,15 +1,11 @@
 import numpy as np
-from scipy.sparse.linalg import splu
-from scipy.sparse.linalg import minres, cg
-from scipy.linalg import cho_factor, cho_solve
-import time
 from loguru import logger
-from .misc import solve
-from .misc import logdet
-from .misc import inv
+from .gp_lin_alg import *
 import warnings
-from scipy.sparse import identity
-from scipy.sparse.linalg import onenormest
+from scipy.sparse import issparse
+
+
+# TODO: finish KVlogdet class and clean up
 
 
 class GPMarginalDensity:
@@ -36,212 +32,121 @@ class GPMarginalDensity:
             self.online = False
             self.calc_inv = False
             warnings.warn("gp2Scale use forbids calc_inv=True or online=True. Both have been set to False")
-        #if self.online: self.calc_inv = True
+        self.KVlinalg = KVlinalg(info, compute_device)
+        K, V, m = self._get_KVm()
+        if self.gp2Scale: mode = self._set_gp2Scale_mode(K)
+        elif self.calc_inv: mode = "Inv"
+        else: mode = "Chol"
 
-        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, m = \
-            self.compute_GPpriorV(self.prior_obj.hyperparameters)
+        self.KVinvY = self._set_KVinvY(K, V, m, mode)
 
+    ##################################################################
     def update_data(self):
         """Update the marginal PDF when the data has changed in data likelihood or prior objects"""
         self.y_data = self.data_obj.y_data
-        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv = self.update_GPpriorV()
+        K, V, m = self._get_KVm()
+        self.KVinvY = self._update_KVinvY(K, V, m)
 
     def update_hyperparameters(self):
         """Update the marginal PDF when if hyperparameters have changed"""
-        self.KV, self.KVinvY, self.KVlogdet, self.factorization_obj, self.KVinv, m = \
-            self.compute_GPpriorV(self.prior_obj.hyperparameters)
+        K, V, m = self._get_KVm()
+        self.KVinvY = self._set_KVinvY(K, V, m, self.KVlinalg.mode)
 
-    def compute_GPpriorV(self, hyperparameters, calc_inv=None):
-        """Recomputed the prior mean for new hyperparameters (e.g. during training)"""
-
-        if calc_inv is None: calc_inv = self.calc_inv
-        K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
-        m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
-        V = self.likelihood_obj.calculate_V(hyperparameters)
-        y_mean = self.data_obj.y_data - m
-        # check if shapes are correct
-        assert K.shape == V.shape
-
-        # get K + V
+    ##################################################################
+    def _update_KVinvY(self, K, V, m):
+        """This updates KVinvY after new data was communicated"""
+        y_mean = self.y_data - m
         KV = K + V
 
-        # get Kinv/KVinvY, LU, Chol, logdet(KV)
+        # update lin alg obj
+        #if self.gp2Scale: mode = self._set_gp2Scale_mode(KV)
+        #else: mode = self.KVlinalg.mode
+        print("size(KV) in marginal: ", KV.shape, y_mean.shape)
+        self.KVlinalg.update_KV(KV)
+        KVinvY = self.KVlinalg.solve(y_mean)
+        return KVinvY
 
-        if self.gp2Scale: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp2Scale_linalg(y_mean, KV)
-        else: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_mean, KV, calc_inv)
-        return KV, KVinvY, KVlogdet, factorization_obj, KVinv, m
+    def _set_KVinvY(self, K, V, m, mode):
+        """Set or reset KVinvY for new hyperparameters"""
+        y_mean = self.data_obj.y_data - m
+        #update lin alg obj
+        KV = K + V
+        self.KVlinalg.set_KV(KV, mode)
+        KVinvY = self.KVlinalg.solve(y_mean)
+        return KVinvY
 
-    ##################################################################################
+    ##################################################################
+    def compute_new_KVinvY(self, KV, m):
+        """
+        Recompute KVinvY for new hyperparameters (e.g. during training, for instance)
+        This is only used by some posterior functions and in the log likelihood functions.
+        This does not change the KV obj
+        """
+        y_mean = self.data_obj.y_data - m
+        if self.gp2Scale:
+            mode = self._set_gp2Scale_mode(KV)
+            if mode == "sparseLU":
+                LU_factor = self.calculate_LU_factor(KV)
+                KVinvY = calculate_LU_solve(LU_factor, y_mean)
+            elif mode == "Chol":
+                if issparse(KV): KV = KV.toarray()
+                Chol_factor = calculate_Chol_factor(KV)
+                KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
+            elif mode == "sparseCG":
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean, info=self.info)
+            else:
+                raise Exception("No mode in gp2Scale", mode)
+        else:
+            Chol_factor = calculate_Chol_factor(KV)
+            KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
+        return KVinvY
 
-    def update_GPpriorV(self):
-        """This updates the prior after new data was communicated"""
-        # get K and V
+    def compute_new_KVlogdet(self, KV):
+        """
+        Recomputed KVinvY for new hyperparameters (e.g. during training, for instance)
+        This is only used by some posterior functions and in the log likelihood functions
+        """
+        if self.gp2Scale:
+            mode = self._set_gp2Scale_mode(KV)
+            if mode == "sparseLU":
+                LU_factor = self.calculate_LU_factor(KV)
+                KVlogdet = calculate_LU_logdet(LU_factor)
+            elif mode == "Chol":
+                Chol_factor = calculate_Chol_factor(KV.toarray())
+                KVlogdet = calculate_Chol_logdet(Chol_factor)
+            elif mode == "sparseCG":
+                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
+            else:
+                raise Exception("No mode in gp2Scale", mode)
+        else:
+            Chol_factor = calculate_Chol_factor(KV)
+            KVlogdet = calculate_Chol_logdet(Chol_factor)
+        return KVlogdet
+
+    def compute_new_KVlogdet_KVinvY(self, K, V, m):
+        """
+        Recomputing KVinvY and logdet(KV) for new hyperparameters.
+        This is only used by the training (the log likelihood)
+        """
+        KV = K + V
+        return self.compute_new_KVinvY(KV, m), self.compute_new_KVlogdet(KV)
+
+    def _get_KVm(self):
         K = self.prior_obj.K
         m = self.prior_obj.m
         V = self.likelihood_obj.V
-        y_mean = self.data_obj.y_data - m
-
-        # check if shapes are correct
         assert K.shape == V.shape
-
-        #get K + V
-        KV = K + V
-
-        # get KVinv/KVinvY, LU, Chol, logdet(KV)
-        if self.online is True:
-            KVinvY, KVlogdet, factorization_obj, KVinv = self._update_gp_linalg(y_mean, KV, self.calc_inv)
-        else:
-            if self.gp2Scale: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp2Scale_linalg(y_mean, KV)
-            else: KVinvY, KVlogdet, factorization_obj, KVinv = self._compute_gp_linalg(y_mean, KV, self.calc_inv)
-        return KV, KVinvY, KVlogdet, factorization_obj, KVinv
-
+        return K, V, m
     ##################################################################################
-    def _compute_gp_linalg(self, vec, KV, calc_inv):
-        if calc_inv:
-            KVinv = inv(KV, compute_device=self.compute_device)
-            factorization_obj = ("Inv", None)
-            KVinvY = KVinv @ vec
-            KVlogdet = logdet(KV,compute_device=self.compute_device)
-        elif not calc_inv:
-            KVinv = None
-            KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
+    def _set_gp2Scale_mode(self, KV):
+        Ksparsity = float(KV.nnz) / float(len(self.data_obj.x_data) ** 2)
+        if len(self.data_obj.x_data) < 50001 and Ksparsity < 0.0001:
+            mode = "sparseLU"
+        elif len(self.data_obj.x_data) < 2001 and Ksparsity >= 0.0001:
+            mode = "Chol"
         else:
-            raise Exception("calc_inv unspecified")
-        return KVinvY, KVlogdet, factorization_obj, KVinv
-
-    def _update_gp_linalg(self, vec, KV, calc_inv):
-        size_KV = len(self.KV)
-        kk = KV[size_KV:, size_KV:]
-        k = KV[size_KV:, 0:size_KV]
-        if calc_inv:
-            X = inv(kk - k @ self.KVinv @ k.T, compute_device=self.compute_device)
-            F = -self.KVinv @ k.T @ X
-            KVinv = np.block([[self.KVinv + self.KVinv @ k.T @ X @ k @ self.KVinv, F],
-                          [F.T, X]])
-            factorization_obj = ("Inv", None)
-            KVinvY = KVinv @ vec
-        else:
-            raise Exception("Cholesky update not implemented yet")
-            KVinv = None
-            factorization_obj["Chol"] = self._cholesky_update_rank_n(factorization_obj["Chol"][0], k, kk), False
-        KVlogdet = self.KVlogdet + logdet(kk - k @ self.KVinv @ k.T, compute_device=self.compute_device)
-        return KVinvY, KVlogdet, factorization_obj, KVinv
-
-    def _compute_gp2Scale_linalg(self, vec, KV):
-        Ksparsity = float(KV.nnz) / float(len(vec) ** 2)
-        if self.info: print("KV sparsity = ", Ksparsity)
-        if len(self.data_obj.x_data) < 50000 and Ksparsity < 0.0001: mode = "sparse_LU"
-        elif len(self.data_obj.x_data) < 2000 and Ksparsity >= 0.0001: mode = "dense_Chol"
-        else: mode = 'gp2Scale'
-
-        if mode == "sparse_LU":
-            try: KVinvY, KVlogdet, factorization_obj = self._LU(KV, vec)
-            except: KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
-        elif mode == "dense_Chol":
-            KV = KV.toarray()
-            KVinvY, KVlogdet, factorization_obj = self._Chol(KV, vec)
-        elif mode == "gp2Scale":
-            KVinvY, KVlogdet, factorization_obj = self._gp2Scale_linalg(KV, vec)
-        else:
-            raise Exception("No linear algebra mode applicable in '_compute_gp_linalg'")
-        return KVinvY, KVlogdet, factorization_obj, None
-
-    def _gp2Scale_linalg(self, KV, vec):
-        from imate import logdet as imate_logdet
-        st = time.time()
-        if self.info: print("CG solve in progress ...", flush=True)
-        KVinvY, exit_code = cg(KV.tocsc(), vec)
-        if exit_code == 1:
-            M = self.spai(KV, 20)
-            KVinvY, exit_code = cg(KV.tocsc(), vec, M=M)
-        if exit_code == 1: warnings.warn("CG not successful")
-        if self.info: print("CG compute time:", time.time() - st, "seconds, exit status ", exit_code, "(0:=successful)", flush=True)
-        factorization_obj = ("gp2Scale", None)
-        if self.compute_device == "gpu": gpu = True
-        else: gpu = False
-        if self.info: print("Random logdet() in progress ... ", time.time() - st, "seconds.", flush=True)
-        KVlogdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
-                                    lanczos_degree=20, error_rtol=0.001, gpu=gpu,
-                                    return_info=True, plot=False, verbose=False)
-        if self.info: print("Random logdet() compute time: ", time.time() - st, "seconds.", flush=True)
-        return KVinvY, KVlogdet, factorization_obj
-
-    def _LU(self, KV, vec):
-        st = time.time()
-        if self.info: print("LU in progress ...")
-        LU = splu(KV.tocsc())
-        factorization_obj = ("LU", LU)
-        KVinvY = LU.solve(vec)
-        upper_diag = abs(LU.U.diagonal())
-        KVlogdet = np.sum(np.log(upper_diag))
-        if self.info: print("LU compute time: ", time.time() - st, "seconds.")
-        return KVinvY, KVlogdet, factorization_obj
-
-    def _Chol(self, KV, vec):
-        st = time.time()
-        if self.info: print("Dense Cholesky in progress ...")
-        c, l = cho_factor(KV)
-        c = np.tril(c.T).T
-        factorization_obj = ("Chol", c, l)
-        KVinvY = cho_solve((c, l), vec)
-        upper_diag = abs(c.diagonal())
-        KVlogdet = 2.0 * np.sum(np.log(upper_diag))
-        if self.info: print("Dense Cholesky compute time: ", time.time() - st, "seconds.")
-        return KVinvY, KVlogdet, factorization_obj
-
-    def spai(self, A, m):
-        """Perform m step of the SPAI iteration."""
-        n = A.shape[0]
-
-        ident = identity(n, format='csr')
-        alpha = 2 / onenormest(A @ A.T)
-        M = alpha * A
-
-        for index in range(m):
-            C = A @ M
-            G = ident - C
-            AG = A @ G
-            trace = (G.T @ AG).diagonal().sum()
-            alpha = trace / np.linalg.norm(AG.data) ** 2
-            M = M + alpha * G
-
-        return M
-
-    def _cholesky_update_rank_1(self, L, b, c):
-        """
-
-        Parameters
-        ----------
-        L matrix
-        b vector
-        c scalar
-
-        Returns
-        -------
-        updated Cholesky
-
-        """
-        # Solve Lv = b for v
-        v = cho_solve((L, False), b)
-
-        # Compute d
-        d = np.sqrt(c - np.dot(v, v))
-
-        # Form the new L'
-        L_prime = np.block([
-            [L, v],
-            [np.zeros((len(L), 1)).T, d]
-        ])
-        return L_prime
-
-    def _cholesky_update_rank_n(self, L, b, c):
-        # Solve Lv = b for v
-        L_prime = L.copy()
-        for i in range(b.shape[1]):
-            L_prime = self._cholesky_update_rank_1(L_prime, np.append(b[:, i], c[0:i, i]), c[i, i])
-        return L_prime
-
-    ##################################################################################
+            mode = "sparseCG"
+        return mode
 
     def log_likelihood(self, hyperparameters=None):
         """
@@ -258,12 +163,17 @@ class GPMarginalDensity:
         log marginal likelihood of the data : float
         """
         if hyperparameters is None:
-            KVinvY, KVlogdet, mean = self.KVinvY, self.KVlogdet, self.prior_obj.m
+            K, V, m = self._get_KVm()
+            KVinvY = self.KVinvY
+            KVlogdet = self.KVlinalg.logdet()
         else:
-            KV, KVinvY, KVlogdet, factorization_obj, KVinv, mean = (
-                self.compute_GPpriorV(hyperparameters, calc_inv=False))
+            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            V = self.likelihood_obj.calculate_V(hyperparameters)
+            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+            KVinvY, KVlogdet = self.compute_new_KVlogdet_KVinvY(K, V, m)
+
         n = len(self.y_data)
-        return -(0.5 * ((self.y_data - mean).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
+        return -(0.5 * ((self.y_data - m).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
 
     ##################################################################################
     def neg_log_likelihood(self, hyperparameters=None):
@@ -299,13 +209,18 @@ class GPMarginalDensity:
         """
         logger.debug("log-likelihood gradient is being evaluated...")
         if hyperparameters is None:
-            KVinvY, KVlogdet, mean = self.KVinvY, self.KVlogdet, self.prior_obj.m
+            KVinvY = self.KVinvY
         else:
-            KV, KVinvY, KVlogdet, factorization_obj, KVinv, mean = (
-                self.compute_GPpriorV(hyperparameters, calc_inv=False))
+            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            V = self.likelihood_obj.calculate_V(hyperparameters)
+            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+            KV = K + V
+            KVinvY = self.compute_new_KVinvY(KV, m)
 
         b = KVinvY
-        #y = self.y_data - mean
+        K = self.prior_obj.K
+        V = self.likelihood_obj.V
+        KV = K + V
         if self.prior_obj.ram_economy is False:
             try:
                 dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, hyperparameters, self) + \
@@ -313,7 +228,7 @@ class GPMarginalDensity:
             except Exception as e:
                 raise Exception(
                     "The gradient evaluation dK/dh + dNoise/dh was not successful. \n \
-                    That normally means the combination of ram_economy and definition \
+                    That normally means the combination of ram_economy and definition \n \
                     of the gradient function is wrong. ",
                     str(e))
             KV = np.array([KV, ] * len(hyperparameters))
@@ -386,3 +301,74 @@ class GPMarginalDensity:
             grad[i] = (self.log_likelihood(hyperparameters=thps_aux) - self.log_likelihood(hyperparameters=thps)) / eps
         analytical = -self.neg_log_likelihood_gradient(hyperparameters=thps)
         return grad, analytical
+
+
+class KVlinalg:
+    def __init__(self, info, compute_device):
+        self.mode = None
+        self.info = info
+        self.compute_device = compute_device
+        self.KVinv = None
+        self.KV = None
+        self.Chol_factor = None
+        self.LU_factor = None
+
+    def set_KV(self, KV, mode):
+        self.mode = mode
+        self.KVinv = None
+        self.KV = None
+        self.Chol_factor = None
+        self.LU_factor = None
+        assert self.mode is not None
+        if self.mode == "Chol":
+            if issparse(KV): KV = KV.toarray()
+            self.Chol_factor = calculate_Chol_factor(KV)
+        elif self.mode == "Inv":
+            self.KV = KV
+            self.KVinv = calculate_inv(KV, compute_device=self.compute_device)
+        elif self.mode == "sparseCG":
+            self.KV = KV
+        elif self.mode == "sparseLU":
+            self.LU_factor = self.calculate_LU_factor(KV)
+        else:
+            raise Exception("No Mode")
+
+    def update_KV(self, KV):
+        if self.mode == "Chol":
+            if issparse(KV): KV = KV.toarray()
+            if len(KV) <= len(self.Chol_factor): res = calculate_Chol_factor(KV)
+            else: res = update_Chol_factor(self.Chol_factor, KV)
+
+            print("size(KV) in KV obj: ", KV.shape)
+            res2 = update_Chol_factor(self.Chol_factor, KV)
+            print("        res2 in KV obj: ", res2.shape)
+            self.Chol_factor = res
+        elif self.mode == "Inv":
+            self.KV = KV
+            if len(KV) <= len(self.KVinv): self.KVinv = calculate_inv(KV, compute_device=self.compute_device)
+            else: self.KVinv = update_inv(self.KVinv, KV, self.compute_device)
+        elif self.mode == "sparseCG":
+            self.KV = KV
+        elif self.mode == "sparseLU":
+            self.LU_factor = self.calculate_LU_factor(KV)
+        else:
+            raise Exception("No Mode")
+
+    def solve(self, b, mode=None):
+        if mode is None: mode = self.mode
+        if mode == "Chol":
+            return calculate_Chol_solve(self.Chol_factor, b)
+        elif mode == "Inv":
+            return self.KVinv @ b
+        elif mode == "sparseCG":
+            return calculate_sparse_conj_grad(self.KV, b, self.info)
+        elif mode == "sparseLU":
+            return calculate_LU_solve(self.LU_factor, b)
+        else:
+            raise Exception("No Mode")
+
+    def logdet(self):
+        if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor)
+        if self.mode == "Inv": return calculate_logdet(self.KV)
+        if self.mode == "sparseCG": return calculate_random_logdet(self.KV, self.info, self.compute_device)
+        if self.mode == "sparseLU": return calculate_LU_logdet(self.LU_factor)

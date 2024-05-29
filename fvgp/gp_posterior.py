@@ -1,12 +1,9 @@
 import numpy as np
-from .misc import solve
-from .misc import logdet
-from .misc import inv
+from .gp_lin_alg import solve
 from loguru import logger
 import warnings
-from scipy.linalg import cho_factor, cho_solve
-from scipy.sparse.linalg import minres, cg
 from scipy.sparse import issparse
+from .gp_lin_alg import *
 
 
 def cartesian_product(x, y):
@@ -29,7 +26,7 @@ def cartesian_product(x, y):
         raise Exception("Cartesian product out of options")
 
 
-class GPposterior:  # pragma: no cover
+class GPposterior:
     def __init__(self,
                  data_obj,
                  prior_obj,
@@ -43,33 +40,15 @@ class GPposterior:  # pragma: no cover
         self.kernel = self.prior_obj.kernel
         self.mean_function = self.prior_obj.mean_function
         self.d_kernel_dx = self.prior_obj.d_kernel_dx
-        # self.dk_dh = self.prior_obj.dk_dh
-
-    def _KVsolve(self, b):
-        if self.marginal_density_obj.factorization_obj[0] == "LU":
-            LU = self.marginal_density_obj.factorization_obj[1]
-            return LU.solve(b)
-        elif self.marginal_density_obj.factorization_obj[0] == "Chol":
-            c, ll = self.marginal_density_obj.factorization_obj[1], self.marginal_density_obj.factorization_obj[2]
-            return cho_solve((c, ll), b)
-        elif self.marginal_density_obj.factorization_obj[0] == "gp2Scale":
-            res = np.empty((len(b), b.shape[1]))
-            if b.shape[1] > 100: warnings.warn(
-                "You want to predict at >100 points. When using gp2Scale, this takes a while."
-                "Better predict at only a handful of points.")
-            for i in range(b.shape[1]):
-                res[:, i], exit_status = cg(self.marginal_density_obj.KV, b[:, i])
-            return res
-        elif self.marginal_density_obj.factorization_obj[0] == "Inv":
-            return self.marginal_density_obj.KVinv @ b
-        else:
-            raise Exception("Non-permitted factorization object encountered.")
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
         x_data, y_data, KVinvY = \
             self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
         if hyperparameters is not None:
-            KV, KVinvY, KVlogdet, factorization_obj, KVinv, m = compute_GPpriorV(hyperparameters, calc_inv=False)
+            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            V = self.likelihood_obj.calculate_V(hyperparameters)
+            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+            KVinvY = self.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.prior_obj.hyperparameters
 
@@ -88,7 +67,10 @@ class GPposterior:  # pragma: no cover
             self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
 
         if hyperparameters is not None:
-            KV, KVinvY, KVlogdet, factorization_obj, KVinv, m = compute_GPpriorV(hyperparameters, calc_inv=False)
+            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            V = self.likelihood_obj.calculate_V(hyperparameters)
+            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+            KVinvY = self.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.prior_obj.hyperparameters
 
@@ -128,15 +110,15 @@ class GPposterior:  # pragma: no cover
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
 
-        if self.marginal_density_obj.KVinv is not None:
+        if self.marginal_density_obj.KVlinalg.KVinv is not None:
             if variance_only:
                 S = None
-                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.marginal_density_obj.KVinv, k)
+                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.marginal_density_obj.KVlinalg.KVinv, k)
             else:
-                S = kk - (k.T @ self.marginal_density_obj.KVinv @ k)
+                S = kk - (k.T @ self.marginal_density_obj.KVlinalg.KVinv @ k)
                 v = np.array(np.diag(S))
         else:
-            k_cov_prod = self._KVsolve(k)
+            k_cov_prod = self.marginal_density_obj.KVlinalg.solve(k)
             S = kk - (k_cov_prod.T @ k)
             v = np.array(np.diag(S))
         if np.any(v < -0.0001):
@@ -168,7 +150,7 @@ class GPposterior:  # pragma: no cover
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
-        k_covariance_prod = self._KVsolve(k)
+        k_covariance_prod = self.marginal_density_obj.KVlinalg.solve(k)
         if direction is not None:
             k_g = self.d_kernel_dx(x_pred, x_data, direction, self.prior_obj.hyperparameters).T
             kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
@@ -253,7 +235,7 @@ class GPposterior:  # pragma: no cover
     ###########################################################################
     def entropy(self, S):
         dim = len(S[0])
-        ldet = logdet(S)
+        ldet = calculate_logdet(S)
         return (float(dim) / 2.0) + ((float(dim) / 2.0) * np.log(2.0 * np.pi)) + (0.5 * ldet)
 
     ###########################################################################
@@ -280,7 +262,7 @@ class GPposterior:  # pragma: no cover
         priors = self.joint_gp_prior(x_pred, x_out=None)
         S = priors["S"]
         dim = len(S[0])
-        ldet = logdet(S)
+        ldet = calculate_logdet(S)
         return (float(dim) / 2.0) + ((float(dim) / 2.0) * np.log(2.0 * np.pi)) + (0.5 * ldet)
 
     ###########################################################################
@@ -292,7 +274,7 @@ class GPposterior:  # pragma: no cover
         priors2 = self.joint_gp_prior_grad(x_pred, direction, x_out=None)
         S1 = priors1["S"]
         S2 = priors2["dS/dx"]
-        return 0.5 * np.trace(inv(S1) @ S2)
+        return 0.5 * np.trace(calculate_inv(S1) @ S2)
 
     ###########################################################################
     def kl_div_grad(self, mu1, dmu1dx, mu2, S1, dS1dx, S2):
@@ -300,13 +282,13 @@ class GPposterior:  # pragma: no cover
         mu = np.subtract(mu2, mu1)
         x2 = solve(S2, mu)
         x3 = solve(S2, -dmu1dx)
-        kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2.T @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
+        kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2.T @ -dmu1dx)) - np.trace(calculate_inv(S1) @ dS1dx))
         return kld
 
     ###########################################################################
     def kl_div(self, mu1, mu2, S1, S2):
-        logdet1 = logdet(S1)
-        logdet2 = logdet(S2)
+        logdet1 = calculate_logdet(S1)
+        logdet2 = calculate_logdet(S2)
         x1 = solve(S2, S1)
         mu = np.subtract(mu2, mu1)
         x2 = solve(S2, mu)
@@ -420,13 +402,13 @@ class GPposterior:  # pragma: no cover
         res = self.posterior_mean(x_pred, x_out=None)
         gp_mean = res["f(x)"]
         gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + (np.identity(len(x_pred)) * 1e-9)
-        gp_cov_inv = inv(gp_cov)
-        comp_cov_inv = inv(comp_cov)
-        cov = inv(gp_cov_inv + comp_cov_inv)
+        gp_cov_inv = calculate_inv(gp_cov)
+        comp_cov_inv = calculate_inv(comp_cov)
+        cov = calculate_inv(gp_cov_inv + comp_cov_inv)
         mu = cov @ gp_cov_inv @ gp_mean + cov @ comp_cov_inv @ comp_mean
-        logdet1 = logdet(cov)
-        logdet2 = logdet(gp_cov)
-        logdet3 = logdet(comp_cov)
+        logdet1 = calculate_logdet(cov)
+        logdet2 = calculate_logdet(gp_cov)
+        logdet3 = calculate_logdet(comp_cov)
         dim = len(mu)
         C = 0.5 * (((gp_mean.T @ gp_cov_inv + comp_mean.T @ comp_cov_inv).T
                     @ cov @ (gp_cov_inv @ gp_mean + comp_cov_inv @ comp_mean))

@@ -15,13 +15,13 @@ from .gp_posterior import GPposterior
 
 
 # TODO: search below "TODO"
-#   neither minres nor random logdet are doing a good job, cg is better but we might need a preconditioner , maybe a large LU?
-#   for Ron's situation, make x_data, x_data optional and None by default, if not communicated, they will be asssigned simple dummy_data (with given dimensionality)
-#                and self.dummy_data = True. This should be overwritten in the update_data and used for warning in train and posteriors.
-#                the noise will have to be either given as a function or itialized randomly too with a warning that noise will have to be communited in the update.
+#   neither minres nor random logdet are doing a good job in gp2Scale,
+#                                            cg is better but we might need a preconditioner , maybe a large LU?
 #   the mcmc in default mode should not need proposal distributions explicitly
 #   reshape posteriors if x_out
 #   when are we really using gpu vs cpu as compute_device
+# TODO: finish KVlogdet  class and clean up
+
 
 class GP:
     """
@@ -154,9 +154,12 @@ class GP:
         a good option when the dataset is not too large and the posterior covariance is heavily used.
     online : bool, optional
         A new setting that allows optimization for online applications. Default=False. If True,
-        calc_inv will be set to true, and the inverse and the logdet() of full dataset will only be computed
+        the inverse (if calc_inv is True), or the Cholesky factors (if calc_inv is False) and the logdet()
+        will only be computed
         once in the beginning and after that only updated. This leads to a significant speedup because
-        the most costly aspects of a GP are entirely avoided.
+        the most costly aspects of a GP are entirely avoided. A good indicator whether `online` is a good choice is
+        the `append` option in the gp update. You always append data, never overwrite, online should be True
+        to save some time.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
         If True, components of the derivative of the marginal log-likelihood are
@@ -380,6 +383,7 @@ class GP:
             self.prior.update_data(self.data.x_data, constant_mean=np.mean(self.data.y_data))
 
         # update likelihood
+        print("K size: ", self.prior.K.shape)
         self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
                                self.prior.hyperparameters)
 
@@ -725,8 +729,7 @@ class GP:
         A dictionary containing information about the GP prior distribution : dict
         """
 
-        return {"prior covariance (K)": self.prior.K, "log(|KV|)": self.marginal_density.KVlogdet,
-                "inv(KV)": self.marginal_density.KVinv,
+        return {"prior covariance (K)": self.prior.K,
                 "prior mean": self.prior.m}
 
     def log_likelihood(self, hyperparameters=None):

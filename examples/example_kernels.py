@@ -139,7 +139,15 @@ def kernel_cpu(x1,x2, hps):
                  g_cpu(x2,hps[20:32],hps[32:36],hps[36:40]))
     return k + hps[40] * wendland_cpu(x1,x2, hps[41])
 
-
+def cory(x1, x2, hps, obj):
+    d = get_anisotropic_distance_matrix(x1[:, 0:-1], x2[:, 0:-1], hps[1:7])
+    k1 = hps[0] * obj.matern_kernel_diff1(d, 1.)
+    l1 = x1[:, -1]
+    l2 = x2[:, -1]
+    c = hps[7]
+    delta = hps[8]
+    k2 = c + np.outer(((1. - l1) ** (1. + delta)), ((1. - l2) ** (1. + delta)))
+    return k1 * k2
 ############################################################
 ############################################################
 ############################################################

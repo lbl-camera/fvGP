@@ -7,8 +7,8 @@ from .mcmc import mcmc
 from scipy.optimize import minimize
 
 
-class GPtraining:  # pragma: no cover
-    def __init__(self,info=False, gp2Scale=False):
+class GPtraining:
+    def __init__(self, info=False, gp2Scale=False):
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
         self.info = info
@@ -292,7 +292,7 @@ class GPtraining:  # pragma: no cover
                                  dask_client):
 
         if not self._in_bounds(starting_hps, hp_bounds):
-            raise Exception("Starting positions outside of optimization bounds.")
+            raise Exception("Starting positions outside of optimization bounds.", starting_hps, hp_bounds)
 
         if self.gp2Scale:
             method = 'mcmc'

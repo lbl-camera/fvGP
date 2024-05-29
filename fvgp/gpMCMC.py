@@ -71,7 +71,7 @@ class gpMCMC:
                  proposal_distributions,
                  args=None,
                  bounds=None,
-                 ):  # pragma: no cover
+                 ):
         self.log_likelihood_function = log_likelihood_function
         self.dim = dim
         self.prior_function = prior_function
@@ -165,10 +165,12 @@ class gpMCMC:
         dist_index = int(len(x) - (len(x) / 100))
         self.mcmc_info = {"f(x)": self.trace["f(x)"],
                           "max f(x)": self.trace["f(x)"][arg_max],
+                          "MAP": self.trace["f(x)"][arg_max],
                           "max x": x[arg_max],
                           "time stamps": self.trace["time stamp"],
                           "x": x,
                           "mean(x)": np.mean(x[dist_index:], axis=0),
+                          "median(x)": np.median(x[dist_index:], axis=0),
                           "var(x)": np.var(x[dist_index:], axis=0)}
 
         return self.mcmc_info
@@ -187,7 +189,7 @@ class gpMCMC:
         else: return False
 
     ###############################################################
-    def _jump(self, x_old, obj, prior_eval, likelihood):  # pragma: no cover
+    def _jump(self, x_old, obj, prior_eval, likelihood):
         x_star = x_old.copy()
         assert callable(obj.prop_dist)
 
@@ -221,7 +223,7 @@ class gpMCMC:
 
 
 ###############################################################
-class ProposalDistribution:  # pragma: no cover
+class ProposalDistribution:
     def __init__(self, prop_dist,
                  indices,
                  init_prop_Sigma=None,
@@ -231,7 +233,7 @@ class ProposalDistribution:  # pragma: no cover
                  c_1=.8,
                  K=10,
                  adapt_cov=True,
-                 prop_args=None):  # pragma: no cover
+                 prop_args=None):
         """
         Class to define a proposal distribution.
 
@@ -296,7 +298,7 @@ class ProposalDistribution:  # pragma: no cover
 
             #########################################################
 
-    def _adapt(self, end, mcmc_obj):  # pragma: no cover
+    def _adapt(self, end, mcmc_obj):
         K = self.K
         if (end % K) == 0:
             k = 3
@@ -316,7 +318,7 @@ class ProposalDistribution:  # pragma: no cover
             self.prop_args["prop_Sigma"] = prop_Sigma
             self.prop_args["sigma_m"] = sigma_m
 
-    def _no_adapt(self, end, mcmc_obj):  # pragma: no cover
+    def _no_adapt(self, end, mcmc_obj):
         return
 
 
@@ -324,7 +326,7 @@ class ProposalDistribution:  # pragma: no cover
 ###############################################################
 ###############################################################
 ###############################################################
-def out_of_bounds(x, bounds):  # pragma: no cover
+def out_of_bounds(x, bounds):
     for i in range(len(x)):
         if x[i] < bounds[i, 0] or x[i] > bounds[i, 1]:
             return True
