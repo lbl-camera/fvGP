@@ -56,10 +56,6 @@ class fvGP(GP):
         fvgp.fvGP.gp_deep_kernel_layer_width. If you specify
         another kernel, please provide
         init_hyperparameters.
-    hyperparameter_bounds : np.ndarray, optional
-        A 2d numpy array of shape (N x 2), where N is the number of needed hyperparameters.
-        The default is None, in that case hyperparameter_bounds have to be specified
-        in the train calls or default bounds are used. Those only work for the default kernel.
     output_positions : np.ndarray, optional
         A 2-D numpy array of shape (U x output_number), so that for each measurement position, the outputs
         are clearly defined by their positions in the output space. The default is
@@ -210,7 +206,6 @@ class fvGP(GP):
         x_data,
         y_data,
         init_hyperparameters=None,
-        hyperparameter_bounds=None,
         output_positions=None,
         noise_variances=None,
         compute_device="cpu",
@@ -231,14 +226,14 @@ class fvGP(GP):
         info=False,
     ):
 
-        if isinstance(x_data, np.ndarray): self.orig_input_space_dim = x_data.shape[1]
-        else: self.orig_input_space_dim = 1
+        if isinstance(x_data, np.ndarray):
+            self.orig_input_space_dim = x_data.shape[1]
+        else:
+            self.orig_input_space_dim = 1
 
         self.output_num = y_data.shape[1]
         output_space_dim = 1
         ###check the output dims
-
-
 
         if np.ndim(y_data) == 1:
             raise ValueError("The output number is 1, you can use GP for single-task GPs")
@@ -270,17 +265,11 @@ class fvGP(GP):
             self.n = Network(self.iset_dim, gp_deep_kernel_layer_width)
             number_of_hps = int(2. * self.iset_dim * gp_deep_kernel_layer_width +
                                 gp_deep_kernel_layer_width ** 2 + 2. * gp_deep_kernel_layer_width + self.iset_dim + 2.)
-            self.hps_bounds = np.zeros((number_of_hps, 2))
-            self.hps_bounds[0] = np.array([np.var(y_data) / 10., np.var(y_data) * 10.])
-            self.hps_bounds[1] = np.array([(np.max(x_data) - np.min(x_data)) / 100., (np.max(x_data) -
-                                                                                      np.min(x_data)) * 100.])
-            self.hps_bounds[2:] = np.array([-1., 1.])
-            init_hps = np.random.uniform(low=self.hps_bounds[:, 0],
-                                         high=self.hps_bounds[:, 1], size=len(self.hps_bounds))
+
+            init_hps = np.ones(number_of_hps)
             warnings.warn("Hyperparameter bounds have been initialized automatically \
                     \n for the default kernel in fvgp. They will automatically used for the training.\
                     \n However, you can also define and provide new bounds.")
-            hyperparameter_bounds = self.hps_bounds
         else:
             warnings.warn("Default kernel could not be defined.")
 
@@ -289,7 +278,6 @@ class fvGP(GP):
             x_data,
             y_data,
             init_hyperparameters=init_hps,
-            hyperparameter_bounds=hyperparameter_bounds,
             noise_variances=noise_variances,
             compute_device=compute_device,
             gp_kernel_function=gp_kernel_function,
@@ -302,7 +290,7 @@ class fvGP(GP):
             gp2Scale_dask_client=gp2Scale_dask_client,
             gp2Scale_batch_size=gp2Scale_batch_size,
             calc_inv=calc_inv,
-            online = online,
+            online=online,
             ram_economy=ram_economy,
             args=args,
             info=info)
@@ -354,11 +342,7 @@ class fvGP(GP):
         ######################################
         x_data, y_data, noise_variances = self._transform_index_set(x_new, y_new, noise_variances_new,
                                                                     output_positions_new)
-        print("a: ", x_data.shape, y_data.shape)
         super().update_gp_data(x_data, y_data, noise_variances, append=append)
-        print("--------------")
-        print("b: ", self.x_data.shape, self.y_data.shape)
-        print("--------------")
         self.output_positions = np.row_stack([self.output_positions, output_positions_new])
 
     ################################################################################################
@@ -368,24 +352,25 @@ class fvGP(GP):
             value_pos[:, j] = j
         return value_pos
 
-    def get_fvgp_data(self, labels):
-        for i in range(len(self.output_num)):
-            pass
     ################################################################################################
     def _transform_index_set(self, x_data, y_data, noise_variances, output_positions):
         point_number = len(x_data)
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
-        if isinstance(x_data, np.ndarray): new_points = np.zeros((point_number * self.output_num, self.iset_dim))
-        else: new_points = [0.] * point_number * self.output_num
+        if isinstance(x_data, np.ndarray):
+            new_points = np.zeros((point_number * self.output_num, self.iset_dim))
+        else:
+            new_points = [0.] * point_number * self.output_num
         new_values = np.zeros((point_number * self.output_num))
-        if noise_variances is not None: new_variances = np.zeros((point_number * self.output_num))
-        else: new_variances = None
+        if noise_variances is not None:
+            new_variances = np.zeros((point_number * self.output_num))
+        else:
+            new_variances = None
         for i in range(self.output_num):
             if isinstance(x_data, np.ndarray):
                 new_points[i * point_number: (i + 1) * point_number] = np.column_stack([x_data, output_positions[:, i]])
             if isinstance(x_data, list):
                 for j in range(len(x_data)):
-                    new_points[i*point_number+j] = [x_data[j], output_positions[j, i]]
+                    new_points[i * point_number + j] = [x_data[j], output_positions[j, i]]
             new_values[i * point_number: (i + 1) * point_number] = y_data[:, i]
             if noise_variances is not None:
                 new_variances[i * point_number: (i + 1) * point_number] = noise_variances[:, i]
@@ -393,30 +378,4 @@ class fvGP(GP):
         return new_points, new_values, new_variances
 
     ################################################################################################
-    def _default_multi_task_kernel(self, x1, x2, hps, obj):  # pragma: no cover
-        signal_var = hps[0]
-        length_scale = hps[1]
-        hps_nn = hps[2:]
-        w1_indices = np.arange(0, self.gp_deep_kernel_layer_width * self.iset_dim)
-        last = self.gp_deep_kernel_layer_width * self.iset_dim
-        w2_indices = np.arange(last, last + self.gp_deep_kernel_layer_width ** 2)
-        last = last + self.gp_deep_kernel_layer_width ** 2
-        w3_indices = np.arange(last, last + self.gp_deep_kernel_layer_width * self.iset_dim)
-        last = last + self.gp_deep_kernel_layer_width * self.iset_dim
-        b1_indices = np.arange(last, last + self.gp_deep_kernel_layer_width)
-        last = last + self.gp_deep_kernel_layer_width
-        b2_indices = np.arange(last, last + self.gp_deep_kernel_layer_width)
-        last = last + self.gp_deep_kernel_layer_width
-        b3_indices = np.arange(last, last + self.iset_dim)
 
-        self.n.set_weights(hps_nn[w1_indices].reshape(self.gp_deep_kernel_layer_width, self.iset_dim),
-                           hps_nn[w2_indices].reshape(self.gp_deep_kernel_layer_width, self.gp_deep_kernel_layer_width),
-                           hps_nn[w3_indices].reshape(self.iset_dim, self.gp_deep_kernel_layer_width))
-        self.n.set_biases(hps_nn[b1_indices].reshape(self.gp_deep_kernel_layer_width),
-                          hps_nn[b2_indices].reshape(self.gp_deep_kernel_layer_width),
-                          hps_nn[b3_indices].reshape(self.iset_dim))
-        x1_nn = self.n.forward(x1)
-        x2_nn = self.n.forward(x2)
-        d = get_distance_matrix(x1_nn, x2_nn)
-        k = signal_var * matern_kernel_diff1(d, length_scale)
-        return k

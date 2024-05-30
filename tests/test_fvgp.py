@@ -200,7 +200,7 @@ def test_multi_task():
     y_data[:,0] = np.sin(np.linalg.norm(x_data, axis=1))
     y_data[:,1] = np.cos(np.linalg.norm(x_data, axis=1))
 
-    my_fvgp = fvGP(x_data, y_data, init_hyperparameters = np.array([1, 1]), hyperparameter_bounds = np.array([[0.,1.],[0.,1.]]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(x_data, y_data, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
     my_fvgp.update_gp_data(x_data, y_data, append = True)
     my_fvgp.update_gp_data(x_data, y_data, append = False)
     my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10]]),

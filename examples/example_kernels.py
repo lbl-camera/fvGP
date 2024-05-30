@@ -155,4 +155,31 @@ def cory(x1, x2, hps, obj):
 ############################################################
 ############################################################
 ############################################################
+#deep kernel
+def deep_multi_task_kernel(x1, x2, hps, obj):  # pragma: no cover
+    signal_var = hps[0]
+    length_scale = hps[1]
+    hps_nn = hps[2:]
+    w1_indices = np.arange(0, gp_deep_kernel_layer_width * iset_dim)
+    last = gp_deep_kernel_layer_width * iset_dim
+    w2_indices = np.arange(last, last + gp_deep_kernel_layer_width ** 2)
+    last = last + gp_deep_kernel_layer_width ** 2
+    w3_indices = np.arange(last, last + gp_deep_kernel_layer_width * iset_dim)
+    last = last + gp_deep_kernel_layer_width * iset_dim
+    b1_indices = np.arange(last, last + gp_deep_kernel_layer_width)
+    last = last + gp_deep_kernel_layer_width
+    b2_indices = np.arange(last, last + gp_deep_kernel_layer_width)
+    last = last + gp_deep_kernel_layer_width
+    b3_indices = np.arange(last, last + iset_dim)
 
+    n.set_weights(hps_nn[w1_indices].reshape(gp_deep_kernel_layer_width, iset_dim),
+                       hps_nn[w2_indices].reshape(gp_deep_kernel_layer_width, gp_deep_kernel_layer_width),
+                       hps_nn[w3_indices].reshape(iset_dim, gp_deep_kernel_layer_width))
+    n.set_biases(hps_nn[b1_indices].reshape(gp_deep_kernel_layer_width),
+                      hps_nn[b2_indices].reshape(gp_deep_kernel_layer_width),
+                      hps_nn[b3_indices].reshape(iset_dim))
+    x1_nn = n.forward(x1)
+    x2_nn = n.forward(x2)
+    d = get_distance_matrix(x1_nn, x2_nn)
+    k = signal_var * matern_kernel_diff1(d, length_scale)
+    return k

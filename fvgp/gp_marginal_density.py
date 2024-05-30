@@ -57,11 +57,6 @@ class GPMarginalDensity:
         """This updates KVinvY after new data was communicated"""
         y_mean = self.y_data - m
         KV = K + V
-
-        # update lin alg obj
-        #if self.gp2Scale: mode = self._set_gp2Scale_mode(KV)
-        #else: mode = self.KVlinalg.mode
-        print("size(KV) in marginal: ", KV.shape, y_mean.shape)
         self.KVlinalg.update_KV(KV)
         KVinvY = self.KVlinalg.solve(y_mean)
         return KVinvY
@@ -338,10 +333,6 @@ class KVlinalg:
             if issparse(KV): KV = KV.toarray()
             if len(KV) <= len(self.Chol_factor): res = calculate_Chol_factor(KV)
             else: res = update_Chol_factor(self.Chol_factor, KV)
-
-            print("size(KV) in KV obj: ", KV.shape)
-            res2 = update_Chol_factor(self.Chol_factor, KV)
-            print("        res2 in KV obj: ", res2.shape)
             self.Chol_factor = res
         elif self.mode == "Inv":
             self.KV = KV

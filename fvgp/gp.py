@@ -15,12 +15,13 @@ from .gp_posterior import GPposterior
 
 
 # TODO: search below "TODO"
+#   there can be no default bounds in the initialization, that means fvgp can't set the default hps bounds either
+#                                               we need get_default_hps for fvgp and test it
 #   neither minres nor random logdet are doing a good job in gp2Scale,
 #                                            cg is better but we might need a preconditioner , maybe a large LU?
 #   the mcmc in default mode should not need proposal distributions explicitly
 #   reshape posteriors if x_out
 #   when are we really using gpu vs cpu as compute_device
-# TODO: finish KVlogdet  class and clean up
 
 
 class GP:
@@ -47,17 +48,9 @@ class GP:
     init_hyperparameters : np.ndarray, optional
         Vector of hyperparameters used by the GP initially.
         This class provides methods to train hyperparameters.
-        The default is a random draw from a uniform distribution
-        within hyperparameter_bounds, with a shape appropriate
-        for the default kernel (D + 1), which is an anisotropic Matern
+        The default is an array of ones with the right length for the anisotropic Matern
         kernel with automatic relevance determination (ARD). If sparse_node or gp2Scale is
         enabled, the default kernel changes to the anisotropic Wendland kernel.
-    hyperparameter_bounds : np.ndarray, optional
-        A 2d numpy array of shape (N x 2), where N is the number of needed hyperparameters.
-        The default is None, in which case the hyperparameter_bounds are estimated from the domain size
-        and the initial y_data. If the data set changes significantly,
-        the hyperparameters and the bounds should be changed/retrained. Initial hyperparameters and bounds
-        can also be set in the train calls. The default only works for the default kernels.
     noise_variances : np.ndarray, optional
         An numpy array defining the uncertainties/noise in the data
         `y_data` in form of a point-wise variance. Shape (len(y_data), 1) or (len(y_data)).
@@ -207,7 +200,6 @@ class GP:
         x_data,
         y_data,
         init_hyperparameters=None,
-        hyperparameter_bounds=None,
         noise_variances=None,
         compute_device="cpu",
         gp_kernel_function=None,
@@ -241,29 +233,16 @@ class GP:
         # prepare initial hyperparameters and bounds
         if self.data.Euclidean:
             if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
-                if hyperparameter_bounds is None and init_hyperparameters is None:
-                    raise Exception(
+                if init_hyperparameters is None: raise Exception(
                         "You have provided callables for kernel, mean, or noise functions but no"
-                        "initial hyperparameters or hyperparameter bounds. Please provide"
-                        "at least one of them at initialization.")
-                else:
-                    if init_hyperparameters is None:
-                        hyperparameters, hyperparameter_bounds = self._get_default_hyperparameters(
-                            hyperparameter_bounds)
+                        "initial hyperparameters.")
             else:
-                if init_hyperparameters is None: hyperparameters, hyperparameter_bounds = \
-                    self._get_default_hyperparameters(hyperparameter_bounds)
-        else:
-            hyperparameters, hyperparameter_bounds = init_hyperparameters, hyperparameter_bounds
+                if init_hyperparameters is None: hyperparameters = np.ones((x_data.shape[1]+1))
+        else: hyperparameters = init_hyperparameters
 
         # warn if they could not be prepared
         if hyperparameters is None:
             raise Exception("'init_hyperparameters' not provided and could not be calculated. Please provide them ")
-
-        if hyperparameter_bounds is None:
-            warnings.warn("hyperparameter_bounds not provided. "
-                          "They will have to be provided in the training call.")
-        self.hyperparameter_bounds = hyperparameter_bounds
 
         if gp2Scale:
             try:
@@ -393,22 +372,22 @@ class GP:
         self.x_data = self.data.x_data
         self.y_data = self.data.y_data
 
-    def _get_default_hyperparameters(self, hyperparameter_bounds):
+    def _get_default_hyperparameter_bounds(self):
         """
-        This function will create hyperparameter bounds and init hyperparameters
-        for the default kernel.
-        """
-        if hyperparameter_bounds is None:
-            hyperparameter_bounds = np.zeros((self.data.input_space_dim + 1, 2))
-            hyperparameter_bounds[0] = np.array([np.var(self.data.y_data) / 100., np.var(self.data.y_data) * 10.])
-            for i in range(self.data.input_space_dim):
-                range_xi = np.max(self.data.x_data[:, i]) - np.min(self.data.x_data[:, i])
-                hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
+        This function will create hyperparameter bounds for the default kernel based
+        on the data only.
 
-        init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
-                                                 high=hyperparameter_bounds[:, 1],
-                                                 size=len(hyperparameter_bounds))
-        return init_hyperparameters, hyperparameter_bounds
+        Return:
+        --------
+        hyperparameter bounds for the default kernel : np.ndarray
+        """
+
+        hyperparameter_bounds = np.zeros((self.data.input_space_dim + 1, 2))
+        hyperparameter_bounds[0] = np.array([np.var(self.data.y_data) / 100., np.var(self.data.y_data) * 10.])
+        for i in range(self.data.input_space_dim):
+            range_xi = np.max(self.data.x_data[:, i]) - np.min(self.data.x_data[:, i])
+            hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
+        return hyperparameter_bounds
 
     ###################################################################################
     ###################################################################################
@@ -416,10 +395,10 @@ class GP:
     #################TRAINING##########################################################
     ###################################################################################
     def train(self,
+              hyperparameter_bounds=None,
               objective_function=None,
               objective_function_gradient=None,
               objective_function_hessian=None,
-              hyperparameter_bounds=None,
               init_hyperparameters=None,
               method="global",
               pop_size=20,
@@ -438,6 +417,11 @@ class GP:
 
         Parameters
         ----------
+        hyperparameter_bounds : np.ndarray
+            A numpy array of shape (D x 2), defining the bounds for the optimization.
+            A 2d numpy array of shape (N x 2), where N is the number of hyperparameters.
+            If the data set changes significantly,
+            the hyperparameters and the bounds should be changed/retrained.
         objective_function : callable, optional
             The function that will be MINIMIZED for training the GP. The form of the function is f(hyperparameters=hps)
             and returns a scalar. This function can be used to train via non-standard user-defined objectives.
@@ -454,13 +438,6 @@ class GP:
             and returns a matrix of shape(len(hps),len(hps)). This function can be used to train
             via non-standard user-defined objectives.
             The default is the hessian of the negative log marginal likelihood.
-        hyperparameter_bounds : np.ndarray, optional
-            A numpy array of shape (D x 2), defining the bounds for the optimization.
-            A 2d numpy array of shape (N x 2), where N is the number of hyperparameters.
-            The default is None, in which case the hyperparameter_bounds are estimated from the domain size
-            and the y_data. If the data set changes significantly,
-            the hyperparameters and the bounds should be changed/retrained.
-            The default only works for the default kernels.
         init_hyperparameters : np.ndarray, optional
             Initial hyperparameters used as starting location for all optimizers with local component.
             The default is a random draw from a uniform distribution within the bounds.
@@ -490,12 +467,14 @@ class GP:
             `dask.distributed.Client` instance is constructed.
         """
         if hyperparameter_bounds is None:
-            if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
-            hyperparameter_bounds = self.hyperparameter_bounds
-        if init_hyperparameters is None: init_hyperparameters = self.prior.hyperparameters
-        if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
-                                                                                  high=hyperparameter_bounds[:, 1],
-                                                                                  size=len(hyperparameter_bounds))
+            hyperparameter_bounds = self._get_default_hyperparameter_bounds()
+            warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
+                          "This will fail for custom kernel,"
+                          " mean, or noise functions")
+        if init_hyperparameters is None:
+            init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
+                                                     high=hyperparameter_bounds[:, 1],
+                                                     size=len(hyperparameter_bounds))
         if objective_function is not None and method == 'mcmc':
             warnings.warn("MCMC will ignore the user-defined objective function")
         if objective_function is not None and objective_function_gradient is None and (method == 'local' or 'hgdl'):
@@ -529,10 +508,10 @@ class GP:
 
     ##################################################################################
     def train_async(self,
+                    hyperparameter_bounds=None,
                     objective_function=None,
                     objective_function_gradient=None,
                     objective_function_hessian=None,
-                    hyperparameter_bounds=None,
                     init_hyperparameters=None,
                     max_iter=10000,
                     local_optimizer="L-BFGS-B",
@@ -548,6 +527,11 @@ class GP:
 
         Parameters
         ----------
+        hyperparameter_bounds : np.ndarray
+            A numpy array of shape (D x 2), defining the bounds for the optimization.
+            A 2d numpy array of shape (N x 2), where N is the number of hyperparameters.
+            If the data set changes significantly,
+            the hyperparameters and the bounds should be changed/retrained.
         objective_function : callable, optional
             The function that will be MINIMIZED for training the GP. The form of the function is f(hyperparameters=hps)
             and returns a scalar. This function can be used to train via non-standard user-defined objectives.
@@ -564,13 +548,6 @@ class GP:
             and returns a matrix of shape(len(hps),len(hps)). This function can be used to train
             via non-standard user-defined objectives.
             The default is the hessian of the negative log marginal likelihood.
-        hyperparameter_bounds : np.ndarray, optional
-            A numpy array of shape (D x 2), defining the bounds for the optimization.
-            A 2d numpy array of shape (N x 2), where N is the number of hyperparameters.
-            The default is None, in which case the hyperparameter_bounds are estimated from the domain size
-            and the y_data. If the data set changes significantly,
-            the hyperparameters and the bounds should be changed/retrained.
-            The default only works for the default kernels.
         init_hyperparameters : np.ndarray, optional
             Initial hyperparameters used as starting location for all optimizers with local component.
             The default is a random draw from a uniform distribution within the bounds.
@@ -593,14 +570,15 @@ class GP:
         to update the prior GP : object instance
         """
         if self.gp2Scale: raise Exception("gp2Scale does not allow asynchronous training!")
-        if dask_client is None: dask_client = distributed.Client()
         if hyperparameter_bounds is None:
-            if self.hyperparameter_bounds is None: raise Exception("Please provide hyperparameter_bounds")
-            hyperparameter_bounds = self.hyperparameter_bounds
-        if init_hyperparameters is None: init_hyperparameters = self.prior.hyperparameters
-        if init_hyperparameters is None: init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
-                                                                                  high=hyperparameter_bounds[:, 1],
-                                                                                  size=len(hyperparameter_bounds))
+            hyperparameter_bounds = self._get_default_hyperparameter_bounds()
+            warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
+                          "This will fail for custom kernel,"
+                          " mean, or noise functions")
+        if init_hyperparameters is None:
+            init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
+                                                     high=hyperparameter_bounds[:, 1],
+                                                     size=len(hyperparameter_bounds))
         if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
         if objective_function_gradient is None: objective_function_gradient = self.marginal_density.neg_log_likelihood_gradient
         if objective_function_hessian is None: objective_function_hessian = self.marginal_density.neg_log_likelihood_hessian
