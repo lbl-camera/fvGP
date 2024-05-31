@@ -89,3 +89,6 @@ target/
 
 # Text notes
 */*.txt
+
+# ignore hatch versioning
+/gpcam/_version.py
