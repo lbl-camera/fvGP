@@ -83,9 +83,6 @@ class fvGP(GP):
         is a 1d array of length N depending on how many hyperparameters are initialized, and
         obj is an `fvgp.GP` instance. The default is a deep kernel with 2 hidden layers and
         a width of fvgp.fvGP.gp_deep_kernel_layer_width.
-    gp_deep_kernel_layer_width : int, optional
-        If no kernel is provided, fvGP will use a deep kernel of depth 2 and width gp_deep_kernel_layer_width.
-        If a user defined kernel is provided this parameter is irrelevant. The default is 5.
     gp_kernel_function_grad : Callable, optional
         A function that calculates the derivative of the `gp_kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
@@ -210,7 +207,6 @@ class fvGP(GP):
         noise_variances=None,
         compute_device="cpu",
         gp_kernel_function=None,
-        gp_deep_kernel_layer_width=5,
         gp_kernel_function_grad=None,
         gp_noise_function=None,
         gp_noise_function_grad=None,
@@ -226,10 +222,8 @@ class fvGP(GP):
         info=False,
     ):
 
-        if isinstance(x_data, np.ndarray):
-            self.orig_input_space_dim = x_data.shape[1]
-        else:
-            self.orig_input_space_dim = 1
+        if isinstance(x_data, np.ndarray): self.orig_input_space_dim = x_data.shape[1]
+        else: self.orig_input_space_dim = 1
 
         self.output_num = y_data.shape[1]
         output_space_dim = 1
@@ -250,34 +244,12 @@ class fvGP(GP):
         self.fvgp_noise_variances = noise_variances
         x_data, y_data, noise_variances = self._transform_index_set(x_data, y_data, noise_variances,
                                                                     self.output_positions)
-        init_hps = init_hyperparameters
-
-        if gp_kernel_function is None and isinstance(x_data, np.ndarray):
-            gp_kernel_function = self._default_multi_task_kernel
-            if callable(gp_noise_function) or callable(gp_mean_function):
-                raise Exception("The default kernel can only be used without mean and noise functions")
-            try:
-                from .deep_kernel_network import Network
-            except:
-                raise Exception("You have not specified a kernel and the default kernel will be used. \n \
-                    The default kernel needs pytorch to be installed manually.")
-            self.gp_deep_kernel_layer_width = gp_deep_kernel_layer_width
-            self.n = Network(self.iset_dim, gp_deep_kernel_layer_width)
-            number_of_hps = int(2. * self.iset_dim * gp_deep_kernel_layer_width +
-                                gp_deep_kernel_layer_width ** 2 + 2. * gp_deep_kernel_layer_width + self.iset_dim + 2.)
-
-            init_hps = np.ones(number_of_hps)
-            warnings.warn("Hyperparameter bounds have been initialized automatically \
-                    \n for the default kernel in fvgp. They will automatically used for the training.\
-                    \n However, you can also define and provide new bounds.")
-        else:
-            warnings.warn("Default kernel could not be defined.")
 
         ####init GP
         super().__init__(
             x_data,
             y_data,
-            init_hyperparameters=init_hps,
+            init_hyperparameters=init_hyperparameters,
             noise_variances=noise_variances,
             compute_device=compute_device,
             gp_kernel_function=gp_kernel_function,

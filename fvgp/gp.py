@@ -237,7 +237,7 @@ class GP:
                         "You have provided callables for kernel, mean, or noise functions but no"
                         "initial hyperparameters.")
             else:
-                if init_hyperparameters is None: hyperparameters = np.ones((x_data.shape[1]+1))
+                if init_hyperparameters is None: hyperparameters = np.ones((self.data.input_space_dim + 1))
         else: hyperparameters = init_hyperparameters
 
         # warn if they could not be prepared
@@ -362,7 +362,6 @@ class GP:
             self.prior.update_data(self.data.x_data, constant_mean=np.mean(self.data.y_data))
 
         # update likelihood
-        print("K size: ", self.prior.K.shape)
         self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
                                self.prior.hyperparameters)
 
@@ -381,7 +380,11 @@ class GP:
         --------
         hyperparameter bounds for the default kernel : np.ndarray
         """
-
+        if not self.data.Euclidean: raise Exception("Please provide custom hyperparameter bounds to "
+                                                    "the training in the non-Euclidean setting")
+        if len(self.prior.hyperparameters) != self.data.input_space_dim + 1:
+            raise Exception("Please provide custom hyperparameter_bounds when kernel, mean or noise"
+                            " functions are customized")
         hyperparameter_bounds = np.zeros((self.data.input_space_dim + 1, 2))
         hyperparameter_bounds[0] = np.array([np.var(self.data.y_data) / 100., np.var(self.data.y_data) * 10.])
         for i in range(self.data.input_space_dim):

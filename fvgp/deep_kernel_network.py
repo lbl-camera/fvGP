@@ -9,6 +9,7 @@ class Network(nn.Module):  # pragma: no cover
         self.layer1 = nn.Linear(dim, layer_width)
         self.layer2 = nn.Linear(layer_width, layer_width)
         self.layer3 = nn.Linear(layer_width, dim)
+        self.number_of_hps = int(2. * dim * layer_width + layer_width ** 2 + 2. * layer_width + dim)
 
     def forward(self, x):
         x = torch.Tensor(x)
