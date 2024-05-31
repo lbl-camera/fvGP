@@ -1,6 +1,7 @@
 import numpy as np
 import warnings
 import time
+from loguru import logger
 from scipy.sparse.linalg import splu
 from scipy.sparse.linalg import minres, cg
 from scipy.sparse import identity
@@ -76,20 +77,21 @@ def calculate_random_logdet(KV, info, compute_device):
     logdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
                                     lanczos_degree=20, error_rtol=0.001, gpu=gpu,
                                     return_info=True, plot=False, verbose=False)
-    if info: print("Random logdet() done after ", time.time() - st, "seconds.", flush=True)
+    if info: logger.info("Random logdet() done after {} seconds", time.time() - st)
     return logdet
 
 
 def calculate_sparse_conj_grad(KV, vec, info=False):
     st = time.time()
-    if info: print("CG solve in progress ...", flush=True)
-    res, exit_code = cg(KV.tocsc(), vec)
-    if exit_code == 1:
-        M = spai(KV, 20)
-        res, exit_code = cg(KV.tocsc(), vec, M=M)
-    if exit_code == 1: warnings.warn("CG not successful")
-    if info: print("CG compute time:", time.time() - st, "seconds, exit status ", exit_code, "(0:=successful)",
-                   flush=True)
+    if info: logger.info("CG solve in progress ...")
+    if np.ndim(vec) == 1: vec = vec.reshape(len(vec),-1)
+    for i in range(vec.shape[1]):
+        res, exit_code = cg(KV.tocsc(), vec[:, i])
+        if exit_code == 1:
+            M = spai(KV, 20)
+            res, exit_code = cg(KV.tocsc(), vec[:,i], M=M)
+        if exit_code == 1: warnings.warn("CG not successful")
+    if info: logger.info("CG compute time: {} seconds, exit status {} (0:=successful)", time.time() - st, exit_code)
     return res
 
 

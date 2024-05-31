@@ -1,7 +1,7 @@
 import numpy as np
 import time
 import warnings
-
+from loguru import logger
 
 ## --------------------------------------------------------------------- ##
 #  A generic Metropolis sampler.  You have to supply the log likelihood   #
@@ -102,7 +102,7 @@ class gpMCMC:
         x0 : np.ndarray
             Starting point of the mcmc.
         info : bool
-            Whether to print information is the mcmc runs.
+            Whether to print information is the mcmc runs (use logger).
         break_condition : callable or string or None
             A break condition that specified when the mcmc is terminated. If None,
             mcmc will run until `n_updates` is reached. If callable will get the mcmc object instance as
@@ -138,7 +138,7 @@ class gpMCMC:
         # Initialize Metropolis
         x = x0.copy()
         likelihood = self.log_likelihood_function(x, self.args)
-        if info: print("Starting likelihood. f(x)=", likelihood)
+        if info: logger.info("Starting likelihood. f(x)= {}", likelihood)
         prior = self.prior_function(x, self.args)
         #########################################################
         # Begin main loop
@@ -155,7 +155,7 @@ class gpMCMC:
             run_in_every_iteration(self)
 
             if info and (i % 100) == 0:
-                print("Finished " + str(i) + " out of " + str(n_updates), " iterations. f(x)=", likelihood)
+                logger.info("Finished {} out of {} iterations. f(x)= {}", i, n_updates, likelihood)
             if break_condition(self): break
         # End main loop
 

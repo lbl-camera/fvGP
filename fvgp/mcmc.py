@@ -1,6 +1,6 @@
 import numpy as np
 import time
-
+from loguru import logger
 
 def out_of_bounds(x,bounds):
     for i in range(len(x)):
@@ -152,8 +152,9 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
             prop_Sigma_trace[i,:,:] = prop_Sigma
         # Echo every 100 iterations
         if info:
-            if (i % 100) == 0: print("Finished "+str(i)+ " out of " + str(n_updates), " iterations. f(x)=",likelihood)
-        if len(x)>201 and np.linalg.norm(np.mean(x[-100:],axis = 0)-np.mean(x[-200:-100],axis = 0)) < 0.01 * np.linalg.norm(np.mean(x[-100:],axis = 0)): break
+            if (i % 100) == 0: logger.info("Finished {} out of {} iterations. f(x)= {}", i, n_updates, likelihood)
+        if len(x) > 201 and np.linalg.norm(np.mean(x[-100:], axis=0)-np.mean(x[-200:-100], axis=0)) < 0.01 * \
+            np.linalg.norm(np.mean(x[-100:], axis=0)): break
     # End main loop
     #########################################################
 

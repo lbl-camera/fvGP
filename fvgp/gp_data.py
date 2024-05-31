@@ -37,7 +37,6 @@ class GPdata:
                       self.input_space_dim == x_data_new.shape[1])
 
         if self.noise_variances is not None and noise_variances_new is None:
-            print(self.noise_variances, noise_variances_new)
             raise Exception("Please provide noise_variances in the data update because you did at initialization"
                             "or during a previous update.")
         if self.noise_variances is None and noise_variances_new is not None:

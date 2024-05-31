@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import warnings
-import dask.distributed as distributed
 import numpy as np
 from loguru import logger
 from dask.distributed import Client
@@ -12,11 +11,10 @@ from .gp_marginal_density import GPMarginalDensity
 from .gp_likelihood import GPlikelihood
 from .gp_training import GPtraining
 from .gp_posterior import GPposterior
+import sys
 
 
 # TODO: search below "TODO"
-#   there can be no default bounds in the initialization, that means fvgp can't set the default hps bounds either
-#                                               we need get_default_hps for fvgp and test it
 #   neither minres nor random logdet are doing a good job in gp2Scale,
 #                                            cg is better but we might need a preconditioner , maybe a large LU?
 #   the mcmc in default mode should not need proposal distributions explicitly
@@ -220,6 +218,10 @@ class GP:
         self.compute_device = compute_device
         self.args = args
         self.info = info
+        if info:
+            logger.remove()
+            logger.enable("fvgp")
+            logger.add(sys.stdout, filter="fvgp", level="INFO")
         self.calc_inv = calc_inv
         self.gp2Scale = gp2Scale
         self.gp2Scale_dask_client = gp2Scale_dask_client
@@ -234,11 +236,12 @@ class GP:
         if self.data.Euclidean:
             if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
                 if init_hyperparameters is None: raise Exception(
-                        "You have provided callables for kernel, mean, or noise functions but no"
-                        "initial hyperparameters.")
+                    "You have provided callables for kernel, mean, or noise functions but no"
+                    "initial hyperparameters.")
             else:
                 if init_hyperparameters is None: hyperparameters = np.ones((self.data.input_space_dim + 1))
-        else: hyperparameters = init_hyperparameters
+        else:
+            hyperparameters = init_hyperparameters
 
         # warn if they could not be prepared
         if hyperparameters is None:
@@ -469,6 +472,7 @@ class GP:
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
         """
+        if self.gp2Scale: method = 'mcmc'
         if hyperparameter_bounds is None:
             hyperparameter_bounds = self._get_default_hyperparameter_bounds()
             warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
@@ -483,10 +487,13 @@ class GP:
         if objective_function is not None and objective_function_gradient is None and (method == 'local' or 'hgdl'):
             raise Exception("For user-defined objective functions and local or hybrid optimization, a gradient and\
                              Hessian function of the objective function have to be defined.")
+        if method == 'mcmc': objective_function = self.marginal_density.log_likelihood
         if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
-        if objective_function is None and method == 'mcmc': objective_function = self.marginal_density.log_likelihood
         if objective_function_gradient is None: objective_function_gradient = self.marginal_density.neg_log_likelihood_gradient
         if objective_function_hessian is None: objective_function_hessian = self.marginal_density.neg_log_likelihood_hessian
+
+        logger.info("objective function: {}", objective_function)
+        logger.info("method: {}", method)
 
         hyperparameters = self.trainer.train(
             objective_function=objective_function,
@@ -1280,8 +1287,8 @@ class GP:
     ####################################################################################
     def _crps_s(self, x, mu, sigma):
         res = abs(sigma * ((1. / np.sqrt(np.pi))
-                                    - 2. * norm.pdf((x - mu) / sigma)
-                                    - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.))))
+                           - 2. * norm.pdf((x - mu) / sigma)
+                           - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.))))
         return np.mean(res), np.sqrt(np.var(res))
 
     def crps(self, x_test, y_test):

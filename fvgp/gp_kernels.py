@@ -101,7 +101,7 @@ def matern_kernel_diff1(distance, length):
     Kernel output : same as distance parameter.
     """
 
-    kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
+    kernel = (1.0 + ((np.sqrt(3.0) * distance) / length)) * np.exp(
         -(np.sqrt(3.0) * distance) / length
     )
     return kernel

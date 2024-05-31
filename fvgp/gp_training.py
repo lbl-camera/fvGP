@@ -257,7 +257,7 @@ class GPtraining:
                                        global_optimizer,
                                        dask_client):
 
-        logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: {}", starting_hps)
+        logger.info("fvGP hyperparameter tuning in progress. Old hyperparameters: {}", starting_hps)
         if not self._in_bounds(starting_hps, hp_bounds):
             raise Exception("Starting positions outside of optimization bounds.")
 
@@ -294,19 +294,15 @@ class GPtraining:
         if not self._in_bounds(starting_hps, hp_bounds):
             raise Exception("Starting positions outside of optimization bounds.", starting_hps, hp_bounds)
 
-        if self.gp2Scale:
-            method = 'mcmc'
-            warnings.warn("gp2Scale activated. Only MCMC training will be performed.")
-
         ############################
         ####global optimization:##
         ############################
         if method == "global":
-            logger.debug(
+            logger.info(
                 "fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
             logger.debug("maximum number of iterations: {}", max_iter)
             logger.debug("termination tolerance: {}", tolerance)
-            logger.debug("bounds: {}", hp_bounds)
+            logger.info("bounds: {}", hp_bounds)
             res = differential_evolution(
                 objective_function,
                 hp_bounds,
@@ -320,18 +316,18 @@ class GPtraining:
                 workers=1,
             )
             hyperparameters = np.array(res["x"])
-            logger.debug(f"fvGP found hyperparameters {hyperparameters} with objective function eval {res['fun']} \
+            logger.info(f"fvGP found hyperparameters {hyperparameters} with objective function eval {res['fun']} \
             via global optimization")
         ############################
         ####local optimization:#####
         ############################
         elif method == "local":
-            logger.debug("fvGP is performing a local update of the hyper parameters.")
+            logger.info("fvGP is performing a local update of the hyper parameters.")
             logger.debug("starting hyperparameters: {}", starting_hps)
             logger.debug("Attempting a BFGS optimization.")
             logger.debug("maximum number of iterations: {}", max_iter)
             logger.debug("termination tolerance: {}", tolerance)
-            logger.debug("bounds: {}", hp_bounds)
+            logger.info("bounds: {}", hp_bounds)
             OptimumEvaluation = minimize(
                 objective_function,
                 starting_hps,
@@ -344,7 +340,7 @@ class GPtraining:
                 constraints=constraints,
                 options={"maxiter": max_iter})
 
-            if OptimumEvaluation["success"] == True:
+            if OptimumEvaluation["success"]:
                 logger.debug(f"fvGP local optimization successfully concluded with result: "
                              f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
             else:
@@ -354,9 +350,9 @@ class GPtraining:
         ####hybrid optimization:####
         ############################
         elif method == "hgdl":
-            logger.debug("fvGP submitted HGDL optimization")
-            logger.debug("starting hyperparameters: {}", starting_hps)
-            logger.debug('bounds are', hp_bounds)
+            logger.info("fvGP submitted HGDL optimization")
+            logger.info("starting hyperparameters: {}", starting_hps)
+            logger.info('bounds are', hp_bounds)
 
             opt_obj = HGDL(objective_function,
                            objective_function_gradient,
@@ -368,21 +364,17 @@ class GPtraining:
                            constraints=constraints)
 
             opt_obj.optimize(dask_client=dask_client, x0=starting_hps.reshape(1, -1))
-            try:
-                hyperparameters = opt_obj.get_final()[0]["x"]
-            except:
-                raise Exception("Something has gone wrong with the objective function evaluation.")
+            try: hyperparameters = opt_obj.get_final()[0]["x"]
+            except: raise Exception("Something has gone wrong with the objective function evaluation.")
             opt_obj.kill_client()
         elif method == "mcmc":
-            logger.debug("MCMC started in fvGP")
-            logger.debug('bounds are {}', hp_bounds)
+            logger.info("MCMC started in fvGP")
+            logger.info('bounds are {}', hp_bounds)
             res = mcmc(objective_function, hp_bounds, x0=starting_hps, n_updates=max_iter, info=self.info)
             hyperparameters = np.array(res["distribution mean"])
             self.mcmc_info = res
-        elif callable(method):
-            hyperparameters = method(self)
-        else:
-            raise ValueError("No optimization mode specified in fvGP")
+        elif callable(method): hyperparameters = method(self)
+        else: raise ValueError("No optimization mode specified in fvGP")
         return hyperparameters
 
     def _in_bounds(self, v, bounds):

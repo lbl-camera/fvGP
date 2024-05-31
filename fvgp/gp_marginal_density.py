@@ -5,8 +5,6 @@ import warnings
 from scipy.sparse import issparse
 
 
-# TODO: finish KVlogdet class and clean up
-
 
 class GPMarginalDensity:
     def __init__(self,
