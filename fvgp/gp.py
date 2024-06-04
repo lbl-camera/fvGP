@@ -1221,58 +1221,6 @@ class GP:
             given the GP posterior at a given point.
         """
         return self.posterior.posterior_probability_grad(x_pred, comp_mean, comp_cov, direction, x_out=x_out)
-
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    ##################################################################################
-    ######################Compute#Covariance#Matrix###################################
-    ##################################################################################
-    ##################################################################################
-    def _normalize(self, data):
-        min_d = np.min(data)
-        max_d = np.max(data)
-        data = (data - min_d) / (max_d - min_d)
-        return data, min_d, max_d
-
-    def normalize_y_data(self, y_data):
-        """
-        Function to normalize the y_data.
-        The user is responsible to normalize the noise accordingly.
-        This function will not update the object instance.
-
-        Parameters
-        ----------
-        y_data : np.ndarray
-            Numpy array of shape (U).
-        """
-        return self._normalize(y_data)
-
-    def _normalize_x_data(self, x_data):
-        n_x = np.empty(x_data.shape)
-        x_min = np.empty((len(x_data)))
-        x_max = np.empty((len(x_data)))
-        for i in range(len(self.x_data[0])):
-            n_x[:, i], x_min[i], x_max[i] = self._normalize(x_data[:, i])
-        return n_x, x_min, x_max
-
-    def _normalize_x_pred(self, x_pred, x_min, x_max):
-        new_x_pred = np.empty(x_pred.shape)
-        for i in range(len(x_pred[0])):
-            new_x_pred[:, i] = (x_pred[:, i] - x_min[i]) / (x_max[i] - x_min[i])
-        return new_x_pred
-
-    def _cartesian_product_noneuclid(self, x, y):
-        """
-        Input x,y have to be 2d numpy arrays
-        The return is the cartesian product of the two sets
-        """
-        res = []
-        for i in range(len(y)):
-            for j in range(len(x)):
-                res.append([x[j], y[i]])
-        return res
-
     ####################################################################################
     ####################################################################################
     #######################VALIDATION###################################################

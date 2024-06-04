@@ -1,29 +1,7 @@
 import numpy as np
-from .gp_lin_alg import solve
 from loguru import logger
-import warnings
 from scipy.sparse import issparse
 from .gp_lin_alg import *
-
-
-def cartesian_product(x, y):
-    """
-    Input x,y have to be 2d numpy arrays
-    The return is the cartesian product of the two sets
-    """
-    res = []
-    if isinstance(x, list) or isinstance(y, list):
-        for i in range(len(y)):
-            for j in range(len(x)):
-                res.append((y[i], x[j]))
-        return res
-    elif isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
-        for i in range(len(y)):
-            for j in range(len(x)):
-                res.append(np.append(x[j], y[i]))
-        return np.array(res)
-    else:
-        raise Exception("Cartesian product out of options")
 
 
 class GPposterior:
@@ -173,6 +151,7 @@ class GPposterior:
             kk_g = (self.kernel(x1, x1, self.prior_obj.hyperparameters, self) -
                     self.kernel(x2, x2, self.prior_obj.hyperparameters, self)) / eps
             dSdx = kk_g - (2.0 * k_g.T @ k_covariance_prod)
+            #print(dSdx.shape)
             a = np.diag(dSdx)
             if x_out is not None:
                 a = a.reshape(len(x_orig), len(x_out), order='F')

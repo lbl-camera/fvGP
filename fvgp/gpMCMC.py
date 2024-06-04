@@ -298,8 +298,7 @@ class ProposalDistribution:
                 self.prop_args["prop_Sigma"] = init_prop_Sigma
                 self.prop_args["sigma_m"] = 2.4 ** 2 / dim
 
-            #########################################################
-
+    #########################################################
     def _adapt(self, end, mcmc_obj):
         K = self.K
         if (end % K) == 0:
