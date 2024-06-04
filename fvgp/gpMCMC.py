@@ -194,7 +194,7 @@ class gpMCMC:
         assert callable(obj.prop_dist)
 
         # get proposed x (x_star)
-        x_star[obj.indices] = obj.prop_dist(x_old[obj.indices].copy(), obj)
+        x_star[obj.indices] = obj.prop_dist(x_old[obj.indices].copy(), x_old, obj)
         # evaluate prior(x_star)
         prior_evaluation_x_star = self.prior_function(x_star, self.args)
         jump_trace = 0.
@@ -223,7 +223,8 @@ class gpMCMC:
 
 ###############################################################
 class ProposalDistribution:
-    def __init__(self, prop_dist,
+    def __init__(self,
+                 prop_dist,
                  indices,
                  init_prop_Sigma=None,
                  adapt_callable=None,

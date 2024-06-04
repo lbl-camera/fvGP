@@ -240,7 +240,7 @@ def test_gp2Scale(client):
     init_s = (np.diag(hps_bounds[:,1]-hps_bounds[:,0])/100.)**2
 
     from fvgp import gpMCMC
-    def proposal_distribution(x0, obj):
+    def proposal_distribution(x0, hps, obj):
         cov = obj.prop_args["prop_Sigma"]
         proposal_hps = np.zeros((len(x0)))
         proposal_hps = np.random.multivariate_normal(
