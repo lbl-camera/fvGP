@@ -11,7 +11,6 @@ class GPMarginalDensity:
                  data_obj,
                  prior_obj,
                  likelihood_obj,
-                 online=False,
                  calc_inv=False,
                  info=False,
                  gp2Scale=False,
@@ -21,15 +20,13 @@ class GPMarginalDensity:
         self.prior_obj = prior_obj
         self.likelihood_obj = likelihood_obj
         self.calc_inv = calc_inv
-        self.online = online
         self.info = info
         self.y_data = data_obj.y_data
         self.gp2Scale = gp2Scale
         self.compute_device = compute_device
         if self.gp2Scale:
-            self.online = False
             self.calc_inv = False
-            warnings.warn("gp2Scale use forbids calc_inv=True or online=True. Both have been set to False")
+            warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False")
         self.KVlinalg = KVlinalg(info, compute_device)
         K, V, m = self._get_KVm()
         if self.gp2Scale: mode = self._set_gp2Scale_mode(K)
@@ -39,11 +36,12 @@ class GPMarginalDensity:
         self.KVinvY = self._set_KVinvY(K, V, m, mode)
 
     ##################################################################
-    def update_data(self):
+    def update_data(self, append):
         """Update the marginal PDF when the data has changed in data likelihood or prior objects"""
         self.y_data = self.data_obj.y_data
         K, V, m = self._get_KVm()
-        self.KVinvY = self._update_KVinvY(K, V, m)
+        if append: self.KVinvY = self._update_KVinvY(K, V, m)
+        else: self.KVinvY = self._set_KVinvY(K, V, m, self.KVlinalg.mode)
 
     def update_hyperparameters(self):
         """Update the marginal PDF when if hyperparameters have changed"""

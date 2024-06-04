@@ -147,11 +147,6 @@ class fvGP(GP):
         False. Note, the training will always use Cholesky or LU decomposition instead of the
         inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
-    online : bool, optional
-        A new setting that allows optimization for online applications. Default=False. If True,
-        calc_inv will be set to true, and the inverse and the logdet() of full dataset will only be computed
-        once in the beginning and after that only updated. This leads to a significant speedup because
-        the most costly aspects of a GP are entirely avoided.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood
         is/are used for the training.
@@ -216,13 +211,14 @@ class fvGP(GP):
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
         calc_inv=False,
-        online=False,
         ram_economy=False,
         args=None,
         info=False,
     ):
 
-        if isinstance(x_data, np.ndarray): self.orig_input_space_dim = x_data.shape[1]
+        if isinstance(x_data, np.ndarray):
+            assert np.ndim(x_data) == 2
+            self.orig_input_space_dim = x_data.shape[1]
         else: self.orig_input_space_dim = 1
 
         self.output_num = y_data.shape[1]
@@ -262,7 +258,6 @@ class fvGP(GP):
             gp2Scale_dask_client=gp2Scale_dask_client,
             gp2Scale_batch_size=gp2Scale_batch_size,
             calc_inv=calc_inv,
-            online=online,
             ram_economy=ram_economy,
             args=args,
             info=info)

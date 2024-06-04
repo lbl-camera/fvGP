@@ -18,8 +18,8 @@ import sys
 #   neither minres nor random logdet are doing a good job in gp2Scale,
 #                                            cg is better but we might need a preconditioner , maybe a large LU?
 #   the mcmc in default mode should not need proposal distributions explicitly
-#   reshape posteriors if x_out
-#   when are we really using gpu vs cpu as compute_device
+#   reshape posteriors if x_out is given
+#   variational inference in fvgp
 
 
 class GP:
@@ -143,14 +143,6 @@ class GP:
         False. Note, the training will always use Cholesky or LU decomposition instead of the
         inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
-    online : bool, optional
-        A new setting that allows optimization for online applications. Default=False. If True,
-        the inverse (if calc_inv is True), or the Cholesky factors (if calc_inv is False) and the logdet()
-        will only be computed
-        once in the beginning and after that only updated. This leads to a significant speedup because
-        the most costly aspects of a GP are entirely avoided. A good indicator whether `online` is a good choice is
-        the `append` option in the gp update. You always append data, never overwrite, online should be True
-        to save some time.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood is/are used for the training.
         If True, components of the derivative of the marginal log-likelihood are
@@ -210,7 +202,6 @@ class GP:
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
         calc_inv=False,
-        online=False,
         ram_economy=False,
         args=None,
         info=False
@@ -222,6 +213,8 @@ class GP:
             logger.remove()
             logger.enable("fvgp")
             logger.add(sys.stdout, filter="fvgp", level="INFO")
+        else:
+            logger.disable("fvgp")
         self.calc_inv = calc_inv
         self.gp2Scale = gp2Scale
         self.gp2Scale_dask_client = gp2Scale_dask_client
@@ -300,7 +293,6 @@ class GP:
             self.data,
             self.prior,
             self.likelihood,
-            online=online,
             calc_inv=calc_inv,
             info=info,
             gp2Scale=gp2Scale,
@@ -369,7 +361,7 @@ class GP:
                                self.prior.hyperparameters)
 
         # update marginal density
-        self.marginal_density.update_data()
+        self.marginal_density.update_data(append)
         ##########################################
         self.x_data = self.data.x_data
         self.y_data = self.data.y_data
@@ -771,9 +763,9 @@ class GP:
             a constraint during training. The default is None which means the initialized or trained hyperparameters
             are used.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space (most often 1).
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         ------
@@ -796,9 +788,9 @@ class GP:
             a constraint during training. The default is None which means the initialized or trained hyperparameters
             are used.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
         direction : int, optional
             Direction of derivative, If None (default) the whole gradient will be computed.
 
@@ -820,9 +812,9 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
         variance_only : bool, optional
             If True the computation of the posterior covariance matrix is avoided which can save compute time.
             In that case the return will only provide the variance at the input points.
@@ -847,9 +839,9 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
         direction : int, optional
             Direction of derivative, If None (default) the whole gradient will be computed.
 
@@ -870,9 +862,9 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         ------
@@ -894,9 +886,9 @@ class GP:
         direction : int
             Direction of derivative.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         ------
@@ -954,9 +946,9 @@ class GP:
         direction : int
             Direction of derivative.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         ------
@@ -1012,9 +1004,9 @@ class GP:
         comp_cov : np.ndarray
             Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         -------
@@ -1039,9 +1031,9 @@ class GP:
         direction: int
             The direction in which the gradient will be computed.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         ------
@@ -1084,9 +1076,9 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         -------
@@ -1111,9 +1103,9 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         -------
@@ -1136,9 +1128,9 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         -------
@@ -1163,9 +1155,9 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         -------
@@ -1190,9 +1182,9 @@ class GP:
         comp_cov: np.nparray
             Covariance matrix, in R^{len(x_pred) times len(x_pred)}
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         -------
@@ -1218,9 +1210,9 @@ class GP:
         direction : int
             The direction to compute the gradient in.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         -------

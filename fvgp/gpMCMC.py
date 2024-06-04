@@ -102,7 +102,7 @@ class gpMCMC:
         x0 : np.ndarray
             Starting point of the mcmc.
         info : bool
-            Whether to print information is the mcmc runs (use logger).
+            Whether to print information about the mcmc iterations (using logger).
         break_condition : callable or string or None
             A break condition that specified when the mcmc is terminated. If None,
             mcmc will run until `n_updates` is reached. If callable will get the mcmc object instance as
@@ -195,7 +195,6 @@ class gpMCMC:
 
         # get proposed x (x_star)
         x_star[obj.indices] = obj.prop_dist(x_old[obj.indices].copy(), obj)
-
         # evaluate prior(x_star)
         prior_evaluation_x_star = self.prior_function(x_star, self.args)
         jump_trace = 0.
@@ -207,7 +206,7 @@ class gpMCMC:
             metr_ratio = np.exp(prior_evaluation_x_star + likelihood_star -
                                 prior_eval - likelihood)
             if np.isnan(metr_ratio):  metr_ratio = 0.
-            if metr_ratio > np.random.uniform(0, 1, 1):
+            if metr_ratio > np.random.uniform(0, 1, 1) or obj.auto_accept:
                 x = x_star
                 prior_eval = prior_evaluation_x_star
                 likelihood = likelihood_star
@@ -232,6 +231,7 @@ class ProposalDistribution:
                  c_0=10,
                  c_1=.8,
                  K=10,
+                 auto_accept=False,
                  adapt_cov=True,
                  prop_args=None):
         """
@@ -272,6 +272,7 @@ class ProposalDistribution:
         self.c_0 = c_0
         self.c_1 = c_1
         self.K = K
+        self.auto_accept = auto_accept
         self.adapt_cov = adapt_cov
         dim = len(indices)
         self.jump_trace = []
