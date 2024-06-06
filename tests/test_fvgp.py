@@ -271,13 +271,13 @@ def test_gp2Scale(client):
             return 0. + np.sum(np.log(theta)/2.)
         else: 
             return -np.inf
-    pd = ProposalDistribution(proposal_distribution, [0,1], 
+    pd = ProposalDistribution([0,1] ,proposal_dist=proposal_distribution,
                             init_prop_Sigma = init_s, adapt_callable="normal")
 
 
 
 
-    my_mcmc = gpMCMC(obj_func, len(hps_bounds), prior_function, [pd], 
+    my_mcmc = gpMCMC(obj_func, prior_function, [pd],
                     args={"bounds":hps_bounds})
 
     hps = np.random.uniform(
@@ -285,7 +285,20 @@ def test_gp2Scale(client):
                             high = hps_bounds[:,1], 
                             size = len(hps_bounds))
     mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
-
+    my_gp2S.set_hyperparameters(mcmc_result["x"][-1])
     x_pred = np.linspace(0,1,1000)
     mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["f(x)"]
     var1 =  my_gp2S.posterior_covariance(x_pred.reshape(-1,1))["v(x)"]
+    
+    pd = ProposalDistribution([0,1], init_prop_Sigma = init_s)
+    my_mcmc = gpMCMC(obj_func, prior_function, [pd],
+                    args={"bounds":hps_bounds})
+
+    mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
+    
+    pd = ProposalDistribution([0,1], init_prop_Sigma = init_s, adapt_callable = "normal")
+    my_mcmc = gpMCMC(obj_func, prior_function, [pd],
+                    args={"bounds":hps_bounds})
+
+    mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
+

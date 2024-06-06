@@ -17,8 +17,6 @@ import sys
 # TODO: search below "TODO"
 #   neither minres nor random logdet are doing a good job in gp2Scale,
 #                                            cg is better but we might need a preconditioner , maybe a large LU?
-#   the mcmc in default mode should not need proposal distributions explicitly
-#   reshape posteriors if x_out is given
 #   variational inference in fvgp
 
 
