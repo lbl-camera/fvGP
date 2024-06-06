@@ -159,7 +159,6 @@ class GP:
     info : bool, optional
         Provides a way how to see the progress of gp2Scale, Default is False
 
-
     Attributes
     ----------
     x_data : np.ndarray
