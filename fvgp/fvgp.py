@@ -190,10 +190,26 @@ class fvGP(GP):
         the noise covariance matrix
 
 
-    All posterior evaluation functions are inherited from :py:class:`fvgp.GP`.
-    Check there for a full list of capabilities. Methods for validation are also  available.
-    These include, but are not limited to:
+    This class inherits all capabilities from :py:class:`fvgp.GP`.
+    Check there for a full list of capabilities. Here are the most important.
 
+    Base-GP Methods:
+
+    :py:meth:`fvgp.GP.train`
+
+    :py:meth:`fvgp.GP.train_async`
+
+    :py:meth:`fvgp.GP.stop_training`
+
+    :py:meth:`fvgp.GP.kill_training`
+
+    :py:meth:`fvgp.GP.update_hyperparameters`
+
+    :py:meth:`fvgp.GP.set_hyperparameters`
+
+    :py:meth:`fvgp.GP.get_hyperparameters`
+
+    Posterior Evaluations:
 
     :py:meth:`fvgp.GP.posterior_mean`
 
@@ -227,7 +243,7 @@ class fvGP(GP):
 
     :py:meth:`fvgp.GP.posterior_probability_grad`
 
-    Other methods:
+    Validation Methods:
 
     :py:meth:`fvgp.GP.crps`
 
@@ -238,6 +254,8 @@ class fvGP(GP):
     :py:meth:`fvgp.GP.make_1d_x_pred`
 
     :py:meth:`fvgp.GP.log_likelihood`
+
+    :py:meth:`fvgp.GP.test_log_likelihood_gradient`
     """
 
     def __init__(
