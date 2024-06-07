@@ -37,11 +37,11 @@ class GPdata:
                       self.input_space_dim == x_data_new.shape[1])
 
         if self.noise_variances is not None and noise_variances_new is None:
-            raise Exception("Please provide noise_variances in the data update because you did at initialization"
+            raise Exception("Please provide noise_variances in the data update because you did at initialization "
                             "or during a previous update.")
         if self.noise_variances is None and noise_variances_new is not None:
-            raise Exception("You did not initialize noise and but included noise in the update"
-                            "but this changes the settings. Please reinitialize in this case.")
+            raise Exception("You did not initialize noise and but included noise in the update."
+                            "Please reinitialize in this case.")
         if callable(noise_variances_new): raise Exception("The update noise_variances cannot be a callable.")
         if noise_variances_new is not None:
             assert isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1

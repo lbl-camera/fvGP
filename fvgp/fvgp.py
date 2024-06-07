@@ -23,9 +23,9 @@ class fvGP(GP):
     The main logic of fvGP is that any multitask GP is just a single-task GP
     over a Cartesian product space of input and output space, as long as the kernel
     is flexible enough, so prepare to work on your kernel. This is the best
-    way to give the user optimal control and power. At various instances, for instances
-    prior-mean function, noise function, and kernel function definitions, you will
-    see that the input ``x'' is defined over this combined space.
+    way to give the user optimal control and power. In the
+    prior-mean function, noise function, and kernel function definition, you will
+    see that the input `x` is defined over this combined space.
     For example, if your input space is a Euclidean 2d space and your output
     is labelled [0,1], the input to the mean, kernel, and noise function might be
 
@@ -36,7 +36,7 @@ class fvGP(GP):
     [0.2, 0.3,1],[0.9,0.6,1]]
 
     This has to be understood and taken into account when customizing fvGP for multitask
-    use.
+    use. The examples will provide deeper insight.
 
     Parameters
     ----------
@@ -283,8 +283,8 @@ class fvGP(GP):
 
         if isinstance(x_data, np.ndarray):
             assert np.ndim(x_data) == 2
-            self.orig_input_space_dim = x_data.shape[1]
-        else: self.orig_input_space_dim = 1
+            self.input_space_dim = x_data.shape[1]
+        else: self.input_space_dim = 1
 
         self.output_num = y_data.shape[1]
         output_space_dim = 1
@@ -298,7 +298,7 @@ class fvGP(GP):
             self.output_positions = output_positions
 
         assert isinstance(self.output_positions, np.ndarray) and np.ndim(self.output_positions) == 2
-        self.iset_dim = self.orig_input_space_dim + output_space_dim
+        self.index_set_dim = self.input_space_dim + output_space_dim
         ####transform the space
         self.fvgp_x_data = x_data
         self.fvgp_y_data = y_data
@@ -389,7 +389,7 @@ class fvGP(GP):
         point_number = len(x_data)
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
         if isinstance(x_data, np.ndarray):
-            new_points = np.zeros((point_number * self.output_num, self.iset_dim))
+            new_points = np.zeros((point_number * self.output_num, self.index_set_dim))
         else:
             new_points = [0.] * point_number * self.output_num
         new_values = np.zeros((point_number * self.output_num))
