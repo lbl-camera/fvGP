@@ -193,7 +193,7 @@ class fvGP(GP):
     All posterior evaluation functions are inherited from :py:class:`fvgp.GP`.
     Check there for a full list of capabilities. Methods for validation are also  available.
     These include, but are not limited to:
-    
+
 
     :py:meth:`fvgp.GP.posterior_mean`
 
@@ -238,12 +238,6 @@ class fvGP(GP):
     :py:meth:`fvgp.GP.make_1d_x_pred`
 
     :py:meth:`fvgp.GP.log_likelihood`
-
-    :py:meth:`fvgp.GP.neg_log_likelihood`
-
-    :py:meth:`fvgp.GP.neg_log_likelihood_gradient`
-
-    :py:meth:`fvgp.GP.neg_log_likelihood_hessian`
     """
 
     def __init__(
