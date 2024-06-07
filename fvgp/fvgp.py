@@ -189,9 +189,11 @@ class fvGP(GP):
     likelihood.V : np.ndarray
         the noise covariance matrix
 
-    All posterior evaluation functions are inherited from :py:class:`fvgp.GP` class.
+
+    All posterior evaluation functions are inherited from :py:class:`fvgp.GP`.
     Check there for a full list of capabilities. Methods for validation are also  available.
     These include, but are not limited to:
+    
 
     :py:meth:`fvgp.GP.posterior_mean`
 
