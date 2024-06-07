@@ -1,9 +1,6 @@
 #!/usr/bin/env python
 import numpy as np
-import warnings
 from .gp import GP
-from .gp_kernels import get_distance_matrix
-from .gp_kernels import matern_kernel_diff1
 
 
 class fvGP(GP):
@@ -191,6 +188,60 @@ class fvGP(GP):
         logdet(K+V)
     likelihood.V : np.ndarray
         the noise covariance matrix
+
+    All posterior evaluation functions are inherited from :py:class:`fvgp.GP` class.
+    Check there for a full list of capabilities. Methods for validation are also  available.
+    These include, but are not limited to:
+
+    :py:meth:`fvgp.GP.posterior_mean`
+
+    :py:meth:`fvgp.GP.posterior_covariance`
+
+    :py:meth:`fvgp.GP.posterior_mean_grad`
+
+    :py:meth:`fvgp.GP.posterior_covariance_grad`
+
+    :py:meth:`fvgp.GP.joint_gp_prior`
+
+    :py:meth:`fvgp.GP.joint_gp_prior_grad`
+
+    :py:meth:`fvgp.GP.gp_entropy`
+
+    :py:meth:`fvgp.GP.gp_entropy_grad`
+
+    :py:meth:`fvgp.GP.gp_kl_div`
+
+    :py:meth:`fvgp.GP.gp_kl_div_grad`
+
+    :py:meth:`fvgp.GP.gp_mutual_information`
+
+    :py:meth:`fvgp.GP.gp_total_correlation`
+
+    :py:meth:`fvgp.GP.gp_relative_information_entropy`
+
+    :py:meth:`fvgp.GP.gp_relative_information_entropy_set`
+
+    :py:meth:`fvgp.GP.posterior_probability`
+
+    :py:meth:`fvgp.GP.posterior_probability_grad`
+
+    Other methods:
+
+    :py:meth:`fvgp.GP.crps`
+
+    :py:meth:`fvgp.GP.rmse`
+
+    :py:meth:`fvgp.GP.make_2d_x_pred`
+
+    :py:meth:`fvgp.GP.make_1d_x_pred`
+
+    :py:meth:`fvgp.GP.log_likelihood`
+
+    :py:meth:`fvgp.GP.neg_log_likelihood`
+
+    :py:meth:`fvgp.GP.neg_log_likelihood_gradient`
+
+    :py:meth:`fvgp.GP.neg_log_likelihood_hessian`
     """
 
     def __init__(
