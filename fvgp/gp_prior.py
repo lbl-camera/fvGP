@@ -10,7 +10,7 @@ from scipy.sparse import block_array
 
 class GPprior:
     def __init__(self,
-                 input_space_dim,
+                 index_set_dim,
                  x_data,
                  Euclidean,
                  gp_kernel_function=None,
@@ -34,7 +34,7 @@ class GPprior:
         assert isinstance(cov_comp_mode, str)
         assert isinstance(constant_mean, float)
 
-        self.input_space_dim = input_space_dim
+        self.index_set_dim = index_set_dim
         self.Euclidean = Euclidean
         self.gp_kernel_function = gp_kernel_function
         self.gp_mean_function = gp_mean_function

@@ -246,7 +246,7 @@ class GPposterior:
         x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L),
             where N is the number of output points,
             and L is the dimensionality of the output space.
 
@@ -440,9 +440,9 @@ class GPposterior:
         if isinstance(x_pred, np.ndarray):
             assert np.ndim(x_pred) == 2
             if isinstance(x_out, np.ndarray):
-                assert x_pred.shape[1] == self.data_obj.input_space_dim - 1
+                assert x_pred.shape[1] == self.data_obj.index_set_dim - 1
             else:
-                assert x_pred.shape[1] == self.data_obj.input_space_dim
+                assert x_pred.shape[1] == self.data_obj.index_set_dim
 
         assert isinstance(x_out, np.ndarray) or x_out is None
         if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1

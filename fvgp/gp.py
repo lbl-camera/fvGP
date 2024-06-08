@@ -23,7 +23,7 @@ import sys
 class GP:
     """
     This class provides all the tools for a single-task Gaussian Process (GP).
-    Use fvGP for multitask GPs. However, the fvGP class inherits all methods from this class.
+    Use fvGP for multi-task GPs. However, the fvGP class inherits all methods from this class.
     This class allows for full HPC support for training via the HGDL package.
 
     V ... number of input points
@@ -36,7 +36,9 @@ class GP:
     Parameters
     ----------
     x_data : np.ndarray or list of tuples
-        The input point positions. Shape (V x D), where D is the `input_space_dim`.
+        The input point positions. Shape (V x D), where D is the `index_set_dim`.
+        For single-task GPs, the index set dimension = input space dimension.
+        For multi-task GPs, the index set dimension = input + output space dimensions.
         If dealing with non-Euclidean inputs
         x_data should be a list, not a numpy array.
     y_data : np.ndarray
@@ -229,7 +231,7 @@ class GP:
                     "You have provided callables for kernel, mean, or noise functions but no"
                     "initial hyperparameters.")
             else:
-                if init_hyperparameters is None: hyperparameters = np.ones((self.data.input_space_dim + 1))
+                if init_hyperparameters is None: hyperparameters = np.ones((self.data.index_set_dim + 1))
         else:
             hyperparameters = init_hyperparameters
 
@@ -256,7 +258,7 @@ class GP:
         ########################################
         ###init prior instance##################
         ########################################
-        self.prior = GPprior(self.data.input_space_dim,
+        self.prior = GPprior(self.data.index_set_dim,
                              self.data.x_data,
                              self.data.Euclidean,
                              hyperparameters=hyperparameters,
@@ -329,7 +331,7 @@ class GP:
         Parameters
         ----------
         x_new : np.ndarray
-            The point positions. Shape (V x D), where D is the `input_space_dim`.
+            The point positions. Shape (V x D), where D is the `index_set_dim`.
         y_new : np.ndarray
             The values of the data points. Shape (V,1) or (V).
         noise_variances_new : np.ndarray, optional
@@ -374,12 +376,12 @@ class GP:
         """
         if not self.data.Euclidean: raise Exception("Please provide custom hyperparameter bounds to "
                                                     "the training in the non-Euclidean setting")
-        if len(self.prior.hyperparameters) != self.data.input_space_dim + 1:
+        if len(self.prior.hyperparameters) != self.data.index_set_dim + 1:
             raise Exception("Please provide custom hyperparameter_bounds when kernel, mean or noise"
                             " functions are customized")
-        hyperparameter_bounds = np.zeros((self.data.input_space_dim + 1, 2))
+        hyperparameter_bounds = np.zeros((self.data.index_set_dim + 1, 2))
         hyperparameter_bounds[0] = np.array([np.var(self.data.y_data) / 100., np.var(self.data.y_data) * 10.])
-        for i in range(self.data.input_space_dim):
+        for i in range(self.data.index_set_dim):
             range_xi = np.max(self.data.x_data[:, i]) - np.min(self.data.x_data[:, i])
             hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
         return hyperparameter_bounds
@@ -760,7 +762,7 @@ class GP:
             a constraint during training. The default is None which means the initialized or trained hyperparameters
             are used.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -785,7 +787,7 @@ class GP:
             a constraint during training. The default is None which means the initialized or trained hyperparameters
             are used.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
         direction : int, optional
@@ -809,7 +811,7 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
         variance_only : bool, optional
@@ -836,7 +838,7 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
         direction : int, optional
@@ -859,7 +861,7 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -883,7 +885,7 @@ class GP:
         direction : int
             Direction of derivative.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -920,7 +922,7 @@ class GP:
         x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L),
             where N is the number of output points,
             and L is the dimensionality of the output space.
 
@@ -943,7 +945,7 @@ class GP:
         direction : int
             Direction of derivative.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -1001,7 +1003,7 @@ class GP:
         comp_cov : np.ndarray
             Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -1028,7 +1030,7 @@ class GP:
         direction: int
             The direction in which the gradient will be computed.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -1073,7 +1075,7 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -1100,7 +1102,7 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -1125,7 +1127,7 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -1152,7 +1154,7 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -1179,7 +1181,7 @@ class GP:
         comp_cov: np.nparray
             Covariance matrix, in R^{len(x_pred) times len(x_pred)}
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -1207,7 +1209,7 @@ class GP:
         direction : int
             The direction to compute the gradient in.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
 
@@ -1231,7 +1233,7 @@ class GP:
     def crps(self, x_test, y_test):
         """
         This function calculates the continuous rank probability score.
-        Note that in the multitask setting the user should perform their
+        Note that in the multi-task setting the user should perform their
         input point transformation beforehand.
 
         Parameters
@@ -1254,7 +1256,7 @@ class GP:
     def rmse(self, x_test, y_test):
         """
         This function calculates the root mean squared error.
-        Note that in the multitask setting the user should perform their
+        Note that in the multi-task setting the user should perform their
         input point transformation beforehand.
 
         Parameters

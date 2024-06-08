@@ -5,7 +5,7 @@ from .gp import GP
 
 class fvGP(GP):
     """
-    This class provides all the tools for a multitask Gaussian Process (GP).
+    This class provides all the tools for a multi-task Gaussian Process (GP).
     This class allows for full HPC support for training. After initialization, this
     class provides all the methods described for the GP class.
 
@@ -20,7 +20,7 @@ class fvGP(GP):
     N ... arbitrary integers (N1, N2,...)
 
 
-    The main logic of fvGP is that any multitask GP is just a single-task GP
+    The main logic of fvGP is that any multi-task GP is just a single-task GP
     over a Cartesian product space of input and output space, as long as the kernel
     is flexible enough, so prepare to work on your kernel. This is the best
     way to give the user optimal control and power. In the
@@ -35,7 +35,7 @@ class fvGP(GP):
 
     [0.2, 0.3,1],[0.9,0.6,1]]
 
-    This has to be understood and taken into account when customizing fvGP for multitask
+    This has to be understood and taken into account when customizing fvGP for multi-task
     use. The examples will provide deeper insight.
 
     Parameters
