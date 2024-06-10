@@ -313,6 +313,7 @@ class GP:
                                      )
         self.x_data = self.data.x_data
         self.y_data = self.data.y_data
+        self.index_set_dim = prior.index_set_dim
 
     def update_gp_data(
         self,
@@ -462,6 +463,10 @@ class GP:
         dask_client : distributed.client.Client, optional
             A Dask Distributed Client instance for distributed training if HGDL is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
+
+        Return
+        ------
+        optimized hyperparameters (only fyi, gp is already updated) : np.ndarray
         """
         if self.gp2Scale: method = 'mcmc'
         if hyperparameter_bounds is None:
@@ -506,6 +511,7 @@ class GP:
         self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
                                self.prior.hyperparameters)
         self.marginal_density.update_hyperparameters()
+        return hyperparameters
 
     ##################################################################################
     def train_async(self,
@@ -925,6 +931,10 @@ class GP:
             Output coordinates in case of multi-task GP use; a numpy array of size (N x L),
             where N is the number of output points,
             and L is the dimensionality of the output space.
+        x_out : np.ndarray, optional
+            Output coordinates in case of multi-task GP use; a numpy array of size (N),
+            where N is the number evaluation points in the output direction.
+            Usually this is np.ndarray([0,1,2,...]).
 
         Return
         ------
