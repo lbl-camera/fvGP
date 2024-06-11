@@ -55,7 +55,7 @@ class GPMarginalDensity:
         KV = K + V
         self.KVlinalg.update_KV(KV)
         KVinvY = self.KVlinalg.solve(y_mean)
-        return KVinvY
+        return KVinvY.reshape(len(y_mean))
 
     def _set_KVinvY(self, K, V, m, mode):
         """Set or reset KVinvY for new hyperparameters"""
@@ -64,7 +64,7 @@ class GPMarginalDensity:
         KV = K + V
         self.KVlinalg.set_KV(KV, mode)
         KVinvY = self.KVlinalg.solve(y_mean)
-        return KVinvY
+        return KVinvY.reshape(len(y_mean))
 
     ##################################################################
     def compute_new_KVinvY(self, KV, m):
@@ -90,7 +90,7 @@ class GPMarginalDensity:
         else:
             Chol_factor = calculate_Chol_factor(KV)
             KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
-        return KVinvY
+        return KVinvY.reshape(len(y_mean))
 
     def compute_new_KVlogdet(self, KV):
         """
@@ -337,7 +337,7 @@ class KVlinalg:
         elif self.mode == "sparseCG":
             self.KV = KV
         elif self.mode == "sparseLU":
-            self.LU_factor = self.calculate_LU_factor(KV)
+            self.LU_factor = calculate_LU_factor(KV)
         else:
             raise Exception("No Mode")
 

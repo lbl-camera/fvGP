@@ -51,7 +51,7 @@ def test_lin_alg():
     k = A[0:90,90:]
     kk = A[90:,90:]
     C = cholesky_update_rank_n(c,k,kk)
-    LU = compute_LU_factor(sparse.coo_matrix(A))
+    LU = calculate_LU_factor(sparse.coo_matrix(A))
     s = calculate_LU_solve(LU, np.random.rand(len(A)))
     l = calculate_LU_logdet(LU)
     dd = update_Chol_factor(c, A)

@@ -3,13 +3,13 @@ import warnings
 import time
 from loguru import logger
 from scipy.sparse.linalg import splu
-from scipy.sparse.linalg import minres, cg
+from scipy.sparse.linalg import minres, cg, spsolve
 from scipy.sparse import identity
 from scipy.sparse.linalg import onenormest
 from scipy.linalg import cho_factor, cho_solve, solve_triangular
 
 
-def compute_LU_factor(M):
+def calculate_LU_factor(M):
     LU = splu(M.tocsc())
     return LU
 
@@ -84,12 +84,13 @@ def calculate_random_logdet(KV, info, compute_device):
 def calculate_sparse_conj_grad(KV, vec, info=False):
     st = time.time()
     if info: logger.info("CG solve in progress ...")
-    if np.ndim(vec) == 1: vec = vec.reshape(len(vec),-1)
+    if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
+    res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res, exit_code = cg(KV.tocsc(), vec[:, i])
+        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], rtol=1e-8)
         if exit_code == 1:
             M = spai(KV, 20)
-            res, exit_code = cg(KV.tocsc(), vec[:,i], M=M)
+            res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-8)
         if exit_code == 1: warnings.warn("CG not successful")
     if info: logger.info("CG compute time: {} seconds, exit status {} (0:=successful)", time.time() - st, exit_code)
     return res
