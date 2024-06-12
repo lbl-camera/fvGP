@@ -6,8 +6,6 @@ build-backend = "hatchling.build"
 name = "fvgp"
 dependencies = [
     "wheel",
-    "matplotlib",
-    "plotly",
     "scipy ~= 1.13.0",
     "numpy ~= 1.26.4",
     "dask == 2024.5.0",
@@ -16,6 +14,8 @@ dependencies = [
     "notebook",
     "loguru",
 ]
+# imate
+# pytorch
 requires-python = ">=3.9"
 authors = [
     { name = "Marcus Michael Noack", email = "MarcusNoack@lbl.gov" },
@@ -25,7 +25,7 @@ maintainers = [
     { name = "Marcus Michael Noack", email = "MarcusNoack@lbl.gov" },
     { name = "Ronald J. Pandolfi", email = "ronpandolfi@lbl.gov" },
 ]
-description = "Autonomous data acquisition"
+description = "Python package for highly flexible function-valued Gaussian processes (fvGP)"
 readme = "README.md"
 license = { file = "LICENSE" }
 keywords = ["autonomous", "self driving", "adaptive", "gui", "qt"]
@@ -45,6 +45,7 @@ dynamic = ["version"]
 [project.optional-dependencies]
 docs = ['sphinx', 'sphinx-rtd-theme', 'myst-parser', 'myst-nb', 'sphinx-panels', 'autodocs', 'jupytext']
 tests = ['pytest', 'codecov', 'pytest-cov', 'imate']
+plotting = ['matplotlib', 'plotly']
 
 [project.urls]
 Homepage = "https://github.com/lbl-camera/fvgp"
