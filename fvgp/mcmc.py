@@ -1,6 +1,6 @@
 import numpy as np
 import time
-
+from loguru import logger
 
 def out_of_bounds(x,bounds):
     for i in range(len(x)):
@@ -53,13 +53,13 @@ def prior_func(theta,bounds):
 #                                                                         #
 
 
-def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
-                          prior_args = None,
-                          info = False, prior_fn = None,
-                          prop_Sigma = np.nan, adapt_cov = True,
-                          return_prop_Sigma_trace = False,
-                          r_opt = .234, c_0 = 10, c_1 = .8,
-                          K = 10):
+def mcmc(likelihood_fn, bounds, x0=None, n_updates=10000,
+         prior_args=None,
+         info=False, prior_fn=None,
+         prop_Sigma=np.nan, adapt_cov=True,
+         return_prop_Sigma_trace=False,
+         r_opt=.234, c_0=10, c_1=.8,
+         K=10):
 
     start_time = time.time()
     n_updates = max(n_updates,2)
@@ -113,10 +113,9 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
         if prior_star != -np.inf:
             likelihood_star = likelihood_fn(hyperparameters = theta_star)
             if np.isnan(likelihood_star): likelihood_star = -np.inf
-            metr_ratio = np.exp(prior_star + likelihood_star -
-                                  prior - likelihood)
+            metr_ratio = np.exp(prior_star + likelihood_star - prior - likelihood)
             if np.isnan(metr_ratio):  metr_ratio = 0.
-            if metr_ratio > np.random.uniform(0,1,1):
+            if metr_ratio > np.random.uniform(0, 1, 1):
                 theta = theta_star
                 prior = prior_star
                 likelihood = likelihood_star
@@ -132,7 +131,7 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
             sigma_m = np.exp(np.log(sigma_m) + gamma1*(r_hat - r_opt))
 
             if adapt_cov:
-                prop_Sigma = prop_Sigma + gamma2*(np.cov(trace[:,(i - K + 1) : i]) - prop_Sigma)
+                prop_Sigma = prop_Sigma + gamma2*(np.cov(trace[:, (i - K + 1): i]) - prop_Sigma)
                 check_chol_cont = True
                 while check_chol_cont:
                     try:
@@ -148,20 +147,20 @@ def mcmc(likelihood_fn, bounds, x0 = None, n_updates = 10000,
         ctime.append(time.time() - start_time)
         sigma_m_trace[i] = sigma_m
         r_trace[i] = r_hat
-        if return_prop_Sigma_trace:
-            prop_Sigma_trace[i,:,:] = prop_Sigma
+        if return_prop_Sigma_trace: prop_Sigma_trace[i, :, :] = prop_Sigma
         # Echo every 100 iterations
         if info:
-            if (i % 100) == 0: print("Finished "+str(i)+ " out of " + str(n_updates), " iterations. f(x)=",likelihood)
-        if len(x)>201 and np.linalg.norm(np.mean(x[-100:],axis = 0)-np.mean(x[-200:-100],axis = 0)) < 0.01 * np.linalg.norm(np.mean(x[-100:],axis = 0)): break
+            if (i % 100) == 0: logger.info("Finished {} out of {} iterations. f(x)= {}", i, n_updates, likelihood)
+        if len(x) > 201 and np.linalg.norm(np.mean(x[-100:], axis=0)-np.mean(x[-200:-100], axis=0)) < 0.01 * \
+            np.linalg.norm(np.mean(x[-100:], axis=0)): break
     # End main loop
     #########################################################
 
     # Collect trace objects to return
-    res = {'trace':trace,
-           'sigma_m_trace':sigma_m_trace,
-           'r_trace':r_trace,
-           'acc_prob':jump_trace.mean()}
+    res = {'trace': trace,
+           'sigma_m_trace': sigma_m_trace,
+           'r_trace': r_trace,
+           'acc_prob': jump_trace.mean()}
     arg_max = np.argmax(f)
     x = np.asarray(trace.T)
     if return_prop_Sigma_trace: res['prop_Sigma_trace'] = prop_Sigma_trace

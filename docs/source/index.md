@@ -7,7 +7,7 @@ banner_brightness: .5
 ```{toctree}
 ---
 hidden: true
-maxdepth: 2
+maxdepth: 1
 caption: API
 ---
 api/overview.md

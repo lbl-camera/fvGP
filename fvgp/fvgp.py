@@ -1,14 +1,11 @@
 #!/usr/bin/env python
 import numpy as np
-import warnings
 from .gp import GP
-from .gp_kernels import get_distance_matrix
-from .gp_kernels import matern_kernel_diff1
 
 
 class fvGP(GP):
     """
-    This class provides all the tools for a multitask Gaussian Process (GP).
+    This class provides all the tools for a multi-task Gaussian Process (GP).
     This class allows for full HPC support for training. After initialization, this
     class provides all the methods described for the GP class.
 
@@ -23,12 +20,12 @@ class fvGP(GP):
     N ... arbitrary integers (N1, N2,...)
 
 
-    The main logic of fvGP is that any multitask GP is just a single-task GP
+    The main logic of fvGP is that any multi-task GP is just a single-task GP
     over a Cartesian product space of input and output space, as long as the kernel
     is flexible enough, so prepare to work on your kernel. This is the best
-    way to give the user optimal control and power. At various instances, for instances
-    prior-mean function, noise function, and kernel function definitions, you will
-    see that the input ``x'' is defined over this combined space.
+    way to give the user optimal control and power. In the
+    prior-mean function, noise function, and kernel function definition, you will
+    see that the input `x` is defined over this combined space.
     For example, if your input space is a Euclidean 2d space and your output
     is labelled [0,1], the input to the mean, kernel, and noise function might be
 
@@ -38,8 +35,8 @@ class fvGP(GP):
 
     [0.2, 0.3,1],[0.9,0.6,1]]
 
-    This has to be understood and taken into account when customizing fvGP for multitask
-    use.
+    This has to be understood and taken into account when customizing fvGP for multi-task
+    use. The examples will provide deeper insight.
 
     Parameters
     ----------
@@ -56,10 +53,6 @@ class fvGP(GP):
         fvgp.fvGP.gp_deep_kernel_layer_width. If you specify
         another kernel, please provide
         init_hyperparameters.
-    hyperparameter_bounds : np.ndarray, optional
-        A 2d numpy array of shape (N x 2), where N is the number of needed hyperparameters.
-        The default is None, in that case hyperparameter_bounds have to be specified
-        in the train calls or default bounds are used. Those only work for the default kernel.
     output_positions : np.ndarray, optional
         A 2-D numpy array of shape (U x output_number), so that for each measurement position, the outputs
         are clearly defined by their positions in the output space. The default is
@@ -87,9 +80,6 @@ class fvGP(GP):
         is a 1d array of length N depending on how many hyperparameters are initialized, and
         obj is an `fvgp.GP` instance. The default is a deep kernel with 2 hidden layers and
         a width of fvgp.fvGP.gp_deep_kernel_layer_width.
-    gp_deep_kernel_layer_width : int, optional
-        If no kernel is provided, fvGP will use a deep kernel of depth 2 and width gp_deep_kernel_layer_width.
-        If a user defined kernel is provided this parameter is irrelevant. The default is 5.
     gp_kernel_function_grad : Callable, optional
         A function that calculates the derivative of the `gp_kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
@@ -154,11 +144,6 @@ class fvGP(GP):
         False. Note, the training will always use Cholesky or LU decomposition instead of the
         inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
-    online : bool, optional
-        A new setting that allows optimization for online applications. Default=False. If True,
-        calc_inv will be set to true, and the inverse and the logdet() of full dataset will only be computed
-        once in the beginning and after that only updated. This leads to a significant speedup because
-        the most costly aspects of a GP are entirely avoided.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the marginal log_likelihood
         is/are used for the training.
@@ -203,6 +188,74 @@ class fvGP(GP):
         logdet(K+V)
     likelihood.V : np.ndarray
         the noise covariance matrix
+
+
+    This class inherits all capabilities from :py:class:`fvgp.GP`.
+    Check there for a full list of capabilities. Here are the most important.
+
+    Base-GP Methods:
+
+    :py:meth:`fvgp.GP.train`
+
+    :py:meth:`fvgp.GP.train_async`
+
+    :py:meth:`fvgp.GP.stop_training`
+
+    :py:meth:`fvgp.GP.kill_training`
+
+    :py:meth:`fvgp.GP.update_hyperparameters`
+
+    :py:meth:`fvgp.GP.set_hyperparameters`
+
+    :py:meth:`fvgp.GP.get_hyperparameters`
+
+    Posterior Evaluations:
+
+    :py:meth:`fvgp.GP.posterior_mean`
+
+    :py:meth:`fvgp.GP.posterior_covariance`
+
+    :py:meth:`fvgp.GP.posterior_mean_grad`
+
+    :py:meth:`fvgp.GP.posterior_covariance_grad`
+
+    :py:meth:`fvgp.GP.joint_gp_prior`
+
+    :py:meth:`fvgp.GP.joint_gp_prior_grad`
+
+    :py:meth:`fvgp.GP.gp_entropy`
+
+    :py:meth:`fvgp.GP.gp_entropy_grad`
+
+    :py:meth:`fvgp.GP.gp_kl_div`
+
+    :py:meth:`fvgp.GP.gp_kl_div_grad`
+
+    :py:meth:`fvgp.GP.gp_mutual_information`
+
+    :py:meth:`fvgp.GP.gp_total_correlation`
+
+    :py:meth:`fvgp.GP.gp_relative_information_entropy`
+
+    :py:meth:`fvgp.GP.gp_relative_information_entropy_set`
+
+    :py:meth:`fvgp.GP.posterior_probability`
+
+    :py:meth:`fvgp.GP.posterior_probability_grad`
+
+    Validation Methods:
+
+    :py:meth:`fvgp.GP.crps`
+
+    :py:meth:`fvgp.GP.rmse`
+
+    :py:meth:`fvgp.GP.make_2d_x_pred`
+
+    :py:meth:`fvgp.GP.make_1d_x_pred`
+
+    :py:meth:`fvgp.GP.log_likelihood`
+
+    :py:meth:`fvgp.GP.test_log_likelihood_gradient`
     """
 
     def __init__(
@@ -210,12 +263,10 @@ class fvGP(GP):
         x_data,
         y_data,
         init_hyperparameters=None,
-        hyperparameter_bounds=None,
         output_positions=None,
         noise_variances=None,
         compute_device="cpu",
         gp_kernel_function=None,
-        gp_deep_kernel_layer_width=5,
         gp_kernel_function_grad=None,
         gp_noise_function=None,
         gp_noise_function_grad=None,
@@ -225,20 +276,19 @@ class fvGP(GP):
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
         calc_inv=False,
-        online=False,
         ram_economy=False,
         args=None,
         info=False,
     ):
 
-        if isinstance(x_data, np.ndarray): self.orig_input_space_dim = x_data.shape[1]
-        else: self.orig_input_space_dim = 1
+        if isinstance(x_data, np.ndarray):
+            assert np.ndim(x_data) == 2
+            self.input_space_dim = x_data.shape[1]
+        else: self.input_space_dim = 1
 
         self.output_num = y_data.shape[1]
         output_space_dim = 1
         ###check the output dims
-
-
 
         if np.ndim(y_data) == 1:
             raise ValueError("The output number is 1, you can use GP for single-task GPs")
@@ -248,48 +298,19 @@ class fvGP(GP):
             self.output_positions = output_positions
 
         assert isinstance(self.output_positions, np.ndarray) and np.ndim(self.output_positions) == 2
-        self.iset_dim = self.orig_input_space_dim + output_space_dim
+        self.index_set_dim = self.input_space_dim + output_space_dim
         ####transform the space
         self.fvgp_x_data = x_data
         self.fvgp_y_data = y_data
         self.fvgp_noise_variances = noise_variances
         x_data, y_data, noise_variances = self._transform_index_set(x_data, y_data, noise_variances,
                                                                     self.output_positions)
-        init_hps = init_hyperparameters
-
-        if gp_kernel_function is None and isinstance(x_data, np.ndarray):
-            gp_kernel_function = self._default_multi_task_kernel
-            if callable(gp_noise_function) or callable(gp_mean_function):
-                raise Exception("The default kernel can only be used without mean and noise functions")
-            try:
-                from .deep_kernel_network import Network
-            except:
-                raise Exception("You have not specified a kernel and the default kernel will be used. \n \
-                    The default kernel needs pytorch to be installed manually.")
-            self.gp_deep_kernel_layer_width = gp_deep_kernel_layer_width
-            self.n = Network(self.iset_dim, gp_deep_kernel_layer_width)
-            number_of_hps = int(2. * self.iset_dim * gp_deep_kernel_layer_width +
-                                gp_deep_kernel_layer_width ** 2 + 2. * gp_deep_kernel_layer_width + self.iset_dim + 2.)
-            self.hps_bounds = np.zeros((number_of_hps, 2))
-            self.hps_bounds[0] = np.array([np.var(y_data) / 10., np.var(y_data) * 10.])
-            self.hps_bounds[1] = np.array([(np.max(x_data) - np.min(x_data)) / 100., (np.max(x_data) -
-                                                                                      np.min(x_data)) * 100.])
-            self.hps_bounds[2:] = np.array([-1., 1.])
-            init_hps = np.random.uniform(low=self.hps_bounds[:, 0],
-                                         high=self.hps_bounds[:, 1], size=len(self.hps_bounds))
-            warnings.warn("Hyperparameter bounds have been initialized automatically \
-                    \n for the default kernel in fvgp. They will automatically used for the training.\
-                    \n However, you can also define and provide new bounds.")
-            hyperparameter_bounds = self.hps_bounds
-        else:
-            warnings.warn("Default kernel could not be defined.")
 
         ####init GP
         super().__init__(
             x_data,
             y_data,
-            init_hyperparameters=init_hps,
-            hyperparameter_bounds=hyperparameter_bounds,
+            init_hyperparameters=init_hyperparameters,
             noise_variances=noise_variances,
             compute_device=compute_device,
             gp_kernel_function=gp_kernel_function,
@@ -302,7 +323,6 @@ class fvGP(GP):
             gp2Scale_dask_client=gp2Scale_dask_client,
             gp2Scale_batch_size=gp2Scale_batch_size,
             calc_inv=calc_inv,
-            online = online,
             ram_economy=ram_economy,
             args=args,
             info=info)
@@ -364,24 +384,25 @@ class fvGP(GP):
             value_pos[:, j] = j
         return value_pos
 
-    def get_fvgp_data(self, labels):
-        for i in range(len(self.output_num)):
-            pass
     ################################################################################################
     def _transform_index_set(self, x_data, y_data, noise_variances, output_positions):
         point_number = len(x_data)
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
-        if isinstance(x_data, np.ndarray): new_points = np.zeros((point_number * self.output_num, self.iset_dim))
-        else: new_points = [0.] * point_number * self.output_num
+        if isinstance(x_data, np.ndarray):
+            new_points = np.zeros((point_number * self.output_num, self.index_set_dim))
+        else:
+            new_points = [0.] * point_number * self.output_num
         new_values = np.zeros((point_number * self.output_num))
-        if noise_variances is not None: new_variances = np.zeros((point_number * self.output_num))
-        else: new_variances = None
+        if noise_variances is not None:
+            new_variances = np.zeros((point_number * self.output_num))
+        else:
+            new_variances = None
         for i in range(self.output_num):
             if isinstance(x_data, np.ndarray):
                 new_points[i * point_number: (i + 1) * point_number] = np.column_stack([x_data, output_positions[:, i]])
             if isinstance(x_data, list):
                 for j in range(len(x_data)):
-                    new_points[i*point_number+j] = [x_data[j], output_positions[j, i]]
+                    new_points[i * point_number + j] = [x_data[j], output_positions[j, i]]
             new_values[i * point_number: (i + 1) * point_number] = y_data[:, i]
             if noise_variances is not None:
                 new_variances[i * point_number: (i + 1) * point_number] = noise_variances[:, i]
@@ -389,30 +410,4 @@ class fvGP(GP):
         return new_points, new_values, new_variances
 
     ################################################################################################
-    def _default_multi_task_kernel(self, x1, x2, hps, obj):  # pragma: no cover
-        signal_var = hps[0]
-        length_scale = hps[1]
-        hps_nn = hps[2:]
-        w1_indices = np.arange(0, self.gp_deep_kernel_layer_width * self.iset_dim)
-        last = self.gp_deep_kernel_layer_width * self.iset_dim
-        w2_indices = np.arange(last, last + self.gp_deep_kernel_layer_width ** 2)
-        last = last + self.gp_deep_kernel_layer_width ** 2
-        w3_indices = np.arange(last, last + self.gp_deep_kernel_layer_width * self.iset_dim)
-        last = last + self.gp_deep_kernel_layer_width * self.iset_dim
-        b1_indices = np.arange(last, last + self.gp_deep_kernel_layer_width)
-        last = last + self.gp_deep_kernel_layer_width
-        b2_indices = np.arange(last, last + self.gp_deep_kernel_layer_width)
-        last = last + self.gp_deep_kernel_layer_width
-        b3_indices = np.arange(last, last + self.iset_dim)
 
-        self.n.set_weights(hps_nn[w1_indices].reshape(self.gp_deep_kernel_layer_width, self.iset_dim),
-                           hps_nn[w2_indices].reshape(self.gp_deep_kernel_layer_width, self.gp_deep_kernel_layer_width),
-                           hps_nn[w3_indices].reshape(self.iset_dim, self.gp_deep_kernel_layer_width))
-        self.n.set_biases(hps_nn[b1_indices].reshape(self.gp_deep_kernel_layer_width),
-                          hps_nn[b2_indices].reshape(self.gp_deep_kernel_layer_width),
-                          hps_nn[b3_indices].reshape(self.iset_dim))
-        x1_nn = self.n.forward(x1)
-        x2_nn = self.n.forward(x2)
-        d = get_distance_matrix(x1_nn, x2_nn)
-        k = signal_var * matern_kernel_diff1(d, length_scale)
-        return k

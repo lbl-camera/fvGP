@@ -58,7 +58,7 @@ def exponential_kernel(distance, length):
     Kernel output : same as distance parameter.
     """
 
-    kernel = np.exp(-(distance) / (length))
+    kernel = np.exp(-distance / length)
     return kernel
 
 
@@ -101,7 +101,7 @@ def matern_kernel_diff1(distance, length):
     Kernel output : same as distance parameter.
     """
 
-    kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
+    kernel = (1.0 + ((np.sqrt(3.0) * distance) / length)) * np.exp(
         -(np.sqrt(3.0) * distance) / length
     )
     return kernel
@@ -385,13 +385,10 @@ def non_stat_kernel_gradient(x1, x2, x0, w, l):
     ------
     Covariance matrix : np.ndarray
     """
-    dkdw = np.einsum('ij,k->ijk', _dgdw(x1, x0, w, l), _g(x2, x0, w, l)) + np.einsum('ij,k->ikj',
-                                                                                     _dgdw(x2, x0, w,
-                                                                                           l),
-                                                                                     _g(x1, x0, w,
-                                                                                        l))
-    dkdl = np.outer(_dgdl(x1, x0, w, l), _g(x2, x0, w, l)) + np.outer(_dgdl(x2, x0, w, l),
-                                                                      _g(x1, x0, w, l)).T
+    dkdw = (np.einsum('ij,k->ijk', _dgdw(x1, x0, w, l), _g(x2, x0, w, l))
+            + np.einsum('ij,k->ikj', _dgdw(x2, x0, w, l), _g(x1, x0, w, l)))
+    dkdl = (np.outer(_dgdl(x1, x0, w, l), _g(x2, x0, w, l)) +
+            np.outer(_dgdl(x2, x0, w, l), _g(x1, x0, w, l)).T)
     res = np.empty((len(w) + 1, len(x1), len(x2)))
     res[0:len(w)] = dkdw
     res[-1] = dkdl
@@ -489,49 +486,3 @@ def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps, obj):  # pragma: no cover
     return kernel.cpu().numpy()
 
 
-def example_deep_kernel(x1, x2, hps, obj):
-    hps_nn_weights_l1 = hps[0:49]
-    hps_nn_weights_l2 = hps[49:98]
-    hps_nn_weights_l3 = hps[98:147]
-    hps_nn_weights_l4 = hps[147:196]
-    hps_nn_weights_l5 = hps[196:245]
-
-    hps_nn_biases_l1 = hps[245:252]
-    hps_nn_biases_l2 = hps[252:259]
-    hps_nn_biases_l3 = hps[259:266]
-    hps_nn_biases_l4 = hps[266:273]
-    hps_nn_biases_l5 = hps[273:280]
-
-    gp_deep_kernel_layer_width = 7
-    iset_dim = 7
-
-    n.set_weights(hps_nn_weights_l1.reshape(gp_deep_kernel_layer_width, iset_dim),
-                  hps_nn_weights_l2.reshape(gp_deep_kernel_layer_width, gp_deep_kernel_layer_width),
-                  hps_nn_weights_l3.reshape(gp_deep_kernel_layer_width, gp_deep_kernel_layer_width),
-                  hps_nn_weights_l4.reshape(gp_deep_kernel_layer_width, gp_deep_kernel_layer_width),
-                  hps_nn_weights_l5.reshape(iset_dim, gp_deep_kernel_layer_width)
-                  )
-    n.set_biases(hps_nn_biases_l1.reshape(gp_deep_kernel_layer_width),
-                 hps_nn_biases_l2.reshape(gp_deep_kernel_layer_width),
-                 hps_nn_biases_l3.reshape(gp_deep_kernel_layer_width),
-                 hps_nn_biases_l4.reshape(gp_deep_kernel_layer_width),
-                 hps_nn_biases_l5.reshape(iset_dim)
-                 )
-    signal_var = hps[280]
-    length_scale = hps[281]
-    x1_nn = n.forward(x1)
-    x2_nn = n.forward(x2)
-    d = obj.get_distance_matrix(x1_nn, x2_nn)
-    k = signal_var * obj.matern_kernel_diff1(d, length_scale)
-    return k
-
-
-def cory(x1, x2, hps, obj):
-    d = get_anisotropic_distance_matrix(x1[:, 0:6], x2[:, 0:6], hps[1:7])
-    k1 = hps[0] * obj.matern_kernel_diff1(d, 1.)
-    l1 = x1[:, 6]
-    l2 = x2[:, 6]
-    c = hps[7]
-    delta = hps[8]
-    k2 = c + ((1. - l1) ** (1. + delta)) * ((1. - l2) ** (1. + delta))
-    return k1 * k2

@@ -1,35 +1,10 @@
 import numpy as np
-from .misc import solve
-from .misc import logdet
-from .misc import inv
 from loguru import logger
-import warnings
-from scipy.linalg import cho_factor, cho_solve
-from scipy.sparse.linalg import minres, cg
 from scipy.sparse import issparse
+from .gp_lin_alg import *
 
 
-def cartesian_product(x, y):
-    """
-    Input x,y have to be 2d numpy arrays
-    The return is the cartesian product of the two sets
-    """
-    res = []
-    if isinstance(x, list) or isinstance(y, list):
-        for i in range(len(y)):
-            for j in range(len(x)):
-                res.append((y[i], x[j]))
-        return res
-    elif isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
-        for i in range(len(y)):
-            for j in range(len(x)):
-                res.append(np.append(x[j], y[i]))
-        return np.array(res)
-    else:
-        raise Exception("Cartesian product out of options")
-
-
-class GPposterior:  # pragma: no cover
+class GPposterior:
     def __init__(self,
                  data_obj,
                  prior_obj,
@@ -43,44 +18,28 @@ class GPposterior:  # pragma: no cover
         self.kernel = self.prior_obj.kernel
         self.mean_function = self.prior_obj.mean_function
         self.d_kernel_dx = self.prior_obj.d_kernel_dx
-        # self.dk_dh = self.prior_obj.dk_dh
-
-    def _KVsolve(self, b):
-        if self.marginal_density_obj.factorization_obj[0] == "LU":
-            LU = self.marginal_density_obj.factorization_obj[1]
-            return LU.solve(b)
-        elif self.marginal_density_obj.factorization_obj[0] == "Chol":
-            c, ll = self.marginal_density_obj.factorization_obj[1], self.marginal_density_obj.factorization_obj[2]
-            return cho_solve((c, ll), b)
-        elif self.marginal_density_obj.factorization_obj[0] == "gp2Scale":
-            res = np.empty((len(b), b.shape[1]))
-            if b.shape[1] > 100: warnings.warn(
-                "You want to predict at >100 points. When using gp2Scale, this takes a while."
-                "Better predict at only a handful of points.")
-            for i in range(b.shape[1]):
-                res[:, i], exit_status = cg(self.marginal_density_obj.KV, b[:, i])
-            return res
-        elif self.marginal_density_obj.factorization_obj[0] == "Inv":
-            return self.marginal_density_obj.KVinv @ b
-        else:
-            raise Exception("Non-permitted factorization object encountered.")
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
         x_data, y_data, KVinvY = \
             self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
         if hyperparameters is not None:
-            KV, KVinvY, KVlogdet, factorization_obj, KVinv, m = compute_GPpriorV(hyperparameters, calc_inv=False)
+            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            V = self.likelihood_obj.calculate_V(hyperparameters)
+            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+            KVinvY = self.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.prior_obj.hyperparameters
 
         self._perform_input_checks(x_pred, x_out)
+        x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         k = self.kernel(x_data, x_pred, hyperparameters, self)
         A = k.T @ KVinvY
         posterior_mean = self.mean_function(x_pred, hyperparameters, self) + A
+        if x_out is not None: posterior_mean = posterior_mean.reshape(len(x_orig), len(x_out), order='F')
 
-        return {"x": x_pred,
+        return {"x": x_orig,
                 "f(x)": posterior_mean}
 
     def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None):
@@ -88,11 +47,15 @@ class GPposterior:  # pragma: no cover
             self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
 
         if hyperparameters is not None:
-            KV, KVinvY, KVlogdet, factorization_obj, KVinv, m = compute_GPpriorV(hyperparameters, calc_inv=False)
+            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            V = self.likelihood_obj.calculate_V(hyperparameters)
+            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+            KVinvY = self.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.prior_obj.hyperparameters
 
         self._perform_input_checks(x_pred, x_out)
+        x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         f = self.mean_function(x_pred, hyperparameters, self)
@@ -101,20 +64,23 @@ class GPposterior:  # pragma: no cover
             x1 = np.array(x_pred)
             x1[:, direction] = x1[:, direction] + eps
             mean_der = (self.mean_function(x1, hyperparameters, self) - f) / eps
-            k = self.kernel(x_data, x_pred, hyperparameters, self)
+            #k = self.kernel(x_data, x_pred, hyperparameters, self)
             k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
             posterior_mean_grad = mean_der + (k_g @ KVinvY)
+            if x_out is not None: posterior_mean_grad = posterior_mean_grad.reshape(len(x_orig), len(x_out), order='F')
         else:
-            posterior_mean_grad = np.zeros(x_pred.shape)
-            for direction in range(len(x_pred[0])):
+            posterior_mean_grad = np.zeros((len(x_pred), x_orig.shape[1]))
+            for direction in range(len(x_orig[0])):
                 x1 = np.array(x_pred)
                 x1[:, direction] = x1[:, direction] + eps
                 mean_der = (self.mean_function(x1, hyperparameters, self) - f) / eps
                 k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
                 posterior_mean_grad[:, direction] = mean_der + (k_g @ KVinvY)
             direction = "ALL"
+            if x_out is not None:
+                posterior_mean_grad = posterior_mean_grad.reshape(len(x_orig), len(x_orig[0]), len(x_out), order='F')
 
-        return {"x": x_pred,
+        return {"x": x_orig,
                 "direction": direction,
                 "df/dx": posterior_mean_grad}
 
@@ -123,20 +89,21 @@ class GPposterior:  # pragma: no cover
         x_data = self.data_obj.x_data.copy()
 
         self._perform_input_checks(x_pred, x_out)
+        x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
 
-        if self.marginal_density_obj.KVinv is not None:
+        if self.marginal_density_obj.KVlinalg.KVinv is not None:
             if variance_only:
                 S = None
-                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.marginal_density_obj.KVinv, k)
+                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.marginal_density_obj.KVlinalg.KVinv, k)
             else:
-                S = kk - (k.T @ self.marginal_density_obj.KVinv @ k)
+                S = kk - (k.T @ self.marginal_density_obj.KVlinalg.KVinv @ k)
                 v = np.array(np.diag(S))
         else:
-            k_cov_prod = self._KVsolve(k)
+            k_cov_prod = self.marginal_density_obj.KVlinalg.solve(k)
             S = kk - (k_cov_prod.T @ k)
             v = np.array(np.diag(S))
         if np.any(v < -0.0001):
@@ -158,35 +125,45 @@ class GPposterior:  # pragma: no cover
             else:
                 warnings.warn("Noise could not be added, you did not provide a noise callable at initialization")
 
-        return {"x": x_pred,
+        if x_out is not None:
+            v = v.reshape(len(x_orig), len(x_out), order='F')
+            if S is not None: S = S.reshape(len(x_orig), len(x_orig), len(x_out), len(x_out), order='F')
+
+        return {"x": x_orig,
                 "v(x)": v,
                 "S": S}
 
     def posterior_covariance_grad(self, x_pred, x_out=None, direction=None):
         x_data = self.data_obj.x_data.copy()
         self._perform_input_checks(x_pred, x_out)
+        x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
-        k_covariance_prod = self._KVsolve(k)
+        k_covariance_prod = self.marginal_density_obj.KVlinalg.solve(k)
         if direction is not None:
             k_g = self.d_kernel_dx(x_pred, x_data, direction, self.prior_obj.hyperparameters).T
-            kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
+            #kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
             x1 = np.array(x_pred)
             x2 = np.array(x_pred)
             eps = 1e-6
             x1[:, direction] = x1[:, direction] + eps
             kk_g = (self.kernel(x1, x1, self.prior_obj.hyperparameters, self) -
                     self.kernel(x2, x2, self.prior_obj.hyperparameters, self)) / eps
-            a = kk_g - (2.0 * k_g.T @ k_covariance_prod)
-            return {"x": x_pred,
-                    "dv/dx": np.diag(a),
-                    "dS/dx": a}
+            dSdx = kk_g - (2.0 * k_g.T @ k_covariance_prod)
+            #print(dSdx.shape)
+            a = np.diag(dSdx)
+            if x_out is not None:
+                a = a.reshape(len(x_orig), len(x_out), order='F')
+                dSdx = dSdx.reshape(len(x_orig), len(x_orig), len(x_out), len(x_out),  order='F')
+            return {"x": x_orig,
+                    "dv/dx": a,
+                    "dS/dx": dSdx}
         else:
-            grad_v = np.zeros((len(x_pred), len(x_pred[0])))
-            for direction in range(len(x_pred[0])):
+            grad_v = np.zeros((len(x_pred), len(x_orig[0])))
+            for direction in range(len(x_orig[0])):
                 k_g = self.d_kernel_dx(x_pred, x_data, direction, self.prior_obj.hyperparameters).T
-                kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
+                #kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self)
                 x1 = np.array(x_pred)
                 x2 = np.array(x_pred)
                 eps = 1e-6
@@ -194,7 +171,10 @@ class GPposterior:  # pragma: no cover
                 kk_g = (self.kernel(x1, x1, self.prior_obj.hyperparameters, self) -
                         self.kernel(x2, x2, self.prior_obj.hyperparameters, self)) / eps
                 grad_v[:, direction] = np.diag(kk_g - (2.0 * k_g.T @ k_covariance_prod))
-            return {"x": x_pred,
+
+            if x_out is not None: grad_v = grad_v.reshape(len(x_orig), len(x_orig[0]), len(x_out), order='F')
+
+            return {"x": x_orig,
                     "dv/dx": grad_v}
 
     ###########################################################################
@@ -210,6 +190,7 @@ class GPposterior:  # pragma: no cover
         post_mean = self.mean_function(x_pred, self.prior_obj.hyperparameters, self)
         joint_gp_prior_mean = np.append(prior_mean_vec, post_mean)
         joint_gp_prior_cov = np.block([[K, k], [k.T, kk]])
+
         return {"x": x_pred,
                 "K": K + np.identity(len(K)) * 1e-9,
                 "k": k,
@@ -237,10 +218,9 @@ class GPposterior:  # pragma: no cover
                                                                                         self.prior_obj.hyperparameters,
                                                                                         self)) / (2.0 * eps)
         # post_mean = self.mean_function(x_pred, self.prior_obj.hyperparameters, self)
-        mean_der = (self.mean_function(x1, self.prior_obj.hyperparameters, self) - self.mean_function(x2,
-                                                                                                      self.prior_obj.hyperparameters,
-                                                                                                      self)) / (
-                           2.0 * eps)
+        mean_der = ((self.mean_function(x1, self.prior_obj.hyperparameters, self) -
+                    self.mean_function(x2, self.prior_obj.hyperparameters,self)) /
+                    (2.0 * eps))
         full_gp_prior_mean_grad = np.append(np.zeros(prior_mean_vec.shape), mean_der)
         prior_cov_grad = np.zeros(K.shape)
         return {"x": x_pred,
@@ -253,7 +233,7 @@ class GPposterior:  # pragma: no cover
     ###########################################################################
     def entropy(self, S):
         dim = len(S[0])
-        ldet = logdet(S)
+        ldet = calculate_logdet(S)
         return (float(dim) / 2.0) + ((float(dim) / 2.0) * np.log(2.0 * np.pi)) + (0.5 * ldet)
 
     ###########################################################################
@@ -266,7 +246,7 @@ class GPposterior:  # pragma: no cover
         x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         x_out : np.ndarray, optional
-            Output coordinates in case of multitask GP use; a numpy array of size (N x L),
+            Output coordinates in case of multi-task GP use; a numpy array of size (N x L),
             where N is the number of output points,
             and L is the dimensionality of the output space.
 
@@ -280,7 +260,7 @@ class GPposterior:  # pragma: no cover
         priors = self.joint_gp_prior(x_pred, x_out=None)
         S = priors["S"]
         dim = len(S[0])
-        ldet = logdet(S)
+        ldet = calculate_logdet(S)
         return (float(dim) / 2.0) + ((float(dim) / 2.0) * np.log(2.0 * np.pi)) + (0.5 * ldet)
 
     ###########################################################################
@@ -292,7 +272,7 @@ class GPposterior:  # pragma: no cover
         priors2 = self.joint_gp_prior_grad(x_pred, direction, x_out=None)
         S1 = priors1["S"]
         S2 = priors2["dS/dx"]
-        return 0.5 * np.trace(inv(S1) @ S2)
+        return 0.5 * np.trace(calculate_inv(S1) @ S2)
 
     ###########################################################################
     def kl_div_grad(self, mu1, dmu1dx, mu2, S1, dS1dx, S2):
@@ -300,13 +280,13 @@ class GPposterior:  # pragma: no cover
         mu = np.subtract(mu2, mu1)
         x2 = solve(S2, mu)
         x3 = solve(S2, -dmu1dx)
-        kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2.T @ -dmu1dx)) - np.trace(np.linalg.inv(S1) @ dS1dx))
+        kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2.T @ -dmu1dx)) - np.trace(calculate_inv(S1) @ dS1dx))
         return kld
 
     ###########################################################################
     def kl_div(self, mu1, mu2, S1, S2):
-        logdet1 = logdet(S1)
-        logdet2 = logdet(S2)
+        logdet1 = calculate_logdet(S1)
+        logdet2 = calculate_logdet(S2)
         x1 = solve(S2, S1)
         mu = np.subtract(mu2, mu1)
         x2 = solve(S2, mu)
@@ -363,53 +343,53 @@ class GPposterior:  # pragma: no cover
     def gp_mutual_information(self, x_pred, x_out=None):
         x_data, K = self.data_obj.x_data.copy(), self.prior_obj.K.copy() + (np.identity(len(self.prior_obj.K)) * 1e-9)
         self._perform_input_checks(x_pred, x_out)
+        x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
 
-        joint_covariance = \
-            np.asarray(np.block([[K, k],
-                                 [k.T, kk]]))
-        return {"x": x_pred,
+        joint_covariance = np.block([[K, k],[k.T, kk]])
+        return {"x": x_orig,
                 "mutual information": self.mutual_information(joint_covariance, kk, K)}
 
     ###########################################################################
     def gp_total_correlation(self, x_pred, x_out=None):
         x_data, K = self.data_obj.x_data.copy(), self.prior_obj.K.copy() + (np.identity(len(self.prior_obj.K)) * 1e-9)
         self._perform_input_checks(x_pred, x_out)
+        x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
 
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters, self)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
-        joint_covariance = np.asarray(np.block([[K, k],
-                                                [k.T, kk]]))
+        joint_covariance = np.block([[K, k],[k.T, kk]])
 
-        prod_covariance = np.asarray(np.block([[K, k * 0.],
-                                               [k.T * 0., kk * np.identity(len(kk))]]))
+        prod_covariance = np.block([[K, k * 0.],[k.T * 0., kk * np.identity(len(kk))]])
 
-        return {"x": x_pred,
+        return {"x": x_orig,
                 "total correlation": self.kl_div(np.zeros((len(joint_covariance))), np.zeros((len(joint_covariance))),
                                                  joint_covariance, prod_covariance)}
 
     ###########################################################################
     def gp_relative_information_entropy(self, x_pred, x_out=None):
         self._perform_input_checks(x_pred, x_out)
+        x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters, self) + (np.identity(len(x_pred)) * 1e-9)
         post_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + (np.identity(len(x_pred)) * 1e-9)
-        return {"x": x_pred,
+        return {"x": x_orig,
                 "RIE": self.kl_div(np.zeros((len(x_pred))), np.zeros((len(x_pred))), kk, post_cov)}
 
     ###########################################################################
     def gp_relative_information_entropy_set(self, x_pred, x_out=None):
         self._perform_input_checks(x_pred, x_out)
+        x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
         RIE = np.zeros((len(x_pred)))
         for i in range(len(x_pred)):
             RIE[i] = self.gp_relative_information_entropy(x_pred[i].reshape(1, len(x_pred[i])), x_out=None)["RIE"]
 
-        return {"x": x_pred,
+        return {"x": x_orig,
                 "RIE": RIE}
 
     ###########################################################################
@@ -420,13 +400,13 @@ class GPposterior:  # pragma: no cover
         res = self.posterior_mean(x_pred, x_out=None)
         gp_mean = res["f(x)"]
         gp_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + (np.identity(len(x_pred)) * 1e-9)
-        gp_cov_inv = inv(gp_cov)
-        comp_cov_inv = inv(comp_cov)
-        cov = inv(gp_cov_inv + comp_cov_inv)
+        gp_cov_inv = calculate_inv(gp_cov)
+        comp_cov_inv = calculate_inv(comp_cov)
+        cov = calculate_inv(gp_cov_inv + comp_cov_inv)
         mu = cov @ gp_cov_inv @ gp_mean + cov @ comp_cov_inv @ comp_mean
-        logdet1 = logdet(cov)
-        logdet2 = logdet(gp_cov)
-        logdet3 = logdet(comp_cov)
+        logdet1 = calculate_logdet(cov)
+        logdet2 = calculate_logdet(gp_cov)
+        logdet3 = calculate_logdet(comp_cov)
         dim = len(mu)
         C = 0.5 * (((gp_mean.T @ gp_cov_inv + comp_mean.T @ comp_cov_inv).T
                     @ cov @ (gp_cov_inv @ gp_mean + comp_cov_inv @ comp_mean))
@@ -460,9 +440,9 @@ class GPposterior:  # pragma: no cover
         if isinstance(x_pred, np.ndarray):
             assert np.ndim(x_pred) == 2
             if isinstance(x_out, np.ndarray):
-                assert x_pred.shape[1] == self.data_obj.input_space_dim - 1
+                assert x_pred.shape[1] == self.data_obj.index_set_dim - 1
             else:
-                assert x_pred.shape[1] == self.data_obj.input_space_dim
+                assert x_pred.shape[1] == self.data_obj.index_set_dim
 
         assert isinstance(x_out, np.ndarray) or x_out is None
         if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1

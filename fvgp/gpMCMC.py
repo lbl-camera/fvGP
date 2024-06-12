@@ -1,6 +1,7 @@
 import numpy as np
 import time
 import warnings
+from loguru import logger
 
 
 ## --------------------------------------------------------------------- ##
@@ -43,18 +44,14 @@ class gpMCMC:
     Parameters
     ----------
     log_likelihood_function : Callable
-        The log of the likelihood to be sampled.
-    dim : int
-        The dimensionality of the space.
-    prior_function : Callable
+        The log of the likelihood to be sampled. Function of the form def likelihood(x,args) that return a scalar.
+    prior_function : callable
         Function to query for the prior probability of form: func(x, obj), where
         x is the current vector and obj is this gpMCMC object instance.
     proposal_distributions : iterable
         A list of object instances of ProposalDistribution.
     args : Any, optional
         Arguments that will be communicated to all Callables.
-    bounds : np.ndarray, optional
-        Bounds for MCMC. Not needed but encouraged. Default is [-1e6,1e6] in all directions.
 
 
     Attributes
@@ -66,28 +63,19 @@ class gpMCMC:
 
     def __init__(self,
                  log_likelihood_function,
-                 dim,
                  prior_function,
                  proposal_distributions,
-                 args=None,
-                 bounds=None,
-                 ):  # pragma: no cover
+                 args=None
+                 ):
         self.log_likelihood_function = log_likelihood_function
-        self.dim = dim
         self.prior_function = prior_function
         self.proposal_distributions = proposal_distributions
         self.args = args
         self.trace = None
         self.mcmc_info = None
-        if bounds is None:
-            self.bounds = np.zeros((dim, 2))
-            self.bounds[:] = np.array([-1e6, 1e6])
-        else: self.bounds = bounds
-        warnings.warn("Thank you for trying our new MCMC. While we tested it quite a lot it's still in\n \
-         its experimental stage. Use caution.")
 
-    def run_mcmc(self, n_updates=10000,
-                 x0=None,
+    def run_mcmc(self, *, x0,
+                 n_updates=10000,
                  info=False,
                  break_condition=None,
                  run_in_every_iteration=None):
@@ -97,12 +85,12 @@ class gpMCMC:
 
         Parameters
         ----------
-        n_updates: int, optional
-            The log of the likelihood to be sampled.
         x0 : np.ndarray
             Starting point of the mcmc.
+        n_updates: int, optional
+            The log of the likelihood to be sampled.
         info : bool
-            Whether to print information is the mcmc runs.
+            Whether to print information about the mcmc iterations (using logger).
         break_condition : callable or string or None
             A break condition that specified when the mcmc is terminated. If None,
             mcmc will run until `n_updates` is reached. If callable will get the mcmc object instance as
@@ -116,11 +104,9 @@ class gpMCMC:
         trace information : dict
             Mean and variances are presented of the last 1% of x. All other returns consider all x.
             x here are all the accepted positions in the MCMC.
-
         """
         start_time = time.time()
         n_updates = max(n_updates, 2)
-        if x0 is None: x0 = np.ones(self.dim)
         if not isinstance(x0, np.ndarray): raise Exception("x0 is not a numpy array")
         if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
         if break_condition is None:
@@ -128,7 +114,8 @@ class gpMCMC:
                 return False
         elif break_condition == "default":
             break_condition = self._default_break_condition
-        else: raise Exception("No valid input for break condition provided!")
+        else:
+            raise Exception("No valid input for break condition provided!")
         if run_in_every_iteration is None: run_in_every_iteration = lambda a: False
 
         self.trace = {"f(x)": [], "x": [], "time stamp": []}
@@ -138,7 +125,7 @@ class gpMCMC:
         # Initialize Metropolis
         x = x0.copy()
         likelihood = self.log_likelihood_function(x, self.args)
-        if info: print("Starting likelihood. f(x)=", likelihood)
+        if info: logger.info("Starting likelihood. f(x)= {}", likelihood)
         prior = self.prior_function(x, self.args)
         #########################################################
         # Begin main loop
@@ -155,7 +142,7 @@ class gpMCMC:
             run_in_every_iteration(self)
 
             if info and (i % 100) == 0:
-                print("Finished " + str(i) + " out of " + str(n_updates), " iterations. f(x)=", likelihood)
+                logger.info("Finished {} out of {} iterations. f(x)= {}", i, n_updates, likelihood)
             if break_condition(self): break
         # End main loop
 
@@ -165,10 +152,12 @@ class gpMCMC:
         dist_index = int(len(x) - (len(x) / 100))
         self.mcmc_info = {"f(x)": self.trace["f(x)"],
                           "max f(x)": self.trace["f(x)"][arg_max],
+                          "MAP": self.trace["f(x)"][arg_max],
                           "max x": x[arg_max],
                           "time stamps": self.trace["time stamp"],
                           "x": x,
                           "mean(x)": np.mean(x[dist_index:], axis=0),
+                          "median(x)": np.median(x[dist_index:], axis=0),
                           "var(x)": np.var(x[dist_index:], axis=0)}
 
         return self.mcmc_info
@@ -182,18 +171,20 @@ class gpMCMC:
             abs_diff = abs(latest_mean - earlier_mean)
             max_index = np.argmax(abs_diff)
             ratio = (abs_diff[max_index] / abs(latest_mean[max_index])) * 100.
-            if ratio < 0.1: return True
-            else: return False
-        else: return False
+            if ratio < 0.1:
+                return True
+            else:
+                return False
+        else:
+            return False
 
     ###############################################################
-    def _jump(self, x_old, obj, prior_eval, likelihood):  # pragma: no cover
+    def _jump(self, x_old, obj, prior_eval, likelihood):
         x_star = x_old.copy()
-        assert callable(obj.prop_dist)
+        assert callable(obj.proposal_dist)
 
         # get proposed x (x_star)
-        x_star[obj.indices] = obj.prop_dist(x_old[obj.indices].copy(), obj)
-
+        x_star[obj.indices] = obj.proposal_dist(x_old[obj.indices].copy(), x_old, obj)
         # evaluate prior(x_star)
         prior_evaluation_x_star = self.prior_function(x_star, self.args)
         jump_trace = 0.
@@ -205,7 +196,7 @@ class gpMCMC:
             metr_ratio = np.exp(prior_evaluation_x_star + likelihood_star -
                                 prior_eval - likelihood)
             if np.isnan(metr_ratio):  metr_ratio = 0.
-            if metr_ratio > np.random.uniform(0, 1, 1):
+            if metr_ratio > np.random.uniform(0, 1, 1) or obj.auto_accept:
                 x = x_star
                 prior_eval = prior_evaluation_x_star
                 likelihood = likelihood_star
@@ -217,65 +208,68 @@ class gpMCMC:
 
         return x, prior_eval, likelihood, jump_trace
 
-    ###############################################################
-
 
 ###############################################################
-class ProposalDistribution:  # pragma: no cover
-    def __init__(self, prop_dist,
+class ProposalDistribution:
+    def __init__(self,
                  indices,
+                 proposal_dist="normal",
                  init_prop_Sigma=None,
-                 adapt_callable=None,
+                 adapt_callable="normal",
                  r_opt=.234,
                  c_0=10,
                  c_1=.8,
                  K=10,
+                 auto_accept=False,
                  adapt_cov=True,
-                 prop_args=None):  # pragma: no cover
+                 prop_args=None):
         """
         Class to define a proposal distribution.
 
         Parameters
         ----------
-        prop_dist : Callable
-            A callable to calculate the proposal distribution evaluation.
-            It is defined as `def name(x, obj)`, where `obj` is a `proposal_distribution`
-            object instance. The function should return a new proposal for `x`.
         indices : iterable of int
-            The indices that should be drawn from this proposal distribution.
+            The indices of the parameters that should be drawn from this proposal distribution.
+        proposal_dist : callable, optional
+            A callable to calculate the proposal distribution evaluation.
+            It is defined as `def name(x, para, obj)`, where `obj` is a `proposal_distribution`
+            object instance. The function should return a new proposal for `x`.
+            para are all other parameters. Default is a normal distribution with the default
+            `init_prop_sigma`.
         init_prop_Sigma : np.ndarray, optional
             If the proposal distribution is normal this is the covariance of the initial proposal distribution.
             It will be updated if adapt_callable = `normal` or a callable.
             While it is optional to provide it, it is highly recommended to do so.
             A warning will be printed in that case. A good rule of thumb
-            is to orient yourself on the size of your domain.
+            is to orient yourself on the size of your domain. The default is the identity matrix.
         adapt_callable : Callable or None or string, optional
             A callable to adapt the distribution. The default is None which means
             the proposal distribution will not be adapted.
-            Use `normal` for the default adaption procedure for normal distributions.
+            Use `normal` (default) for the default adaption procedure for normal distributions.
             The callable should be defined as `def adapt(index, mcmc_obj)` and not return anything
-            but update the `mcmc_obj.prop_args`. Note, any adapt function will have to be well thought through.
+            but update the `ProposalDistribution.prop_args` attribute. Note, any
+            adapt function will have to be well thought through.
             Most adapt functions will not lead to a stationary final distributions. Use with caution.
         prop_args : Any, optional
-            Arguments that will be available as obj attribute in `prop_dist`and `adapt_callable`.
+            Arguments that will be available as obj attribute in `proposal_dist`and `adapt_callable`.
 
         """
-        # consider:
-        # axis_std = np.linalg.norm(hps_bounds, axis=1) / 10.
-        # init_s = np.diag(axis_std ** 2)
-
-        self.prop_dist = prop_dist
         self.indices = indices
         self.r_opt = r_opt
         self.c_0 = c_0
         self.c_1 = c_1
         self.K = K
+        self.auto_accept = auto_accept
         self.adapt_cov = adapt_cov
         dim = len(indices)
         self.jump_trace = []
-        if adapt_callable == "normal" and init_prop_Sigma is None:
+        if proposal_dist == "normal": self.proposal_dist = self.normal_proposal_dist
+        elif callable(proposal_dist): self.proposal_dist = proposal_dist
+        else: raise Exception("No proposal distribution specified!")
+
+        if proposal_dist == "normal" and init_prop_Sigma is None:
             init_prop_Sigma = np.identity(dim)
-            warnings.warn("You are using the normal adaption mechanism for normal distributions\n \
+            warnings.warn("You are using the normal proposal distribution for normal distributions\n \
                            but did not provide `init_prop_sigma`. This can lead to slow convergence")
 
         if callable(adapt_callable):
@@ -294,9 +288,14 @@ class ProposalDistribution:  # pragma: no cover
                 self.prop_args["prop_Sigma"] = init_prop_Sigma
                 self.prop_args["sigma_m"] = 2.4 ** 2 / dim
 
-            #########################################################
+    #########################################################
+    def normal_proposal_dist(self, x, hps, obj):
+        cov = obj.prop_args["prop_Sigma"]
+        proposal_hps = np.random.multivariate_normal(
+            mean=x, cov=cov, size=1).reshape(len(x))
+        return proposal_hps
 
-    def _adapt(self, end, mcmc_obj):  # pragma: no cover
+    def _adapt(self, end, mcmc_obj):
         K = self.K
         if (end % K) == 0:
             k = 3
@@ -316,36 +315,5 @@ class ProposalDistribution:  # pragma: no cover
             self.prop_args["prop_Sigma"] = prop_Sigma
             self.prop_args["sigma_m"] = sigma_m
 
-    def _no_adapt(self, end, mcmc_obj):  # pragma: no cover
+    def _no_adapt(self, end, mcmc_obj):
         return
-
-
-###############################################################
-###############################################################
-###############################################################
-###############################################################
-def out_of_bounds(x, bounds):  # pragma: no cover
-    for i in range(len(x)):
-        if x[i] < bounds[i, 0] or x[i] > bounds[i, 1]:
-            return True
-    return False
-
-
-def project_onto_bounds(x, bounds):  # pragma: no cover
-    for i in range(len(x)):
-        if x[i] < bounds[i, 0]: x[i] = bounds[i, 0]
-        if x[i] > bounds[i, 1]: x[i] = bounds[i, 1]
-    return x
-
-
-def in_bounds(v, bounds):  # pragma: no cover
-    for i in range(len(v)):
-        if v[i] < bounds[i, 0] or v[i] > bounds[i, 1]: return False
-    return True
-
-
-def prior_func(theta, bounds):  # pragma: no cover
-    if in_bounds(theta, bounds):
-        return 0.
-    else:
-        return -np.inf
