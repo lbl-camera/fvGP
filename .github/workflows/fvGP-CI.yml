@@ -32,6 +32,7 @@ jobs:
           python -m ensurepip --upgrade
           python -m pip install --upgrade setuptools
           pip install -e .[tests]
+          pip install --upgrade git+https://github.com/ronpandolfi/HGDL/tree/cancelled_tasks_fix
 
       - name: Run tests
         run: pytest tests --cov=./ --cov-report=xml
