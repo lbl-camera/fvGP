@@ -5,8 +5,8 @@ __email__ = 'MarcusNoack@lbl.gov'
 
 try:
     from ._version import __version__
-except ImportError as ex:
-    raise RuntimeError('Running gpcam from source code requires installation. If you would like an editable source '
+except (ImportError, ModuleNotFoundError) as ex:
+    raise RuntimeError('Running fvgp from source code requires installation. If you would like an editable source '
                        'install, use "pip install -e ." to perform and editable installation.') from ex
 
 from loguru import logger
