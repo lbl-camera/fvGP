@@ -91,4 +91,4 @@ target/
 */*.txt
 
 # ignore hatch versioning
-/gpcam/_version.py
+fvgp/_version.py
