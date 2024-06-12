@@ -64,7 +64,7 @@ jobs:
         run: |
           python -m ensurepip --upgrade
           python -m pip install --upgrade setuptools
-          pip install --upgrade wheel twine
+          pip install --upgrade wheel twine hatch
           hatch build
 
       - name: Publish package
@@ -78,5 +78,5 @@ jobs:
         uses: fnkr/github-action-ghr@v1
         env:
           GHR_COMPRESS: xz
-          GHR_PATH: build/
+          GHR_PATH: dist/
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
