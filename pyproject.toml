@@ -8,9 +8,9 @@ dependencies = [
     "wheel",
     "scipy ~= 1.13.0",
     "numpy ~= 1.26.4",
-    "dask ~= 2024.5.0",
-    "distributed ~= 2024.5.0",
-    "hgdl ~= 2.1.8",
+    "dask ~= 2024.1.0",
+    "distributed ~= 2024.1.0",
+    "hgdl ~= 2.1.9",
     "loguru",
 ]
 # imate
