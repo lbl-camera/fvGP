@@ -485,8 +485,10 @@ class GP:
                              Hessian function of the objective function have to be defined.")
         if method == 'mcmc': objective_function = self.marginal_density.log_likelihood
         if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
-        if objective_function_gradient is None: objective_function_gradient = self.marginal_density.neg_log_likelihood_gradient
-        if objective_function_hessian is None: objective_function_hessian = self.marginal_density.neg_log_likelihood_hessian
+        if objective_function_gradient is None:
+            objective_function_gradient = self.marginal_density.neg_log_likelihood_gradient
+        if objective_function_hessian is None:
+            objective_function_hessian = self.marginal_density.neg_log_likelihood_hessian
 
         logger.info("objective function: {}", objective_function)
         logger.info("method: {}", method)
@@ -587,8 +589,10 @@ class GP:
                                                      high=hyperparameter_bounds[:, 1],
                                                      size=len(hyperparameter_bounds))
         if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
-        if objective_function_gradient is None: objective_function_gradient = self.marginal_density.neg_log_likelihood_gradient
-        if objective_function_hessian is None: objective_function_hessian = self.marginal_density.neg_log_likelihood_hessian
+        if objective_function_gradient is None: objective_function_gradient = (
+            self.marginal_density.neg_log_likelihood_gradient)
+        if objective_function_hessian is None: objective_function_hessian = (
+            self.marginal_density.neg_log_likelihood_hessian)
 
         opt_obj = self.trainer.train_async(
             objective_function=objective_function,
