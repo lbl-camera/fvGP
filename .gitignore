@@ -89,3 +89,6 @@ target/
 
 # Text notes
 */*.txt
+
+# ignore hatch versioning
+fvgp/_version.py

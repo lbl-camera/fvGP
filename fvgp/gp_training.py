@@ -364,8 +364,10 @@ class GPtraining:
                            constraints=constraints)
 
             opt_obj.optimize(dask_client=dask_client, x0=starting_hps.reshape(1, -1))
-            try: hyperparameters = opt_obj.get_final()[0]["x"]
-            except: raise Exception("Something has gone wrong with the objective function evaluation.")
+            try:
+                hyperparameters = opt_obj.get_final()[0]["x"]
+            except Exception as ex:
+                raise Exception("Something has gone wrong with the objective function evaluation.") from ex
             opt_obj.kill_client()
         elif method == "mcmc":
             logger.info("MCMC started in fvGP")

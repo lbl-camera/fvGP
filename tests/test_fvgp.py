@@ -121,16 +121,16 @@ def test_single_task_init_advanced():
     my_gp2 = GP(x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
         compute_device="cpu", calc_inv = True, ram_economy = True)
 
-def test_train_basic():
+def test_train_basic(client):
     my_gp1 = GP(x_data, y_data, np.array([1., 1., 1., 1., 1., 1.]))
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            method = "local", pop_size = 10, tolerance = 0.001,max_iter = 2)
+            method = "local", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            method = "global", pop_size = 10, tolerance = 0.001,max_iter = 2)
+            method = "global", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 2)
+            method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 2)
+            method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
 
     res = my_gp1.posterior_mean(np.random.rand(len(x_data),len(x_data[0])))
     res = my_gp1.posterior_mean_grad(np.random.rand(10,len(x_data[0])))
@@ -179,21 +179,21 @@ def test_train_basic():
     res = non_stat_kernel_gradient(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
     res = wendland_anisotropic(x_data,x_data,np.ones((6)), my_gp1)
 
-def test_train_hgdl():
+def test_train_hgdl(client):
     my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]), noise_variances=np.zeros(y_data.shape) + 0.01,
         compute_device="cpu", calc_inv = True, ram_economy = True)
 
 
     my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            method = "hgdl", tolerance = 0.001, max_iter = 2)
+            method = "hgdl", tolerance = 0.001, max_iter = 2, dask_client=client)
 
 
-def test_train_hgdl_async():
+def test_train_hgdl_async(client):
     my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]),noise_variances=np.zeros(y_data.shape) + 0.01,
         compute_device="cpu", calc_inv = True, ram_economy = True)
 
     opt_obj = my_gp2.train_async(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            max_iter = 50)
+            max_iter = 50, dask_client=client)
 
     time.sleep(3)
     my_gp2.update_hyperparameters(opt_obj)
@@ -205,7 +205,7 @@ def test_train_hgdl_async():
     my_gp2.marginal_density.test_log_likelihood_gradient(np.array([1., 1., 1., 1., 1., 1.]))
 
 
-def test_multi_task():
+def test_multi_task(client):
     def mkernel(x1,x2,hps,obj):
         d = get_distance_matrix(x1,x2)
         return hps[0] * matern_kernel_diff1(d,hps[1])
@@ -217,7 +217,7 @@ def test_multi_task():
     my_fvgp.update_gp_data(x_data, y_data, append = True)
     my_fvgp.update_gp_data(x_data, y_data, append = False)
     my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10]]),
-            method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2)
+            method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2, dask_client=client)
     my_fvgp.posterior_mean(np.random.rand(10,5), x_out = np.array([0,1]))["f(x)"]
     my_fvgp.posterior_mean_grad(np.random.rand(10,5), x_out = np.array([0,1]))["df/dx"]
     my_fvgp.posterior_covariance(np.random.rand(10,5), x_out = np.array([0,1]))["v(x)"]
