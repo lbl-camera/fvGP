@@ -51,9 +51,9 @@ class GPprior:
 
         if gp2Scale:
             if not callable(gp_kernel_function):
-                warnings.warn("You have chosen to activate gp2Scale. A powerful tool! \n \
-                        But you have not supplied a kernel that is compactly supported. \n \
-                        I will use an anisotropic Wendland kernel for now.",
+                warnings.warn("You have chosen to activate gp2Scale. A powerful tool!"
+                              "But you have not supplied a kernel that is compactly supported."
+                              "I will use an anisotropic Wendland kernel for now.",
                               stacklevel=2)
                 if compute_device == "cpu":
                     gp_kernel_function = wendland_anisotropic_gp2Scale_cpu

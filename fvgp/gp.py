@@ -351,10 +351,8 @@ class GP:
         self.data.update(x_new, y_new, noise_variances_new, append=append)
 
         # update prior
-        if append:
-            self.prior.augment_data(old_x_data, x_new, constant_mean=np.mean(self.data.y_data))
-        else:
-            self.prior.update_data(self.data.x_data, constant_mean=np.mean(self.data.y_data))
+        if append: self.prior.augment_data(old_x_data, x_new, constant_mean=np.mean(self.data.y_data))
+        else: self.prior.update_data(self.data.x_data, constant_mean=np.mean(self.data.y_data))
 
         # update likelihood
         self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,

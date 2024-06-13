@@ -10,27 +10,32 @@ from scipy.linalg import cho_factor, cho_solve, solve_triangular
 
 
 def calculate_LU_factor(M):
+    logger.debug("calculating LU factor")
     LU = splu(M.tocsc())
     return LU
 
 
 def calculate_LU_solve(LU, vec):
+    logger.debug("calculating LU solve")
     return LU.solve(vec)
 
 
 def calculate_LU_logdet(LU):
+    logger.debug("calculate_LU_logdet")
     upper_diag = abs(LU.U.diagonal())
     logdet = np.sum(np.log(upper_diag))
     return logdet
 
 
 def calculate_Chol_factor(M):
+    logger.debug("calculate_Chol_factor")
     c, l = cho_factor(M, lower=True)
     c = np.tril(c)
     return c
 
 
 def update_Chol_factor(old_chol_factor, new_matrix):
+    logger.debug("update_Chol_factor")
     size = len(old_chol_factor)
     KV = new_matrix
     kk = KV[size:, size:]
@@ -39,17 +44,20 @@ def update_Chol_factor(old_chol_factor, new_matrix):
 
 
 def calculate_Chol_solve(factor, vec):
+    logger.debug("calculate_Chol_solve")
     res = cho_solve((factor, True), vec)
     return res
 
 
 def calculate_Chol_logdet(factor):
+    logger.debug("calculate_Chol_logdet")
     upper_diag = abs(factor.diagonal())
     logdet = 2.0 * np.sum(np.log(upper_diag))
     return logdet
 
 
 def spai(A, m):
+    logger.debug("spai")
     """Perform m step of the SPAI iteration."""
     n = A.shape[0]
 
@@ -69,6 +77,7 @@ def spai(A, m):
 
 
 def calculate_random_logdet(KV, info, compute_device):
+    logger.debug("calculate_random_logdet")
     from imate import logdet as imate_logdet
     st = time.time()
     if compute_device == "gpu": gpu = True
@@ -82,6 +91,7 @@ def calculate_random_logdet(KV, info, compute_device):
 
 
 def calculate_sparse_conj_grad(KV, vec, info=False):
+    logger.debug("calculate_sparse_conj_grad")
     st = time.time()
     if info: logger.info("CG solve in progress ...")
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
@@ -127,6 +137,7 @@ def cholesky_update_rank_1(L, b, c):
 
 def cholesky_update_rank_n(L, b, c):
     # Solve Lv = b for v
+    logger.debug("cholesky_update_rank_n")
     L_prime = L.copy()
     for i in range(b.shape[1]):
         L_prime = cholesky_update_rank_1(L_prime, np.append(b[:, i], c[0:i, i]), c[i, i])
@@ -134,6 +145,7 @@ def cholesky_update_rank_n(L, b, c):
 
 
 def calculate_logdet(A, compute_device='cpu'):
+    logger.debug("calculate_logdet")
     if compute_device == "cpu":
         s, logdet = np.linalg.slogdet(A)
         return logdet
@@ -156,6 +168,7 @@ def calculate_logdet(A, compute_device='cpu'):
 
 
 def update_logdet(old_logdet, old_inv, new_matrix, compute_device="cpu"):
+    logger.debug("update_logdet")
     size = len(old_inv)
     KV = new_matrix
     kk = KV[size:, size:]
@@ -165,6 +178,7 @@ def update_logdet(old_logdet, old_inv, new_matrix, compute_device="cpu"):
 
 
 def calculate_inv(A, compute_device='cpu'):
+    logger.debug("calculate_inv")
     if compute_device == "cpu":
         return np.linalg.inv(A)
     elif compute_device == "gpu":
@@ -177,6 +191,7 @@ def calculate_inv(A, compute_device='cpu'):
 
 
 def update_inv(old_inv, new_matrix, compute_device="cpu"):
+    logger.debug("update_inv")
     size = len(old_inv)
     KV = new_matrix
     kk = KV[size:, size:]
@@ -189,6 +204,7 @@ def update_inv(old_inv, new_matrix, compute_device="cpu"):
 
 
 def solve(A, b, compute_device='cpu'):
+    logger.debug("solve")
     if np.ndim(b) == 1: b = np.expand_dims(b, axis=1)
     if compute_device == "cpu":
         try:
@@ -241,6 +257,7 @@ def solve(A, b, compute_device='cpu'):
 
 ##################################################################################
 def is_sparse(A):
+    logger.debug("is_sparse")
     if float(np.count_nonzero(A)) / float(len(A) ** 2) < 0.01:
         return True
     else:
@@ -248,4 +265,5 @@ def is_sparse(A):
 
 
 def how_sparse_is(A):
+    logger.debug("how_sparse_is")
     return float(np.count_nonzero(A)) / float(len(A) ** 2)
