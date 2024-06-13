@@ -92,7 +92,7 @@ class GPtraining:
             objective_function_gradient,
             objective_function_hessian,
             init_hyperparameters,
-            np.array(hyperparameter_bounds),
+            hyperparameter_bounds,
             method,
             max_iter,
             pop_size,
@@ -378,6 +378,7 @@ class GPtraining:
         return hyperparameters
 
     def _in_bounds(self, v, bounds):
+        assert isinstance(bounds, np.ndarray)
         if any(v < bounds[:, 0]) or any(v > bounds[:, 1]): return False
         return True
 
