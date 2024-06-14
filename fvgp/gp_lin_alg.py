@@ -10,13 +10,13 @@ from scipy.linalg import cho_factor, cho_solve, solve_triangular
 
 
 def calculate_LU_factor(M):
-    logger.debug("calculating LU factor")
+    logger.debug("calculate_LU_factor")
     LU = splu(M.tocsc())
     return LU
 
 
 def calculate_LU_solve(LU, vec):
-    logger.debug("calculating LU solve")
+    logger.debug("calculate_LU_solve")
     return LU.solve(vec)
 
 
@@ -137,7 +137,6 @@ def cholesky_update_rank_1(L, b, c):
 
 def cholesky_update_rank_n(L, b, c):
     # Solve Lv = b for v
-    logger.debug("cholesky_update_rank_n")
     L_prime = L.copy()
     for i in range(b.shape[1]):
         L_prime = cholesky_update_rank_1(L_prime, np.append(b[:, i], c[0:i, i]), c[i, i])
