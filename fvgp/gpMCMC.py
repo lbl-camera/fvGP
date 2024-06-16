@@ -215,7 +215,7 @@ class ProposalDistribution:
                  indices,
                  proposal_dist="normal",
                  init_prop_Sigma=None,
-                 adapt_callable="normal",
+                 adapt_callable=None,
                  r_opt=.234,
                  c_0=10,
                  c_1=.8,
