@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import numpy as np
 import time
 import warnings
@@ -38,7 +40,7 @@ from loguru import logger
 
 class gpMCMC:
     """
-    This class provides allows the user to customize an MCMC via user-defined proposal distributions and a prior.
+    This class allows the user to customize an MCMC via user-defined proposal distributions and a prior.
 
 
     Parameters
