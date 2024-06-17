@@ -15,6 +15,6 @@ from .gp import GP
 from .fvgp import fvGP
 from .gpMCMC import gpMCMC
 
-__all__ = ['GP', 'fvGP']
+__all__ = ['GP', 'fvGP', 'gpMCMC']
 
 logger.disable('fvgp')
