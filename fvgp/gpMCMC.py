@@ -43,8 +43,8 @@ class gpMCMC:
 
     Parameters
     ----------
-    log_likelihood_function : Callable
-        The log of the likelihood to be sampled. Function of the form def likelihood(x,args) that return a scalar.
+    log_likelihood_function : callable
+        The log of the likelihood to be sampled. Function of the form def likelihood(x,args) that returns a scalar.
     prior_function : callable
         Function to query for the prior probability of form: func(x, obj), where
         x is the current vector and obj is this gpMCMC object instance.
@@ -250,6 +250,8 @@ class ProposalDistribution:
             but update the `ProposalDistribution.prop_args` attribute. Note, any
             adapt function will have to be well thought through.
             Most adapt functions will not lead to a stationary final distributions. Use with caution.
+        auto_accept : bool, optional
+	    Indicates whether to auto-accept the jump.
         prop_args : Any, optional
             Arguments that will be available as obj attribute in `proposal_dist`and `adapt_callable`.
 

@@ -13,6 +13,7 @@ caption: API
 api/overview.md
 api/GP.md
 api/fvGP.md
+api/gpMCMC.md
 api/logging.md
 ```
 
