@@ -10,4 +10,4 @@ Development Lead
 Contributors
 ------------
 
-David Perryman
+* Ronald Pandolfi
