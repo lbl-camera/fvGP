@@ -1,4 +1,4 @@
-from fvgp import _version
+from fvgp import __version__
 
 # Configuration file for the Sphinx documentation builder.
 #
@@ -22,9 +22,9 @@ from fvgp import _version
 project = 'fvGP'
 copyright = '2021, Marcus Michael Noack'
 author = 'Marcus Michael Noack'
-version = _version.get_versions()['version']
+version = __version__
 # The full version, including alpha/beta/rc tags
-release = _version.get_versions()['version']
+release = __version__
 
 
 # -- General configuration ---------------------------------------------------
