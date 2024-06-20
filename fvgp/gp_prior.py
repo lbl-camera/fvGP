@@ -7,6 +7,7 @@ from functools import partial
 import scipy.sparse as sparse
 from scipy.sparse import block_array
 import time
+from loguru import logger
 
 
 class GPprior:
