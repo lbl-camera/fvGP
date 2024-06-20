@@ -164,6 +164,7 @@ class GPprior:
 
     def _compute_prior_covariance_gp2Scale(self, x_data, hyperparameters):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
+        st = time.time()
         client = self.client
         point_number = len(x_data)
         num_batches = point_number // self.batch_size
@@ -175,6 +176,7 @@ class GPprior:
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
+        logger.info("        gp2Scale covariance matrix init done after {} seconds.", time.time() - st)
 
         results = list(map(self.harvest_result, distributed.as_completed(client.map(
             partial(kernel_function,
@@ -185,6 +187,8 @@ class GPprior:
             [self.x_data_scatter_future] * len(ranges_ij)),
             with_results=True)))
 
+        logger.info("        gp2Scale covariance matrix result written after {} seconds.", time.time() - st)
+
         # reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
         # mirror across diagonal
@@ -194,6 +198,7 @@ class GPprior:
             np.hstack([j_s, i_s[diagonal_mask]])
         K = sparse.coo_matrix((data, (i_s, j_s)))
         K.resize((len(x_data), len(x_data)))
+        logger.info("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
         return K
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):

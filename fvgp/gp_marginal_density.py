@@ -161,7 +161,7 @@ class GPMarginalDensity:
         else:
             st = time.time()
             K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
-            logger.info("   Prior density computed after {} seconds.", time.time() - st)
+            logger.info("   Prior covariance matrix computed after {} seconds.", time.time() - st)
             V = self.likelihood_obj.calculate_V(hyperparameters)
             logger.info("   V computed after {} seconds.", time.time() - st)
             m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
