@@ -104,8 +104,8 @@ class gpMCMC:
         Return
         ------
         trace information : dict
-            Mean and variances are presented of the last 1% of x. All other returns consider all x.
-            x here are all the accepted positions in the MCMC.
+            Mean, medians, and variances of the last 1% are presented. All other returns consider the whole trace.
+            The traces `x` are all the accepted positions in the MCMC.
         """
         start_time = time.time()
         n_updates = max(n_updates, 2)
@@ -143,8 +143,7 @@ class gpMCMC:
             self.trace["time stamp"].append(time.time() - start_time)
             run_in_every_iteration(self)
 
-            if info and (i % 100) == 0:
-                logger.info("Finished {} out of {} iterations. f(x)= {}", i, n_updates, likelihood)
+            if info and (i % 100) == 0: print("Finished ", i, " out of ", n_updates, " iterations. f(x)= ", likelihood)
             if break_condition(self): break
         # End main loop
 
@@ -253,11 +252,11 @@ class ProposalDistribution:
             adapt function will have to be well thought through.
             Most adapt functions will not lead to a stationary final distributions. Use with caution.
         auto_accept : bool, optional
-	    Indicates whether to auto-accept the jump.
+            Indicates whether to auto-accept the jump.
         prop_args : Any, optional
             Arguments that will be available as obj attribute in `proposal_dist`and `adapt_callable`.
-
         """
+
         self.indices = indices
         self.r_opt = r_opt
         self.c_0 = c_0
@@ -267,9 +266,12 @@ class ProposalDistribution:
         self.adapt_cov = adapt_cov
         dim = len(indices)
         self.jump_trace = []
-        if proposal_dist == "normal": self.proposal_dist = self.normal_proposal_dist
-        elif callable(proposal_dist): self.proposal_dist = proposal_dist
-        else: raise Exception("No proposal distribution specified!")
+        if proposal_dist == "normal":
+            self.proposal_dist = self.normal_proposal_dist
+        elif callable(proposal_dist):
+            self.proposal_dist = proposal_dist
+        else:
+            raise Exception("No proposal distribution specified!")
 
         if proposal_dist == "normal" and init_prop_Sigma is None:
             init_prop_Sigma = np.identity(dim)
