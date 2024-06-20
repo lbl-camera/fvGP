@@ -216,8 +216,6 @@ class GP:
             logger.disable("fvgp")
         self.calc_inv = calc_inv
         self.gp2Scale = gp2Scale
-        self.gp2Scale_dask_client = gp2Scale_dask_client
-        self.gp2Scale_batch_size = gp2Scale_batch_size
         hyperparameters = init_hyperparameters
         ########################################
         ###init data instance###################
@@ -246,7 +244,9 @@ class GP:
                 raise Exception(
                     "You have activated `gp2Scale`. You need to install imate\
                      manually for this to work.")
-            if gp2Scale_dask_client is None: gp2Scale_dask_client = Client()
+            if gp2Scale_dask_client is None:
+                logger.info("Creating my own local client.")
+                gp2Scale_dask_client = Client()
 
         if compute_device == 'gpu':
             try:

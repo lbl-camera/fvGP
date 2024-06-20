@@ -171,6 +171,7 @@ class GPprior:
         point_number = len(x_data)
         num_batches = point_number // self.batch_size
         NUM_RANGES = num_batches
+        logger.info("client id: {}", client.id)
 
         self.x_data_scatter_future = client.scatter(
             x_data, workers=self.compute_workers, broadcast=False)
