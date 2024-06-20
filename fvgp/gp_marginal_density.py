@@ -153,15 +153,21 @@ class GPMarginalDensity:
         ------
         log marginal likelihood of the data : float
         """
+        logger.info("log marginal likelihood is being evaluated")
         if hyperparameters is None:
             K, V, m = self._get_KVm()
             KVinvY = self.KVinvY
             KVlogdet = self.KVlinalg.logdet()
         else:
+            st = time.time()
             K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            logger.info("   Prior density computed after {} seconds.", time.time() - st)
             V = self.likelihood_obj.calculate_V(hyperparameters)
+            logger.info("   V computed after {} seconds.", time.time() - st)
             m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+            logger.info("   Prior mean computed after {} seconds.", time.time() - st)
             KVinvY, KVlogdet = self.compute_new_KVlogdet_KVinvY(K, V, m)
+            logger.info("   KVinvY and logdet computed after {} seconds.", time.time() - st)
 
         n = len(self.y_data)
         return -(0.5 * ((self.y_data - m).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
@@ -198,7 +204,7 @@ class GPMarginalDensity:
         ------
         Gradient of the negative log marginal likelihood : np.ndarray
         """
-        logger.debug("log-likelihood gradient is being evaluated...")
+
         if hyperparameters is None:
             KVinvY = self.KVinvY
         else:
@@ -252,7 +258,6 @@ class GPMarginalDensity:
                 dL_dH[i] = - 0.5 * (mtrace - np.trace(matr))
             else:
                 dL_dH[i] = 0.0
-        logger.debug("gradient norm: {}", np.linalg.norm(dL_dH + dL_dHm))
         return dL_dH + dL_dHm
 
     ##################################################################################
