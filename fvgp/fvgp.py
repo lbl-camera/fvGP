@@ -298,11 +298,11 @@ class fvGP(GP):
             self.output_positions = output_positions
 
         assert isinstance(self.output_positions, np.ndarray) and np.ndim(self.output_positions) == 2
-        self.index_set_dim = self.input_space_dim + output_space_dim
         ####transform the space
         self.fvgp_x_data = x_data
         self.fvgp_y_data = y_data
         self.fvgp_noise_variances = noise_variances
+        self.index_set_dim = self.input_space_dim + output_space_dim
         x_data, y_data, noise_variances = self._transform_index_set(x_data, y_data, noise_variances,
                                                                     self.output_positions)
 
@@ -326,6 +326,7 @@ class fvGP(GP):
             ram_economy=ram_economy,
             args=args,
             info=info)
+        assert self.index_set_dim == self.input_space_dim + output_space_dim
 
     def update_gp_data(
         self,
