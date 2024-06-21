@@ -83,8 +83,8 @@ class GPMarginalDensity:
                 if issparse(KV): KV = KV.toarray()
                 Chol_factor = calculate_Chol_factor(KV)
                 KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
-            #elif mode == "sparseCG": ##CG is not working well without a good preconditioner
-            #    KVinvY = calculate_sparse_conj_grad(KV, y_mean, info=self.info)
+            elif mode == "sparseCG":
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean, info=self.info)
             elif mode == "sparseMINRES":
                 KVinvY = calculate_sparse_minres(KV, y_mean, info=self.info)
             else:
@@ -107,8 +107,8 @@ class GPMarginalDensity:
             elif mode == "Chol":
                 Chol_factor = calculate_Chol_factor(KV.toarray())
                 KVlogdet = calculate_Chol_logdet(Chol_factor)
-            #elif mode == "sparseCG":
-            #    KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
+            elif mode == "sparseCG":
+                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
             elif mode == "sparseMINRES":
                 KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
             else:
@@ -140,7 +140,7 @@ class GPMarginalDensity:
         elif len(self.data_obj.x_data) < 2001 and Ksparsity >= 0.0001:
             mode = "Chol"
         else:
-            mode = "sparseMINRES" #used to be CG
+            mode = "sparseCG"
         return mode
 
     def log_likelihood(self, hyperparameters=None):
@@ -228,9 +228,9 @@ class GPMarginalDensity:
                         self.likelihood_obj.noise_function_grad(self.data_obj.x_data, hyperparameters, self)
             except Exception as e:
                 raise Exception(
-                    "The gradient evaluation dK/dh + dNoise/dh was not successful. \n \
-                    That normally means the combination of ram_economy and definition \n \
-                    of the gradient function is wrong. ",
+                    "The gradient evaluation dK/dh + dNoise/dh was not successful. "
+                    "That normally means the combination of ram_economy and definition "
+                    "of the gradient function is wrong. ",
                     str(e))
             KV = np.array([KV, ] * len(hyperparameters))
             a = solve(KV, dK_dH, compute_device=self.compute_device)
@@ -250,9 +250,9 @@ class GPMarginalDensity:
                         self.likelihood_obj.noise_function_grad(self.data_obj.x_data, i, hyperparameters, self)
                 except:
                     raise Exception(
-                        "The gradient evaluation dK/dh + dNoise/dh was not successful. \n \
-                        That normally means the combination of ram_economy and definition of \
-                        the gradient function is wrong.")
+                        "The gradient evaluation dK/dh + dNoise/dh was not successful. "
+                        "That normally means the combination of ram_economy and definition of "
+                        "the gradient function is wrong.")
                 matr = solve(KV, dK_dH, compute_device=self.compute_device)
             if dL_dHm[i] == 0.0:
                 if self.prior_obj.ram_economy is False:
@@ -356,8 +356,8 @@ class KVlinalg:
             return calculate_Chol_solve(self.Chol_factor, b)
         elif mode == "Inv":
             return self.KVinv @ b
-        #elif mode == "sparseCG":
-        #    return calculate_sparse_conj_grad(self.KV, b, self.info)
+        elif mode == "sparseCG":
+            return calculate_sparse_conj_grad(self.KV, b, self.info)
         elif mode == "sparseMINRES":
             return calculate_sparse_minres(self.KV, b, self.info)
         elif mode == "sparseLU":
@@ -368,6 +368,6 @@ class KVlinalg:
     def logdet(self):
         if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor)
         if self.mode == "Inv": return calculate_logdet(self.KV)
-        #if self.mode == "sparseCG": return calculate_random_logdet(self.KV, self.info, self.compute_device)
+        if self.mode == "sparseCG": return calculate_random_logdet(self.KV, self.info, self.compute_device)
         if self.mode == "sparseMINRES": return calculate_random_logdet(self.KV, self.info, self.compute_device)
         if self.mode == "sparseLU": return calculate_LU_logdet(self.LU_factor)

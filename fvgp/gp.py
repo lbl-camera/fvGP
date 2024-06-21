@@ -242,8 +242,8 @@ class GP:
                 import imate
             except:
                 raise Exception(
-                    "You have activated `gp2Scale`. You need to install imate\
-                     manually for this to work.")
+                    "You have activated `gp2Scale`. You need to install imate"
+                    "manually for this to work.")
             if gp2Scale_dask_client is None:
                 logger.info("Creating my own local client.")
                 gp2Scale_dask_client = Client()

@@ -101,6 +101,7 @@ def calculate_sparse_conj_grad(KV, vec, info=False):
     for i in range(vec.shape[1]):
         res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], rtol=1e-8)
         if exit_code == 1:
+            logger.info("CG preconditioning in progress ...")
             M = spai(KV, 20)
             res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-8)
         if exit_code == 1: warnings.warn("CG not successful")
