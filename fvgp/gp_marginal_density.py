@@ -328,6 +328,8 @@ class KVlinalg:
             self.KVinv = calculate_inv(KV, compute_device=self.compute_device)
         elif self.mode == "sparseMINRES":
             self.KV = KV
+        elif self.mode == "sparseCG":
+            self.KV = KV
         elif self.mode == "sparseLU":
             self.LU_factor = self.calculate_LU_factor(KV)
         else:
@@ -344,6 +346,8 @@ class KVlinalg:
             if len(KV) <= len(self.KVinv): self.KVinv = calculate_inv(KV, compute_device=self.compute_device)
             else: self.KVinv = update_inv(self.KVinv, KV, self.compute_device)
         elif self.mode == "sparseMINRES":
+            self.KV = KV
+        elif self.mode == "sparseCG":
             self.KV = KV
         elif self.mode == "sparseLU":
             self.LU_factor = calculate_LU_factor(KV)
