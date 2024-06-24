@@ -368,19 +368,24 @@ def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
     covariance matrix being calculated.
     Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
     """
+    st = time.time()
 
     hps = hyperparameters
     range_i, range_j = range_ij
     x1 = x1_future[range_i[0]:range_i[1]]
     x2 = x2_future[range_j[0]:range_j[1]]
     k = kernel(x1, x2, hps, None)
+    print("calc time:", time.time() - st, flush = True)
     k_sparse = sparse.coo_matrix(k)
+    print("transforming:", time.time() - st, flush = True)
 
     data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
+    print("insertion:", time.time() - st, flush = True)
 
     # mask lower triangular values when current chunk spans diagonal
     if range_i[0] == range_j[0]:
         mask = [row <= col for (row, col) in zip(rows, cols)]
+        print("symmetrization:", time.time() - st, flush = True)
         return data[mask], rows[mask], cols[mask]
     else:
         return data, rows, cols
