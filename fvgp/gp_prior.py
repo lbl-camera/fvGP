@@ -21,7 +21,6 @@ class GPprior:
                  gp_mean_function_grad=None,
                  hyperparameters=None,
                  ram_economy=False,
-                 cov_comp_mode="trad",
                  compute_device='cpu',
                  constant_mean=0.0,
                  gp2Scale=False,
@@ -33,7 +32,6 @@ class GPprior:
         assert callable(gp_mean_function) or gp_mean_function is None
         assert isinstance(hyperparameters, np.ndarray)
         assert np.ndim(hyperparameters) == 1
-        assert isinstance(cov_comp_mode, str)
         assert isinstance(constant_mean, float)
 
         self.index_set_dim = index_set_dim
