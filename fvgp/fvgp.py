@@ -337,7 +337,10 @@ class fvGP(GP):
             ram_economy=ram_economy,
             args=args,
             info=info)
-        assert self.index_set_dim == self.input_space_dim + output_space_dim
+        print("input space dim in fvGP:  ", self.input_space_dim)
+        print("output space dims in fvGP:", output_space_dim)
+        print("index set dim in fvGP    :", self.index_set_dim)
+        if self.data.Euclidean: assert self.index_set_dim == self.input_space_dim + output_space_dim
 
     def update_gp_data(
         self,

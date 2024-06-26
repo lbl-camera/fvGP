@@ -58,6 +58,8 @@ def test_lin_alg():
     ss = calculate_Chol_solve(dd, np.random.rand(len(A)))
     ll = calculate_Chol_logdet(dd)
     ll = spai(A,20)
+    calculate_sparse_minres(sparse.coo_matrix(A),np.random.rand(len(A)), info=False)
+    update_sparse_minres(sparse.coo_matrix(A),np.random.rand(len(A)), np.random.rand(len(A)))
     calculate_sparse_conj_grad(sparse.coo_matrix(A),np.random.rand(len(A)))
     logd = calculate_logdet(B)
     update_logdet(logd, np.linalg.inv(B), A)
@@ -69,17 +71,20 @@ def test_lin_alg():
 
 
 def test_single_task_init_basic():
-    def kernel(x1,x2,hps,obj):
+    def kernel(x1,x2,hps):
         d = get_distance_matrix(x1,x2)
         return hps[0] * matern_kernel_diff1(d,3.)
-    def noise(x,hps,obj):
+    def noise(x,hps):
         return np.identity(len(x))
+    def prior_mean(x,hps):
+        return np.zeros(len(x))
+
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu', info = True)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), gp_kernel_function = kernel,
             gp_noise_function=noise, compute_device = 'cpu', info = True, ram_economy=True)
     my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.get_hyperparameters())
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), gp_kernel_function = kernel,
-            gp_noise_function=noise, compute_device = 'cpu', info = True, ram_economy=False)
+            gp_noise_function=noise, gp_mean_function = prior_mean, compute_device = 'cpu', info = True, ram_economy=False)
     my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.get_hyperparameters())
     my_gp1 = GP(x_data, y_data, info = True)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
@@ -109,7 +114,7 @@ def test_single_task_init_basic():
     res = matern_kernel_diff2_robust(1,1)
     res = sparse_kernel(1,1)
     res = periodic_kernel(1,1,1)
-    res = my_gp1.prior._default_kernel(x_data,x_data,np.array([1.,1.,1.,1.,1.,1.]),my_gp1)
+    res = my_gp1.prior._default_kernel(x_data,x_data,np.array([1.,1.,1.,1.,1.,1.]))
     my_gp1.crps(x_data[0:2] + 1., np.array([1.,2.]))
     my_gp1.rmse(x_data[0:2] + 1., np.array([1.,2.]))
     my_gp1.make_2d_x_pred(np.array([1.,2.]),np.array([3.,4]))
@@ -174,10 +179,10 @@ def test_train_basic(client):
     res = linear_kernel(2.,2.2, 1.,1.,1.)
     res = dot_product_kernel(np.random.rand(2),np.random.rand(2),1.,np.array([[1.,0.],[0.,2.]]))
     res = polynomial_kernel(np.random.rand(2),np.random.rand(2), 2)
-    res = my_gp1.prior._default_kernel(x_data,x_data,np.ones((6)),my_gp1)
+    res = my_gp1.prior._default_kernel(x_data,x_data,np.ones((6)))
     res = non_stat_kernel(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
     res = non_stat_kernel_gradient(x_data,x_data,np.random.rand(10,5),np.random.rand(10),0.5)
-    res = wendland_anisotropic(x_data,x_data,np.ones((6)), my_gp1)
+    res = wendland_anisotropic(x_data,x_data,np.ones((6)))
 
 def test_train_hgdl(client):
     my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]), noise_variances=np.zeros(y_data.shape) + 0.01,
@@ -206,7 +211,7 @@ def test_train_hgdl_async(client):
 
 
 def test_multi_task(client):
-    def mkernel(x1,x2,hps,obj):
+    def mkernel(x1,x2,hps):
         d = get_distance_matrix(x1,x2)
         return hps[0] * matern_kernel_diff1(d,hps[1])
     y_data = np.zeros((N,2))
@@ -290,11 +295,11 @@ def test_gp2Scale(client):
     mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["f(x)"]
     var1 =  my_gp2S.posterior_covariance(x_pred.reshape(-1,1))["v(x)"]
     
-    pd = ProposalDistribution([0,1], init_prop_Sigma = init_s)
+    pd = ProposalDistribution([0,1], init_prop_Sigma = init_s, adapt_callable = "normal")
     my_mcmc = gpMCMC(obj_func, prior_function, [pd],
                     args={"bounds":hps_bounds})
 
-    mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
+    mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=202, break_condition="default")
     
     pd = ProposalDistribution([0,1], init_prop_Sigma = init_s, adapt_callable = "normal")
     my_mcmc = gpMCMC(obj_func, prior_function, [pd],

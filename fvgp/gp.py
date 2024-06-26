@@ -316,6 +316,7 @@ class GP:
         self.x_data = self.data.x_data
         self.y_data = self.data.y_data
         self.index_set_dim = self.prior.index_set_dim
+        print("dim in GP: ", self.index_set_dim)
 
     def update_gp_data(
         self,

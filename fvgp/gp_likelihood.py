@@ -53,7 +53,7 @@ class GPlikelihood:
             else:
                 self.noise_function_grad = self._default_dnoise_dh
 
-        self.V = self.noise_function(self.x_data, hyperparameters, self)
+        self.V = self.noise_function(self.x_data, hyperparameters)
 
     ##################################################################################
     def update(self, x_data, y_data, noise_variances, hyperparameters):
@@ -63,16 +63,16 @@ class GPlikelihood:
         self.V = self.calculate_V(hyperparameters)
 
     def calculate_V(self, hyperparameters):
-        return self.noise_function(self.x_data, hyperparameters, self)
+        return self.noise_function(self.x_data, hyperparameters)
 
-    def _default_noise_function(self, x, hyperparameters, gp_obj):
+    def _default_noise_function(self, x, hyperparameters):
         noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)
         if self.gp2Scale:
             return self._calculate_sparse_default_noise_covariance(x)
         else:
             return np.diag(noise)
 
-    def _measured_noise_function(self, x, hyperparameters, gp_obj):
+    def _measured_noise_function(self, x, hyperparameters):
         if self.gp2Scale:
             return self._calculate_sparse_measured_noise_covariance(self.noise_variances)
         else:
@@ -90,34 +90,34 @@ class GPlikelihood:
         diag.setdiag(vector)
         return diag
 
-    def _default_dnoise_dh(self, x, hps, gp_obj):
+    def _default_dnoise_dh(self, x, hps):
         gr = np.zeros((len(hps), len(x), len(x)))
         return gr
 
-    def _default_dnoise_dh_econ(self, x, i, hps, gp_obj):
+    def _default_dnoise_dh_econ(self, x, i, hps):
         gr = np.zeros((len(x), len(x)))
         return gr
 
     ##########################
-    def _finitediff_dnoise_dh(self, x, hps, gp_obj):
+    def _finitediff_dnoise_dh(self, x, hps):
         gr = np.zeros((len(hps), len(x), len(x)))
         for i in range(len(hps)):
             temp_hps1 = np.array(hps)
             temp_hps1[i] = temp_hps1[i] + 1e-6
             temp_hps2 = np.array(hps)
             temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.noise_function(x, temp_hps1, self)
-            b = self.noise_function(x, temp_hps2, self)
+            a = self.noise_function(x, temp_hps1)
+            b = self.noise_function(x, temp_hps2)
             gr[i] = (a - b) / 2e-6
         return gr
 
     ##########################
-    def _finitediff_dnoise_dh_econ(self, x, i, hps, gp_obj):
+    def _finitediff_dnoise_dh_econ(self, x, i, hps):
         temp_hps1 = np.array(hps)
         temp_hps1[i] = temp_hps1[i] + 1e-6
         temp_hps2 = np.array(hps)
         temp_hps2[i] = temp_hps2[i] - 1e-6
-        a = self.noise_function(x, temp_hps1, self)
-        b = self.noise_function(x, temp_hps2, self)
+        a = self.noise_function(x, temp_hps1)
+        b = self.noise_function(x, temp_hps2)
         gr = (a - b) / 2e-6
         return gr

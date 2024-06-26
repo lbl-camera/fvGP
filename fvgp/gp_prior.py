@@ -128,7 +128,7 @@ class GPprior:
         if self.gp2Scale:
             K = self._compute_prior_covariance_gp2Scale(x, hyperparameters)
         else:
-            K = self.kernel(x, x, hyperparameters, self)
+            K = self.kernel(x, x, hyperparameters)
         return K
 
     def _update_prior_covariance_matrix(self, x_old, x_new):
@@ -136,8 +136,8 @@ class GPprior:
         if self.gp2Scale:
             K = self._update_prior_covariance_gp2Scale(x_old, x_new, self.hyperparameters)
         else:
-            k = self.kernel(x_old, x_new, self.hyperparameters, self)
-            kk = self.kernel(x_new, x_new, self.hyperparameters, self)
+            k = self.kernel(x_old, x_new, self.hyperparameters)
+            kk = self.kernel(x_new, x_new, self.hyperparameters)
             K = np.block([
                 [self.K, k],
                 [k.T, kk]
@@ -147,12 +147,12 @@ class GPprior:
     def compute_mean(self, x_data, hyperparameters=None):
         """computes the covariance matrix from the kernel"""
         if hyperparameters is None: hyperparameters = self.hyperparameters
-        m = self.mean_function(x_data, hyperparameters, self)
+        m = self.mean_function(x_data, hyperparameters)
         return m
 
     def _update_mean(self, x_new):
         if self.default_m: self.m[:] = self.constant_mean
-        m = np.append(self.m, self.mean_function(x_new, self.hyperparameters, self))
+        m = np.append(self.m, self.mean_function(x_new, self.hyperparameters))
         return m
 
     @staticmethod
@@ -198,7 +198,7 @@ class GPprior:
             np.hstack([i_s, j_s[diagonal_mask]]), \
             np.hstack([j_s, i_s[diagonal_mask]])
         K = sparse.coo_matrix((data, (i_s, j_s)))
-        K.resize((len(x_data), len(x_data)))
+        K.resize(len(x_data), len(x_data))
         logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
         return K
 
@@ -275,7 +275,7 @@ class GPprior:
     ####################################################
     ####################################################
 
-    def _default_kernel(self, x1, x2, hyperparameters, obj):
+    def _default_kernel(self, x1, x2, hyperparameters):
         """
         Function for the default kernel, a Matern kernel of first-order differentiability.
 
@@ -287,8 +287,6 @@ class GPprior:
             Numpy array of shape (V x D).
         hyperparameters : np.ndarray
             Array of hyperparameters. For this kernel we need D + 1 hyperparameters.
-        obj : object instance
-            GP object instance.
 
         Return
         ------
@@ -305,18 +303,18 @@ class GPprior:
         new_points = np.array(points1)
         epsilon = 1e-8
         new_points[:, direction] += epsilon
-        a = self.kernel(new_points, points2, hyperparameters, self)
-        b = self.kernel(points1, points2, hyperparameters, self)
+        a = self.kernel(new_points, points2, hyperparameters)
+        b = self.kernel(points1, points2, hyperparameters)
         derivative = (a - b) / epsilon
         return derivative
 
-    def _gp_kernel_gradient(self, points1, points2, hyperparameters, obj):
+    def _gp_kernel_gradient(self, points1, points2, hyperparameters):
         gradient = np.empty((len(hyperparameters), len(points1), len(points2)))
         for direction in range(len(hyperparameters)):
             gradient[direction] = self._dkernel_dh(points1, points2, direction, hyperparameters)
         return gradient
 
-    def _gp_kernel_derivative(self, points1, points2, direction, hyperparameters, obj):
+    def _gp_kernel_derivative(self, points1, points2, direction, hyperparameters):
         # gradient = np.empty((len(hyperparameters), len(points1),len(points2)))
         derivative = self._dkernel_dh(points1, points2, direction, hyperparameters)
         return derivative
@@ -327,30 +325,30 @@ class GPprior:
         epsilon = 1e-8
         new_hyperparameters1[direction] += epsilon
         new_hyperparameters2[direction] -= epsilon
-        a = self.kernel(points1, points2, new_hyperparameters1, self)
-        b = self.kernel(points1, points2, new_hyperparameters2, self)
+        a = self.kernel(points1, points2, new_hyperparameters1)
+        b = self.kernel(points1, points2, new_hyperparameters2)
         derivative = (a - b) / (2.0 * epsilon)
         return derivative
 
-    def _default_mean_function(self, x, hyperparameters, gp_obj):
+    def _default_mean_function(self, x, hyperparameters):
         """evaluates the gp mean function at the data points """
         mean = np.zeros((len(x)))
         mean[:] = self.constant_mean
         return mean
 
-    def _finitediff_dm_dh(self, x, hps, gp_obj):
+    def _finitediff_dm_dh(self, x, hps):
         gr = np.empty((len(hps), len(x)))
         for i in range(len(hps)):
             temp_hps1 = np.array(hps)
             temp_hps1[i] = temp_hps1[i] + 1e-6
             temp_hps2 = np.array(hps)
             temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.mean_function(x, temp_hps1, self)
-            b = self.mean_function(x, temp_hps2, self)
+            a = self.mean_function(x, temp_hps1)
+            b = self.mean_function(x, temp_hps2)
             gr[i] = (a - b) / 2e-6
         return gr
 
-    def _default_dm_dh(self, x, hps, gp_obj):
+    def _default_dm_dh(self, x, hps):
         gr = np.zeros((len(hps), len(x)))
         return gr
 
@@ -372,7 +370,7 @@ def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
     range_i, range_j = range_ij
     x1 = x1_future[range_i[0]:range_i[1]]
     x2 = x2_future[range_j[0]:range_j[1]]
-    k = kernel(x1, x2, hps, None)
+    k = kernel(x1, x2, hps)
     #calc_time = time.time() - st
     k_sparse = sparse.coo_matrix(k)
     #trans_time =  time.time() - st
@@ -400,7 +398,7 @@ def kernel_function_update(range_ij, x1_future, x2_future, hyperparameters, kern
     range_i, range_j = range_ij
     x1 = x1_future[range_i[0]:range_i[1]]
     x2 = x2_future[range_j[0]:range_j[1]]
-    k = kernel(x1, x2, hps, None)
+    k = kernel(x1, x2, hps)
     k_sparse = sparse.coo_matrix(k)
 
     data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]

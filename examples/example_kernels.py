@@ -139,9 +139,9 @@ def kernel_cpu(x1,x2, hps):
                  g_cpu(x2,hps[20:32],hps[32:36],hps[36:40]))
     return k + hps[40] * wendland_cpu(x1,x2, hps[41])
 
-def cory(x1, x2, hps, obj):
+def cory(x1, x2, hps):
     d = get_anisotropic_distance_matrix(x1[:, 0:-1], x2[:, 0:-1], hps[1:7])
-    k1 = hps[0] * obj.matern_kernel_diff1(d, 1.)
+    k1 = hps[0] * matern_kernel_diff1(d, 1.)
     l1 = x1[:, -1]
     l2 = x2[:, -1]
     c = hps[7]
@@ -156,7 +156,7 @@ def cory(x1, x2, hps, obj):
 ############################################################
 ############################################################
 #deep kernel
-def deep_multi_task_kernel(x1, x2, hps, obj):  # pragma: no cover
+def deep_multi_task_kernel(x1, x2, hps):  # pragma: no cover
     signal_var = hps[0]
     length_scale = hps[1]
     hps_nn = hps[2:]

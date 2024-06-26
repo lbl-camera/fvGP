@@ -308,7 +308,7 @@ def polynomial_kernel(x1, x2, p):
     return p
 
 
-def wendland_anisotropic(x1, x2, hyperparameters, obj):
+def wendland_anisotropic(x1, x2, hyperparameters):
     """
     Function for the Wendland kernel.
     The Wendland kernel is compactly supported, leading to sparse covariance matrices.
@@ -457,7 +457,7 @@ def _dgdl(x, x0, w, l):
     return np.sum(w * e * (d ** 2 / l ** 2), axis=1)
 
 
-def wendland_anisotropic_gp2Scale_cpu(x1, x2, hps, obj):
+def wendland_anisotropic_gp2Scale_cpu(x1, x2, hps):
     distance_matrix = np.zeros((len(x1), len(x2)))
     for i in range(len(x1[0])): distance_matrix += (np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
     d = np.sqrt(distance_matrix)
@@ -474,7 +474,7 @@ def _get_distance_matrix_gpu(x1, x2, device, hps):  # pragma: no cover
     return torch.sqrt(d)
 
 
-def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps, obj):  # pragma: no cover
+def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps):  # pragma: no cover
     import torch
     cuda_device = torch.device("cuda:0")
     x1_dev = torch.from_numpy(x1).to(cuda_device, dtype=torch.float32)

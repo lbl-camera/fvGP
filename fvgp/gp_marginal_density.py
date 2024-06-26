@@ -224,8 +224,8 @@ class GPMarginalDensity:
         KV = K + V
         if self.prior_obj.ram_economy is False:
             try:
-                dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, hyperparameters, self) + \
-                        self.likelihood_obj.noise_function_grad(self.data_obj.x_data, hyperparameters, self)
+                dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, hyperparameters) + \
+                        self.likelihood_obj.noise_function_grad(self.data_obj.x_data, hyperparameters)
             except Exception as e:
                 raise Exception(
                     "The gradient evaluation dK/dh + dNoise/dh was not successful. "
@@ -237,7 +237,7 @@ class GPMarginalDensity:
         bbT = np.outer(b, b.T)
         dL_dH = np.zeros((len(hyperparameters)))
         dL_dHm = np.zeros((len(hyperparameters)))
-        dm_dh = self.prior_obj.dm_dh(self.data_obj.x_data, hyperparameters, self)
+        dm_dh = self.prior_obj.dm_dh(self.data_obj.x_data, hyperparameters)
 
         for i in range(len(hyperparameters)):
             dL_dHm[i] = -dm_dh[i].T @ b
@@ -246,8 +246,8 @@ class GPMarginalDensity:
             else:
                 try:
                     dK_dH = \
-                        self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters, self) + \
-                        self.likelihood_obj.noise_function_grad(self.data_obj.x_data, i, hyperparameters, self)
+                        self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters) + \
+                        self.likelihood_obj.noise_function_grad(self.data_obj.x_data, i, hyperparameters)
                 except:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "
