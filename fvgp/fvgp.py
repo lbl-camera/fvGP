@@ -7,13 +7,11 @@ class fvGP(GP):
     """
     This class provides all the tools for a multi-task Gaussian Process (GP).
     This class allows for full HPC support for training. After initialization, this
-    class provides all the methods described for the GP class.
+    class provides all the methods described for the GP (:py:class:`fvgp.GP`) class.
 
     V ... number of input points
 
     Di... input space dimensionality
-
-    Do... output space dimensionality
 
     No... number of outputs
 
@@ -22,117 +20,135 @@ class fvGP(GP):
 
     The main logic of fvGP is that any multi-task GP is just a single-task GP
     over a Cartesian product space of input and output space, as long as the kernel
-    is flexible enough, so prepare to work on your kernel. This is the best
+    is flexible enough and non-stationary, so prepare to work on your kernel. This is the best
     way to give the user optimal control and power. In the
-    prior-mean function, noise function, and kernel function definition, you will
+    prior-mean function, noise function, and kernel function definitions, you will
     see that the input `x` is defined over this combined space.
     For example, if your input space is a Euclidean 2d space and your output
     is labelled [0,1], the input to the mean, kernel, and noise function might be
 
     x =
 
-    [[0.2, 0.3,0],[0.9,0.6,0],
+    [[0.2, 0.3,0],
 
-    [0.2, 0.3,1],[0.9,0.6,1]]
+     [0.9,0.6,0],
+
+     [0.2, 0.3,1],
+
+     [0.9,0.6,1]]
 
     This has to be understood and taken into account when customizing fvGP for multi-task
-    use. The examples will provide deeper insight.
+    use. The examples will provide deeper insights.
 
     Parameters
     ----------
-    x_data : np.ndarray
-        The input point positions. Shape (V x D), where D is the `input_space_dim`.
+    x_data : np.ndarray or list
+        The input point positions. Shape (V x Di), where Di is the :py:attr:`fvgp.fvGP.input_space_dim`.
+        For multi-task GPs, the index set dimension = input space dimension + 1.
+        If dealing with non-Euclidean inputs
+        x_data should be a list, not a numpy array.
     y_data : np.ndarray
         The values of the data points. Shape (V,No).
     init_hyperparameters : np.ndarray, optional
-        Vector of hyperparameters used by the GP initially.
-        This class provides methods to train hyperparameters.
-        The default is an array that specifies the right number of
-        initial hyperparameters for the default kernel, which is
-        a deep kernel with two layers of width
-        fvgp.fvGP.gp_deep_kernel_layer_width. If you specify
-        another kernel, please provide
-        init_hyperparameters.
+        Vector of hyperparameters used to initiate the GP.
+        The default is an array of ones with the right length for the anisotropic Matern
+        kernel with automatic relevance determination (ARD). The task direction is
+        simply considered a separate dimension. If sparse_node or gp2Scale is
+        enabled, the default kernel changes to the anisotropic Wendland kernel.
     output_positions : np.ndarray, optional
-        A 2-D numpy array of shape (U x output_number), so that for each measurement position, the outputs
+        A 2d numpy array of shape (V x output_number), so that for each measurement position, the outputs
         are clearly defined by their positions in the output space. The default is
         np.array([[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...]).
     noise_variances : np.ndarray, optional
-        An numpy array defining the uncertainties/noise in the data
-        `y_data` in form of a point-wise variance. Shape y_data.shape.
+        An numpy array defining the uncertainties/noise in the
+        `y_data` in form of a point-wise variance. Shape (V, No).
         Note: if no noise_variances are provided here, the gp_noise_function
         callable will be used; if the callable is not provided, the noise variances
-        will be set to `abs(np.mean(y_data) / 100.0`. If
-        noise covariances are required, also make use of the gp_noise_function.
+        will be set to `abs(np.mean(y_data)) / 100.0`. If
+        noise covariances are required (correlated noise), make use of the gp_noise_function.
+        Only provide a noise function OR `noise_variances`, not both.
     compute_device : str, optional
-        One of "cpu" or "gpu", determines how linear system solves are run. The default is "cpu".
+        One of `cpu` or `gpu`, determines how linear system solves are executed. The default is `cpu`.
         For "gpu", pytorch has to be installed manually.
         If gp2Scale is enabled but no kernel is provided, the choice of the compute_device
-        becomes much more important. In that case, the default kernel will be computed on
+        becomes much more important. In that case, the default Wendland kernel will be computed on
         the cpu or the gpu which will significantly change the compute time depending on the compute
         architecture.
     gp_kernel_function : Callable, optional
-        A symmetric positive semi-definite covariance function (a kernel)
+        A symmetric positive definite covariance function (a kernel)
         that calculates the covariance between
         data points. It is a function of the form k(x1,x2,hyperparameters, obj).
-        The input x1 is a N1 x Di+Do array of positions, x2 is a N2 x Di+Do
+        The input `x1` a N1 x Di+1 array of positions, `x2` is a N2 x Di+1
         array of positions, the hyperparameters argument
+        is a 1d array of length D+1 for the default kernel and of a different
+        length for user-defined kernels.
+        `obj` is an `fvgp.GP` instance.
         is a 1d array of length N depending on how many hyperparameters are initialized, and
-        obj is an `fvgp.GP` instance. The default is a deep kernel with 2 hidden layers and
-        a width of fvgp.fvGP.gp_deep_kernel_layer_width.
+        obj is an `fvgp.GP` instance. The default is a stationary anisotropic kernel
+        (`fvgp.GP.default_kernel`) which performs automatic relevance determination (ARD). The task
+        direction is simply considered an additional dimension. This kernel should only be used for tests and in the
+        simplest of cases.
+        The output is a matrix, an N1 x N2 numpy array.
     gp_kernel_function_grad : Callable, optional
         A function that calculates the derivative of the `gp_kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
-        It accepts as input x1 (a N1 x Di+Do array of positions),
-        x2 (a N2 x Di+Do array of positions),
-        hyperparameters, and a
+        It accepts as input `x1` (a N1 x Di + 1 array of positions),
+        `x2` (a N2 x Di + 1 array of positions),
+        `hyperparameters` (a 1d array of length Di+2 for the default kernel), and a
         `fvgp.GP` instance. The default is a finite difference calculation.
-        If 'ram_economy' is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and a
+        If `ram_economy` is True, the function's input is x1, x2,
+        direction (int), hyperparameters (numpy array), and a
         `fvgp.GP` instance, and the output
         is a numpy array of shape (len(hps) x N).
-        If 'ram economy' is False,the function's input is x1, x2, hyperparameters, and a
+        If `ram_economy` is `False`, the function's input is x1, x2, hyperparameters, and a
         `fvgp.GP` instance. The output is
-        a numpy array of shape (len(hyperparameters) x N1 x N2). See 'ram_economy'.
+        a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
     gp_mean_function : Callable, optional
         A function that evaluates the prior mean at a set of input position. It accepts as input
-        an array of positions (of shape N1 x Di+Do), hyperparameters
+        an array of positions (of shape N1 x Di+1), hyperparameters (a 1d array of length Di+2 for the default kernel)
         and a `fvgp.GP` instance. The return value is a 1d array of length N1. If None is provided,
-        `fvgp.GP._default_mean_function` is used.
+        `fvgp.GP._default_mean_function` is used, which is the average of the `y_data`.
     gp_mean_function_grad : Callable, optional
-        A function that evaluates the gradient of the ``gp_mean_function'' at a set of input positions with respect to
-        the hyperparameters. It accepts as input an array of positions (of size N1 x Di+Do), hyperparameters
-        and a `fvgp.GP` instance. The return value is a 2d array of shape (len(hyperparameters) x N1). If None is
-        provided, either zeros are returned since the default mean function does not depend on hyperparameters, or a
-        finite-difference approximation is used if ``gp_mean_function'' is provided.
-    gp_noise_function : Callable optional
+        A function that evaluates the gradient of the `gp_mean_function` at
+        a set of input positions with respect to the hyperparameters.
+        It accepts as input an array of positions (of size N1 x Di+1), hyperparameters
+        (a 1d array of length Di+2 for the default kernel)
+        and a `fvgp.GP` instance. The return value is a 2d array of
+        shape (len(hyperparameters) x N1). If None is provided, either
+        zeros are returned since the default mean function does not depend on hyperparameters,
+        or a finite-difference approximation
+        is used if `gp_mean_function` is provided.
+    gp_noise_function : Callable, optional
         The noise function is a callable f(x,hyperparameters,obj) that returns a
         positive symmetric definite matrix of shape(len(x),len(x)).
-        The input x is a numpy array of shape (N x Di+Do). The hyperparameter array is the same
-        that is communicated to mean and kernel functions. The obj is a fvgp.fvGP instance.
+        The input `x` is a numpy array of shape (N x Di+1). The hyperparameter array is the same
+        that is communicated to mean and kernel functions. The obj is a `fvgp.GP` instance.
+        Only provide a noise function OR a noise variance vector, not both.
     gp_noise_function_grad : Callable, optional
-        A function that evaluates the gradient of the ``gp_noise_function'' at an input position with respect
-        to the hyperparameters. It accepts as input an array of positions (of size N x Di+Do),
+        A function that evaluates the gradient of the `gp_noise_function`
+        at an input position with respect to the hyperparameters.
+        It accepts as input an array of positions (of size N x Di+1),
         hyperparameters (a 1d array of length D+1 for the default kernel)
-        and a `fvgp.GP` instance. The return value is a 3-D array of shape
-        (len(hyperparameters) x N x N). If None is provided, either
-        zeros are returned since the default noise function does not depend on hyperparameters.
-        If ``gp_noise_function'' is provided but no gradient function,
+        and a `fvgp.GP` instance. The return value is a 3-D array of
+        shape (len(hyperparameters) x N x N). If None is provided, either
+        zeros are returned since the default noise function does not depend on
+        hyperparameters, or, if `gp_noise_function` is provided but no gradient function,
         a finite-difference approximation will be used.
-        The same rules regarding ram economy as for the kernel definition apply here.
+        The same rules regarding `ram_economy` as for the kernel definition apply here.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
         This is an advanced feature for HPC GPs up to 10
-        million datapoints. If gp2Scale is used, the default kernel is an anisotropic Wendland
-        kernel which is compactly supported. The noise function will have
-        to return a scipy.sparse matrix instead of a numpy array. There are a few more things
-        to consider (read on); this is an advanced option.
-        If no kernel is provided, the compute_device option should be revisited. The kernel will
-        use the specified device to compute covariances.
+        million data points. If gp2Scale is used, the default kernel is an anisotropic
+        Wendland kernel which is compactly supported. The noise function will have
+        to return a `scipy.sparse` matrix instead of a numpy array. There are a few more
+        things to consider (read on); this is an advanced option.
+        If no kernel is provided, the `compute_device` option should be revisited.
+        The kernel will use the specified device to compute covariances.
         The default is False.
     gp2Scale_dask_client : dask.distributed.Client, optional
-        A dask client for gp2Scale to distribute covariance computations over. Has to contain at least 3 workers.
-        On HPC architecture, this client is provided by the jobscript. Please have a look at the examples.
-        A local client is used as default.
+        A dask client for gp2Scale.
+        On HPC architecture, this client is provided by the job script. Please have a look at the examples.
+        A local client is used as the default.
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     calc_inv : bool, optional
@@ -141,27 +157,26 @@ class fvGP(GP):
         which makes computing the posterior covariance faster (5-10 times).
         For larger problems (>2000 data points), the use of inversion should be avoided due
         to computational instability and costs. The default is
-        False. Note, the training will always use Cholesky or LU decomposition instead of the
+        False. Note, the training will not the
         inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
     ram_economy : bool, optional
-        Only of interest if the gradient and/or Hessian of the marginal log_likelihood
-        is/are used for the training.
-        If True, components of the derivative of the marginal log-likelihood are calculated
-        subsequently, leading to a slow-down
-        but much less RAM usage. If the derivative of the kernel (or noise function) with
+        Only of interest if the gradient and/or Hessian of the log marginal likelihood is/are used for the training.
+        If True, components of the derivative of the log marginal likelihood are
+        calculated sequentially, leading to a slow-down
+        but much less RAM usage. If the derivative of the kernel (and noise function) with
         respect to the hyperparameters (gp_kernel_function_grad) is
-        going to be provided, it has to be tailored: for ram_economy=True it should be of
-        the form f(x1[, x2], direction, hyperparameters, obj)
+        going to be provided, it has to be tailored: for `ram_economy=True` it should be
+        of the form f(x1[, x2], direction, hyperparameters, obj)
         and return a 2d numpy array of shape len(x1) x len(x2).
-        If ram_economy=False, the function should be of the form f(x1[, x2,] hyperparameters, obj)
+        If `ram_economy=False`, the function should be of the form f(x1[, x2,] hyperparameters, obj)
         and return a numpy array of shape
-        H x len(x1) x len(x2), where H is the number of hyperparameters. CAUTION:
-        This array will be stored and is very large.
+        H x len(x1) x len(x2), where H is the number of hyperparameters.
+        CAUTION: This array will be stored and is very large.
     args : any, optional
         args will be a class attribute and therefore available to kernel, noise and prior mean functions.
     info : bool, optional
-        Provides a way how to see the progress of gp2Scale, Default is False
+        Provides a way how to access various information reports. The default is False
 
     Attributes
     ----------
@@ -169,10 +184,6 @@ class fvGP(GP):
         Datapoint positions
     y_data : np.ndarray
         Datapoint values
-    fvgp_x_data : np.ndarray
-        Datapoint positions as seen by fvgp
-    fvgp_y_data : np.ndarray
-        Datapoint values as seen by fvgp
     noise_variances : np.ndarray
         Datapoint observation (co)variances.
     prior.hyperparameters : np.ndarray
@@ -345,12 +356,15 @@ class fvGP(GP):
         Parameters
         ----------
         x_new : np.ndarray
-            The point positions. Shape (V x D), where D is the `input_space_dim`.
+            The input point positions. Shape (V x Di), where Di is the :py:attr:`fvgp.fvGP.input_space_dim`.
+            For multi-task GPs, the index set dimension = input space dimension + 1.
+            If dealing with non-Euclidean inputs
+            x_new should be a list, not a numpy array.
         y_new : np.ndarray
-            The values of the data points. Shape (V,1) or (V).
+            The values of the data points. Shape (V,No).
         noise_variances_new : np.ndarray, optional
             An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance.
-            Shape (len(y_data), 1) or (len(y_data)).
+            Shape (len(y_new)).
             Note: if no variances are provided here, the noise_covariance
             callable will be used; if the callable is not provided the noise variances
             will be set to `abs(np.mean(y_data)) / 100.0`. If you provided a noise function,
@@ -359,12 +373,10 @@ class fvGP(GP):
             Indication whether to append to or overwrite the existing dataset. Default = True.
             In the default case, data will be appended.
         output_positions_new : np.ndarray, optional
-            A 3-D numpy array of shape (U x output_number x output_dim), so that
-            for each measurement position, the outputs
-            are clearly defined by their positions in the output space.
-            The default is np.array([[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...]).
+            A 2d numpy array of shape (V x output_number), so that for each measurement position, the outputs
+            are clearly defined by their positions in the output space. The default is
+            np.array([[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...]).
         """
-
         ##########################################
         #######prepare value positions############
         ##########################################
