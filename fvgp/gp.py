@@ -67,21 +67,21 @@ class GP:
     gp_kernel_function : Callable, optional
         A symmetric positive definite covariance function (a kernel)
         that calculates the covariance between
-        data points. It is a function of the form k(x1,x2,hyperparameters, obj).
+        data points. It is a function of the form k(x1,x2,hyperparameters).
         The input `x1` is a N1 x D array of positions, `x2` is a N2 x D
         array of positions, the hyperparameters argument
         is a 1d array of length D+1 for the default kernel and of a different
         length for user-defined kernels.
-        `obj` is an `fvgp.GP` instance. The default is a stationary anisotropic kernel
+        The default is a stationary anisotropic kernel
         (`fvgp.GP.default_kernel`) which performs automatic relevance determination (ARD).
         The output is a matrix, an N1 x N2 numpy array.
     gp_kernel_function_grad : Callable, optional
         A function that calculates the derivative of the `gp_kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
         It accepts as input `x1` (a N1 x D array of positions),
-        `x2` (a N2 x D array of positions),
-        `hyperparameters` (a 1d array of length D+1 for the default kernel), and a
-        `fvgp.GP` instance. The default is a finite difference calculation.
+        `x2` (a N2 x D array of positions) and
+        `hyperparameters` (a 1d array of length D+1 for the default kernel).
+        The default is a finite difference calculation.
         If `ram_economy` is True, the function's input is x1, x2, direction (int), hyperparameters (numpy array), and a
         `fvgp.GP` instance, and the output
         is a numpy array of shape (len(hps) x N).
@@ -90,31 +90,31 @@ class GP:
         a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
     gp_mean_function : Callable, optional
         A function that evaluates the prior mean at a set of input position. It accepts as input
-        an array of positions (of shape N1 x D), hyperparameters (a 1d array of length D+1 for the default kernel)
-        and a `fvgp.GP` instance. The return value is a 1d array of length N1. If None is provided,
+        an array of positions (of shape N1 x D) and hyperparameters (a 1d array of length D+1 for the default kernel).
+        The return value is a 1d array of length N1. If None is provided,
         `fvgp.GP._default_mean_function` is used, which is the average of the `y_data`.
     gp_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the `gp_mean_function` at
         a set of input positions with respect to the hyperparameters.
-        It accepts as input an array of positions (of size N1 x D), hyperparameters
-        (a 1d array of length D+1 for the default kernel)
-        and a `fvgp.GP` instance. The return value is a 2d array of
+        It accepts as input an array of positions (of size N1 x D) and hyperparameters
+        (a 1d array of length D+1 for the default kernel).
+        The return value is a 2d array of
         shape (len(hyperparameters) x N1). If None is provided, either
         zeros are returned since the default mean function does not depend on hyperparameters,
         or a finite-difference approximation
         is used if `gp_mean_function` is provided.
     gp_noise_function : Callable, optional
-        The noise function is a callable f(x,hyperparameters,obj) that returns a
+        The noise function is a callable f(x,hyperparameters) that returns a
         positive symmetric definite matrix of shape(len(x),len(x)).
         The input `x` is a numpy array of shape (N x D). The hyperparameter array is the same
-        that is communicated to mean and kernel functions. The obj is a `fvgp.GP` instance.
+        that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
     gp_noise_function_grad : Callable, optional
         A function that evaluates the gradient of the `gp_noise_function`
         at an input position with respect to the hyperparameters.
-        It accepts as input an array of positions (of size N x D),
-        hyperparameters (a 1d array of length D+1 for the default kernel)
-        and a `fvgp.GP` instance. The return value is a 3-D array of
+        It accepts as input an array of positions (of size N x D) and
+        hyperparameters (a 1d array of length D+1 for the default kernel).
+        The return value is a 3-D array of
         shape (len(hyperparameters) x N x N). If None is provided, either
         zeros are returned since the default noise function does not depend on
         hyperparameters, or, if `gp_noise_function` is provided but no gradient function,
@@ -152,9 +152,9 @@ class GP:
         but much less RAM usage. If the derivative of the kernel (and noise function) with
         respect to the hyperparameters (gp_kernel_function_grad) is
         going to be provided, it has to be tailored: for `ram_economy=True` it should be
-        of the form f(x1[, x2], direction, hyperparameters, obj)
+        of the form f(x1[, x2], direction, hyperparameters)
         and return a 2d numpy array of shape len(x1) x len(x2).
-        If `ram_economy=False`, the function should be of the form f(x1[, x2,] hyperparameters, obj)
+        If `ram_economy=False`, the function should be of the form f(x1[, x2,] hyperparameters)
         and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
@@ -178,8 +178,7 @@ class GP:
     prior.m : np.ndarray
         Current prior mean vector.
     marginal_density.KVinv : np.ndarray
-        If enabled, the inverse of the prior covariance + nose matrix V
-        inv(K+V)
+        inverse(K+V)
     marginal_density.KVlogdet : float
         logdet(K+V)
     likelihood.V : np.ndarray
@@ -333,7 +332,7 @@ class GP:
 
         Parameters
         ----------
-        x_new : np.ndarray
+        x_new : np.ndarray or list
             The point positions. Shape (V x D), where D is the :py:attr:`fvgp.GP.index_set_dim`.
         y_new : np.ndarray
             The values of the data points. Shape (V).
@@ -581,8 +580,7 @@ class GP:
 
         Return
         ------
-        Optimization object that can be given to `fvgp.GP.update_hyperparameters()`
-        to update the prior GP : object instance
+        Optimization object that can be given to `fvgp.GP.update_hyperparameters()` to update the GP : object instance
         """
         if self.gp2Scale: raise Exception("gp2Scale does not allow asynchronous training!")
         if hyperparameter_bounds is None:
@@ -617,48 +615,41 @@ class GP:
     ##################################################################################
     def stop_training(self, opt_obj):
         """
-        This function stops the training if `hgdl` is used. It leaves the dask client alive.
-
+        Function to stop an asynchronous `hgdl` training.
+        This leaves the :py:class:`distributed.client.Client` alive.
 
         Parameters
         ----------
-        opt_obj : hgdl object instance
-            `hgdl` object instance returned by `fvgp.GP.train_async()`
+        opt_obj : object instance
+            Object created by :py:meth:`train_async()`.
         """
         self.trainer.stop_training(opt_obj)
 
     ###################################################################################
     def kill_training(self, opt_obj):
         """
-        This function stops the training if `hgdl` is used, and kills the dask client.
-
+        Function to kill an asynchronous training. This shuts down the associated :py:class:`distributed.client.Client`.
 
         Parameters
         ----------
-        opt_obj : hgdl object instance
-            `hgdl` object instance returned by `fvgp.GP.train_async()`
+        opt_obj : object instance
+            Object created by :py:meth:`train_async()`.
         """
         self.trainer.kill_training(opt_obj)
 
     ##################################################################################
     def update_hyperparameters(self, opt_obj):
         """
-        This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
-        This can be done on a remote cluster/computer by
-        providing a dask client. This function just submits the training and returns
-        an object which can be given to `fvgp.GP.update_hyperparameters()`, which will automatically
-        update the GP prior with the new hyperparameters.
-
+        Function to update the Gaussian Process hyperparameters if an asynchronous training is running.
 
         Parameters
         ----------
-        opt_obj : hgdl object instance
-            `hgdl` object instance returned by `fvgp.GP.train_async()`
-
+        opt_obj : object instance
+            Object created by :py:meth:`train_async()`.
 
         Return
         ------
-        The current hyperparameters : np.ndarray
+        hyperparameters : np.ndarray
         """
 
         res = self.trainer.update_hyperparameters(opt_obj)

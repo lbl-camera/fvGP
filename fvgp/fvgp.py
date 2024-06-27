@@ -18,26 +18,22 @@ class fvGP(GP):
     N ... arbitrary integers (N1, N2,...)
 
 
-    The main logic of fvGP is that any multi-task GP is just a single-task GP
+    The main logic of :doc:`fvgp <fvgp:index>` is that any multi-task GP is just a single-task GP
     over a Cartesian product space of input and output space, as long as the kernel
-    is flexible enough and non-stationary, so prepare to work on your kernel. This is the best
-    way to give the user optimal control and power. In the
+    is flexible enough, so prepare to work on your kernel. This is the best
+    way to give the user optimal control and power. At various instances, for instances
     prior-mean function, noise function, and kernel function definitions, you will
     see that the input `x` is defined over this combined space.
     For example, if your input space is a Euclidean 2d space and your output
-    is labelled [0,1], the input to the mean, kernel, and noise function might be
+    is labelled [[0],[1]], the input to the mean, kernel, and noise function might be
 
     x =
 
-    [[0.2, 0.3,0],
+    [[0.2, 0.3,0],[0.9,0.6,0],
 
-     [0.9,0.6,0],
+    [0.2, 0.3,1],[0.9,0.6,1]]
 
-     [0.2, 0.3,1],
-
-     [0.9,0.6,1]]
-
-    This has to be understood and taken into account when customizing fvGP for multi-task
+    This has to be understood and taken into account when customizing :doc:`fvgp <fvgp:index>` for multi-task
     use. The examples will provide deeper insights.
 
     Parameters
@@ -77,14 +73,11 @@ class fvGP(GP):
     gp_kernel_function : Callable, optional
         A symmetric positive definite covariance function (a kernel)
         that calculates the covariance between
-        data points. It is a function of the form k(x1,x2,hyperparameters, obj).
+        data points. It is a function of the form k(x1,x2,hyperparameters).
         The input `x1` a N1 x Di+1 array of positions, `x2` is a N2 x Di+1
         array of positions, the hyperparameters argument
-        is a 1d array of length D+1 for the default kernel and of a different
-        length for user-defined kernels.
-        `obj` is an `fvgp.GP` instance.
-        is a 1d array of length N depending on how many hyperparameters are initialized, and
-        obj is an `fvgp.GP` instance. The default is a stationary anisotropic kernel
+        is a 1d array of length N depending on how many hyperparameters are initialized.
+        The default is a stationary anisotropic kernel
         (`fvgp.GP.default_kernel`) which performs automatic relevance determination (ARD). The task
         direction is simply considered an additional dimension. This kernel should only be used for tests and in the
         simplest of cases.
@@ -93,9 +86,9 @@ class fvGP(GP):
         A function that calculates the derivative of the `gp_kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
         It accepts as input `x1` (a N1 x Di + 1 array of positions),
-        `x2` (a N2 x Di + 1 array of positions),
-        `hyperparameters` (a 1d array of length Di+2 for the default kernel), and a
-        `fvgp.GP` instance. The default is a finite difference calculation.
+        `x2` (a N2 x Di + 1 array of positions) and
+        `hyperparameters` (a 1d array of length Di+2 for the default kernel).
+        The default is a finite difference calculation.
         If `ram_economy` is True, the function's input is x1, x2,
         direction (int), hyperparameters (numpy array), and a
         `fvgp.GP` instance, and the output
@@ -105,31 +98,32 @@ class fvGP(GP):
         a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
     gp_mean_function : Callable, optional
         A function that evaluates the prior mean at a set of input position. It accepts as input
-        an array of positions (of shape N1 x Di+1), hyperparameters (a 1d array of length Di+2 for the default kernel)
-        and a `fvgp.GP` instance. The return value is a 1d array of length N1. If None is provided,
+        an array of positions (of shape N1 x Di+1) and
+         hyperparameters (a 1d array of length Di+2 for the default kernel).
+        The return value is a 1d array of length N1. If None is provided,
         `fvgp.GP._default_mean_function` is used, which is the average of the `y_data`.
     gp_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the `gp_mean_function` at
         a set of input positions with respect to the hyperparameters.
-        It accepts as input an array of positions (of size N1 x Di+1), hyperparameters
-        (a 1d array of length Di+2 for the default kernel)
-        and a `fvgp.GP` instance. The return value is a 2d array of
+        It accepts as input an array of positions (of size N1 x Di+1) and hyperparameters
+        (a 1d array of length Di+2 for the default kernel).
+        The return value is a 2d array of
         shape (len(hyperparameters) x N1). If None is provided, either
         zeros are returned since the default mean function does not depend on hyperparameters,
         or a finite-difference approximation
         is used if `gp_mean_function` is provided.
     gp_noise_function : Callable, optional
-        The noise function is a callable f(x,hyperparameters,obj) that returns a
+        The noise function is a callable f(x,hyperparameters) that returns a
         positive symmetric definite matrix of shape(len(x),len(x)).
         The input `x` is a numpy array of shape (N x Di+1). The hyperparameter array is the same
-        that is communicated to mean and kernel functions. The obj is a `fvgp.GP` instance.
+        that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
     gp_noise_function_grad : Callable, optional
         A function that evaluates the gradient of the `gp_noise_function`
         at an input position with respect to the hyperparameters.
-        It accepts as input an array of positions (of size N x Di+1),
-        hyperparameters (a 1d array of length D+1 for the default kernel)
-        and a `fvgp.GP` instance. The return value is a 3-D array of
+        It accepts as input an array of positions (of size N x Di+1) and
+        hyperparameters (a 1d array of length D+1 for the default kernel).
+        The return value is a 3-D array of
         shape (len(hyperparameters) x N x N). If None is provided, either
         zeros are returned since the default noise function does not depend on
         hyperparameters, or, if `gp_noise_function` is provided but no gradient function,
@@ -167,16 +161,16 @@ class fvGP(GP):
         but much less RAM usage. If the derivative of the kernel (and noise function) with
         respect to the hyperparameters (gp_kernel_function_grad) is
         going to be provided, it has to be tailored: for `ram_economy=True` it should be
-        of the form f(x1[, x2], direction, hyperparameters, obj)
+        of the form f(x1[, x2], direction, hyperparameters)
         and return a 2d numpy array of shape len(x1) x len(x2).
-        If `ram_economy=False`, the function should be of the form f(x1[, x2,] hyperparameters, obj)
+        If `ram_economy=False`, the function should be of the form f(x1[, x2,] hyperparameters)
         and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
     args : any, optional
         args will be a class attribute and therefore available to kernel, noise and prior mean functions.
     info : bool, optional
-        Provides a way how to access various information reports. The default is False
+        Provides a way how to access various information reports. The default is False.
 
     Attributes
     ----------
