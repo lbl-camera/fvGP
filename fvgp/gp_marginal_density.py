@@ -56,7 +56,7 @@ class GPMarginalDensity:
         y_mean = self.y_data - m
         KV = K + V
         self.KVlinalg.update_KV(KV)
-        KVinvY = self.KVlinalg.solve(y_mean)
+        KVinvY = self.KVlinalg.solve(y_mean, x0 = self.KVinvY)
         return KVinvY.reshape(len(y_mean))
 
     def _set_KVinvY(self, K, V, m, mode):
@@ -357,16 +357,18 @@ class KVlinalg:
         else:
             raise Exception("No Mode")
 
-    def solve(self, b, mode=None):
+    def solve(self, b, mode=None, x0=None):
         if mode is None: mode = self.mode
         if mode == "Chol":
             return calculate_Chol_solve(self.Chol_factor, b)
         elif mode == "Inv":
             return self.KVinv @ b
         elif mode == "sparseCG":
-            return calculate_sparse_conj_grad(self.KV, b, self.info)
+            if x0 is None: return calculate_sparse_conj_grad(self.KV, b, self.info)
+            else: return update_sparse_conj_grad(self.KV, b, x0, self.info)
         elif mode == "sparseMINRES":
-            return calculate_sparse_minres(self.KV, b, self.info)
+            if x0 is None: return calculate_sparse_minres(self.KV, b, self.info)
+            else: return update_sparse_minres(self.KV, b, x0, self.info)
         elif mode == "sparseLU":
             return calculate_LU_solve(self.LU_factor, b)
         else:
