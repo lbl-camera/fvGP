@@ -14,7 +14,7 @@ class GPMarginalDensity:
                  calc_inv=False,
                  info=False,
                  gp2Scale=False,
-                 gp2Scale_mode=None,
+                 gp2Scale_linalg_mode=None,
                  compute_device='cpu'):
 
         self.data_obj = data_obj
@@ -25,7 +25,7 @@ class GPMarginalDensity:
         self.y_data = data_obj.y_data
         self.gp2Scale = gp2Scale
         self.compute_device = compute_device
-        self.gp2Scale_mode = gp2Scale_mode
+        self.gp2Scale_linalg_mode = gp2Scale_linalg_mode
         if self.gp2Scale:
             self.calc_inv = False
             warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False")
@@ -136,7 +136,7 @@ class GPMarginalDensity:
         return K, V, m
     ##################################################################################
     def _set_gp2Scale_mode(self, KV):
-        if self.gp2Scale_mode is not None: return self.gp2Scale_mode
+        if self.gp2Scale_linalg_mode is not None: return self.gp2Scale_linalg_mode
         Ksparsity = float(KV.nnz) / float(len(self.data_obj.x_data) ** 2)
         if len(self.data_obj.x_data) < 50001 and Ksparsity < 0.0001:
             mode = "sparseLU"
