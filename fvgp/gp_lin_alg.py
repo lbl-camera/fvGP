@@ -86,9 +86,9 @@ def calculate_random_logdet(KV, info, compute_device):
         gpu = False
 
     logdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
-                                    lanczos_degree=20, error_rtol=0.01, gpu=gpu,
-                                    return_info=True, plot=False, verbose=False)
-    if info: logger.info("Random logdet() done after {} seconds", time.time() - st)
+                                    lanczos_degree=10, error_rtol=0.01, gpu=gpu,
+                                    return_info=True, plot=False, verbose=False, orthogonalize=0)
+    if info: logger.info("Random logdet() compute time {} seconds", time.time() - st)
     return logdet
 
 
