@@ -10,32 +10,32 @@ from scipy.linalg import cho_factor, cho_solve, solve_triangular
 
 
 def calculate_LU_factor(M):
-    logger.debug("calculate_LU_factor")
+    logger.info("calculate_LU_factor")
     LU = splu(M.tocsc())
     return LU
 
 
 def calculate_LU_solve(LU, vec):
-    logger.debug("calculate_LU_solve")
+    logger.info("calculate_LU_solve")
     return LU.solve(vec)
 
 
 def calculate_LU_logdet(LU):
-    logger.debug("calculate_LU_logdet")
+    logger.info("calculate_LU_logdet")
     upper_diag = abs(LU.U.diagonal())
     logdet = np.sum(np.log(upper_diag))
     return logdet
 
 
 def calculate_Chol_factor(M):
-    logger.debug("calculate_Chol_factor")
+    logger.info("calculate_Chol_factor")
     c, l = cho_factor(M, lower=True)
     c = np.tril(c)
     return c
 
 
 def update_Chol_factor(old_chol_factor, new_matrix):
-    logger.debug("update_Chol_factor")
+    logger.info("update_Chol_factor")
     size = len(old_chol_factor)
     KV = new_matrix
     kk = KV[size:, size:]
@@ -44,20 +44,20 @@ def update_Chol_factor(old_chol_factor, new_matrix):
 
 
 def calculate_Chol_solve(factor, vec):
-    logger.debug("calculate_Chol_solve")
+    logger.info("calculate_Chol_solve")
     res = cho_solve((factor, True), vec)
     return res
 
 
 def calculate_Chol_logdet(factor):
-    logger.debug("calculate_Chol_logdet")
+    logger.info("calculate_Chol_logdet")
     upper_diag = abs(factor.diagonal())
     logdet = 2.0 * np.sum(np.log(upper_diag))
     return logdet
 
 
 def spai(A, m):
-    logger.debug("spai")
+    logger.info("spai preconditioning")
     """Perform m step of the SPAI iteration."""
     n = A.shape[0]
 
@@ -77,7 +77,7 @@ def spai(A, m):
 
 
 def calculate_random_logdet(KV, info, compute_device):
-    logger.debug("calculate_random_logdet")
+    logger.info("calculate_random_logdet")
     from imate import logdet as imate_logdet
     st = time.time()
     if compute_device == "gpu":

@@ -145,6 +145,9 @@ class fvGP(GP):
         A local client is used as the default.
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
+    gp2Scale_mode : str, optional
+        One of `Chol`, `sparseLU`, `sparseCG`, or `sparseMINRES`. The default is None which amounts to
+        an automatic determination of the mode.
     calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
@@ -280,6 +283,7 @@ class fvGP(GP):
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
+        gp2Scale_mode=None,
         calc_inv=False,
         ram_economy=False,
         args=None,
@@ -327,6 +331,7 @@ class fvGP(GP):
             gp2Scale=gp2Scale,
             gp2Scale_dask_client=gp2Scale_dask_client,
             gp2Scale_batch_size=gp2Scale_batch_size,
+            gp2Scale_mode=gp2Scale_mode,
             calc_inv=calc_inv,
             ram_economy=ram_economy,
             args=args,

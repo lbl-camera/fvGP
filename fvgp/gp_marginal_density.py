@@ -14,6 +14,7 @@ class GPMarginalDensity:
                  calc_inv=False,
                  info=False,
                  gp2Scale=False,
+                 gp2Scale_mode=None,
                  compute_device='cpu'):
 
         self.data_obj = data_obj
@@ -24,6 +25,7 @@ class GPMarginalDensity:
         self.y_data = data_obj.y_data
         self.gp2Scale = gp2Scale
         self.compute_device = compute_device
+        self.gp2Scale_mode = gp2Scale_mode
         if self.gp2Scale:
             self.calc_inv = False
             warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False")
@@ -77,7 +79,7 @@ class GPMarginalDensity:
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
             if mode == "sparseLU":
-                LU_factor = self.calculate_LU_factor(KV)
+                LU_factor = calculate_LU_factor(KV)
                 KVinvY = calculate_LU_solve(LU_factor, y_mean)
             elif mode == "Chol":
                 if issparse(KV): KV = KV.toarray()
@@ -102,7 +104,7 @@ class GPMarginalDensity:
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
             if mode == "sparseLU":
-                LU_factor = self.calculate_LU_factor(KV)
+                LU_factor = calculate_LU_factor(KV)
                 KVlogdet = calculate_LU_logdet(LU_factor)
             elif mode == "Chol":
                 Chol_factor = calculate_Chol_factor(KV.toarray())
@@ -134,6 +136,7 @@ class GPMarginalDensity:
         return K, V, m
     ##################################################################################
     def _set_gp2Scale_mode(self, KV):
+        if self.gp2Scale_mode is not None: return self.gp2Scale_mode
         Ksparsity = float(KV.nnz) / float(len(self.data_obj.x_data) ** 2)
         if len(self.data_obj.x_data) < 50001 and Ksparsity < 0.0001:
             mode = "sparseLU"
@@ -331,7 +334,7 @@ class KVlinalg:
         elif self.mode == "sparseCG":
             self.KV = KV
         elif self.mode == "sparseLU":
-            self.LU_factor = self.calculate_LU_factor(KV)
+            self.LU_factor = calculate_LU_factor(KV)
         else:
             raise Exception("No Mode")
 

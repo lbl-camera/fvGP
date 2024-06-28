@@ -172,7 +172,7 @@ class GPprior:
         logger.debug("client id: {}", client.id)
 
         self.x_data_scatter_future = client.scatter(
-            x_data, workers=self.compute_workers, broadcast=False)
+            x_data, workers=self.compute_workers, broadcast=True)
         ranges = self.ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
@@ -207,9 +207,9 @@ class GPprior:
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
         self.x_new_scatter_future = client.scatter(
-            x_new, workers=self.compute_workers, broadcast=False)
+            x_new, workers=self.compute_workers, broadcast=True)
         self.x_old_scatter_future = client.scatter(
-            x_old, workers=self.compute_workers, broadcast=False)
+            x_old, workers=self.compute_workers, broadcast=True)
 
         point_number = len(x_old)
         num_batches = point_number // self.batch_size
@@ -364,7 +364,6 @@ def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
     covariance matrix being calculated.
     Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
     """
-    st = time.time()
 
     hps = hyperparameters
     range_i, range_j = range_ij
