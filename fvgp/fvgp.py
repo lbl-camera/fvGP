@@ -151,12 +151,10 @@ class fvGP(GP):
     calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
-        which makes computing the posterior covariance faster (5-10 times).
-        For larger problems (>2000 data points), the use of inversion should be avoided due
-        to computational instability and costs. The default is
-        False. Note, the training will not the
+        which makes computing the posterior covariance faster (3-10 times).
+        The default is False. Note, the training will not use the
         inverse for stability reasons. Storing the inverse is
-        a good option when the dataset is not too large and the posterior covariance is heavily used.
+        a good option when the posterior covariance is heavily used.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the log marginal likelihood is/are used for the training.
         If True, components of the derivative of the log marginal likelihood are

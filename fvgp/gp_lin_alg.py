@@ -93,7 +93,7 @@ def calculate_random_logdet(KV, info, compute_device):
 
 
 def calculate_sparse_conj_grad(KV, vec, info=False):
-    logger.debug("calculate_sparse_conj_grad")
+    logger.info("calculate_sparse_conj_grad")
     st = time.time()
     if info: logger.info("CG solve in progress ...")
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
@@ -108,13 +108,14 @@ def calculate_sparse_conj_grad(KV, vec, info=False):
     if info: logger.info("CG compute time: {} seconds, exit status {} (0:=successful)", time.time() - st, exit_code)
     return res
 
+
 def update_sparse_conj_grad(KV, vec, x0, info=False):
     assert np.ndim(vec) == 1
     assert np.ndim(KV) == 2
     assert np.ndim(x0) == 1
-    logger.debug("update_sparse_conj_grad")
+    logger.info("update_sparse_conj_grad")
     st = time.time()
-    if len(x0)<KV.shape[0]: x0=np.append(x0,np.zeros(KV.shape[0]-len(x0)))
+    if len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     if info: logger.info("CG solve in progress ...")
     vec = vec.reshape(len(vec), 1)
     res, exit_code = cg(KV.tocsc(), vec[:, 0], rtol=1e-8, x0=x0)
@@ -128,7 +129,7 @@ def update_sparse_conj_grad(KV, vec, x0, info=False):
 
 
 def calculate_sparse_minres(KV, vec, info=False):
-    logger.debug("calculate_sparse_minres")
+    logger.info("calculate_sparse_minres")
     st = time.time()
     if info: logger.info("MINRES solve in progress ...")
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
@@ -145,9 +146,9 @@ def update_sparse_minres(KV, vec, x0, info=False):
     assert np.ndim(vec) == 1
     assert np.ndim(KV) == 2
     assert np.ndim(x0) == 1
-    logger.debug("update_sparse_minres")
+    logger.info("update_sparse_minres")
     st = time.time()
-    if len(x0)<KV.shape[0]: x0=np.append(x0,np.zeros(KV.shape[0]-len(x0)))
+    if len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     if info: logger.info("MINRES solve in progress ...")
     vec = vec.reshape(len(vec), 1)
     res, exit_code = minres(KV.tocsc(), vec[:, 0], rtol=1e-8, x0=x0)
@@ -195,7 +196,7 @@ def cholesky_update_rank_n(L, b, c):
 
 
 def calculate_logdet(A, compute_device='cpu'):
-    logger.debug("calculate_logdet")
+    logger.info("calculate_logdet")
     if compute_device == "cpu":
         s, logdet = np.linalg.slogdet(A)
         return logdet
@@ -218,7 +219,7 @@ def calculate_logdet(A, compute_device='cpu'):
 
 
 def update_logdet(old_logdet, old_inv, new_matrix, compute_device="cpu"):
-    logger.debug("update_logdet")
+    logger.info("update_logdet")
     size = len(old_inv)
     KV = new_matrix
     kk = KV[size:, size:]
@@ -228,7 +229,7 @@ def update_logdet(old_logdet, old_inv, new_matrix, compute_device="cpu"):
 
 
 def calculate_inv(A, compute_device='cpu'):
-    logger.debug("calculate_inv")
+    logger.info("calculate_inv")
     if compute_device == "cpu":
         return np.linalg.inv(A)
     elif compute_device == "gpu":
@@ -241,7 +242,7 @@ def calculate_inv(A, compute_device='cpu'):
 
 
 def update_inv(old_inv, new_matrix, compute_device="cpu"):
-    logger.debug("update_inv")
+    logger.info("update_inv")
     size = len(old_inv)
     KV = new_matrix
     kk = KV[size:, size:]
@@ -254,7 +255,7 @@ def update_inv(old_inv, new_matrix, compute_device="cpu"):
 
 
 def solve(A, b, compute_device='cpu'):
-    logger.debug("solve")
+    logger.info("solve")
     if np.ndim(b) == 1: b = np.expand_dims(b, axis=1)
     if compute_device == "cpu":
         try:
@@ -307,7 +308,7 @@ def solve(A, b, compute_device='cpu'):
 
 ##################################################################################
 def is_sparse(A):
-    logger.debug("is_sparse")
+    logger.info("is_sparse")
     if float(np.count_nonzero(A)) / float(len(A) ** 2) < 0.01:
         return True
     else:
@@ -315,5 +316,5 @@ def is_sparse(A):
 
 
 def how_sparse_is(A):
-    logger.debug("how_sparse_is")
+    logger.info("how_sparse_is")
     return float(np.count_nonzero(A)) / float(len(A) ** 2)

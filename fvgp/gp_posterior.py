@@ -97,7 +97,8 @@ class GPposterior:
         if self.marginal_density_obj.KVlinalg.KVinv is not None:
             if variance_only:
                 S = None
-                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T, self.marginal_density_obj.KVlinalg.KVinv, k)
+                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T,
+                                            self.marginal_density_obj.KVlinalg.KVinv, k, optimize=True)
             else:
                 S = kk - (k.T @ self.marginal_density_obj.KVlinalg.KVinv @ k)
                 v = np.array(np.diag(S))

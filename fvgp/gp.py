@@ -142,12 +142,10 @@ class GP:
     calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
-        which makes computing the posterior covariance faster (5-10 times).
-        For larger problems (>2000 data points), the use of inversion should be avoided due
-        to computational instability and costs. The default is
-        False. Note, the training will not the
+        which makes computing the posterior covariance faster (3-10 times).
+        The default is False. Note, the training will not use the
         inverse for stability reasons. Storing the inverse is
-        a good option when the dataset is not too large and the posterior covariance is heavily used.
+        a good option when the posterior covariance is heavily used.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the log marginal likelihood is/are used for the training.
         If True, components of the derivative of the log marginal likelihood are
@@ -326,7 +324,8 @@ class GP:
         x_new,
         y_new,
         noise_variances_new=None,
-        append=True
+        append=True,
+        gp_rank_n_update=None
     ):
         """
         This function updates the data in the gp object instance.
@@ -351,8 +350,13 @@ class GP:
         append : bool, optional
             Indication whether to append to or overwrite the existing dataset. Default=True.
             In the default case, data will be appended.
+        gp_rank_n_update : bool, optional
+            Indicates whether the GP marginal should be rank-n updated or recomputed. The default
+            is `gp_rank_n_update=append`, meaning if data is only appended, the rang_n_update will
+            be performed.
         """
         old_x_data = self.data.x_data.copy()
+        if gp_rank_n_update is None: gp_rank_n_update = append
         # update data
         self.data.update(x_new, y_new, noise_variances_new, append=append)
 
@@ -365,7 +369,7 @@ class GP:
                                self.prior.hyperparameters)
 
         # update marginal density
-        self.marginal_density.update_data(append)
+        self.marginal_density.update_data(gp_rank_n_update)
         ##########################################
         self.x_data = self.data.x_data
         self.y_data = self.data.y_data
@@ -840,7 +844,7 @@ class GP:
         variance_only : bool, optional
             If True the computation of the posterior covariance matrix is avoided which can save compute time.
             In that case the return will only provide the variance at the input points.
-            Default = False.
+            Default = False. This is only relevant if `calc_inv` at initialization is True.
         add_noise : bool, optional
             If True the noise variances will be added to the posterior variances. Default = False.
 

@@ -56,7 +56,7 @@ class GPMarginalDensity:
         y_mean = self.y_data - m
         KV = K + V
         self.KVlinalg.update_KV(KV)
-        KVinvY = self.KVlinalg.solve(y_mean, x0 = self.KVinvY)
+        KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY)
         return KVinvY.reshape(len(y_mean))
 
     def _set_KVinvY(self, K, V, m, mode):
