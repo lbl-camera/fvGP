@@ -19,6 +19,7 @@ import sys
 #                             cg is better but we:wa
 #                             might need a preconditioner , maybe a large LU?
 #   variational inference in fvgp
+#   fvgp_data should be availible in it's natural by-task form for convenience
 
 
 class GP:
