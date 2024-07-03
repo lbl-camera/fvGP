@@ -96,37 +96,37 @@ class GPMarginalDensity:
             KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
         return KVinvY.reshape(len(y_mean))
 
-    def compute_new_KVlogdet(self, KV):
-        """
-        Recomputed KVinvY for new hyperparameters (e.g. during training, for instance)
-        This is only used by some posterior functions and in the log likelihood functions
-        """
-        if self.gp2Scale:
-            mode = self._set_gp2Scale_mode(KV)
-            if mode == "sparseLU":
-                LU_factor = calculate_LU_factor(KV)
-                KVlogdet = calculate_LU_logdet(LU_factor)
-            elif mode == "Chol":
-                Chol_factor = calculate_Chol_factor(KV.toarray())
-                KVlogdet = calculate_Chol_logdet(Chol_factor)
-            elif mode == "sparseCG":
-                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
-            elif mode == "sparseMINRES":
-                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
-            else:
-                raise Exception("No mode in gp2Scale", mode)
-        else:
-            Chol_factor = calculate_Chol_factor(KV)
-            KVlogdet = calculate_Chol_logdet(Chol_factor)
-        return KVlogdet
-
     def compute_new_KVlogdet_KVinvY(self, K, V, m):
         """
         Recomputing KVinvY and logdet(KV) for new hyperparameters.
         This is only used by the training (the log likelihood)
         """
         KV = K + V
-        return self.compute_new_KVinvY(KV, m), self.compute_new_KVlogdet(KV)
+        y_mean = self.data_obj.y_data - m
+        if self.gp2Scale:
+            mode = self._set_gp2Scale_mode(KV)
+            if mode == "sparseLU":
+                LU_factor = calculate_LU_factor(KV)
+                KVinvY = calculate_LU_solve(LU_factor, y_mean)
+                KVlogdet = calculate_LU_logdet(LU_factor)
+            elif mode == "Chol":
+                if issparse(KV): KV = KV.toarray()
+                Chol_factor = calculate_Chol_factor(KV)
+                KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
+                KVlogdet = calculate_Chol_logdet(Chol_factor)
+            elif mode == "sparseCG":
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean, info=self.info)
+                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
+            elif mode == "sparseMINRES":
+                KVinvY = calculate_sparse_minres(KV, y_mean, info=self.info)
+                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
+            else:
+                raise Exception("No mode in gp2Scale", mode)
+        else:
+            Chol_factor = calculate_Chol_factor(KV)
+            KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
+            KVlogdet = calculate_Chol_logdet(Chol_factor)
+        return KVinvY, KVlogdet
 
     def _get_KVm(self):
         K = self.prior_obj.K
