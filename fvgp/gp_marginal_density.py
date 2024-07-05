@@ -124,7 +124,7 @@ class GPMarginalDensity:
                 raise Exception("No mode in gp2Scale", mode)
         else:
             Chol_factor = calculate_Chol_factor(KV)
-            KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
+            KVinvY = calculate_Chol_solve(Chol_factor, y_mean).reshape(len(y_mean))
             KVlogdet = calculate_Chol_logdet(Chol_factor)
         return KVinvY, KVlogdet
 
