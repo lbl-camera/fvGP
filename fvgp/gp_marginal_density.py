@@ -140,24 +140,18 @@ class GPMarginalDensity:
     def _addKV(K, V):
         assert np.ndim(K) == 2
         assert K.shape[0] == K.shape[1]
-        assert np.ndim(V) == 1 or np.ndim(V) == 2
-        if issparse(V): assert np.ndim(V) == 2
-        if np.ndim(V) == 1: assert len(V) == K.shape[0]
-        if isinstance(K, np.ndarray): assert isinstance(V, np.ndarray)
-        if issparse(K) and np.ndim(2): assert issparse(V)
+        assert isinstance(V, np.ndarray)
+        assert np.ndim(V) == 1
+        assert len(V) == K.shape[0]
 
-        if issparse(K) and issparse(V): return K + V
-        elif issparse(K) and isinstance(V, np.ndarray):
+        if issparse(K) and isinstance(V, np.ndarray):
             KV = K.copy()
             KV.setdiag(KV.diagonal() + V)
             return KV
-        elif isinstance(K, np.ndarray) and isinstance(V, np.ndarray):
+        elif isinstance(K, np.ndarray):
             KV = K.copy()
-            if np.ndim(V) == 1:
-                np.fill_diagonal(KV, np.diag(K) + V)
-                return KV
-            elif np.ndim(V) == 2: return K + V
-            else: raise Exception("Wrong dim in K+V of V.")
+            np.fill_diagonal(KV, np.diag(K) + V)
+            return KV
         else: raise Exception("K+V not possible with the given formats")
 
     ##################################################################################
