@@ -5,7 +5,6 @@ import warnings
 from scipy.sparse import issparse
 
 
-
 class GPMarginalDensity:
     def __init__(self,
                  data_obj,
@@ -31,9 +30,12 @@ class GPMarginalDensity:
             warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False")
         self.KVlinalg = KVlinalg(info, compute_device)
         K, V, m = self._get_KVm()
-        if self.gp2Scale: mode = self._set_gp2Scale_mode(K)
-        elif self.calc_inv: mode = "Inv"
-        else: mode = "Chol"
+        if self.gp2Scale:
+            mode = self._set_gp2Scale_mode(K)
+        elif self.calc_inv:
+            mode = "Inv"
+        else:
+            mode = "Chol"
 
         self.KVinvY = self._set_KVinvY(K, V, m, mode)
 
@@ -42,8 +44,10 @@ class GPMarginalDensity:
         """Update the marginal PDF when the data has changed in data likelihood or prior objects"""
         self.y_data = self.data_obj.y_data
         K, V, m = self._get_KVm()
-        if append: self.KVinvY = self._update_KVinvY(K, V, m)
-        else: self.KVinvY = self._set_KVinvY(K, V, m, self.KVlinalg.mode)
+        if append:
+            self.KVinvY = self._update_KVinvY(K, V, m)
+        else:
+            self.KVinvY = self._set_KVinvY(K, V, m, self.KVlinalg.mode)
 
     def update_hyperparameters(self):
         """Update the marginal PDF when if hyperparameters have changed"""
@@ -67,8 +71,6 @@ class GPMarginalDensity:
         self.KVlinalg.set_KV(KV, mode)
         KVinvY = self.KVlinalg.solve(y_mean)
         return KVinvY.reshape(len(y_mean))
-
-
 
     ##################################################################
     def compute_new_KVinvY(self, KV, m):
@@ -144,7 +146,7 @@ class GPMarginalDensity:
         assert np.ndim(V) == 1
         assert len(V) == K.shape[0]
 
-        if issparse(K) and isinstance(V, np.ndarray):
+        if issparse(K):
             KV = K.copy()
             KV.setdiag(KV.diagonal() + V)
             return KV
@@ -152,7 +154,8 @@ class GPMarginalDensity:
             KV = K.copy()
             np.fill_diagonal(KV, np.diag(K) + V)
             return KV
-        else: raise Exception("K+V not possible with the given formats")
+        else:
+            raise Exception("K+V not possible with the given formats")
 
     ##################################################################################
     def _set_gp2Scale_mode(self, KV):
@@ -363,13 +366,17 @@ class KVlinalg:
     def update_KV(self, KV):
         if self.mode == "Chol":
             if issparse(KV): KV = KV.toarray()
-            if len(KV) <= len(self.Chol_factor): res = calculate_Chol_factor(KV)
-            else: res = update_Chol_factor(self.Chol_factor, KV)
+            if len(KV) <= len(self.Chol_factor):
+                res = calculate_Chol_factor(KV)
+            else:
+                res = update_Chol_factor(self.Chol_factor, KV)
             self.Chol_factor = res
         elif self.mode == "Inv":
             self.KV = KV
-            if len(KV) <= len(self.KVinv): self.KVinv = calculate_inv(KV, compute_device=self.compute_device)
-            else: self.KVinv = update_inv(self.KVinv, KV, self.compute_device)
+            if len(KV) <= len(self.KVinv):
+                self.KVinv = calculate_inv(KV, compute_device=self.compute_device)
+            else:
+                self.KVinv = update_inv(self.KVinv, KV, self.compute_device)
         elif self.mode == "sparseMINRES":
             self.KV = KV
         elif self.mode == "sparseCG":
@@ -386,11 +393,15 @@ class KVlinalg:
         elif mode == "Inv":
             return self.KVinv @ b
         elif mode == "sparseCG":
-            if x0 is None: return calculate_sparse_conj_grad(self.KV, b, self.info)
-            else: return update_sparse_conj_grad(self.KV, b, x0, self.info)
+            if x0 is None:
+                return calculate_sparse_conj_grad(self.KV, b, self.info)
+            else:
+                return update_sparse_conj_grad(self.KV, b, x0, self.info)
         elif mode == "sparseMINRES":
-            if x0 is None: return calculate_sparse_minres(self.KV, b, self.info)
-            else: return update_sparse_minres(self.KV, b, x0, self.info)
+            if x0 is None:
+                return calculate_sparse_minres(self.KV, b, self.info)
+            else:
+                return update_sparse_minres(self.KV, b, x0, self.info)
         elif mode == "sparseLU":
             return calculate_LU_solve(self.LU_factor, b)
         else:
