@@ -54,7 +54,7 @@ class GPMarginalDensity:
     def _update_KVinvY(self, K, V, m):
         """This updates KVinvY after new data was communicated"""
         y_mean = self.y_data - m
-        KV = K + V
+        KV = self._addKV(K, V)
         self.KVlinalg.update_KV(KV)
         KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY)
         return KVinvY.reshape(len(y_mean))
@@ -63,10 +63,12 @@ class GPMarginalDensity:
         """Set or reset KVinvY for new hyperparameters"""
         y_mean = self.data_obj.y_data - m
         #update lin alg obj
-        KV = K + V
+        KV = self._addKV(K, V)
         self.KVlinalg.set_KV(KV, mode)
         KVinvY = self.KVlinalg.solve(y_mean)
         return KVinvY.reshape(len(y_mean))
+
+
 
     ##################################################################
     def compute_new_KVinvY(self, KV, m):
@@ -101,7 +103,7 @@ class GPMarginalDensity:
         Recomputing KVinvY and logdet(KV) for new hyperparameters.
         This is only used by the training (the log likelihood)
         """
-        KV = K + V
+        KV = self._addKV(K, V)
         y_mean = self.data_obj.y_data - m
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
@@ -132,8 +134,32 @@ class GPMarginalDensity:
         K = self.prior_obj.K
         m = self.prior_obj.m
         V = self.likelihood_obj.V
-        assert K.shape == V.shape
         return K, V, m
+
+    @staticmethod
+    def _addKV(K, V):
+        assert np.ndim(K) == 2
+        assert K.shape[0] == K.shape[1]
+        assert np.ndim(V) == 1 or np.ndim(V) == 2
+        if issparse(V): assert np.ndim(V) == 2
+        if np.ndim(V) == 1: assert len(V) == K.shape[0]
+        if isinstance(K, np.ndarray): assert isinstance(V, np.ndarray)
+        if issparse(K) and np.ndim(2): assert issparse(V)
+
+        if issparse(K) and issparse(V): return K + V
+        elif issparse(K) and isinstance(V, np.ndarray):
+            KV = K.copy()
+            KV.setdiag(KV.diagonal() + V)
+            return KV
+        elif isinstance(K, np.ndarray) and isinstance(V, np.ndarray):
+            KV = K.copy()
+            if np.ndim(V) == 1:
+                np.fill_diagonal(KV, np.diag(K) + V)
+                return KV
+            elif np.ndim(V) == 2: return K + V
+            else: raise Exception("Wrong dim in K+V of V.")
+        else: raise Exception("K+V not possible with the given formats")
+
     ##################################################################################
     def _set_gp2Scale_mode(self, KV):
         if self.gp2Scale_linalg_mode is not None: return self.gp2Scale_linalg_mode
@@ -214,21 +240,23 @@ class GPMarginalDensity:
 
         if hyperparameters is None:
             KVinvY = self.KVinvY
+            K = self.prior_obj.K
+            V = self.likelihood_obj.V
+            KV = self._addKV(K, V)
         else:
             K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
             V = self.likelihood_obj.calculate_V(hyperparameters)
             m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
-            KV = K + V
+            KV = self._addKV(K, V)
             KVinvY = self.compute_new_KVinvY(KV, m)
 
         b = KVinvY
-        K = self.prior_obj.K
-        V = self.likelihood_obj.V
-        KV = K + V
         if self.prior_obj.ram_economy is False:
             try:
-                dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, hyperparameters) + \
-                        self.likelihood_obj.noise_function_grad(self.data_obj.x_data, hyperparameters)
+                noise_der = self.likelihood_obj.noise_function_grad(self.data_obj.x_data, hyperparameters)
+                noise_der_V = np.zeros((len(hyperparameters), len(self.data_obj.x_data), len(self.data_obj.x_data)))
+                for i in range(len(hyperparameters)): np.fill_diagonal(noise_der_V[i], noise_der[i])
+                dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, hyperparameters) + noise_der_V
             except Exception as e:
                 raise Exception(
                     "The gradient evaluation dK/dh + dNoise/dh was not successful. "
@@ -250,7 +278,7 @@ class GPMarginalDensity:
                 try:
                     dK_dH = \
                         self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters) + \
-                        self.likelihood_obj.noise_function_grad(self.data_obj.x_data, i, hyperparameters)
+                        np.diag(self.likelihood_obj.noise_function_grad(self.data_obj.x_data, i, hyperparameters))
                 except:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "

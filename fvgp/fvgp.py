@@ -114,7 +114,7 @@ class fvGP(GP):
         is used if `gp_mean_function` is provided.
     gp_noise_function : Callable, optional
         The noise function is a callable f(x,hyperparameters) that returns a
-        positive symmetric definite matrix of shape(len(x),len(x)).
+        vector (1d np.ndarray) of length(x).
         The input `x` is a numpy array of shape (N x Di+1). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
@@ -124,7 +124,7 @@ class fvGP(GP):
         It accepts as input an array of positions (of size N x Di+1) and
         hyperparameters (a 1d array of length D+1 for the default kernel).
         The return value is a 3-D array of
-        shape (len(hyperparameters) x N x N). If None is provided, either
+        shape (len(hyperparameters) x N). If None is provided, either
         zeros are returned since the default noise function does not depend on
         hyperparameters, or, if `gp_noise_function` is provided but no gradient function,
         a finite-difference approximation will be used.

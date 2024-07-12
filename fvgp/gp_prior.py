@@ -197,8 +197,7 @@ class GPprior:
         data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
             np.hstack([i_s, j_s[diagonal_mask]]), \
             np.hstack([j_s, i_s[diagonal_mask]])
-        K = sparse.coo_matrix((data, (i_s, j_s)))
-        K.resize(len(x_data), len(x_data))
+        K = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_data), len(x_data)))
         logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
         return K
 
@@ -234,8 +233,7 @@ class GPprior:
                                with_results=True)))
 
         data, i_s, j_s = map(np.hstack, zip(*results))
-        B = sparse.coo_matrix((data, (i_s, j_s)))
-        B.resize(len(x_old), len(x_new))
+        B = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_old), len(x_new)))
 
         # mirror across diagonal
         ranges_ij2 = list(itertools.product(ranges_input, ranges_input))
@@ -256,8 +254,7 @@ class GPprior:
         data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
             np.hstack([i_s, j_s[diagonal_mask]]), \
             np.hstack([j_s, i_s[diagonal_mask]])
-        D = sparse.coo_matrix((data, (i_s, j_s)))
-        D.resize(len(x_new), len(x_new))
+        D = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_new), len(x_new)))
 
         res = block_array([[self.K, B],
                            [B.transpose(), D]])

@@ -63,44 +63,30 @@ class GPlikelihood:
         self.V = self.calculate_V(hyperparameters)
 
     def calculate_V(self, hyperparameters):
-        return self.noise_function(self.x_data, hyperparameters)
+        noise = self.noise_function(self.x_data, hyperparameters)
+        assert isinstance(noise, np.ndarray) and np.ndim(noise) == 1
+        return noise
 
     def _default_noise_function(self, x, hyperparameters):
         noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)
-        if self.gp2Scale:
-            return self._calculate_sparse_default_noise_covariance(x)
-        else:
-            return np.diag(noise)
+        return noise
 
     def _measured_noise_function(self, x, hyperparameters):
-        if self.gp2Scale:
-            return self._calculate_sparse_measured_noise_covariance(self.noise_variances)
-        else:
-            return np.diag(self.noise_variances)
+        return self.noise_variances
 
-    def _calculate_sparse_measured_noise_covariance(self, noise):
-        vector = noise
-        diag = sparse.eye(len(vector), format="coo")
-        diag.setdiag(self.noise_variances)
-        return diag
-
-    def _calculate_sparse_default_noise_covariance(self, x):
-        vector = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)
-        diag = sparse.eye(len(vector), format="coo")
-        diag.setdiag(vector)
-        return diag
-
-    def _default_dnoise_dh(self, x, hps):
-        gr = np.zeros((len(hps), len(x), len(x)))
+    @staticmethod
+    def _default_dnoise_dh(x, hps):
+        gr = np.zeros((len(hps), len(x)))
         return gr
 
-    def _default_dnoise_dh_econ(self, x, i, hps):
-        gr = np.zeros((len(x), len(x)))
+    @staticmethod
+    def _default_dnoise_dh_econ(x, i, hps):
+        gr = np.zeros((len(x)))
         return gr
 
     ##########################
     def _finitediff_dnoise_dh(self, x, hps):
-        gr = np.zeros((len(hps), len(x), len(x)))
+        gr = np.zeros((len(hps), len(x)))
         for i in range(len(hps)):
             temp_hps1 = np.array(hps)
             temp_hps1[i] = temp_hps1[i] + 1e-6

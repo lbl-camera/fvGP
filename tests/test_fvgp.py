@@ -76,7 +76,7 @@ def test_single_task_init_basic():
         d = get_distance_matrix(x1,x2)
         return hps[0] * matern_kernel_diff1(d,3.)
     def noise(x,hps):
-        return np.identity(len(x))
+        return np.ones((len(x)))
     def prior_mean(x,hps):
         return np.zeros(len(x))
 
