@@ -19,7 +19,7 @@ import sys
 #                             cg is better but we:wa
 #                             might need a preconditioner , maybe a large LU?
 #   variational inference in fvgp
-#   fvgp_data should be availible in it's natural by-task form for convenience
+#   fvgp_data should be availible in it's natural by-task form for convenience
 
 
 class GP:
@@ -243,7 +243,7 @@ class GP:
 
         if gp2Scale:
             try:
-                import imate
+                from imate import logdet as imate_logdet
             except:
                 raise Exception(
                     "You have activated `gp2Scale`. You need to install imate"

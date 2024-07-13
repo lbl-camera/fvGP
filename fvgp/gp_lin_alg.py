@@ -78,6 +78,7 @@ def spai(A, m):
 
 def calculate_random_logdet(KV, info, compute_device):
     logger.info("calculate_random_logdet")
+    from imate import logdet as imate_logdet
     st = time.time()
     if compute_device == "gpu":
         gpu = True
