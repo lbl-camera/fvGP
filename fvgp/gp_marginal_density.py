@@ -149,7 +149,7 @@ class GPMarginalDensity:
         if issparse(K):
             KV = K.copy()
             KV.setdiag(KV.diagonal() + V)
-            return KV
+            return KV.tocsr()
         elif isinstance(K, np.ndarray):
             KV = K.copy()
             np.fill_diagonal(KV, np.diag(K) + V)
