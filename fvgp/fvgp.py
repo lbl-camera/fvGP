@@ -175,12 +175,18 @@ class fvGP(GP):
 
     Attributes
     ----------
-    x_data : np.ndarray
+    x_data : np.ndarray or list
         Datapoint positions
     y_data : np.ndarray
         Datapoint values
     noise_variances : np.ndarray
-        Datapoint observation (co)variances.
+        Datapoint observation variances.
+    fvgp_x_data : np.ndarray or list
+        Data points from the fvgp point of view.
+    fvgp_y_data : np.ndarray
+        The data values from the fvgp point of view.
+    fvgp_noise_variances : np.ndarray
+        Observation variances from the fvgp point of view.
     prior.hyperparameters : np.ndarray
         Current hyperparameters in use.
     prior.K : np.ndarray
@@ -352,7 +358,7 @@ class fvGP(GP):
 
         Parameters
         ----------
-        x_new : np.ndarray
+        x_new : np.ndarray or list
             The input point positions. Shape (V x Di), where Di is the :py:attr:`fvgp.fvGP.input_space_dim`.
             For multi-task GPs, the index set dimension = input space dimension + 1.
             If dealing with non-Euclidean inputs
@@ -374,6 +380,14 @@ class fvGP(GP):
             are clearly defined by their positions in the output space. The default is
             np.array([[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...]).
         """
+        assert isinstance(x_new, np.ndarray) or isinstance(x_new, list)
+        assert isinstance(y_new, np.ndarray) and np.ndim(y_new) == 2
+        if noise_variances_new is not None:
+            assert isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 2
+            self.fvgp_noise_variances = np.row_stack([self.fvgp_noise_variances, noise_variances_new])
+        if isinstance(x_new, np.ndarray): self.fvgp_x_data = np.row_stack([self.fvgp_x_data, x_new])
+        if isinstance(x_new, list): self.fvgp_x_data = self.fvgp_x_data + x_new
+        self.fvgp_y_data = np.row_stack([self.fvgp_y_data, y_new])
         ##########################################
         #######prepare value positions############
         ##########################################

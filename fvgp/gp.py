@@ -15,11 +15,8 @@ import sys
 
 
 # TODO: search below "TODO"
-#   neither minres nor random logdet are doing a good job in gp2Scale,
-#                             cg is better but we:wa
-#                             might need a preconditioner , maybe a large LU?
 #   variational inference in fvgp
-#   fvgp_data should be availible in it's natural by-task form for convenience
+#   fvgp output positions should not be a 2d np array, they should be a list of 1d arrays so that tasks can be missing
 
 
 class GP:
