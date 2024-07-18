@@ -447,7 +447,7 @@ class GP:
             via non-standard user-defined objectives.
             The default is the Hessian of the negative log marginal likelihood.
         init_hyperparameters : np.ndarray, optional
-            Initial hyperparameters used as starting location for all optimizers with local component.
+            Initial hyperparameters used as starting location for all optimizers.
             The default is a random draw from a uniform distribution within the `hyperparameter_bounds`.
         method : str or Callable, optional
             The method used to train the hyperparameters.
