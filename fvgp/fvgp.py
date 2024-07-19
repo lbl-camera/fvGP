@@ -349,6 +349,7 @@ class fvGP(GP):
         noise_variances_new=None,
         append=True,
         output_positions_new=None,
+        gp_rank_n_update=None
     ):
 
         """
@@ -379,6 +380,10 @@ class fvGP(GP):
             A 2d numpy array of shape (V x output_number), so that for each measurement position, the outputs
             are clearly defined by their positions in the output space. The default is
             np.array([[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...]).
+        gp_rank_n_update : bool , optional
+            Indicates whether the GP marginal should be rank-n updated or recomputed. The default
+            is `gp_rank_n_update=append`, meaning if data is only appended, the rank_n_update will
+            be performed.
         """
         assert isinstance(x_new, np.ndarray) or isinstance(x_new, list)
         assert isinstance(y_new, np.ndarray) and np.ndim(y_new) == 2
@@ -398,7 +403,7 @@ class fvGP(GP):
         ######################################
         x_data, y_data, noise_variances = self._transform_index_set(x_new, y_new, noise_variances_new,
                                                                     output_positions_new)
-        super().update_gp_data(x_data, y_data, noise_variances, append=append)
+        super().update_gp_data(x_data, y_data, noise_variances, append=append, gp_rank_n_update=gp_rank_n_update)
         self.output_positions = np.row_stack([self.output_positions, output_positions_new])
 
     ################################################################################################

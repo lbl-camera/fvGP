@@ -350,7 +350,7 @@ class GP:
             In the default case, data will be appended.
         gp_rank_n_update : bool, optional
             Indicates whether the GP marginal should be rank-n updated or recomputed. The default
-            is `gp_rank_n_update=append`, meaning if data is only appended, the rang_n_update will
+            is `gp_rank_n_update=append`, meaning if data is only appended, the rank_n_update will
             be performed.
         """
         old_x_data = self.data.x_data.copy()
