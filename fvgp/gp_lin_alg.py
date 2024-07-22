@@ -7,6 +7,7 @@ from scipy.sparse.linalg import minres, cg, spsolve
 from scipy.sparse import identity
 from scipy.sparse.linalg import onenormest
 from scipy.linalg import cho_factor, cho_solve, solve_triangular
+from scipy import sparse
 
 
 def calculate_LU_factor(M):
@@ -99,7 +100,8 @@ def calculate_sparse_conj_grad(KV, vec, info=False):
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], rtol=1e-8)
+        M = sparse.csr_matrix((len(vec),len(vec))).setdiag(KV.diagonal())
+        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-8)
         if exit_code == 1:
             logger.info("CG preconditioning in progress ...")
             M = spai(KV, 20)
@@ -118,7 +120,8 @@ def update_sparse_conj_grad(KV, vec, x0, info=False):
     if len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     if info: logger.info("CG solve in progress ...")
     vec = vec.reshape(len(vec), 1)
-    res, exit_code = cg(KV.tocsc(), vec[:, 0], rtol=1e-8, x0=x0)
+    M = sparse.csr_matrix((len(vec),len(vec))).setdiag(KV.diagonal())
+    res, exit_code = cg(KV.tocsc(), vec[:, 0], rtol=1e-8, M=M, x0=x0)
     if exit_code == 1:
         logger.info("CG preconditioning in progress ...")
         M = spai(KV, 20)
@@ -135,7 +138,8 @@ def calculate_sparse_minres(KV, vec, info=False):
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], rtol=1e-8)
+        M = sparse.csr_matrix((len(vec),len(vec))).setdiag(KV.diagonal())
+        res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], M=M, rtol=1e-8)
         if exit_code == 1: warnings.warn("MINRES not successful")
     if info: logger.info("MINRES compute time: {} seconds, exit status {} (0:=successful)",
                          time.time() - st, exit_code)
@@ -151,7 +155,8 @@ def update_sparse_minres(KV, vec, x0, info=False):
     if len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     if info: logger.info("MINRES solve in progress ...")
     vec = vec.reshape(len(vec), 1)
-    res, exit_code = minres(KV.tocsc(), vec[:, 0], rtol=1e-8, x0=x0)
+    M = sparse.csr_matrix((len(vec),len(vec))).setdiag(KV.diagonal())
+    res, exit_code = minres(KV.tocsc(), vec[:, 0], rtol=1e-8, M=M, x0=x0)
     if exit_code == 1: warnings.warn("MINRES update not successful")
     if info: logger.info("MINRES compute time: {} seconds, exit status {} (0:=successful)",
                          time.time() - st, exit_code)
