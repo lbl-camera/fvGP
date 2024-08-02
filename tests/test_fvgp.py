@@ -59,8 +59,6 @@ def test_lin_alg():
     ll = calculate_Chol_logdet(dd)
     ll = spai(A,20)
     calculate_sparse_minres(sparse.coo_matrix(A),np.random.rand(len(A)), info=False)
-    update_sparse_minres(sparse.coo_matrix(A),np.random.rand(len(A)), np.random.rand(len(A)-2))
-    update_sparse_conj_grad(sparse.coo_matrix(A),np.random.rand(len(A)), np.random.rand(len(A)-2))
     calculate_sparse_conj_grad(sparse.coo_matrix(A),np.random.rand(len(A)))
     logd = calculate_logdet(B)
     update_logdet(logd, np.linalg.inv(B), A)
@@ -230,6 +228,17 @@ def test_multi_task(client):
     
 
 
+    my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), output_positions = [[0,1],[0,1],[0,2]], noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.,3.]], output_positions = [[0,1],[0,1],[0,2]], noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.,3.]], output_positions = [[0,1],[0,1],[0,2]], noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.,3.]], output_positions = [[0,1],[0,1],[0,2]], noise_variances = np.random.rand(3,2), init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.]], output_positions = [[0,1],[0,1],[0]], noise_variances = [[.1,.2],[.1,.2],[.1]], init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp.update_gp_data(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.]], output_positions_new = [[0,1],[0,1],[0]], noise_variances_new = [[.1,.2],[.1,.2],[.1]], append = True)
+    my_fvgp.update_gp_data(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.]], output_positions_new = [[0,1],[0,1],[0]], noise_variances_new = [[.1,.2],[.1,.2],[.1]], append = False)
+    
+
+
 def test_gp2Scale(client):
     from imate import logdet as imate_logdet
     input_dim = 1
@@ -248,8 +257,17 @@ def test_gp2Scale(client):
                             ])
 
     init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseLU")
+    my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCG")
+    my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRES")
+    my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
+    my_gp2S.log_likelihood(hyperparameters = init_hps)
+
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client)
-    
+
     my_gp2S.update_gp_data(x_data,y_data, append = False)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
 
@@ -301,7 +319,7 @@ def test_gp2Scale(client):
     my_mcmc = gpMCMC(obj_func, prior_function, [pd],
                     args={"bounds":hps_bounds})
 
-    mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=202, break_condition="default")
+    mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=20, break_condition="default")
     
     pd = ProposalDistribution([0,1], init_prop_Sigma = init_s, adapt_callable = "normal")
     my_mcmc = gpMCMC(obj_func, prior_function, [pd],

@@ -93,73 +93,41 @@ def calculate_random_logdet(KV, info, compute_device):
     return logdet
 
 
-def calculate_sparse_conj_grad(KV, vec, info=False):
-    logger.info("calculate_sparse_conj_grad")
-    st = time.time()
-    if info: logger.info("CG solve in progress ...")
-    if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
-    res = np.zeros(vec.shape)
-    for i in range(vec.shape[1]):
-        M = sparse.csr_matrix((len(vec), len(vec))).setdiag(KV.diagonal())
-        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-8)
-        if exit_code == 1:
-            logger.info("CG preconditioning in progress ...")
-            M = spai(KV, 20)
-            res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-8)
-        if exit_code == 1: warnings.warn("CG not successful")
-    if info: logger.info("CG compute time: {} seconds, exit status {} (0:=successful)", time.time() - st, exit_code)
-    return res
-
-
-def update_sparse_conj_grad(KV, vec, x0, info=False):
-    assert np.ndim(vec) == 1
-    assert np.ndim(KV) == 2
-    assert np.ndim(x0) == 1
-    logger.info("update_sparse_conj_grad")
-    st = time.time()
-    if len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
-    if info: logger.info("CG solve in progress ...")
-    vec = vec.reshape(len(vec), 1)
-    M = sparse.csr_matrix((len(vec), len(vec))).setdiag(KV.diagonal())
-    res, exit_code = cg(KV.tocsc(), vec[:, 0], rtol=1e-8, M=M, x0=x0)
-    if exit_code == 1:
-        logger.info("CG preconditioning in progress ...")
-        M = spai(KV, 20)
-        res, exit_code = cg(KV.tocsc(), vec[:, 0], M=M, x0=x0, rtol=1e-8)
-        if exit_code == 1: warnings.warn("CG not successful")
-    if info: logger.info("CG compute time: {} seconds, exit status {} (0:=successful)", time.time() - st, exit_code)
-    return res
-
-
-def calculate_sparse_minres(KV, vec, info=False):
+def calculate_sparse_minres(KV, vec, info=False, x0=None, M=None):
     logger.info("calculate_sparse_minres")
     st = time.time()
     if info: logger.info("MINRES solve in progress ...")
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
+    if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        M = sparse.csr_matrix((len(vec), len(vec))).setdiag(KV.diagonal())
-        res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], M=M, rtol=1e-8)
+        res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], M=M, rtol=1e-8, x0=x0)
         if exit_code == 1: warnings.warn("MINRES not successful")
-    if info: logger.info("MINRES compute time: {} seconds, exit status {} (0:=successful)",
-                         time.time() - st, exit_code)
+    if info: logger.info("MINRES compute time: {} seconds.",
+                         time.time() - st)
     return res
 
 
-def update_sparse_minres(KV, vec, x0, info=False):
-    assert np.ndim(vec) == 1
-    assert np.ndim(KV) == 2
-    assert np.ndim(x0) == 1
-    logger.info("update_sparse_minres")
+def calculate_sparse_conj_grad(KV, vec, info=False, x0=None, M=None):
+    logger.info("calculate_sparse_conj_grad")
     st = time.time()
-    if len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
-    if info: logger.info("MINRES solve in progress ...")
-    vec = vec.reshape(len(vec), 1)
-    M = sparse.csr_matrix((len(vec),len(vec))).setdiag(KV.diagonal())
-    res, exit_code = minres(KV.tocsc(), vec[:, 0], rtol=1e-8, M=M, x0=x0)
-    if exit_code == 1: warnings.warn("MINRES update not successful")
-    if info: logger.info("MINRES compute time: {} seconds, exit status {} (0:=successful)",
-                         time.time() - st, exit_code)
+    if info: logger.info("CG solve in progress ...")
+    if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
+    if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
+    res = np.zeros(vec.shape)
+    for i in range(vec.shape[1]):
+        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-8, x0=x0)
+        if exit_code == 1: warnings.warn("CG not successful")
+    if info: logger.info("CG compute time: {} seconds.", time.time() - st)
+    return res
+
+
+def calculate_sparse_solve(KV, vec, info=False):
+    logger.info("calculate_sparse_conj_grad")
+    st = time.time()
+    if info: logger.info("Sparse solve in progress ...")
+    res = sparse.linalg.spsolve(KV, vec)
+    if info: logger.info("Sparse solve compute time: {} seconds.", time.time() - st)
     return res
 
 

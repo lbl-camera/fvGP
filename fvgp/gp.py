@@ -135,7 +135,8 @@ class GP:
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     gp2Scale_linalg_mode : str, optional
-        One of `Chol`, `sparseLU`, `sparseCG`, or `sparseMINRES`. The default is None which amounts to
+        One of `Chol`, `sparseLU`, `sparseCG`, `sparseMINRES`, `sparseSolve`, `sparseCGpre`
+        (incomplete LU preconditioner), or `sparseMINRESpre`. The default is None which amounts to
         an automatic determination of the mode.
     calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
@@ -1054,7 +1055,7 @@ class GP:
             Usually this is np.ndarray([0,1,2,...]).
 
         Return
-        -------
+        ------
         Solution : dict
         """
         return self.posterior.gp_kl_div(x_pred, comp_mean, comp_cov, x_out=x_out)
@@ -1126,7 +1127,7 @@ class GP:
             Usually this is np.ndarray([0,1,2,...]).
 
         Return
-        -------
+        ------
         Solution : dict
         """
         return self.posterior.gp_mutual_information(x_pred, x_out=x_out)
@@ -1153,7 +1154,7 @@ class GP:
             Usually this is np.ndarray([0,1,2,...]).
 
         Return
-        -------
+        ------
         Solution : dict
             Total correlation between prediction points, as a collective.
         """
@@ -1178,7 +1179,7 @@ class GP:
             Usually this is np.ndarray([0,1,2,...]).
 
         Return
-        -------
+        ------
         Solution : dict
             Relative information entropy of prediction points, as a collective.
         """
@@ -1205,7 +1206,7 @@ class GP:
             Usually this is np.ndarray([0,1,2,...]).
 
         Return
-        -------
+        ------
         Solution : dict
             Relative information entropy of prediction points, but not as a collective.
         """
@@ -1232,7 +1233,7 @@ class GP:
             Usually this is np.ndarray([0,1,2,...]).
 
         Return
-        -------
+        ------
         Solution : dict
             The probability of a probabilistic quantity of interest, given the GP posterior at a given point.
         """
@@ -1260,7 +1261,7 @@ class GP:
             Usually this is np.ndarray([0,1,2,...]).
 
         Return
-        -------
+        ------
         Solution : dict
             The gradient of the probability of a probabilistic quantity of interest,
             given the GP posterior at a given point.

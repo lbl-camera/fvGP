@@ -223,7 +223,8 @@ class ProposalDistribution:
                  K=10,
                  auto_accept=False,
                  adapt_cov=True,
-                 prop_args=None):
+                 prop_args=None,
+                 ID=None):
         """
         Class to define a proposal distribution.
 
@@ -264,6 +265,7 @@ class ProposalDistribution:
         self.K = K
         self.auto_accept = auto_accept
         self.adapt_cov = adapt_cov
+        self.ID = ID
         dim = len(indices)
         self.jump_trace = []
         if proposal_dist == "normal":

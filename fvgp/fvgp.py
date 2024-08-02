@@ -43,21 +43,28 @@ class fvGP(GP):
         For multi-task GPs, the index set dimension = input space dimension + 1.
         If dealing with non-Euclidean inputs
         x_data should be a list, not a numpy array.
-    y_data : np.ndarray
-        The values of the data points. Shape (V,No).
+    y_data : np.ndarray or list
+        The values of the data points. Shape (V,No) if `y_data` is an array.
+        It is possible that not every entry in `x_data`
+        has all corresponding tasks available. In that case `y_data` can be a list. In that case make sure
+        that every entry in `y_data` has a corresponding `output_position` of the same shape.
     init_hyperparameters : np.ndarray, optional
         Vector of hyperparameters used to initiate the GP.
         The default is an array of ones with the right length for the anisotropic Matern
         kernel with automatic relevance determination (ARD). The task direction is
         simply considered a separate dimension. If sparse_node or gp2Scale is
         enabled, the default kernel changes to the anisotropic Wendland kernel.
-    output_positions : np.ndarray, optional
-        A 2d numpy array of shape (V x output_number), so that for each measurement position, the outputs
+    output_positions : list, optional
+        A list of 1d numpy arrays indicating which `task` measurements are available,
+        so that for each measurement position, the outputs
         are clearly defined by their positions in the output space. The default is
-        np.array([[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...]).
-    noise_variances : np.ndarray, optional
-        An numpy array defining the uncertainties/noise in the
-        `y_data` in form of a point-wise variance. Shape (V, No).
+        [[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...].
+        It is possible that for certain inputs tasks are missing, e.g.,
+        output_positions = [[0,1],[1]].
+    noise_variances : np.ndarray or list, optional
+        An numpy array or list defining the uncertainties/noise in the
+        `y_data` in form of a point-wise variance. Shape (V, No) if np.ndarray.
+        If `y_data` is a list then the `noise_variances` should be a list.
         Note: if no noise_variances are provided here, the gp_noise_function
         callable will be used; if the callable is not provided, the noise variances
         will be set to `abs(np.mean(y_data)) / 100.0`. If
@@ -146,7 +153,8 @@ class fvGP(GP):
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     gp2Scale_linalg_mode : str, optional
-        One of `Chol`, `sparseLU`, `sparseCG`, or `sparseMINRES`. The default is None which amounts to
+        One of `Chol`, `sparseLU`, `sparseCG`, `sparseMINRES`, `sparseSolve`, `sparseCGpre`
+        (incomplete LU preconditioner), or `sparseMINRESpre`. The default is None which amounts to
         an automatic determination of the mode.
     calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
@@ -293,33 +301,36 @@ class fvGP(GP):
         args=None,
         info=False,
     ):
+        assert isinstance(y_data, list) or isinstance(y_data, np.ndarray)
+        assert output_positions is None or isinstance(output_positions, list)
 
         if isinstance(x_data, np.ndarray):
             assert np.ndim(x_data) == 2
             self.input_space_dim = x_data.shape[1]
         else: self.input_space_dim = 1
 
-        self.output_num = y_data.shape[1]
-        output_space_dim = 1
+        self.output_num = len(y_data[0])
         ###check the output dims
 
-        if np.ndim(y_data) == 1:
-            raise ValueError("The output number is 1, you can use GP for single-task GPs")
-        if output_space_dim == 1 and isinstance(output_positions, np.ndarray) is False:
+        if isinstance(y_data, np.ndarray) and np.ndim(y_data) == 1:
+            raise ValueError("The output number is 1, you can use the GP class for single-task GPs")
+        if output_positions is None:
             self.output_positions = self._compute_standard_output_positions(len(x_data))
         else:
             self.output_positions = output_positions
 
-        assert isinstance(self.output_positions, np.ndarray) and np.ndim(self.output_positions) == 2
+        assert isinstance(self.output_positions, list)
+        assert len(x_data) == len(y_data)
         ####transform the space
         self.fvgp_x_data = x_data
         self.fvgp_y_data = y_data
         self.fvgp_noise_variances = noise_variances
-        self.index_set_dim = self.input_space_dim + output_space_dim
-        x_data, y_data, noise_variances = self._transform_index_set(x_data, y_data, noise_variances,
-                                                                    self.output_positions)
+        self.index_set_dim = self.input_space_dim + 1
+        x_data, y_data, noise_variances = self._transform_index_set2(x_data, y_data, noise_variances,
+                                                                     self.output_positions)
 
         ####init GP
+
         super().__init__(
             x_data,
             y_data,
@@ -340,7 +351,8 @@ class fvGP(GP):
             ram_economy=ram_economy,
             args=args,
             info=info)
-        if self.data.Euclidean: assert self.index_set_dim == self.input_space_dim + output_space_dim
+
+        if self.data.Euclidean: assert self.index_set_dim == self.input_space_dim + 1
 
     def update_gp_data(
         self,
@@ -364,79 +376,101 @@ class fvGP(GP):
             For multi-task GPs, the index set dimension = input space dimension + 1.
             If dealing with non-Euclidean inputs
             x_new should be a list, not a numpy array.
-        y_new : np.ndarray
-            The values of the data points. Shape (V,No).
-        noise_variances_new : np.ndarray, optional
-            An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance.
-            Shape (len(y_new)).
-            Note: if no variances are provided here, the noise_covariance
-            callable will be used; if the callable is not provided the noise variances
-            will be set to `abs(np.mean(y_data)) / 100.0`. If you provided a noise function,
-            the noise_variances_new will be ignored.
+        y_new : np.ndarray or list
+            The values of the data points. Shape (V,No) if `y_new`  is an array.
+            It is possible that not every entry in `x_new`
+            has all corresponding tasks available. In that case `y_new` can be a list. In that case make sure
+            that every entry in `y_new` has a corresponding `output_position_new` of the same shape.
+        noise_variances_new : np.ndarray or list, optional
+            An numpy array or list defining the uncertainties/noise in the
+            `y_data` in form of a point-wise variance. Shape (V, No) if np.ndarray.
+            If `y_new` is a list then the `noise_variances` should be a list.
+            Note: if no noise_variances are provided here, the gp_noise_function
+            callable will be used; if the callable is not provided, the noise variances
+            will be set to `abs(np.mean(y_data)) / 100.0`. If
+            noise covariances are required (correlated noise), make use of the gp_noise_function.
+            Only provide a noise function OR `noise_variances`, not both.
         append : bool, optional
             Indication whether to append to or overwrite the existing dataset. Default = True.
             In the default case, data will be appended.
-        output_positions_new : np.ndarray, optional
-            A 2d numpy array of shape (V x output_number), so that for each measurement position, the outputs
+        output_positions_new : list, optional
+            A list of 1d numpy arrays indicating which `task` measurements are available,
+            so that for each measurement position, the outputs
             are clearly defined by their positions in the output space. The default is
-            np.array([[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...]).
+            [[0,1,2,3,...,output_number - 1],[0,1,2,3,...,output_number - 1],...].
+            The output_number is defined by the first entry in `y_data`.
         gp_rank_n_update : bool , optional
             Indicates whether the GP marginal should be rank-n updated or recomputed. The default
             is `gp_rank_n_update=append`, meaning if data is only appended, the rank_n_update will
             be performed.
         """
         assert isinstance(x_new, np.ndarray) or isinstance(x_new, list)
-        assert isinstance(y_new, np.ndarray) and np.ndim(y_new) == 2
-        if noise_variances_new is not None:
-            assert isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 2
-            self.fvgp_noise_variances = np.row_stack([self.fvgp_noise_variances, noise_variances_new])
-        if isinstance(x_new, np.ndarray): self.fvgp_x_data = np.row_stack([self.fvgp_x_data, x_new])
-        if isinstance(x_new, list): self.fvgp_x_data = self.fvgp_x_data + x_new
-        self.fvgp_y_data = np.row_stack([self.fvgp_y_data, y_new])
+        assert isinstance(y_new, np.ndarray) or isinstance(y_new, list)
+        assert len(x_new) == len(y_new)
+        if append:
+            if noise_variances_new is not None:
+                assert isinstance(noise_variances_new, np.ndarray) or isinstance(noise_variances_new, list)
+                if isinstance(noise_variances_new, np.ndarray): self.fvgp_noise_variances = (
+                    np.row_stack([self.fvgp_noise_variances, noise_variances_new]))
+                if isinstance(noise_variances_new, list): self.fvgp_noise_variances = (
+                    self.fvgp_noise_variances + noise_variances_new)
+            if isinstance(x_new, np.ndarray): self.fvgp_x_data = np.row_stack([self.fvgp_x_data, x_new])
+            if isinstance(x_new, list): self.fvgp_x_data = self.fvgp_x_data + x_new
+            if isinstance(y_new, np.ndarray): self.fvgp_y_data = np.row_stack([self.fvgp_y_data, y_new])
+            if isinstance(y_new, list): self.fvgp_y_data = self.fvgp_y_data + y_new
+        else:
+            self.fvgp_noise_variances = noise_variances_new
+            self.fvgp_x_data = x_new
+            self.fvgp_y_data = y_new
+
         ##########################################
         #######prepare value positions############
         ##########################################
-        if not isinstance(output_positions_new, np.ndarray):
+        if output_positions_new is None:
             output_positions_new = self._compute_standard_output_positions(len(x_new))
         ######################################
         #####transform to index set###########
         ######################################
-        x_data, y_data, noise_variances = self._transform_index_set(x_new, y_new, noise_variances_new,
-                                                                    output_positions_new)
+        x_data, y_data, noise_variances = self._transform_index_set2(x_new, y_new, noise_variances_new,
+                                                                     output_positions_new)
         super().update_gp_data(x_data, y_data, noise_variances, append=append, gp_rank_n_update=gp_rank_n_update)
-        self.output_positions = np.row_stack([self.output_positions, output_positions_new])
+        self.output_positions = self.output_positions + output_positions_new
 
     ################################################################################################
     def _compute_standard_output_positions(self, point_number):
-        value_pos = np.zeros((point_number, self.output_num))
-        for j in range(self.output_num):
-            value_pos[:, j] = j
+        value_pos = []
+        for j in range(point_number):
+            value_pos.append(np.arange(0, self.output_num))
         return value_pos
 
     ################################################################################################
-    def _transform_index_set(self, x_data, y_data, noise_variances, output_positions):
-        point_number = len(x_data)
+    @staticmethod
+    def _transform_index_set2(x_data, y_data, noise_variances, output_positions):
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
-        if isinstance(x_data, np.ndarray):
-            new_points = np.zeros((point_number * self.output_num, self.index_set_dim))
-        else:
-            new_points = [0.] * point_number * self.output_num
-        new_values = np.zeros((point_number * self.output_num))
-        if noise_variances is not None:
-            new_variances = np.zeros((point_number * self.output_num))
-        else:
-            new_variances = None
-        for i in range(self.output_num):
-            if isinstance(x_data, np.ndarray):
-                new_points[i * point_number: (i + 1) * point_number] = np.column_stack([x_data, output_positions[:, i]])
-            if isinstance(x_data, list):
-                for j in range(len(x_data)):
-                    new_points[i * point_number + j] = [x_data[j], output_positions[j, i]]
-            new_values[i * point_number: (i + 1) * point_number] = y_data[:, i]
-            if noise_variances is not None:
-                new_variances[i * point_number: (i + 1) * point_number] = noise_variances[:, i]
+        assert isinstance(y_data, np.ndarray) or isinstance(y_data, list)
+        assert isinstance(output_positions, list)
+        assert len(x_data) == len(y_data) == len(output_positions)
+        if noise_variances is not None: assert len(noise_variances) == len(y_data)
+        new_x_data = []
+        new_y_data = []
+        if noise_variances is not None: new_variances = []
+        else: new_variances = None
+        for i in range(len(x_data)):
+            assert len(y_data[i]) == len(output_positions[i])
+            if noise_variances is not None: assert len(noise_variances[i]) == len(output_positions[i])
+            for j in range(len(y_data[i])):
+                if isinstance(x_data, np.ndarray): new_x_data.append(np.append(x_data[i], output_positions[i][j]))
+                else: new_x_data.append([x_data[i], output_positions[i][j]])
+                new_y_data.append(y_data[i][j])
+                if new_variances is not None:
+                    new_variances.append(noise_variances[i][j])
+        if isinstance(x_data, np.ndarray): new_x_data = np.asarray(new_x_data)
+        new_y_data = np.asarray(new_y_data)
+        if new_variances is not None: new_variances = np.asarray(new_variances)
 
-        return new_points, new_values, new_variances
+        assert isinstance(new_x_data, list) or isinstance(new_x_data, np.ndarray)
+        assert isinstance(new_y_data, np.ndarray) and np.ndim(new_y_data) == 1
+        if new_variances is not None: assert isinstance(new_variances, np.ndarray) and np.ndim(new_variances) == 1
+        return new_x_data, new_y_data, new_variances
 
     ################################################################################################
-

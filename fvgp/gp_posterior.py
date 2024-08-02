@@ -154,7 +154,7 @@ class GPposterior:
             a = np.diag(dSdx)
             if x_out is not None:
                 a = a.reshape(len(x_orig), len(x_out), order='F')
-                dSdx = dSdx.reshape(len(x_orig), len(x_orig), len(x_out), len(x_out),  order='F')
+                dSdx = dSdx.reshape(len(x_orig), len(x_orig), len(x_out), len(x_out), order='F')
             return {"x": x_orig,
                     "dv/dx": a,
                     "dS/dx": dSdx}
@@ -215,7 +215,7 @@ class GPposterior:
 
         mean_der = ((self.mean_function(x1, self.prior_obj.hyperparameters) -
                      self.mean_function(x2, self.prior_obj.hyperparameters)) /
-                     (2.0 * eps))
+                    (2.0 * eps))
         full_gp_prior_mean_grad = np.append(np.zeros(prior_mean_vec.shape), mean_der)
         prior_cov_grad = np.zeros(K.shape)
         return {"x": x_pred,
@@ -344,7 +344,7 @@ class GPposterior:
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
 
-        joint_covariance = np.block([[K, k],[k.T, kk]])
+        joint_covariance = np.block([[K, k], [k.T, kk]])
         return {"x": x_orig,
                 "mutual information": self.mutual_information(joint_covariance, kk, K)}
 
@@ -357,9 +357,9 @@ class GPposterior:
 
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
-        joint_covariance = np.block([[K, k],[k.T, kk]])
+        joint_covariance = np.block([[K, k], [k.T, kk]])
 
-        prod_covariance = np.block([[K, k * 0.],[k.T * 0., kk * np.identity(len(kk))]])
+        prod_covariance = np.block([[K, k * 0.], [k.T * 0., kk * np.identity(len(kk))]])
 
         return {"x": x_orig,
                 "total correlation": self.kl_div(np.zeros((len(joint_covariance))), np.zeros((len(joint_covariance))),
@@ -427,6 +427,7 @@ class GPposterior:
         return {"probability grad": probability_grad}
 
     ###########################################################################
+    @staticmethod
     def _int_gauss(self, S):
         return ((2.0 * np.pi) ** (len(S) / 2.0)) * np.sqrt(np.linalg.det(S))
 
@@ -434,29 +435,33 @@ class GPposterior:
         assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list)
         if isinstance(x_pred, np.ndarray):
             assert np.ndim(x_pred) == 2
-            if isinstance(x_out, np.ndarray):
+            if isinstance(x_out, np.ndarray) or isinstance(x_out, list):
                 assert x_pred.shape[1] == self.data_obj.index_set_dim - 1
             else:
                 assert x_pred.shape[1] == self.data_obj.index_set_dim
 
-        assert isinstance(x_out, np.ndarray) or x_out is None
+        assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list)
         if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1
 
-    def cartesian_product(self, x, y):
+    @staticmethod
+    def cartesian_product(x, y):
         """
         Input x,y have to be 2d numpy arrays
         The return is the cartesian product of the two sets
         """
+        assert isinstance(y, np.ndarray)
+        assert np.ndim(y) == 1
+
         res = []
-        if isinstance(x, list) or isinstance(y, list):
-            for i in range(len(y)):
-                for j in range(len(x)):
-                    res.append([x[j], y[i]])
+        if isinstance(x, list):
+            for j in range(len(y)):
+                for i in range(len(x)):
+                    res.append([x[i], y[j]])
             return res
-        elif isinstance(x, np.ndarray) and isinstance(y, np.ndarray):
-            for i in range(len(y)):
-                for j in range(len(x)):
-                    res.append(np.append(x[j], y[i]))
-            return np.array(res)
+        elif isinstance(x, np.ndarray):
+            for j in range(len(y)):
+                for i in range(len(x)):
+                    res.append(np.append(x[i], y[j]))
+            return np.asarray(res)
         else:
             raise Exception("Cartesian product out of options")
