@@ -16,7 +16,6 @@ import sys
 
 # TODO: search below "TODO"
 #   variational inference in fvgp
-#   fvgp output positions should not be a 2d np array, they should be a list of 1d arrays so that tasks can be missing
 
 
 class GP:
