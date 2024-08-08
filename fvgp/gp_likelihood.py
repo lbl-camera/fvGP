@@ -72,7 +72,8 @@ class GPlikelihood:
         return noise
 
     def _measured_noise_function(self, x, hyperparameters):
-        return self.noise_variances
+        if len(x) == len(self.noise_variances): return self.noise_variances
+        else: return np.zeros((len(x))) + 0.00001
 
     @staticmethod
     def _default_dnoise_dh(x, hps):

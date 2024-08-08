@@ -101,6 +101,7 @@ def test_single_task_init_basic():
     res = my_gp1.posterior_mean_grad(x_pred,direction=0)
     res = my_gp1.posterior_mean_grad(x_pred)
     res = my_gp1.posterior_covariance(x_pred)
+    res = my_gp1.posterior_covariance(x_pred, add_noise = True)
     res = my_gp1.posterior_covariance_grad(x_pred,direction=0)
     res = my_gp1.gp_entropy(x_pred)
     res = squared_exponential_kernel(1,1)

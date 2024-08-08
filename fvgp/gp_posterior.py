@@ -118,10 +118,10 @@ class GPposterior:
 
         if add_noise and callable(self.likelihood_obj.noise_function):
             noise = self.likelihood_obj.noise_function(x_pred, self.prior_obj.hyperparameters)
-            if issparse(noise): noise = noise.toarray()
+            assert isinstance(noise, np.ndarray) and np.ndim(noise) == 1
             if len(x_pred) == len(noise):
-                v = v + np.diag(noise)
-                if S is not None: S = S + noise
+                v = v + noise
+                if S is not None: S = S + np.diag(noise)
             else:
                 warnings.warn("Noise could not be added, you did not provide a noise callable at initialization")
 
