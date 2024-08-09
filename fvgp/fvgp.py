@@ -8,6 +8,7 @@ class fvGP(GP):
     This class provides all the tools for a multi-task Gaussian Process (GP).
     This class allows for full HPC support for training. After initialization, this
     class provides all the methods described for the GP (:py:class:`fvgp.GP`) class.
+    This class allows full HPC support for training via the `hgdl` package.
 
     V ... number of input points
 
@@ -52,7 +53,7 @@ class fvGP(GP):
         Vector of hyperparameters used to initiate the GP.
         The default is an array of ones with the right length for the anisotropic Matern
         kernel with automatic relevance determination (ARD). The task direction is
-        simply considered a separate dimension. If sparse_node or gp2Scale is
+        simply considered a separate dimension. If gp2Scale is
         enabled, the default kernel changes to the anisotropic Wendland kernel.
     output_positions : list, optional
         A list of 1d numpy arrays indicating which `task` measurements are available,
@@ -64,17 +65,17 @@ class fvGP(GP):
     noise_variances : np.ndarray or list, optional
         An numpy array or list defining the uncertainties/noise in the
         `y_data` in form of a point-wise variance. Shape (V, No) if np.ndarray.
-        If `y_data` is a list then the `noise_variances` should be a list.
+        If `y_data` is a list then the `noise_variances` shouldi also be a list.
         Note: if no noise_variances are provided here, the gp_noise_function
         callable will be used; if the callable is not provided, the noise variances
         will be set to `abs(np.mean(y_data)) / 100.0`. If
-        noise covariances are required (correlated noise), make use of the gp_noise_function.
+        noise covariances are required (correlated noise), make use of the `gp_kernel_function`.
         Only provide a noise function OR `noise_variances`, not both.
     compute_device : str, optional
-        One of `cpu` or `gpu`, determines how linear system solves are executed. The default is `cpu`.
+        One of `cpu` or `gpu`, determines how linear algebra computations are executed. The default is `cpu`.
         For "gpu", pytorch has to be installed manually.
-        If gp2Scale is enabled but no kernel is provided, the choice of the compute_device
-        becomes much more important. In that case, the default Wendland kernel will be computed on
+        If gp2Scale is enabled but no kernel is provided, the choice of the `compute_device`
+        will be particularly important. In that case, the default Wendland kernel will be computed on
         the cpu or the gpu which will significantly change the compute time depending on the compute
         architecture.
     gp_kernel_function : Callable, optional
@@ -97,12 +98,10 @@ class fvGP(GP):
         `hyperparameters` (a 1d array of length Di+2 for the default kernel).
         The default is a finite difference calculation.
         If `ram_economy` is True, the function's input is x1, x2,
-        direction (int), hyperparameters (numpy array), and a
-        `fvgp.GP` instance, and the output
-        is a numpy array of shape (len(hps) x N).
-        If `ram_economy` is `False`, the function's input is x1, x2, hyperparameters, and a
-        `fvgp.GP` instance. The output is
-        a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
+        direction (int), and hyperparameters (numpy array).
+        The output is a numpy array of shape (len(hps) x N).
+        If `ram_economy` is `False`, the function's input is x1, x2, and hyperparameters.
+        The output is a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
     gp_mean_function : Callable, optional
         A function that evaluates the prior mean at a set of input position. It accepts as input
         an array of positions (of shape N1 x Di+1) and
@@ -130,21 +129,20 @@ class fvGP(GP):
         at an input position with respect to the hyperparameters.
         It accepts as input an array of positions (of size N x Di+1) and
         hyperparameters (a 1d array of length D+1 for the default kernel).
-        The return value is a 3-D array of
+        The return value is a 2d array of
         shape (len(hyperparameters) x N). If None is provided, either
         zeros are returned since the default noise function does not depend on
-        hyperparameters, or, if `gp_noise_function` is provided but no gradient function,
+        hyperparameters, or, if `gp_noise_function` is provided but no noise function,
         a finite-difference approximation will be used.
         The same rules regarding `ram_economy` as for the kernel definition apply here.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
         This is an advanced feature for HPC GPs up to 10
         million data points. If gp2Scale is used, the default kernel is an anisotropic
-        Wendland kernel which is compactly supported. The noise function will have
-        to return a `scipy.sparse` matrix instead of a numpy array. There are a few more
+        Wendland kernel which is compactly supported. There are a few
         things to consider (read on); this is an advanced option.
         If no kernel is provided, the `compute_device` option should be revisited.
-        The kernel will use the specified device to compute covariances.
+        The default kernel will use the specified device to compute covariances.
         The default is False.
     gp2Scale_dask_client : dask.distributed.Client, optional
         A dask client for gp2Scale.
@@ -160,9 +158,16 @@ class fvGP(GP):
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster (3-10 times).
-        The default is False. Note, the training will not use the
+        For larger problems (>2000 data points), the use of inversion should be avoided due
+        to computational instability and costs. The default is
+        False. Note, the training will not use the
         inverse for stability reasons. Storing the inverse is
-        a good option when the posterior covariance is heavily used.
+        a good option when the dataset is not too large and the posterior covariance is heavily used.
+        Caution: this option, together with `append=True` in `tell()` will mean that the inverse of
+        the covariance is updated, not recomputed, which can lead to instability.
+        In application where data is appended many times, it is recommended to either turn
+        `calc_inv` off, or to regularly force the recomputation of the inverse via `gp_rank_n_update` in
+        `update_gp_data`.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the log marginal likelihood is/are used for the training.
         If True, components of the derivative of the log marginal likelihood are
@@ -170,9 +175,9 @@ class fvGP(GP):
         but much less RAM usage. If the derivative of the kernel (and noise function) with
         respect to the hyperparameters (gp_kernel_function_grad) is
         going to be provided, it has to be tailored: for `ram_economy=True` it should be
-        of the form f(x1[, x2], direction, hyperparameters)
+        of the form f(x, direction, hyperparameters)
         and return a 2d numpy array of shape len(x1) x len(x2).
-        If `ram_economy=False`, the function should be of the form f(x1[, x2,] hyperparameters)
+        If `ram_economy=False`, the function should be of the form f(x, hyperparameters)
         and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
@@ -366,8 +371,9 @@ class fvGP(GP):
 
         """
         This function updates the data in the gp object instance.
-        The data will NOT be appended but overwritten!
-        Please provide the full updated data set.
+        The data will only be overwritten if `append=False`, otherwise
+        the data will be appended. This is a change from earlier versions.
+        Now, the default is not to overwrite the existing data.
 
         Parameters
         ----------
