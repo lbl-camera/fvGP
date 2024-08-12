@@ -104,6 +104,7 @@ class GP:
         The input `x` is a numpy array of shape (N x D). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
+        If noise covariances are required (correlated noise), make use of the `gp_kernel_function`.
     gp_noise_function_grad : Callable, optional
         A function that evaluates the gradient of the `gp_noise_function`
         at an input position with respect to the hyperparameters.
@@ -780,7 +781,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray or list
             A numpy array of shape (V x D), interpreted as an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         hyperparameters : np.ndarray, optional
@@ -805,7 +806,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         hyperparameters : np.ndarray, optional
@@ -834,7 +835,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
@@ -861,7 +862,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
@@ -906,7 +907,7 @@ class GP:
 
         Parameters
         ------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         direction : int
@@ -946,7 +947,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
             Output coordinates in case of multi-task GP use; a numpy array of size (N x L),
@@ -970,7 +971,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         direction : int
@@ -1043,7 +1044,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         comp_mean : np.ndarray
@@ -1068,7 +1069,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         comp_mean : np.ndarray
@@ -1119,7 +1120,7 @@ class GP:
         data support.
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
@@ -1146,7 +1147,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
@@ -1171,7 +1172,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
@@ -1198,7 +1199,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
@@ -1221,7 +1222,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         comp_mean: np.ndarray
@@ -1247,7 +1248,7 @@ class GP:
 
         Parameters
         ----------
-        x_pred : np.ndarray
+        x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         comp_mean: np.ndarray
@@ -1272,7 +1273,8 @@ class GP:
     ####################################################################################
     #######################VALIDATION###################################################
     ####################################################################################
-    def _crps_s(self, x, mu, sigma):
+    @staticmethod
+    def _crps_s(x, mu, sigma):
         res = abs(sigma * ((1. / np.sqrt(np.pi))
                            - 2. * norm.pdf((x - mu) / sigma)
                            - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.))))

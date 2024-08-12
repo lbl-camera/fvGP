@@ -22,11 +22,11 @@ class fvGP(GP):
     The main logic of :doc:`fvgp <fvgp:index>` is that any multi-task GP is just a single-task GP
     over a Cartesian product space of input and output space, as long as the kernel
     is flexible enough, so prepare to work on your kernel. This is the best
-    way to give the user optimal control and power. At various instances, for instances
+    way to give the user optimal control and power. At various instances, for example
     prior-mean function, noise function, and kernel function definitions, you will
     see that the input `x` is defined over this combined space.
     For example, if your input space is a Euclidean 2d space and your output
-    is labelled [[0],[1]], the input to the mean, kernel, and noise function might be
+    is labelled [0,1], the input to the mean, kernel, and noise functions might be
 
     x =
 
@@ -65,7 +65,7 @@ class fvGP(GP):
     noise_variances : np.ndarray or list, optional
         An numpy array or list defining the uncertainties/noise in the
         `y_data` in form of a point-wise variance. Shape (V, No) if np.ndarray.
-        If `y_data` is a list then the `noise_variances` shouldi also be a list.
+        If `y_data` is a list then the `noise_variances` should be a list.
         Note: if no noise_variances are provided here, the gp_noise_function
         callable will be used; if the callable is not provided, the noise variances
         will be set to `abs(np.mean(y_data)) / 100.0`. If
@@ -124,6 +124,7 @@ class fvGP(GP):
         The input `x` is a numpy array of shape (N x Di+1). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
+        If noise covariances are required (correlated noise), make use of the `gp_kernel_function`.
     gp_noise_function_grad : Callable, optional
         A function that evaluates the gradient of the `gp_noise_function`
         at an input position with respect to the hyperparameters.
