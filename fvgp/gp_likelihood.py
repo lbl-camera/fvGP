@@ -36,7 +36,8 @@ class GPlikelihood:
             self.noise_function = self._measured_noise_function
         else:
             warnings.warn(
-                "No noise function or measurement noise provided. Noise variances will be set to 1% of mean(y_data).",
+                "No noise function or measurement noise provided. "
+                "Noise variances will be set to (0.01 * mean(|y_data|))^2.",
                 stacklevel=2)
             self.noise_function = self._default_noise_function
 
@@ -68,12 +69,12 @@ class GPlikelihood:
         return noise
 
     def _default_noise_function(self, x, hyperparameters):
-        noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)
+        noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)**2
         return noise
 
     def _measured_noise_function(self, x, hyperparameters):
         if len(x) == len(self.noise_variances): return self.noise_variances
-        else: return np.zeros((len(x))) + 0.00001
+        else: return np.zeros((len(x))) + 0.0000001
 
     @staticmethod
     def _default_dnoise_dh(x, hps):
