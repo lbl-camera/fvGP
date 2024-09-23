@@ -101,7 +101,7 @@ def calculate_sparse_minres(KV, vec, info=False, x0=None, M=None):
     if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], M=M, rtol=1e-8, x0=x0)
+        res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], M=M, rtol=1e-5, x0=x0)
         if exit_code == 1: warnings.warn("MINRES not successful")
     if info: logger.info("MINRES compute time: {} seconds.",
                          time.time() - st)
@@ -116,7 +116,7 @@ def calculate_sparse_conj_grad(KV, vec, info=False, x0=None, M=None):
     if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-8, x0=x0)
+        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-5, x0=x0)
         if exit_code == 1: warnings.warn("CG not successful")
     if info: logger.info("CG compute time: {} seconds.", time.time() - st)
     return res

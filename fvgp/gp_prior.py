@@ -190,6 +190,7 @@ class GPprior:
 
         logger.debug("        gp2Scale covariance matrix result written after {} seconds.", time.time() - st)
 
+
         # reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
         # mirror across diagonal
@@ -199,6 +200,7 @@ class GPprior:
             np.hstack([j_s, i_s[diagonal_mask]])
         K = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_data), len(x_data)))
         logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
+        logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
         return K
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
