@@ -162,18 +162,27 @@ class GPMarginalDensity:
     def _addKV(K, V):
         assert np.ndim(K) == 2
         assert K.shape[0] == K.shape[1]
-        assert isinstance(V, np.ndarray)
-        assert np.ndim(V) == 1
-        assert len(V) == K.shape[0]
 
         if issparse(K):
-            KV = K.copy()
-            KV.setdiag(KV.diagonal() + V)
-            return KV.tocsr()
+            if issparse(V):
+                KV = K + V
+                return KV
+            else:
+                assert np.ndim(V) == 1, "K is sparse, but V is a dense matrix"
+                assert len(V) == K.shape[0]
+                KV = K.copy()
+                KV.setdiag(KV.diagonal() + V)
+                return KV.tocsr()
         elif isinstance(K, np.ndarray):
-            KV = K.copy()
-            np.fill_diagonal(KV, np.diag(K) + V)
-            return KV
+            assert isinstance(V, np.ndarray), "K is np.ndarray, V is not"
+            assert np.ndim(V) == 1 or np.ndim(V) == 2, "V has strange dimensionality"
+            if np.ndim(V) == 2:
+                KV = K + V
+                return KV
+            else:
+                KV = K.copy()
+                np.fill_diagonal(KV, np.diag(K) + V)
+                return KV
         else:
             raise Exception("K+V not possible with the given formats")
 
@@ -271,8 +280,11 @@ class GPMarginalDensity:
         if self.prior_obj.ram_economy is False:
             try:
                 noise_der = self.likelihood_obj.noise_function_grad(self.data_obj.x_data, hyperparameters)
-                noise_der_V = np.zeros((len(hyperparameters), len(self.data_obj.x_data), len(self.data_obj.x_data)))
-                for i in range(len(hyperparameters)): np.fill_diagonal(noise_der_V[i], noise_der[i])
+                assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 3
+                if np.ndim(noise_der) == 2:
+                    noise_der_V = np.zeros((len(hyperparameters), len(self.data_obj.x_data), len(self.data_obj.x_data)))
+                    for i in range(len(hyperparameters)): np.fill_diagonal(noise_der_V[i], noise_der[i])
+                else: noise_der_V = noise_der
                 dK_dH = self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, hyperparameters) + noise_der_V
             except Exception as e:
                 raise Exception(
@@ -293,9 +305,14 @@ class GPMarginalDensity:
                 matr = a[i]
             else:
                 try:
-                    dK_dH = \
-                        self.prior_obj.dk_dh(self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters) + \
-                        np.diag(self.likelihood_obj.noise_function_grad(self.data_obj.x_data, i, hyperparameters))
+                    noise_der = self.likelihood_obj.noise_function_grad(self.data_obj.x_data, i, hyperparameters)
+                    assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 1
+                    if np.ndim(noise_der) == 1:
+                        dK_dH = self.prior_obj.dk_dh(
+                            self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters) + np.diag(noise_der)
+                    else:
+                        dK_dH = self.prior_obj.dk_dh(
+                            self.data_obj.x_data, self.data_obj.x_data, i, hyperparameters) + noise_der
                 except:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "

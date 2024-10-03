@@ -7,7 +7,6 @@ import unittest
 import numpy as np
 from fvgp import fvGP
 from fvgp import GP
-import matplotlib.pyplot as plt
 import time
 import urllib.request
 
@@ -127,7 +126,10 @@ def test_single_task_init_advanced():
         compute_device="cpu", calc_inv = True, ram_economy = True)
 
 def test_train_basic(client):
-    my_gp1 = GP(x_data, y_data, np.array([1., 1., 1., 1., 1., 1.]))
+    def noiseC(x,hps):
+        return np.identity((len(x)))
+
+    my_gp1 = GP(x_data, y_data, np.array([1., 1., 1., 1., 1., 1.]), gp_noise_function = noiseC)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             method = "local", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),

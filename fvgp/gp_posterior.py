@@ -118,11 +118,16 @@ class GPposterior:
 
         if add_noise and callable(self.likelihood_obj.noise_function):
             noise = self.likelihood_obj.noise_function(x_pred, self.prior_obj.hyperparameters)
-            assert isinstance(noise, np.ndarray) and np.ndim(noise) == 1
-            if len(x_pred) == len(noise):
-                v = v + noise
-                if S is not None: S = S + np.diag(noise)
-            else:
+            assert isinstance(noise, np.ndarray)
+            try:
+                if np.ndim(noise) == 1:
+                    v = v + noise
+                    if S is not None: S = S + np.diag(noise)
+                elif np.ndim(noise) == 2:
+                    v = v + np.diag(noise)
+                    if S is not None: S = S + noise
+                else: raise Exception("Wrong noise format")
+            except:
                 warnings.warn("Noise could not be added, you did not provide a noise callable at initialization")
 
         if x_out is not None:
@@ -150,7 +155,6 @@ class GPposterior:
             kk_g = (self.kernel(x1, x1, self.prior_obj.hyperparameters) -
                     self.kernel(x2, x2, self.prior_obj.hyperparameters)) / eps
             dSdx = kk_g - (2.0 * k_g.T @ k_covariance_prod)
-            #print(dSdx.shape)
             a = np.diag(dSdx)
             if x_out is not None:
                 a = a.reshape(len(x_orig), len(x_out), order='F')

@@ -7,15 +7,15 @@ name = "fvgp"
 dependencies = [
     "wheel",
     "scipy ~= 1.13.0",
-    "numpy ~= 1.26.4",
+    "numpy ~= 2.1.1",
     "dask ~= 2024.1.0",
     "distributed ~= 2024.1.0",
-    "hgdl ~= 2.1.9",
+    "hgdl ~= 2.2.1",
     "loguru",
 ]
 # imate
 # pytorch
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     { name = "Marcus Michael Noack", email = "MarcusNoack@lbl.gov" },
     { name = "Ronald J. Pandolfi", email = "ronpandolfi@lbl.gov" },
@@ -33,7 +33,6 @@ classifiers = [
     'Intended Audience :: Developers',
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
-    'Programming Language :: Python :: 3.9',
     'Programming Language :: Python :: 3.10',
     'Programming Language :: Python :: 3.11',
     'Programming Language :: Python :: 3.12',

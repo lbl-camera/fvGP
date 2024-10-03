@@ -52,7 +52,7 @@ class GP:
         Note: if no noise_variances are provided here, the gp_noise_function
         callable will be used; if the callable is not provided, the noise variances
         will be set to `abs(np.mean(y_data)) / 100.0`. If
-        noise covariances are required (correlated noise), make use of the `gp_kernel_function`.
+        noise covariances are required (correlated noise), make use of the `gp_noise_function`.
         Only provide a noise function OR `noise_variances`, not both.
     compute_device : str, optional
         One of `cpu` or `gpu`, determines how linear algebra computations are executed. The default is `cpu`.
@@ -100,18 +100,19 @@ class GP:
         is used if `gp_mean_function` is provided.
     gp_noise_function : Callable, optional
         The noise function is a callable f(x,hyperparameters) that returns a
-        vector (1d np.ndarray) of length(x).
+        vector (1d np.ndarray) of len(x), a matrix of shape (length(x),length(x)) or a sparse matrix
+        of the same shape.
         The input `x` is a numpy array of shape (N x D). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
-        If noise covariances are required (correlated noise), make use of the `gp_kernel_function`.
     gp_noise_function_grad : Callable, optional
         A function that evaluates the gradient of the `gp_noise_function`
         at an input position with respect to the hyperparameters.
         It accepts as input an array of positions (of size N x D) and
         hyperparameters (a 1d array of length D+1 for the default kernel).
-        The return value is a 2d array of
-        shape (len(hyperparameters) x N). If None is provided, either
+        The return value is a 2d np.ndarray of
+        shape (len(hyperparameters) x N) or a 3d np.ndarray of shape (len(hyperparameters) x N x N).
+        If None is provided, either
         zeros are returned since the default noise function does not depend on
         hyperparameters, or, if `gp_noise_function` is provided but no noise function,
         a finite-difference approximation will be used.

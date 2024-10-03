@@ -65,7 +65,6 @@ class GPlikelihood:
 
     def calculate_V(self, hyperparameters):
         noise = self.noise_function(self.x_data, hyperparameters)
-        assert isinstance(noise, np.ndarray) and np.ndim(noise) == 1
         return noise
 
     def _default_noise_function(self, x, hyperparameters):
@@ -88,7 +87,8 @@ class GPlikelihood:
 
     ##########################
     def _finitediff_dnoise_dh(self, x, hps):
-        gr = np.zeros((len(hps), len(x)))
+        #gr = np.zeros((len(hps), len(x)))
+        gr = np.array([np.zeros(self.V.shape)] * len(hps))
         for i in range(len(hps)):
             temp_hps1 = np.array(hps)
             temp_hps1[i] = temp_hps1[i] + 1e-6
