@@ -1301,7 +1301,7 @@ class GP:
 
         mean = self.posterior_mean(x_test)["f(x)"]
         sigma = self.posterior_covariance(x_test)["v(x)"]
-        r = self._crps_s(y_test, mean, sigma)
+        r = self._crps_s(y_test, mean, np.sqrt(sigma))
         return r
 
     def rmse(self, x_test, y_test):
@@ -1325,6 +1325,56 @@ class GP:
         v1 = y_test.reshape(len(y_test))
         v2 = self.posterior_mean(x_test)["f(x)"].reshape(len(v1))
         return np.sqrt(np.sum((v1 - v2) ** 2) / len(v1))
+
+    def nlpd(self, x_test, y_test):
+        """
+        This function calculates the Negative log predictive density.
+        Note that in the multi-task setting the user should perform their
+        input point transformation beforehand.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape V. These are the y data to compare against
+
+        Return
+        ------
+        NLPD : float
+        """
+
+        mean = self.posterior_mean(x_test)["f(x)"]
+        sigma = np.sqrt(self.posterior_covariance(x_test)["v(x)"])
+
+        g = self.gaussian_1d(y_test, mean, sigma)
+        g[g == 0.] = 1e-16
+        g = np.log(g)
+        return -np.mean(g)
+
+    @staticmethod
+    def gaussian_1d(x, mu, sigma):
+        """
+        Evaluates a 1D Gaussian (Normal) distribution at a point x.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            The points where you want to evaluate the Gaussian.
+        mu : np.ndarray
+            The mean of the Gaussian (default 0.0).
+        sigma : np.ndarray
+            The standard deviation of the Gaussians.
+
+        Return
+        ------
+        Evaluations of the Gaussian : np.ndarray
+        """
+        # Gaussian function formula
+        coefficient = 1.0 / (np.sqrt(2 * np.pi) * sigma)
+        exponent = -((x - mu) ** 2) / (2 * sigma ** 2)
+        return coefficient * np.exp(exponent)
+
 
     @staticmethod
     def make_2d_x_pred(bx, by, resx=100, resy=100):  # pragma: no cover

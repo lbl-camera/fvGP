@@ -116,6 +116,7 @@ def test_single_task_init_basic():
     res = my_gp1.prior._default_kernel(x_data,x_data,np.array([1.,1.,1.,1.,1.,1.]))
     my_gp1.crps(x_data[0:2] + 1., np.array([1.,2.]))
     my_gp1.rmse(x_data[0:2] + 1., np.array([1.,2.]))
+    my_gp1.nlpd(x_data[0:2] + 1., np.array([1.,2.]))
     my_gp1.make_2d_x_pred(np.array([1.,2.]),np.array([3.,4]))
     my_gp1.make_1d_x_pred(np.array([1.,2.]))
     my_gp1._get_default_hyperparameter_bounds()
