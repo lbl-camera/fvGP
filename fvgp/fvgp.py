@@ -419,12 +419,12 @@ class fvGP(GP):
             if noise_variances_new is not None:
                 assert isinstance(noise_variances_new, np.ndarray) or isinstance(noise_variances_new, list)
                 if isinstance(noise_variances_new, np.ndarray): self.fvgp_noise_variances = (
-                    np.row_stack([self.fvgp_noise_variances, noise_variances_new]))
+                    np.vstack([self.fvgp_noise_variances, noise_variances_new]))
                 if isinstance(noise_variances_new, list): self.fvgp_noise_variances = (
                     self.fvgp_noise_variances + noise_variances_new)
-            if isinstance(x_new, np.ndarray): self.fvgp_x_data = np.row_stack([self.fvgp_x_data, x_new])
+            if isinstance(x_new, np.ndarray): self.fvgp_x_data = np.vstack([self.fvgp_x_data, x_new])
             if isinstance(x_new, list): self.fvgp_x_data = self.fvgp_x_data + x_new
-            if isinstance(y_new, np.ndarray): self.fvgp_y_data = np.row_stack([self.fvgp_y_data, y_new])
+            if isinstance(y_new, np.ndarray): self.fvgp_y_data = np.vstack([self.fvgp_y_data, y_new])
             if isinstance(y_new, list): self.fvgp_y_data = self.fvgp_y_data + y_new
         else:
             self.fvgp_noise_variances = noise_variances_new

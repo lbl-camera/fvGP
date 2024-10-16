@@ -51,7 +51,7 @@ class GPdata:
             self.y_data = y_data_new
             self.noise_variances = noise_variances_new
         else:
-            if self.Euclidean: self.x_data = np.row_stack([self.x_data, x_data_new])
+            if self.Euclidean: self.x_data = np.vstack([self.x_data, x_data_new])
             else: self.x_data = self.x_data + x_data_new
             self.y_data = np.append(self.y_data, y_data_new)
             if isinstance(noise_variances_new, np.ndarray):
