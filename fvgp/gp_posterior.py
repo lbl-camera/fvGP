@@ -230,7 +230,8 @@ class GPposterior:
                 "dS/dx": np.block([[prior_cov_grad, k_g], [k_g.T, kk_g]])}
 
     ###########################################################################
-    def entropy(self, S):
+    @staticmethod
+    def entropy(S):
         dim = len(S[0])
         ldet = calculate_logdet(S)
         return (float(dim) / 2.0) + ((float(dim) / 2.0) * np.log(2.0 * np.pi)) + (0.5 * ldet)
