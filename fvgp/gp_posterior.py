@@ -116,19 +116,7 @@ class GPposterior:
             v[v < 0.0] = 0.0
             if not variance_only: np.fill_diagonal(S, v)
 
-        if add_noise and callable(self.likelihood_obj.noise_function):
-            noise = self.likelihood_obj.noise_function(x_pred, self.prior_obj.hyperparameters)
-            assert isinstance(noise, np.ndarray)
-            try:
-                if np.ndim(noise) == 1:
-                    v = v + noise
-                    if S is not None: S = S + np.diag(noise)
-                elif np.ndim(noise) == 2:
-                    v = v + np.diag(noise)
-                    if S is not None: S = S + noise
-                else: raise Exception("Wrong noise format")
-            except:
-                warnings.warn("Noise could not be added, you did not provide a noise callable at initialization")
+        if add_noise: v, S = self.add_noise(x_pred, v, S)
 
         if x_out is not None:
             v = v.reshape(len(x_orig), len(x_out), order='F')
@@ -340,7 +328,7 @@ class GPposterior:
         return self.entropy(m1) + self.entropy(m2) - self.entropy(joint)
 
     ###########################################################################
-    def gp_mutual_information(self, x_pred, x_out=None):
+    def gp_mutual_information(self, x_pred, x_out=None, add_noise=False):
         x_data, K = self.data_obj.x_data.copy(), self.prior_obj.K.copy() + (np.identity(len(self.prior_obj.K)) * 1e-9)
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
@@ -348,13 +336,14 @@ class GPposterior:
 
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
+        if add_noise: v, kk = self.add_noise(x_pred, np.diag(kk), kk)
 
         joint_covariance = np.block([[K, k], [k.T, kk]])
         return {"x": x_orig,
                 "mutual information": self.mutual_information(joint_covariance, kk, K)}
 
     ###########################################################################
-    def gp_total_correlation(self, x_pred, x_out=None):
+    def gp_total_correlation(self, x_pred, x_out=None, add_noise=False):
         x_data, K = self.data_obj.x_data.copy(), self.prior_obj.K.copy() + (np.identity(len(self.prior_obj.K)) * 1e-9)
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
@@ -362,6 +351,7 @@ class GPposterior:
 
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
+        if add_noise: v, kk = self.add_noise(x_pred, np.diag(kk), kk)
         joint_covariance = np.block([[K, k], [k.T, kk]])
 
         prod_covariance = np.block([[K, k * 0.], [k.T * 0., kk * np.identity(len(kk))]])
@@ -371,23 +361,29 @@ class GPposterior:
                                                  joint_covariance, prod_covariance)}
 
     ###########################################################################
-    def gp_relative_information_entropy(self, x_pred, x_out=None):
+    def gp_relative_information_entropy(self, x_pred, x_out=None, add_noise=False):
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
         post_cov = self.posterior_covariance(x_pred, x_out=None)["S"] + (np.identity(len(x_pred)) * 1e-9)
+        if add_noise: v, post_cov = self.add_noise(x_pred, np.diag(post_cov), post_cov)
+
+        hyperparameters = self.prior_obj.hyperparameters
+        post_mean = self.posterior_mean(x_pred, x_out=None)["f(x)"]
+        prio_mean = self.mean_function(x_pred, hyperparameters)
         return {"x": x_orig,
-                "RIE": self.kl_div(np.zeros((len(x_pred))), np.zeros((len(x_pred))), kk, post_cov)}
+                "RIE": self.kl_div(prio_mean, post_mean, kk, post_cov)}
 
     ###########################################################################
-    def gp_relative_information_entropy_set(self, x_pred, x_out=None):
+    def gp_relative_information_entropy_set(self, x_pred, x_out=None, add_noise=False):
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
         if x_out is not None: x_pred = self.cartesian_product(x_pred, x_out)
         RIE = np.zeros((len(x_pred)))
         for i in range(len(x_pred)):
-            RIE[i] = self.gp_relative_information_entropy(x_pred[i].reshape(1, len(x_pred[i])), x_out=None)["RIE"]
+            RIE[i] = self.gp_relative_information_entropy(
+                x_pred[i].reshape(1, len(x_pred[i])), x_out=None, add_noise=add_noise)["RIE"]
 
         return {"x": x_orig,
                 "RIE": RIE}
@@ -430,6 +426,23 @@ class GPposterior:
         probability_grad = (self.posterior_probability(x1, comp_mean, comp_cov, x_out=None)["probability"] -
                             self.posterior_probability(x2, comp_mean, comp_cov, x_out=None)["probability"]) / 2e-6
         return {"probability grad": probability_grad}
+
+    def add_noise(self, x_pred, v, S):
+        if callable(self.likelihood_obj.noise_function):
+            noise = self.likelihood_obj.noise_function(x_pred, self.prior_obj.hyperparameters)
+            assert isinstance(noise, np.ndarray)
+            try:
+                if np.ndim(noise) == 1:
+                    v = v + noise
+                    if S is not None: S = S + np.diag(noise)
+                elif np.ndim(noise) == 2:
+                    v = v + np.diag(noise)
+                    if S is not None: S = S + noise
+                else:
+                    raise Exception("Wrong noise format")
+            except:
+                warnings.warn("Noise could not be added, you did not provide a noise callable at initialization")
+        return v, S
 
     ###########################################################################
     @staticmethod

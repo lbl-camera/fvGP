@@ -57,7 +57,7 @@ def test_lin_alg():
     ss = calculate_Chol_solve(dd, np.random.rand(len(A)))
     ll = calculate_Chol_logdet(dd)
     ll = spai(A,20)
-    calculate_sparse_minres(sparse.coo_matrix(A),np.random.rand(len(A)), info=False)
+    calculate_sparse_minres(sparse.coo_matrix(A),np.random.rand(len(A)))
     calculate_sparse_conj_grad(sparse.coo_matrix(A),np.random.rand(len(A)))
     logd = calculate_logdet(B)
     update_logdet(logd, np.linalg.inv(B), A)
@@ -77,16 +77,16 @@ def test_single_task_init_basic():
     def prior_mean(x,hps):
         return np.zeros(len(x))
 
-    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu', info = True)
+    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu')
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), gp_kernel_function = kernel,
-            gp_noise_function=noise, compute_device = 'cpu', info = True, ram_economy=True)
+            gp_noise_function=noise, compute_device = 'cpu', ram_economy=True)
     my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.get_hyperparameters())
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), gp_kernel_function = kernel,
-            gp_noise_function=noise, gp_mean_function = prior_mean, compute_device = 'cpu', info = True, ram_economy=False)
+            gp_noise_function=noise, gp_mean_function = prior_mean, compute_device = 'cpu', ram_economy=False)
     my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.get_hyperparameters())
-    my_gp1 = GP(x_data, y_data, info = True)
+    my_gp1 = GP(x_data, y_data)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
-    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = False, info = True)
+    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = False)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), args = {'a':2.})
     my_gp1.update_gp_data(x_data, y_data, append = True)
     my_gp1.update_gp_data(x_data, y_data, append = False)
@@ -150,6 +150,18 @@ def test_train_basic(client):
     res = my_gp1.gp_entropy_grad(np.random.rand(10,len(x_data[0])),0)
     res = my_gp1.gp_relative_information_entropy(np.random.rand(10,len(x_data[0])))
     res = my_gp1.gp_relative_information_entropy_set(np.random.rand(10,len(x_data[0])))
+    
+    res = my_gp1.gp_mutual_information(np.random.rand(10,len(x_data[0])), add_noise = False)
+    res = my_gp1.gp_mutual_information(np.random.rand(10,len(x_data[0])), add_noise = True)
+    res = my_gp1.gp_total_correlation(np.random.rand(10,len(x_data[0])))
+    res = my_gp1.gp_total_correlation(np.random.rand(10,len(x_data[0])), add_noise = True)
+    res = my_gp1.gp_relative_information_entropy(np.random.rand(10,len(x_data[0])))
+    res = my_gp1.gp_relative_information_entropy(np.random.rand(10,len(x_data[0])), add_noise = True)
+
+    res = my_gp1.gp_relative_information_entropy_set(np.random.rand(10,len(x_data[0])))
+    res = my_gp1.gp_relative_information_entropy_set(np.random.rand(10,len(x_data[0])), add_noise = True)
+
+
 
     A = np.random.rand(10,10)
     B = A.T @ A
@@ -203,7 +215,7 @@ def test_train_hgdl_async(client):
     opt_obj = my_gp2.train_async(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             max_iter = 50, dask_client=client)
 
-    time.sleep(3)
+    time.sleep(5)
     my_gp2.update_hyperparameters(opt_obj)
     my_gp2.stop_training(opt_obj)
     my_gp2.kill_training(opt_obj)
@@ -225,7 +237,7 @@ def test_multi_task(client):
     my_fvgp.update_gp_data(x_data, y_data, append = True)
     my_fvgp.update_gp_data(x_data, y_data, append = False)
     my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10]]),
-            method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2, dask_client=client)
+            method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2, dask_client=client, info = True)
     my_fvgp.posterior_mean(np.random.rand(10,5), x_out = np.array([0,1]))["f(x)"]
     my_fvgp.posterior_mean_grad(np.random.rand(10,5), x_out = np.array([0,1]))["df/dx"]
     my_fvgp.posterior_covariance(np.random.rand(10,5), x_out = np.array([0,1]))["v(x)"]
@@ -275,7 +287,7 @@ def test_gp2Scale(client):
     my_gp2S.update_gp_data(x_data,y_data, append = False)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
 
-    my_gp2S.train(hyperparameter_bounds=hps_bounds, max_iter = 2, init_hyperparameters = init_hps)
+    my_gp2S.train(hyperparameter_bounds=hps_bounds, max_iter = 2, init_hyperparameters = init_hps, info = True)
 
     def obj_func(hps,args):
         return my_gp2S.log_likelihood(hyperparameters=hps[0:2])
@@ -313,7 +325,7 @@ def test_gp2Scale(client):
                             low = hps_bounds[:,0], 
                             high = hps_bounds[:,1], 
                             size = len(hps_bounds))
-    mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
+    mcmc_result = my_mcmc.run_mcmc(x0=hps, n_updates=10, break_condition="default")
     my_gp2S.set_hyperparameters(mcmc_result["x"][-1])
     x_pred = np.linspace(0,1,1000)
     mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["f(x)"]
@@ -323,7 +335,7 @@ def test_gp2Scale(client):
     my_mcmc = gpMCMC(obj_func, prior_function, [pd],
                     args={"bounds":hps_bounds})
 
-    mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=20, break_condition="default")
+    mcmc_result = my_mcmc.run_mcmc(x0=hps, n_updates=20, break_condition="default")
     
     pd = ProposalDistribution([0,1], init_prop_Sigma = init_s, adapt_callable = "normal")
     my_mcmc = gpMCMC(obj_func, prior_function, [pd],

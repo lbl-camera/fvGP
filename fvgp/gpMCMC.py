@@ -3,7 +3,6 @@
 import numpy as np
 import time
 import warnings
-from loguru import logger
 
 
 ## --------------------------------------------------------------------- ##
@@ -92,7 +91,7 @@ class gpMCMC:
         n_updates: int, optional
             The log of the likelihood to be sampled.
         info : bool
-            Whether to print information about the mcmc iterations (using logger).
+            Whether to print information about the mcmc iterations.
         break_condition : callable or string or None
             A break condition that specified when the mcmc is terminated. If None,
             mcmc will run until `n_updates` is reached. If callable will get the mcmc object instance as
@@ -127,7 +126,7 @@ class gpMCMC:
         # Initialize Metropolis
         x = x0.copy()
         likelihood = self.log_likelihood_function(x, self.args)
-        if info: logger.info("Starting likelihood. f(x)= {}", likelihood)
+        if info: print("Starting likelihood. f(x)= ", likelihood)
         prior = self.prior_function(x, self.args)
         #########################################################
         # Begin main loop

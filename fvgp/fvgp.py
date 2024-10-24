@@ -185,8 +185,6 @@ class fvGP(GP):
         CAUTION: This array will be stored and is very large.
     args : any, optional
         args will be a class attribute and therefore available to kernel, noise and prior mean functions.
-    info : bool, optional
-        Provides a way how to access various information reports. The default is False.
 
     Attributes
     ----------
@@ -306,7 +304,6 @@ class fvGP(GP):
         calc_inv=False,
         ram_economy=False,
         args=None,
-        info=False,
     ):
         assert isinstance(y_data, list) or isinstance(y_data, np.ndarray)
         assert output_positions is None or isinstance(output_positions, list)
@@ -356,8 +353,7 @@ class fvGP(GP):
             gp2Scale_linalg_mode=gp2Scale_linalg_mode,
             calc_inv=calc_inv,
             ram_economy=ram_economy,
-            args=args,
-            info=info)
+            args=args)
 
         if self.data.Euclidean: assert self.index_set_dim == self.input_space_dim + 1
 

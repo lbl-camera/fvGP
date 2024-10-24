@@ -11,11 +11,10 @@ from .gp_marginal_density import GPMarginalDensity
 from .gp_likelihood import GPlikelihood
 from .gp_training import GPtraining
 from .gp_posterior import GPposterior
-import sys
 
 
 # TODO: search below "TODO"
-#   variational inference in fvgp
+#   variational inference in fvgp?
 
 
 class GP:
@@ -165,8 +164,6 @@ class GP:
         CAUTION: This array will be stored and is very large.
     args : any, optional
         args will be a class attribute and therefore available to kernel, noise and prior mean functions.
-    info : bool, optional
-        Provides a way how to access various information reports. The default is False.
 
     Attributes
     ----------
@@ -206,17 +203,9 @@ class GP:
         calc_inv=False,
         ram_economy=False,
         args=None,
-        info=False
     ):
         self.compute_device = compute_device
         self.args = args
-        self.info = info
-        if info:
-            logger.remove()
-            logger.enable("fvgp")
-            logger.add(sys.stdout, filter="fvgp", level="INFO")
-        else:
-            logger.disable("fvgp")
         self.calc_inv = calc_inv
         self.gp2Scale = gp2Scale
         hyperparameters = init_hyperparameters
@@ -229,7 +218,7 @@ class GP:
         if self.data.Euclidean:
             if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
                 if init_hyperparameters is None: raise Exception(
-                    "You have provided callables for kernel, mean, or noise functions but no"
+                    "You have provided callables for kernel, mean, or noise functions but no "
                     "initial hyperparameters.")
             else:
                 if init_hyperparameters is None: hyperparameters = np.ones((self.data.index_set_dim + 1))
@@ -248,7 +237,7 @@ class GP:
                     "You have activated `gp2Scale`. You need to install imate"
                     " manually for this to work.")
             if gp2Scale_dask_client is None:
-                logger.info("Creating my own local client.")
+                logger.debug("Creating my own local client.")
                 gp2Scale_dask_client = Client()
 
         if compute_device == 'gpu':
@@ -296,7 +285,6 @@ class GP:
             self.prior,
             self.likelihood,
             calc_inv=calc_inv,
-            info=info,
             gp2Scale=gp2Scale,
             gp2Scale_linalg_mode=gp2Scale_linalg_mode,
             compute_device=compute_device
@@ -305,7 +293,7 @@ class GP:
         ##########################################
         #######prepare training###################
         ##########################################
-        self.trainer = GPtraining(info=info, gp2Scale=gp2Scale)
+        self.trainer = GPtraining(gp2Scale=gp2Scale)
 
         ##########################################
         #######prepare posterior evaluations######
@@ -416,7 +404,8 @@ class GP:
               local_optimizer="L-BFGS-B",
               global_optimizer="genetic",
               constraints=(),
-              dask_client=None):
+              dask_client=None,
+              info=False):
 
         """
         This function finds the maximum of the log marginal likelihood and therefore trains the GP (synchronously).
@@ -475,6 +464,10 @@ class GP:
         dask_client : distributed.client.Client, optional
             A Dask Distributed Client instance for distributed training if `hgdl` is used. If None is provided, a new
             `dask.distributed.Client` instance is constructed.
+        info : bool, optional
+            Provides a way how to access information reports during training of the GP. The default is False.
+            If other information is needed please, utilize `logger` as described in the online
+            documentation (separately for HGDL and fvgp if needed).
 
 
         Return
@@ -494,7 +487,7 @@ class GP:
         if objective_function is not None and method == 'mcmc':
             warnings.warn("MCMC will ignore the user-defined objective function")
         if objective_function is not None and objective_function_gradient is None and (method == 'local' or 'hgdl'):
-            raise Exception("For user-defined objective functions and local or hybrid optimization, a gradient and\
+            raise Exception("For user-defined objective functions and local or hybrid optimization, a gradient and \
                              Hessian function of the objective function have to be defined.")
         if method == 'mcmc': objective_function = self.marginal_density.log_likelihood
         if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
@@ -503,8 +496,8 @@ class GP:
         if objective_function_hessian is None:
             objective_function_hessian = self.marginal_density.neg_log_likelihood_hessian
 
-        logger.info("objective function: {}", objective_function)
-        logger.info("method: {}", method)
+        logger.debug("objective function: {}", objective_function)
+        logger.debug("method: {}", method)
 
         hyperparameters = self.trainer.train(
             objective_function=objective_function,
@@ -519,7 +512,8 @@ class GP:
             local_optimizer=local_optimizer,
             global_optimizer=global_optimizer,
             constraints=constraints,
-            dask_client=dask_client
+            dask_client=dask_client,
+            info=info
         )
 
         self.prior.update_hyperparameters(self.data.x_data, hyperparameters)
@@ -1112,7 +1106,7 @@ class GP:
         return self.posterior.mutual_information(joint, m1, m2)
 
     ###########################################################################
-    def gp_mutual_information(self, x_pred, x_out=None):
+    def gp_mutual_information(self, x_pred, x_out=None, add_noise=False):
         """
         Function to calculate the mutual information between
         the random variables f(x_data) and f(x_pred).
@@ -1128,15 +1122,17 @@ class GP:
             Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
+        add_noise : bool, optional
+            If True the noise variances will be added to the prior over the prediction points. Default = False.
 
         Return
         ------
         Solution : dict
         """
-        return self.posterior.gp_mutual_information(x_pred, x_out=x_out)
+        return self.posterior.gp_mutual_information(x_pred, x_out=x_out, add_noise=add_noise)
 
     ###########################################################################
-    def gp_total_correlation(self, x_pred, x_out=None):
+    def gp_total_correlation(self, x_pred, x_out=None, add_noise=False):
         """
         Function to calculate the interaction information between
         the random variables f(x_data) and f(x_pred). This is the mutual information
@@ -1155,16 +1151,18 @@ class GP:
             Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
+        add_noise : bool, optional
+            If True the noise variances will be added to the prior over the prediction points. Default = False.
 
         Return
         ------
         Solution : dict
             Total correlation between prediction points, as a collective.
         """
-        return self.posterior.gp_total_correlation(x_pred, x_out=x_out)
+        return self.posterior.gp_total_correlation(x_pred, x_out=x_out, add_noise=add_noise)
 
     ###########################################################################
-    def gp_relative_information_entropy(self, x_pred, x_out=None):
+    def gp_relative_information_entropy(self, x_pred, x_out=None, add_noise=False):
         """
         Function to compute the KL divergence and therefore the relative information entropy
         of the prior distribution defined over predicted function values and the posterior distribution.
@@ -1180,16 +1178,18 @@ class GP:
             Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
+        add_noise : bool, optional
+            If True the noise variances will be added to the posterior covariance. Default = False.
 
         Return
         ------
         Solution : dict
             Relative information entropy of prediction points, as a collective.
         """
-        return self.posterior.gp_relative_information_entropy(x_pred, x_out=x_out)
+        return self.posterior.gp_relative_information_entropy(x_pred, x_out=x_out, add_noise=add_noise)
 
     ###########################################################################
-    def gp_relative_information_entropy_set(self, x_pred, x_out=None):
+    def gp_relative_information_entropy_set(self, x_pred, x_out=None, add_noise=False):
         """
         Function to compute the KL divergence and therefore the relative information entropy
         of the prior distribution over predicted function values and the posterior distribution.
@@ -1207,13 +1207,15 @@ class GP:
             Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
             Usually this is np.ndarray([0,1,2,...]).
+        add_noise : bool, optional
+            If True the noise variances will be added to the posterior covariance. Default = False.
 
         Return
         ------
         Solution : dict
             Relative information entropy of prediction points, but not as a collective.
         """
-        return self.posterior.gp_relative_information_entropy_set(x_pred, x_out=x_out)
+        return self.posterior.gp_relative_information_entropy_set(x_pred, x_out=x_out, add_noise=add_noise)
 
     ###########################################################################
     def posterior_probability(self, x_pred, comp_mean, comp_cov, x_out=None):

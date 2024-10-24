@@ -12,7 +12,6 @@ class GPMarginalDensity:
                  prior_obj,
                  likelihood_obj,
                  calc_inv=False,
-                 info=False,
                  gp2Scale=False,
                  gp2Scale_linalg_mode=None,
                  compute_device='cpu'):
@@ -21,7 +20,6 @@ class GPMarginalDensity:
         self.prior_obj = prior_obj
         self.likelihood_obj = likelihood_obj
         self.calc_inv = calc_inv
-        self.info = info
         self.y_data = data_obj.y_data
         self.gp2Scale = gp2Scale
         self.compute_device = compute_device
@@ -29,7 +27,7 @@ class GPMarginalDensity:
         if self.gp2Scale:
             self.calc_inv = False
             warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False")
-        self.KVlinalg = KVlinalg(info, compute_device)
+        self.KVlinalg = KVlinalg(compute_device)
         K, V, m = self._get_KVm()
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(K)
@@ -91,9 +89,9 @@ class GPMarginalDensity:
                 Chol_factor = calculate_Chol_factor(KV)
                 KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
             elif mode == "sparseCG":
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, info=self.info)
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean)
             elif mode == "sparseMINRES":
-                KVinvY = calculate_sparse_minres(KV, y_mean, info=self.info)
+                KVinvY = calculate_sparse_minres(KV, y_mean)
             elif mode == "sparseMINRESpre":
                 B = sparse.linalg.spilu(KV, drop_tol=1e-8)
                 KVinvY = calculate_sparse_minres(KV, y_mean, M=B.L.T @ B.L)
@@ -101,7 +99,7 @@ class GPMarginalDensity:
                 B = sparse.linalg.spilu(KV, drop_tol=1e-8)
                 KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L)
             elif mode == "sparseSolve":
-                KVinvY = calculate_sparse_solve(KV, y_mean, info=self.info)
+                KVinvY = calculate_sparse_solve(KV, y_mean)
             else:
                 raise Exception("No mode in gp2Scale", mode)
         else:
@@ -128,22 +126,22 @@ class GPMarginalDensity:
                 KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
                 KVlogdet = calculate_Chol_logdet(Chol_factor)
             elif mode == "sparseCG":
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, info=self.info)
-                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean)
+                KVlogdet = calculate_random_logdet(KV, self.compute_device)
             elif mode == "sparseMINRES":
-                KVinvY = calculate_sparse_minres(KV, y_mean, info=self.info)
-                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
+                KVinvY = calculate_sparse_minres(KV, y_mean)
+                KVlogdet = calculate_random_logdet(KV, self.compute_device)
             elif mode == "sparseMINRESpre":
                 B = sparse.linalg.spilu(KV, drop_tol=1e-8)
                 KVinvY = calculate_sparse_minres(KV, y_mean, M=B.L.T @ B.L)
-                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
+                KVlogdet = calculate_random_logdet(KV, self.compute_device)
             elif mode == "sparseCGpre":
                 B = sparse.linalg.spilu(KV, drop_tol=1e-8)
                 KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L)
-                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
+                KVlogdet = calculate_random_logdet(KV, self.compute_device)
             elif mode == "sparseSolve":
-                KVinvY = calculate_sparse_solve(KV, y_mean, info=self.info)
-                KVlogdet = calculate_random_logdet(KV, self.info, self.compute_device)
+                KVinvY = calculate_sparse_solve(KV, y_mean)
+                KVlogdet = calculate_random_logdet(KV, self.compute_device)
             else:
                 raise Exception("No mode in gp2Scale", mode)
         else:
@@ -212,7 +210,7 @@ class GPMarginalDensity:
         ------
         log marginal likelihood of the data : float
         """
-        logger.info("log marginal likelihood is being evaluated")
+        logger.debug("log marginal likelihood is being evaluated")
         if hyperparameters is None:
             K, V, m = self._get_KVm()
             KVinvY = self.KVinvY
@@ -220,13 +218,13 @@ class GPMarginalDensity:
         else:
             st = time.time()
             K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
-            logger.info("   Prior covariance matrix computed after {} seconds.", time.time() - st)
+            logger.debug("   Prior covariance matrix computed after {} seconds.", time.time() - st)
             V = self.likelihood_obj.calculate_V(hyperparameters)
-            logger.info("   V computed after {} seconds.", time.time() - st)
+            logger.debug("   V computed after {} seconds.", time.time() - st)
             m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
-            logger.info("   Prior mean computed after {} seconds.", time.time() - st)
+            logger.debug("   Prior mean computed after {} seconds.", time.time() - st)
             KVinvY, KVlogdet = self.compute_new_KVlogdet_KVinvY(K, V, m)
-            logger.info("   KVinvY and logdet computed after {} seconds.", time.time() - st)
+            logger.debug("   KVinvY and logdet computed after {} seconds.", time.time() - st)
 
         n = len(self.y_data)
         return -(0.5 * ((self.y_data - m).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
@@ -369,9 +367,8 @@ class GPMarginalDensity:
 
 
 class KVlinalg:
-    def __init__(self, info, compute_device):
+    def __init__(self, compute_device):
         self.mode = None
-        self.info = info
         self.compute_device = compute_device
         self.KVinv = None
         self.KV = None
@@ -441,9 +438,9 @@ class KVlinalg:
         elif self.mode == "Inv":
             return self.KVinv @ b
         elif self.mode == "sparseCG":
-            return calculate_sparse_conj_grad(self.KV, b, info=self.info, x0=x0)
+            return calculate_sparse_conj_grad(self.KV, b, x0=x0)
         elif self.mode == "sparseMINRES":
-            return calculate_sparse_minres(self.KV, b, info=self.info, x0=x0)
+            return calculate_sparse_minres(self.KV, b, x0=x0)
         elif self.mode == "sparseLU":
             return calculate_LU_solve(self.LU_factor, b)
         elif self.mode == "sparseMINRESpre":
@@ -453,7 +450,7 @@ class KVlinalg:
             B = sparse.linalg.spilu(self.KV, drop_tol=1e-8)
             return calculate_sparse_conj_grad(self.KV, b, M=B.L.T @ B.L, x0=x0)
         elif self.mode == "sparseSolve":
-            return calculate_sparse_solve(self.KV, b, info=self.info)
+            return calculate_sparse_solve(self.KV, b)
         else:
             raise Exception("No Mode")
 
@@ -461,10 +458,10 @@ class KVlinalg:
         if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor)
         elif self.mode == "sparseLU": return calculate_LU_logdet(self.LU_factor)
         elif self.mode == "Inv": return calculate_logdet(self.KV)
-        elif self.mode == "sparseCG": return calculate_random_logdet(self.KV, self.info, self.compute_device)
-        elif self.mode == "sparseMINRES": return calculate_random_logdet(self.KV, self.info, self.compute_device)
-        elif self.mode == "sparseMINRESpre": return calculate_random_logdet(self.KV, self.info, self.compute_device)
-        elif self.mode == "sparseCGpre": return calculate_random_logdet(self.KV, self.info, self.compute_device)
-        elif self.mode == "sparseSolve": return calculate_random_logdet(self.KV, self.info, self.compute_device)
+        elif self.mode == "sparseCG": return calculate_random_logdet(self.KV, self.compute_device)
+        elif self.mode == "sparseMINRES": return calculate_random_logdet(self.KV, self.compute_device)
+        elif self.mode == "sparseMINRESpre": return calculate_random_logdet(self.KV, self.compute_device)
+        elif self.mode == "sparseCGpre": return calculate_random_logdet(self.KV, self.compute_device)
+        elif self.mode == "sparseSolve": return calculate_random_logdet(self.KV, self.compute_device)
 
 
