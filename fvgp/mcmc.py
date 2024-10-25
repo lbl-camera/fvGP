@@ -150,7 +150,7 @@ def mcmc(likelihood_fn, bounds, x0=None, n_updates=10000,
         if return_prop_Sigma_trace: prop_Sigma_trace[i, :, :] = prop_Sigma
         # Echo every 100 iterations
         if info:
-            if (i % 100) == 0: print("Finished {} out of {} iterations. f(x)= {}", i, n_updates, likelihood)
+            if (i % 100) == 0: print("Finished ", i, " out of ", n_updates, " iterations. f(x)= ", likelihood)
         if len(x) > 201 and np.linalg.norm(np.mean(x[-100:], axis=0)-np.mean(x[-200:-100], axis=0)) < 0.01 * \
             np.linalg.norm(np.mean(x[-100:], axis=0)): break
     # End main loop
