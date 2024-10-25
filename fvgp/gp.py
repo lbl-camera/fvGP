@@ -466,7 +466,7 @@ class GP:
             `dask.distributed.Client` instance is constructed.
         info : bool, optional
             Provides a way how to access information reports during training of the GP. The default is False.
-            If other information is needed please, utilize `logger` as described in the online
+            If other information is needed please utilize `logger` as described in the online
             documentation (separately for HGDL and fvgp if needed).
 
 
