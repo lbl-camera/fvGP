@@ -5,9 +5,7 @@ import scipy.sparse as sparse
 
 class GPlikelihood:
     def __init__(self,
-                 x_data,
-                 y_data,
-                 noise_variances,
+                 data,
                  hyperparameters=None,
                  gp_noise_function=None,
                  gp_noise_function_grad=None,
@@ -16,23 +14,20 @@ class GPlikelihood:
                  ):
 
         assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
+        self.data = data
+        assert self.data.noise_variances is None or isinstance(self.data.noise_variances, np.ndarray)
 
-        self.x_data = x_data
-        self.y_data = y_data
-        self.noise_variances = noise_variances
-        assert self.noise_variances is None or isinstance(self.noise_variances, np.ndarray)
-
-        if isinstance(self.noise_variances, np.ndarray):
-            assert np.ndim(self.noise_variances) == 1
-            assert all(self.noise_variances > 0.0)
+        if isinstance(self.data.noise_variances, np.ndarray):
+            assert np.ndim(self.data.noise_variances) == 1
+            assert all(self.data.noise_variances > 0.0)
 
         self.gp2Scale = gp2Scale
 
-        if self.noise_variances is not None and callable(gp_noise_function):
+        if self.data.noise_variances is not None and callable(gp_noise_function):
             raise Exception("Noise function and measurement noise provided. Decide which one to use.")
         if callable(gp_noise_function):
             self.noise_function = gp_noise_function
-        elif self.noise_variances is not None:
+        elif self.data.noise_variances is not None:
             self.noise_function = self._measured_noise_function
         else:
             warnings.warn(
@@ -53,26 +48,25 @@ class GPlikelihood:
                 self.noise_function_grad = self._default_dnoise_dh_econ
             else:
                 self.noise_function_grad = self._default_dnoise_dh
-
-        self.V = self.noise_function(self.x_data, hyperparameters)
+        self.V = self.noise_function(self.data.x_data, hyperparameters)
 
     ##################################################################################
-    def update(self, x_data, y_data, noise_variances, hyperparameters):
-        self.x_data = x_data
-        self.y_data = y_data
-        self.noise_variances = noise_variances
+    def update(self, hyperparameters):
         self.V = self.calculate_V(hyperparameters)
 
+    #def augment(self, x_old, x_new): #for later to augment V given new data instead of recompute
+    #    self.V =
+
     def calculate_V(self, hyperparameters):
-        noise = self.noise_function(self.x_data, hyperparameters)
+        noise = self.noise_function(self.data.x_data, hyperparameters)
         return noise
 
     def _default_noise_function(self, x, hyperparameters):
-        noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)**2
+        noise = np.ones((len(x))) * (np.mean(abs(self.data.y_data)) / 100.0)**2
         return noise
 
     def _measured_noise_function(self, x, hyperparameters):
-        if len(x) == len(self.noise_variances): return self.noise_variances
+        if len(x) == len(self.data.noise_variances): return self.data.noise_variances
         else: return np.zeros((len(x))) + 0.0000001
 
     @staticmethod

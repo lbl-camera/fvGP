@@ -2,11 +2,7 @@ import numpy as np
 import time
 from loguru import logger
 
-def out_of_bounds(x,bounds):
-    for i in range(len(x)):
-        if x[i] < bounds[i,0] or x[i] > bounds[i,1]:
-            return True
-    return False
+
 
 
 def project_onto_bounds(x, bounds):

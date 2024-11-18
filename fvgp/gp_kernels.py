@@ -308,6 +308,26 @@ def polynomial_kernel(x1, x2, p):
     return p
 
 
+def wendland_function(d):
+    """
+    Function for the Wendland kernel with a given distance matrix.
+    The Wendland kernel is compactly supported, leading to sparse covariance matrices.
+
+    Parameters
+    ----------
+    d : np.ndarray
+        Distance matrix.
+
+    Return
+    ------
+    Covariance matrix : np.ndarray
+    """
+    d[d > 1.] = 1.
+    kernel = (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
+    return kernel
+
+
+
 def wendland_anisotropic(x1, x2, hyperparameters):
     """
     Function for the Wendland kernel.

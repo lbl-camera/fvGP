@@ -12,9 +12,7 @@ from loguru import logger
 
 class GPprior:
     def __init__(self,
-                 index_set_dim,
-                 x_data,
-                 Euclidean,
+                 data,
                  gp_kernel_function=None,
                  gp_kernel_function_grad=None,
                  gp_mean_function=None,
@@ -22,7 +20,6 @@ class GPprior:
                  hyperparameters=None,
                  ram_economy=False,
                  compute_device='cpu',
-                 constant_mean=0.0,
                  gp2Scale=False,
                  gp2Scale_dask_client=None,
                  gp2Scale_batch_size=10000
@@ -32,18 +29,17 @@ class GPprior:
         assert callable(gp_mean_function) or gp_mean_function is None
         assert isinstance(hyperparameters, np.ndarray)
         assert np.ndim(hyperparameters) == 1
-        assert isinstance(constant_mean, float)
 
-        self.index_set_dim = index_set_dim
-        self.Euclidean = Euclidean
+        self.index_set_dim = data.index_set_dim
+        self.Euclidean = data.Euclidean
         self.gp_kernel_function = gp_kernel_function
         self.gp_mean_function = gp_mean_function
         self.hyperparameters = hyperparameters
         self.ram_economy = ram_economy
-        self.constant_mean = constant_mean
         self.gp2Scale = gp2Scale
         self.client = gp2Scale_dask_client
         self.batch_size = gp2Scale_batch_size
+        self.data = data
 
         if not self.Euclidean and not callable(gp_kernel_function):
             raise Exception(
@@ -94,19 +90,17 @@ class GPprior:
         else:
             self.dm_dh = self._default_dm_dh
 
-        self.m, self.K = self._compute_prior(x_data)
+        self.m, self.K = self._compute_prior(data.x_data)
 
-    def augment_data(self, x_old, x_new, constant_mean=0.0):
-        self.constant_mean = constant_mean
+    def augment_data(self, x_old, x_new):
         self.m, self.K = self._update_prior(x_old, x_new)
 
-    def update_data(self, x_data, constant_mean=0.0):
-        self.constant_mean = constant_mean
-        self.m, self.K = self._compute_prior(x_data)
+    def update_data(self):
+        self.m, self.K = self._compute_prior(self.data.x_data)
 
-    def update_hyperparameters(self, x_data, hyperparameters):
+    def update_hyperparameters(self, hyperparameters):
         self.hyperparameters = hyperparameters
-        self.m, self.K = self._compute_prior(x_data)
+        self.m, self.K = self._compute_prior(self.data.x_data)
 
     def _compute_prior(self, x_data):
         m = self.compute_mean(x_data)
@@ -151,12 +145,14 @@ class GPprior:
         return m
 
     def _update_mean(self, x_new):
-        if self.default_m: self.m[:] = self.constant_mean
+        if self.default_m:
+            m = np.zeros((len(self.m) + len(x_new)))
+            m[:] = np.mean(self.data.y_data)
         m = np.append(self.m, self.mean_function(x_new, self.hyperparameters))
         return m
 
     @staticmethod
-    def ranges(N, nb):
+    def _ranges(N, nb):
         """ splits a range(N) into nb chunks defined by chunk_start, chunk_end """
         if nb == 0: nb = 1
         step = N / nb
@@ -173,13 +169,13 @@ class GPprior:
 
         self.x_data_scatter_future = client.scatter(
             x_data, workers=self.compute_workers, broadcast=True)
-        ranges = self.ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
+        ranges = self._ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
         logger.debug("        gp2Scale covariance matrix init done after {} seconds.", time.time() - st)
 
-        results = list(map(self.harvest_result, distributed.as_completed(client.map(
+        results = list(map(self._harvest_result, distributed.as_completed(client.map(
             partial(kernel_function,
                     hyperparameters=hyperparameters,
                     kernel=self.kernel),
@@ -189,7 +185,6 @@ class GPprior:
             with_results=True)))
 
         logger.debug("        gp2Scale covariance matrix result written after {} seconds.", time.time() - st)
-
 
         # reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
@@ -215,16 +210,16 @@ class GPprior:
         point_number = len(x_old)
         num_batches = point_number // self.batch_size
         NUM_RANGES = num_batches
-        ranges_data = self.ranges(len(x_old), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
+        ranges_data = self._ranges(len(x_old), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         num_batches2 = len(x_new) // self.batch_size
-        ranges_input = self.ranges(len(x_new), num_batches2)
+        ranges_input = self._ranges(len(x_new), num_batches2)
         ranges_ij = list(itertools.product(ranges_data, ranges_input))
 
         # K = np.block([[self.K, B],
         #               [B,      C]])
         # Calculate B
 
-        results = list(map(self.harvest_result,
+        results = list(map(self._harvest_result,
                            distributed.as_completed(client.map(
                                partial(kernel_function_update,
                                        hyperparameters=hyperparameters,
@@ -242,7 +237,7 @@ class GPprior:
         ranges_ij2 = [range_ij2 for range_ij2 in ranges_ij2 if
                       range_ij2[0][0] <= range_ij2[1][0]]  # filter lower diagonal
 
-        results = list(map(self.harvest_result,
+        results = list(map(self._harvest_result,
                            distributed.as_completed(client.map(
                                partial(kernel_function,
                                        hyperparameters=hyperparameters,
@@ -264,7 +259,7 @@ class GPprior:
         return res
 
     @staticmethod
-    def harvest_result(future_result):
+    def _harvest_result(future_result):
         future, result = future_result
         future.release()
         return result
@@ -273,8 +268,8 @@ class GPprior:
     ####################################################
     ####################################################
     ####################################################
-
-    def _default_kernel(self, x1, x2, hyperparameters):
+    @staticmethod
+    def _default_kernel(x1, x2, hyperparameters):
         """
         Function for the default kernel, a Matern kernel of first-order differentiability.
 
@@ -332,7 +327,7 @@ class GPprior:
     def _default_mean_function(self, x, hyperparameters):
         """evaluates the gp mean function at the data points """
         mean = np.zeros((len(x)))
-        mean[:] = self.constant_mean
+        mean[:] = np.mean(self.data.y_data)
         return mean
 
     def _finitediff_dm_dh(self, x, hps):

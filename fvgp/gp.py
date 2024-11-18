@@ -221,7 +221,9 @@ class GP:
                     "You have provided callables for kernel, mean, or noise functions but no "
                     "initial hyperparameters.")
             else:
-                if init_hyperparameters is None: hyperparameters = np.ones((self.data.index_set_dim + 1))
+                if init_hyperparameters is None:
+                    hyperparameters = np.ones((self.data.index_set_dim + 1))
+                    warnings.warn("Hyperparameters initialized to a vector of ones.")
         else:
             hyperparameters = init_hyperparameters
 
@@ -250,15 +252,12 @@ class GP:
         ########################################
         ###init prior instance##################
         ########################################
-        self.prior = GPprior(self.data.index_set_dim,
-                             self.data.x_data,
-                             self.data.Euclidean,
+        self.prior = GPprior(self.data,
                              hyperparameters=hyperparameters,
                              gp_kernel_function=gp_kernel_function,
                              gp_mean_function=gp_mean_function,
                              gp_kernel_function_grad=gp_kernel_function_grad,
                              gp_mean_function_grad=gp_mean_function_grad,
-                             constant_mean=np.mean(y_data),
                              gp2Scale=gp2Scale,
                              gp2Scale_dask_client=gp2Scale_dask_client,
                              gp2Scale_batch_size=gp2Scale_batch_size,
@@ -267,9 +266,7 @@ class GP:
         ########################################
         ###init likelihood instance#############
         ########################################
-        self.likelihood = GPlikelihood(self.data.x_data,
-                                       self.data.y_data,
-                                       self.data.noise_variances,
+        self.likelihood = GPlikelihood(self.data,
                                        hyperparameters=self.prior.hyperparameters,
                                        gp_noise_function=gp_noise_function,
                                        gp_noise_function_grad=gp_noise_function_grad,
@@ -351,12 +348,13 @@ class GP:
         self.data.update(x_new, y_new, noise_variances_new, append=append)
 
         # update prior
-        if append: self.prior.augment_data(old_x_data, x_new, constant_mean=np.mean(self.data.y_data))
-        else: self.prior.update_data(self.data.x_data, constant_mean=np.mean(self.data.y_data))
+        if append:
+            self.prior.augment_data(old_x_data, x_new)
+        else:
+            self.prior.update_data()
 
         # update likelihood
-        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
-                               self.prior.hyperparameters)
+        self.likelihood.update(self.prior.hyperparameters)
 
         # update marginal density
         self.marginal_density.update_data(gp_rank_n_update)
@@ -481,9 +479,13 @@ class GP:
                           "This will fail for custom kernel,"
                           " mean, or noise functions")
         if init_hyperparameters is None:
-            init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
-                                                     high=hyperparameter_bounds[:, 1],
-                                                     size=len(hyperparameter_bounds))
+            if out_of_bounds(self.prior.hyperparameters, hyperparameter_bounds):
+                init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
+                                                         high=hyperparameter_bounds[:, 1],
+                                                         size=len(hyperparameter_bounds))
+            else:
+                init_hyperparameters = self.prior.hyperparameters
+
         if objective_function is not None and method == 'mcmc':
             warnings.warn("MCMC will ignore the user-defined objective function")
         if objective_function is not None and objective_function_gradient is None and (method == 'local' or 'hgdl'):
@@ -516,9 +518,8 @@ class GP:
             info=info
         )
 
-        self.prior.update_hyperparameters(self.data.x_data, hyperparameters)
-        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
-                               self.prior.hyperparameters)
+        self.prior.update_hyperparameters(hyperparameters)
+        self.likelihood.update(self.prior.hyperparameters)
         self.marginal_density.update_hyperparameters()
         return hyperparameters
 
@@ -593,10 +594,12 @@ class GP:
             warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
                           "This will fail for custom kernel,"
                           " mean, or noise functions")
-        if init_hyperparameters is None:
+        if out_of_bounds(self.prior.hyperparameters, hyperparameter_bounds):
             init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
                                                      high=hyperparameter_bounds[:, 1],
                                                      size=len(hyperparameter_bounds))
+        else:
+            init_hyperparameters = self.prior.hyperparameters
         if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
         if objective_function_gradient is None: objective_function_gradient = (
             self.marginal_density.neg_log_likelihood_gradient)
@@ -660,12 +663,11 @@ class GP:
         res = self.trainer.update_hyperparameters(opt_obj)
         if res is not None:
             l_n = self.marginal_density.neg_log_likelihood(res)
-            l_o = self.marginal_density.neg_log_likelihood(self.prior.hyperparameters)
+            l_o = self.marginal_density.neg_log_likelihood()
             if l_n - l_o < 0.000001:
                 hyperparameters = res
-                self.prior.update_hyperparameters(self.data.x_data, hyperparameters)
-                self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
-                                       self.prior.hyperparameters)
+                self.prior.update_hyperparameters(hyperparameters)
+                self.likelihood.update(self.prior.hyperparameters)
                 self.marginal_density.update_hyperparameters()
                 logger.debug("    fvGP async hyperparameter update successful")
                 logger.debug("    Latest hyperparameters: {}", hyperparameters)
@@ -692,9 +694,8 @@ class GP:
         hps : np.ndarray
             A 1-d numpy array of hyperparameters.
         """
-        self.prior.update_hyperparameters(self.data.x_data, hps)
-        self.likelihood.update(self.data.x_data, self.data.y_data, self.data.noise_variances,
-                               self.prior.hyperparameters)
+        self.prior.update_hyperparameters(hps)
+        self.likelihood.update(self.prior.hyperparameters)
         self.marginal_density.update_hyperparameters()
 
     ##################################################################################
@@ -1272,6 +1273,7 @@ class GP:
             given the GP posterior at a given point.
         """
         return self.posterior.posterior_probability_grad(x_pred, comp_mean, comp_cov, direction, x_out=x_out)
+
     ####################################################################################
     ####################################################################################
     #######################VALIDATION###################################################
@@ -1377,7 +1379,6 @@ class GP:
         exponent = -((x - mu) ** 2) / (2 * sigma ** 2)
         return coefficient * np.exp(exponent)
 
-
     @staticmethod
     def make_2d_x_pred(bx, by, resx=100, resy=100):  # pragma: no cover
         """
@@ -1425,8 +1426,15 @@ class GP:
         x_pred = np.linspace(b[0], b[1], res).reshape(res, -1)
         return x_pred
 
+
 ####################################################################################
 ####################################################################################
 ####################################################################################
 ####################################################################################
 ####################################################################################
+
+def out_of_bounds(x, bounds):
+    for i in range(len(x)):
+        if x[i] < bounds[i, 0] or x[i] > bounds[i, 1]:
+            return True
+    return False
