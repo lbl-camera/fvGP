@@ -47,8 +47,8 @@ class fvGP(GP):
     y_data : np.ndarray or list
         The values of the data points. Shape (V,No) if `y_data` is an array.
         It is possible that not every entry in `x_data`
-        has all corresponding tasks available. In that case `y_data` can be a list. In that case make sure
-        that every entry in `y_data` has a corresponding `output_position` of the same shape.
+        has all corresponding tasks available. In that case `y_data` can be a list of numpy arrays.
+        In that case make sure that every entry in `y_data` has a corresponding `output_position` of the same shape.
     init_hyperparameters : np.ndarray, optional
         Vector of hyperparameters used to initiate the GP.
         The default is an array of ones with the right length for the anisotropic Matern
@@ -314,10 +314,10 @@ class fvGP(GP):
         else: self.input_space_dim = 1
 
         self.output_num = len(y_data[0])
-        ###check the output dims
 
-        if isinstance(y_data, np.ndarray) and np.ndim(y_data) == 1:
-            raise ValueError("The output number is 1, you can use the GP class for single-task GPs")
+        if isinstance(y_data, np.ndarray):
+            if np.ndim(y_data) == 1:
+                raise ValueError("The output number is 1, you can use the GP class for single-task GPs")
         if output_positions is None:
             self.output_positions = self._compute_standard_output_positions(len(x_data))
         else:
@@ -356,6 +356,7 @@ class fvGP(GP):
             args=args)
 
         if self.data.Euclidean: assert self.index_set_dim == self.input_space_dim + 1
+        self.posterior.x_out = self.output_positions[0]
 
     def update_gp_data(
         self,

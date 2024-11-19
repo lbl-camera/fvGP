@@ -239,8 +239,11 @@ def test_multi_task(client):
     my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10]]),
             method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2, dask_client=client, info = True)
     my_fvgp.posterior_mean(np.random.rand(10,5), x_out = np.array([0,1]))["f(x)"]
+    my_fvgp.posterior_mean(np.random.rand(10,5))["f(x)"]
     my_fvgp.posterior_mean_grad(np.random.rand(10,5), x_out = np.array([0,1]))["df/dx"]
+    my_fvgp.posterior_mean_grad(np.random.rand(10,5))["df/dx"]
     my_fvgp.posterior_covariance(np.random.rand(10,5), x_out = np.array([0,1]))["v(x)"]
+    my_fvgp.posterior_covariance(np.random.rand(10,5))["v(x)"]
     
 
 
