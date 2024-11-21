@@ -31,7 +31,6 @@ class GPposterior:
             hyperparameters = self.prior_obj.hyperparameters
 
         if x_out is None: x_out = self.x_out
-        print(x_out)
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
 
