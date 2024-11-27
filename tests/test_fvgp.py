@@ -167,9 +167,7 @@ def test_train_basic(client):
     B = A.T @ A
     res = my_gp1.entropy(B)
     res = my_gp1.gp_kl_div(np.random.rand(10,len(x_data[0])), np.random.rand(10), B)
-    res = my_gp1.gp_kl_div_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B,0)
     res = my_gp1.posterior_probability(np.random.rand(10,len(x_data[0])), np.random.rand(10), B)
-    res = my_gp1.posterior_probability_grad(np.random.rand(10,len(x_data[0])), np.random.rand(10), B, direction = 0)
 
     res = squared_exponential_kernel(1.,1.)
     res = squared_exponential_kernel_robust(1.,1.)
@@ -244,7 +242,43 @@ def test_multi_task(client):
     my_fvgp.posterior_mean_grad(np.random.rand(10,5))["df/dx"]
     my_fvgp.posterior_covariance(np.random.rand(10,5), x_out = np.array([0,1]))["v(x)"]
     my_fvgp.posterior_covariance(np.random.rand(10,5))["v(x)"]
-    
+    my_fvgp.posterior_covariance_grad(np.random.rand(10,5))
+    my_fvgp.posterior_covariance_grad(np.random.rand(10,5), x_out = np.array([0,1]))
+
+    my_fvgp.joint_gp_prior(np.random.rand(10,5))
+    my_fvgp.joint_gp_prior(np.random.rand(10,5), x_out = np.array([0,1]))
+
+    my_fvgp.joint_gp_prior_grad(np.random.rand(10,5), 0)
+    my_fvgp.joint_gp_prior_grad(np.random.rand(10,5), 0, x_out = np.array([0,1]))
+
+    my_fvgp.gp_entropy(np.random.rand(10,5))
+    my_fvgp.gp_entropy_grad(np.random.rand(10,5), 0)
+    my_fvgp.gp_entropy(np.random.rand(10,5), x_out = np.array([0,1]))
+    my_fvgp.gp_entropy_grad(np.random.rand(10,5),0, x_out = np.array([0,1]))
+
+    A = np.random.rand(20,20)
+    B = A.T @ A
+
+
+    my_fvgp.gp_kl_div(np.random.rand(10,5), np.random.rand(20), B)
+    my_fvgp.gp_kl_div(np.random.rand(10,5), np.random.rand(20), B ,x_out = np.array([0,1]))
+
+    my_fvgp.gp_mutual_information(np.random.rand(10,5))
+    my_fvgp.gp_mutual_information(np.random.rand(10,5), x_out = np.array([0,1]))
+
+
+    my_fvgp.gp_total_correlation(np.random.rand(10,5))
+    my_fvgp.gp_total_correlation(np.random.rand(10,5), x_out = np.array([0,1]))
+
+
+    my_fvgp.gp_relative_information_entropy(np.random.rand(10,5))
+    my_fvgp.gp_relative_information_entropy(np.random.rand(10,5), x_out = np.array([0,1]))
+
+    my_fvgp.gp_relative_information_entropy_set(np.random.rand(10,5))
+    my_fvgp.gp_relative_information_entropy_set(np.random.rand(10,5), x_out = np.array([0,1]))
+
+    my_fvgp.posterior_probability(np.random.rand(10,5), np.random.rand(20), B)
+    my_fvgp.posterior_probability(np.random.rand(10,5), np.random.rand(20), B, x_out = np.array([0,1]))
 
 
     my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)

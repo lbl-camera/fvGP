@@ -266,8 +266,6 @@ class fvGP(GP):
 
     :py:meth:`fvgp.GP.posterior_probability`
 
-    :py:meth:`fvgp.GP.posterior_probability_grad`
-
     Validation Methods:
 
     :py:meth:`fvgp.GP.crps`

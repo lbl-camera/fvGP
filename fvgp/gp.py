@@ -1232,7 +1232,7 @@ class GP:
         comp_mean: np.ndarray
             A vector of mean values, same length as x_pred.
         comp_cov: np.nparray
-            Covariance matrix, in R^{len(x_pred) times len(x_pred)}
+            Covariance matrix, in R^{len(x_pred) x len(x_pred)}
         x_out : np.ndarray, optional
             Output coordinates in case of multi-task GP use; a numpy array of size (N),
             where N is the number evaluation points in the output direction.
@@ -1244,35 +1244,6 @@ class GP:
             The probability of a probabilistic quantity of interest, given the GP posterior at a given point.
         """
         return self.posterior.posterior_probability(x_pred, comp_mean, comp_cov, x_out=x_out)
-
-    def posterior_probability_grad(self, x_pred, comp_mean, comp_cov, direction, x_out=None):
-        """
-        Function to compute the gradient of the probability of a probabilistic quantity of interest,
-        given the GP posterior at a given point.
-
-        Parameters
-        ----------
-        x_pred : np.ndarray  or list
-            A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
-            GPs on non-Euclidean input spaces.
-        comp_mean: np.ndarray
-            A vector of mean values, same length as x_pred.
-        comp_cov: np.nparray
-            Covariance matrix, in R^{len(x_pred) times len(x_pred)}
-        direction : int
-            The direction to compute the gradient in.
-        x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
-
-        Return
-        ------
-        Solution : dict
-            The gradient of the probability of a probabilistic quantity of interest,
-            given the GP posterior at a given point.
-        """
-        return self.posterior.posterior_probability_grad(x_pred, comp_mean, comp_cov, direction, x_out=x_out)
 
     ####################################################################################
     ####################################################################################
