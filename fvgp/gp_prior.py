@@ -9,6 +9,8 @@ from scipy.sparse import block_array
 import time
 from loguru import logger
 
+from .utils import log_time
+
 
 class GPprior:
     def __init__(self,
@@ -160,42 +162,41 @@ class GPprior:
 
     def _compute_prior_covariance_gp2Scale(self, x_data, hyperparameters):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
-        st = time.time()
-        client = self.client
-        point_number = len(x_data)
-        num_batches = point_number // self.batch_size
-        NUM_RANGES = num_batches
-        logger.debug("client id: {}", client.id)
+        with log_time(cumulative_key='compute_prior_covariance_gp2Scale'):
+            st = time.time()
+            client = self.client
+            point_number = len(x_data)
+            num_batches = point_number // self.batch_size
+            NUM_RANGES = num_batches
+            logger.debug("client id: {}", client.id)
 
-        self.x_data_scatter_future = client.scatter(
-            x_data, workers=self.compute_workers, broadcast=True)
-        ranges = self._ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
-        ranges_ij = list(
-            itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
-        ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
-        logger.debug("        gp2Scale covariance matrix init done after {} seconds.", time.time() - st)
+            self.x_data_scatter_future = client.scatter(
+                x_data, workers=self.compute_workers, broadcast=True)
+            logger.debug("        gp2Scale covariance matrix init done after {} seconds.", time.time() - st)
 
-        results = list(map(self._harvest_result, distributed.as_completed(client.map(
-            partial(kernel_function,
-                    hyperparameters=hyperparameters,
-                    kernel=self.kernel),
-            ranges_ij,
-            [self.x_data_scatter_future] * len(ranges_ij),
-            [self.x_data_scatter_future] * len(ranges_ij)),
-            with_results=True)))
+            dsk = {f'kernel_{i}_{j}': (kernel_function,
+                                       ((i * self.batch_size, (i+1) * self.batch_size), (j * self.batch_size, (j+1) * self.batch_size)),
+                                       self.x_data_scatter_future,
+                                       self.x_data_scatter_future,
+                                       hyperparameters,
+                                       self.kernel)
+                   for i in range(NUM_RANGES) for j in range(NUM_RANGES)
+                   if i <= j
+                   }
 
-        logger.debug("        gp2Scale covariance matrix result written after {} seconds.", time.time() - st)
+            dsk.update({f'make-csr_{i}_{j}': (self.make_csr,
+                                              f'kernel_{i}_{j}' if i <= j else f'kernel_{j}_{i}',
+                                              i <= j)
+                        for i in range(NUM_RANGES) for j in range(NUM_RANGES)})
 
-        # reshape the result set into COO components
-        data, i_s, j_s = map(np.hstack, zip(*results))
-        # mirror across diagonal
-        diagonal_mask = i_s != j_s
-        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
-            np.hstack([i_s, j_s[diagonal_mask]]), \
-            np.hstack([j_s, i_s[diagonal_mask]])
-        K = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_data), len(x_data)))
-        logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
-        logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
+            csr_blocks = client.get(dsk, [[f'make-csr_{i}_{j}' for j in range(NUM_RANGES)] for i in range(NUM_RANGES)])
+
+            logger.debug("        gp2Scale covariance matrix result written after {} seconds.", time.time() - st)
+
+            K = sparse.block_array(csr_blocks, format='csr')
+
+            logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
+            logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
         return K
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
@@ -259,10 +260,11 @@ class GPprior:
         return res
 
     @staticmethod
-    def _harvest_result(future_result):
-        future, result = future_result
-        future.release()
-        return result
+    def make_csr(block:sparse.coo_matrix, transpose=False):
+        if transpose:
+            block = block.T
+        csr = block.tocsr()
+        return csr
 
     ####################################################
     ####################################################
@@ -361,19 +363,15 @@ def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
 
     hps = hyperparameters
     range_i, range_j = range_ij
+    shape = (range_i[1] - range_i[0], range_j[1] - range_j[0])
     x1 = x1_future[range_i[0]:range_i[1]]
     x2 = x2_future[range_j[0]:range_j[1]]
     k = kernel(x1, x2, hps)
     k_sparse = sparse.coo_matrix(k)
 
-    data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
+    data, rows, cols = k_sparse.data, k_sparse.row, k_sparse.col
 
-    # mask lower triangular values when current chunk spans diagonal
-    if range_i[0] == range_j[0]:
-        mask = [row <= col for (row, col) in zip(rows, cols)]
-        return data[mask], rows[mask], cols[mask]
-    else:
-        return data, rows, cols
+    return sparse.coo_matrix((data, (rows, cols)), shape=shape)
 
 
 def kernel_function_update(range_ij, x1_future, x2_future, hyperparameters, kernel):
