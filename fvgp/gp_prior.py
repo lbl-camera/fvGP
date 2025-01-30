@@ -188,8 +188,9 @@ class GPprior:
                }
 
         dsk.update({f'stack-blocks_{r}':(self.stack_blocks,
-                                         [f'kernel_{r}_{j}' for j in range(r, NUM_RANGES)], # blocks in the row on upper triangle
-                                         [f'kernel_{i}_{r}' for i in range(0, r)]) # blocks that need to be reflected up to upper triangle
+                                         [f'kernel_{i}_{r}' for i in range(0, r)], # blocks that need to be reflected up to upper triangle
+                                         [f'kernel_{r}_{j}' for j in range(r, NUM_RANGES)] # blocks in the row on upper triangle
+                                         )
                     for r in range(NUM_RANGES)})
 
         dsk.update({f'make-csr_{r}':(self.make_csr, f'stack-blocks_{r}')
@@ -264,9 +265,9 @@ class GPprior:
         return res
 
     @staticmethod
-    def stack_blocks(blocks: sparse.coo_matrix, symmetric_blocks: sparse.coo_matrix):
+    def stack_blocks(symmetric_blocks: List[sparse.coo_matrix], row_blocks: List[sparse.coo_matrix]):
         transpose_blocks = [block.T for block in symmetric_blocks]
-        blocks = [*blocks, *transpose_blocks]
+        blocks = [*transpose_blocks, *row_blocks]
         return sparse.hstack(blocks)
 
     @staticmethod
@@ -400,12 +401,7 @@ def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
 
     data, rows, cols = k_sparse.data, k_sparse.row, k_sparse.col
 
-    # mask lower triangular values when current chunk spans diagonal
-    if range_i[0] == range_j[0]:
-        mask = [row <= col for (row, col) in zip(rows, cols)]
-        return sparse.coo_matrix((data[mask], (rows[mask], cols[mask])), shape=shape)
-    else:
-        return sparse.coo_matrix((data, (rows, cols)), shape=shape)
+    return sparse.coo_matrix((data, (rows, cols)), shape=shape)
 
 
 def kernel_function_update(range_ij, x1_future, x2_future, hyperparameters, kernel):
