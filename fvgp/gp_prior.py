@@ -272,7 +272,6 @@ class GPprior:
     @staticmethod
     def make_csr(block_row: sparse.coo_matrix):
         csr = block_row.tocsr()  # TODO: this could *maybe* be faster by making each block csr before stacking, but I don't feel like its worth the added complexity
-        # csr._has_sorted_indices = True
         return csr
 
     @staticmethod
@@ -293,7 +292,7 @@ class GPprior:
 
 
         csr = sparse.csr_matrix((data, indices, indptr), shape=shape)
-        # csr._has_sorted_indices = True
+        csr._has_sorted_indices = True
         return csr
 
     ####################################################
