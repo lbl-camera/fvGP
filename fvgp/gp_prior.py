@@ -11,6 +11,8 @@ from scipy.sparse import block_array
 import time
 from loguru import logger
 
+from .utils import log_time
+
 
 class GPprior:
     def __init__(self,
@@ -162,46 +164,47 @@ class GPprior:
 
     def _compute_prior_covariance_gp2Scale(self, x_data, hyperparameters):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
-        st = time.time()
-        client = self.client
-        point_number = len(x_data)
-        num_batches = point_number // self.batch_size
-        NUM_RANGES = num_batches
-        logger.debug("client id: {}", client.id)
+        with log_time(cumulative_key='compute_prior_covariance_gp2Scale'):
+            st = time.time()
+            client = self.client
+            point_number = len(x_data)
+            num_batches = point_number // self.batch_size
+            NUM_RANGES = num_batches
+            logger.debug("client id: {}", client.id)
 
-        self.x_data_scatter_future = client.scatter(
-            x_data, workers=self.compute_workers, broadcast=True)
-        ranges = self._ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
-        ranges_ij = list(
-            itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
-        ranges = np.array(ranges_ij).reshape(NUM_RANGES, NUM_RANGES, 2, 2)
-        logger.debug("        gp2Scale covariance matrix init done after {} seconds.", time.time() - st)
+            self.x_data_scatter_future = client.scatter(
+                x_data, workers=self.compute_workers, broadcast=True)
+            ranges = self._ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
+            ranges_ij = list(
+                itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
+            ranges = np.array(ranges_ij).reshape(NUM_RANGES, NUM_RANGES, 2, 2)
+            logger.debug("        gp2Scale covariance matrix init done after {} seconds.", time.time() - st)
 
-        dsk = {f'kernel_{i}_{j}': (kernel_function,
-                               ranges[i][j],
-                               self.x_data_scatter_future,
-                               self.x_data_scatter_future,
-                               hyperparameters,
-                               self.kernel)
-               for i in range(NUM_RANGES) for j in range(NUM_RANGES)
-               if i<=j
-               }
+            dsk = {f'kernel_{i}_{j}': (kernel_function,
+                                   ranges[i][j],
+                                   self.x_data_scatter_future,
+                                   self.x_data_scatter_future,
+                                   hyperparameters,
+                                   self.kernel)
+                   for i in range(NUM_RANGES) for j in range(NUM_RANGES)
+                   if i<=j
+                   }
 
-        dsk.update({f'stack-blocks_{r}':(self.stack_blocks,
-                                         [f'kernel_{i}_{r}' for i in range(0, r)], # blocks that need to be reflected up to upper triangle
-                                         [f'kernel_{r}_{j}' for j in range(r, NUM_RANGES)] # blocks in the row on upper triangle
-                                         )
-                    for r in range(NUM_RANGES)})
+            dsk.update({f'stack-blocks_{r}':(self.stack_blocks,
+                                             [f'kernel_{i}_{r}' for i in range(0, r)], # blocks that need to be reflected up to upper triangle
+                                             [f'kernel_{r}_{j}' for j in range(r, NUM_RANGES)] # blocks in the row on upper triangle
+                                             )
+                        for r in range(NUM_RANGES)})
 
-        dsk.update({f'make-csr_{r}':(self.make_csr, f'stack-blocks_{r}')
-                    for r in range(NUM_RANGES)})
+            dsk.update({f'make-csr_{r}':(self.make_csr, f'stack-blocks_{r}')
+                        for r in range(NUM_RANGES)})
 
-        dsk.update({'stack-csr':(self.stack_csr, [f'make-csr_{r}' for r in range(NUM_RANGES)])})
+            dsk.update({'stack-csr':(self.stack_csr, [f'make-csr_{r}' for r in range(NUM_RANGES)])})
 
-        K = client.get(dsk, 'stack-csr')
+            K = client.get(dsk, 'stack-csr')
 
-        logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
-        logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
+            logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
+            logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
         return K
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
