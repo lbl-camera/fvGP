@@ -282,13 +282,13 @@ def test_multi_task(client):
 
 
     my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), output_positions = [[0,1],[0,1],[0,2]], noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.,3.]], output_positions = [[0,1],[0,1],[0,2]], noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.,3.]], output_positions = [[0,1],[0,1],[0,2]], noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.,3.]], output_positions = [[0,1],[0,1],[0,2]], noise_variances = np.random.rand(3,2), init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.]], output_positions = [[0,1],[0,1],[0]], noise_variances = [[.1,.2],[.1,.2],[.1]], init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp.update_gp_data(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.]], output_positions_new = [[0,1],[0,1],[0]], noise_variances_new = [[.1,.2],[.1,.2],[.1]], append = True)
-    my_fvgp.update_gp_data(np.random.rand(3,5), [[3.,4.],[1.,6.],[87.]], output_positions_new = [[0,1],[0,1],[0]], noise_variances_new = [[.1,.2],[.1,.2],[.1]], append = False)
+    my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87.,3.]]), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87.,3.]]), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87.,3.]]), noise_variances = np.random.rand(3,2), init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87., np.nan]]), noise_variances = np.array([[.1,.2],[.1,.2],[.1, np.nan]]), init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp.update_gp_data(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87., np.nan]]), noise_variances_new = np.array([[.1,.2],[.1,.2],[.1, np.nan]]), append = True)
+    my_fvgp.update_gp_data(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87., np.nan]]), noise_variances_new = np.array([[.1,.2],[.1,.2],[.1, np.nan]]), append = False)
     
 
 
