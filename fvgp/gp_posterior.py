@@ -98,8 +98,6 @@ class GPposterior:
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        print(x_pred)
-
         k = self.kernel(x_data, x_pred, self.prior_obj.hyperparameters)
         kk = self.kernel(x_pred, x_pred, self.prior_obj.hyperparameters)
 
