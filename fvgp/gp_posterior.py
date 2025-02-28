@@ -20,13 +20,13 @@ class GPposterior:
         self.x_out = None
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
-        x_data, y_data, KVinvY = \
-            self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
+        x_data, KVinvY = self.data_obj.x_data.copy(), self.marginal_density_obj.KVinvY.copy()
         if hyperparameters is not None:
-            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            K = self.prior_obj.compute_prior_covariance_matrix(x_data, hyperparameters=hyperparameters)
             V = self.likelihood_obj.calculate_V(hyperparameters)
-            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
-            KVinvY = self.compute_new_KVinvY(K + V, m)
+            m = self.prior_obj.compute_mean(x_data, hyperparameters=hyperparameters)
+            if np.ndim(V) == 1: V = np.diag(V)
+            KVinvY = self.marginal_density_obj.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.prior_obj.hyperparameters
 
@@ -48,14 +48,14 @@ class GPposterior:
                 "x_pred": x_pred}
 
     def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None):
-        x_data, y_data, KVinvY = \
-            self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
+        x_data, KVinvY = self.data_obj.x_data.copy(), self.marginal_density_obj.KVinvY.copy()
 
         if hyperparameters is not None:
-            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            K = self.prior_obj.compute_prior_covariance_matrix(x_data, hyperparameters=hyperparameters)
             V = self.likelihood_obj.calculate_V(hyperparameters)
-            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
-            KVinvY = self.compute_new_KVinvY(K + V, m)
+            m = self.prior_obj.compute_mean(x_data, hyperparameters=hyperparameters)
+            if np.ndim(V) == 1: V = np.diag(V)
+            KVinvY = self.marginal_density_obj.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.prior_obj.hyperparameters
 

@@ -97,6 +97,7 @@ def test_single_task_init_basic():
     my_gp1.update_gp_data(x_data, y_data, noise_variances_new = np.zeros(y_data.shape) + 0.01, append = False)
     
     res = my_gp1.posterior_mean(x_pred)
+    res = my_gp1.posterior_mean(x_pred, hyperparameters = np.ones((6)))
     res = my_gp1.posterior_mean_grad(x_pred,direction=0)
     res = my_gp1.posterior_mean_grad(x_pred)
     res = my_gp1.posterior_covariance(x_pred)
