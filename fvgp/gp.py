@@ -14,7 +14,7 @@ from .gp_posterior import GPposterior
 
 
 # TODO: search below "TODO"
-#   variational inference in fvgp?
+#
 
 
 class GP:
@@ -1396,6 +1396,28 @@ class GP:
 
         x_pred = np.linspace(b[0], b[1], res).reshape(res, -1)
         return x_pred
+
+    def get_gp2Scale_exec_time(self, time_per_worker_execution, number_of_workers):
+        """
+        This function calculates the estimated time gp2Scale takes to calculate the covariance matrix
+        as a function of the number of workers and their speed calculating a block.
+
+        Parameters
+        ----------
+        time_per_worker_execution : float
+            The time one worker takes to compute a block of the covariance matrix.
+        number_of_workers : int
+            The number of dask workers the covariance matrix calculation is distributed over.
+
+        Return
+        ------
+        estimated execution time : float
+        """
+        b = self.prior.batch_size
+        D = len(self.x_data)
+        tb = time_per_worker_execution
+        n = number_of_workers
+        return (D ** 2 * tb) / (2. * n * b ** 2)
 
 
 ####################################################################################

@@ -365,6 +365,7 @@ def test_gp2Scale(client):
                             size = len(hps_bounds))
     mcmc_result = my_mcmc.run_mcmc(x0=hps, n_updates=10, break_condition="default")
     my_gp2S.set_hyperparameters(mcmc_result["x"][-1])
+    my_gp2S.get_gp2Scale_exec_time(1.,10)
     x_pred = np.linspace(0,1,1000)
     mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["f(x)"]
     var1 =  my_gp2S.posterior_covariance(x_pred.reshape(-1,1))["v(x)"]

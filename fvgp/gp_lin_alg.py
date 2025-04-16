@@ -218,6 +218,7 @@ def calculate_inv_from_chol(L):
     A_inv = cho_solve((L, True), np.eye(L.shape[0]))
     return A_inv
 
+
 def update_inv(old_inv, new_matrix, compute_device="cpu"):
     logger.debug("update_inv")
     size = len(old_inv)
