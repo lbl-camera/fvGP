@@ -49,13 +49,13 @@ def test_lin_alg():
     k = A[0:90,90:]
     kk = A[90:,90:]
     C = cholesky_update_rank_n(c,k,kk)
-    LU = calculate_LU_factor(sparse.coo_matrix(A))
+    LU = calculate_sparse_LU_factor(sparse.coo_matrix(A))
     s = calculate_LU_solve(LU, np.random.rand(len(A)))
     l = calculate_LU_logdet(LU)
     dd = update_Chol_factor(c, A)
     ss = calculate_Chol_solve(dd, np.random.rand(len(A)))
     ll = calculate_Chol_logdet(dd)
-    ll = spai(A,20)
+    ll = spai(sparse.coo_matrix(A),20)
     calculate_sparse_minres(sparse.coo_matrix(A),np.random.rand(len(A)))
     calculate_sparse_conj_grad(sparse.coo_matrix(A),np.random.rand(len(A)))
     logd = calculate_logdet(B)

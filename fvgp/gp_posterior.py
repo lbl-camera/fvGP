@@ -436,16 +436,16 @@ class GPposterior:
         return ((2.0 * np.pi) ** (len(S) / 2.0)) * np.sqrt(np.linalg.det(S))
 
     def _perform_input_checks(self, x_pred, x_out):
-        assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list)
+        assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list), "wrong format in x_pred"
         if isinstance(x_pred, np.ndarray):
-            assert np.ndim(x_pred) == 2
+            assert np.ndim(x_pred) == 2, "wrong dim in x_pred, has to be 2-d"
             if isinstance(x_out, np.ndarray) or isinstance(x_out, list):
-                assert x_pred.shape[1] == self.data_obj.index_set_dim - 1
+                assert x_pred.shape[1] == self.data_obj.index_set_dim - 1, "wrong number of columns in x_pred"
             else:
-                assert x_pred.shape[1] == self.data_obj.index_set_dim
+                assert x_pred.shape[1] == self.data_obj.index_set_dim, "wrong number of columns in x_pred"
 
-        assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list)
-        if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1
+        assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list), "wrong format in x_out"
+        if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1, "wrong dim in x_out, has to be 1-d"
 
     @staticmethod
     def cartesian_product(x, y):

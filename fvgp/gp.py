@@ -14,7 +14,7 @@ from .gp_posterior import GPposterior
 
 
 # TODO: search below "TODO"
-#
+#   as work on function is completed and functions are maintained, add verbose assert statement.
 
 
 class GP:
@@ -204,6 +204,18 @@ class GP:
         ram_economy=False,
         args=None,
     ):
+        assert isinstance(x_data, list) or isinstance(x_data, np.ndarray), "wrong format in x_data"
+        assert isinstance(y_data, np.ndarray) and np.ndim(y_data) == 1, "wrong format in y_data"
+        assert isinstance(noise_variances, np.ndarray) or noise_variances is None, "wrong format in noise_variances"
+        assert init_hyperparameters is None or isinstance(init_hyperparameters,np.ndarray), "wrong init_hyperparameters"
+        assert isinstance(compute_device, str), "wrong format in compute_device"
+        assert callable(kernel_function) or kernel_function is None, "wrong format in kernel_function"
+        assert callable(kernel_function_grad) or kernel_function_grad is None, "wrong format in kernel_function"
+        assert callable(noise_function) or noise_function is None, "wrong format in noise_function"
+        assert callable(noise_function_grad) or noise_function_grad is None, "wrong format in noise_function"
+        assert callable(prior_mean_function) or prior_mean_function is None, "wrong format in prior_mean_function"
+        assert callable(prior_mean_function_grad) or prior_mean_function_grad is None, "wrong format in prior_mean_function"
+
         self.compute_device = compute_device
         self.args = args
         self.calc_inv = calc_inv
@@ -342,6 +354,9 @@ class GP:
             is `gp_rank_n_update=append`, meaning if data is only appended, the rank_n_update will
             be performed.
         """
+        assert isinstance(x_new, list) or isinstance(x_new, np.ndarray), "wrong format in x_new"
+        assert isinstance(y_new, np.ndarray) and np.ndim(y_new) == 1, "wrong format in y_new"
+        assert isinstance(noise_variances_new, np.ndarray) or noise_variances_new is None, "wrong format in noise_variances_new"
         old_x_data = self.data.x_data.copy()
         if gp_rank_n_update is None: gp_rank_n_update = append
         # update data
@@ -382,6 +397,7 @@ class GP:
         for i in range(self.data.index_set_dim):
             range_xi = np.max(self.data.x_data[:, i]) - np.min(self.data.x_data[:, i])
             hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
+        assert isinstance(hyperparameter_bounds, np.ndarray) and np.ndim(hyperparameter_bounds) == 2
         return hyperparameter_bounds
 
     ###################################################################################
@@ -478,6 +494,7 @@ class GP:
             warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
                           "This will fail for custom kernel,"
                           " mean, or noise functions")
+
         if init_hyperparameters is None:
             if out_of_bounds(self.prior.hyperparameters, hyperparameter_bounds):
                 init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
@@ -485,6 +502,12 @@ class GP:
                                                          size=len(hyperparameter_bounds))
             else:
                 init_hyperparameters = self.prior.hyperparameters
+        else:
+            if out_of_bounds(init_hyperparameters, hyperparameter_bounds):
+                warnings.warn("Your init_hyperparameters are out of bounds. They will be over-written")
+                init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
+                                                         high=hyperparameter_bounds[:, 1],
+                                                         size=len(hyperparameter_bounds))
 
         if objective_function is not None and method == 'mcmc':
             warnings.warn("MCMC will ignore the user-defined objective function")
@@ -521,6 +544,7 @@ class GP:
         self.prior.update_hyperparameters(hyperparameters)
         self.likelihood.update(self.prior.hyperparameters)
         self.marginal_density.update_hyperparameters()
+        assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
         return hyperparameters
 
     ##################################################################################
@@ -594,12 +618,21 @@ class GP:
             warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
                           "This will fail for custom kernel,"
                           " mean, or noise functions")
-        if out_of_bounds(self.prior.hyperparameters, hyperparameter_bounds):
-            init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
-                                                     high=hyperparameter_bounds[:, 1],
-                                                     size=len(hyperparameter_bounds))
+
+        if init_hyperparameters is None:
+            if out_of_bounds(self.prior.hyperparameters, hyperparameter_bounds):
+                init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
+                                                         high=hyperparameter_bounds[:, 1],
+                                                         size=len(hyperparameter_bounds))
+            else:
+                init_hyperparameters = self.prior.hyperparameters
         else:
-            init_hyperparameters = self.prior.hyperparameters
+            if out_of_bounds(init_hyperparameters, hyperparameter_bounds):
+                warnings.warn("Your init_hyperparameters are out of bounds. They will be over-written")
+                init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
+                                                         high=hyperparameter_bounds[:, 1],
+                                                         size=len(hyperparameter_bounds))
+
         if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
         if objective_function_gradient is None: objective_function_gradient = (
             self.marginal_density.neg_log_likelihood_gradient)
@@ -694,6 +727,8 @@ class GP:
         hps : np.ndarray
             A 1-d numpy array of hyperparameters.
         """
+        assert isinstance(hps, np.ndarray), "wrong format in hyperparameters"
+        assert np.ndim(hps) == 1, "wrong format in hyperparameters"
         self.prior.update_hyperparameters(hps)
         self.likelihood.update(self.prior.hyperparameters)
         self.marginal_density.update_hyperparameters()
@@ -749,6 +784,9 @@ class GP:
         ------
         log marginal likelihood of the data : float
         """
+        if hyperparameters is not None:
+            assert isinstance(hyperparameters, np.ndarray), "wrong format in hyperparameters"
+            assert np.ndim(hyperparameters) == 1, "wrong format in hyperparameters"
         return self.marginal_density.log_likelihood(hyperparameters=hyperparameters)
 
     def test_log_likelihood_gradient(self, hyperparameters):
@@ -764,6 +802,8 @@ class GP:
         ------
         analytical and finite difference gradients to compare
         """
+        assert isinstance(hyperparameters, np.ndarray), "wrong format in hyperparameters"
+        assert np.ndim(hyperparameters) == 1, "wrong format in hyperparameters"
         return self.marginal_density.test_log_likelihood_gradient(hyperparameters)
 
     ##################################################################################
