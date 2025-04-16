@@ -18,10 +18,9 @@ import datetime
 import sys
 from dask.distributed import performance_report
 from distributed.utils_test import gen_cluster, client, loop, cluster_fixture, loop_in_thread, cleanup
-from fvgp.gp_kernels import *
+from fvgp.kernels import *
 from fvgp.gp_lin_alg import *
 from scipy import sparse
-from fvgp.gp_kernels import *
 
 
 
@@ -78,11 +77,11 @@ def test_single_task_init_basic():
         return np.zeros(len(x))
 
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu')
-    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), gp_kernel_function = kernel,
-            gp_noise_function=noise, compute_device = 'cpu', ram_economy=True)
+    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
+            noise_function=noise, compute_device = 'cpu', ram_economy=True)
     my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.get_hyperparameters())
-    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), gp_kernel_function = kernel,
-            gp_noise_function=noise, gp_mean_function = prior_mean, compute_device = 'cpu', ram_economy=False)
+    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
+            noise_function=noise, prior_mean_function = prior_mean, compute_device = 'cpu', ram_economy=False)
     my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.get_hyperparameters())
     my_gp1 = GP(x_data, y_data)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
@@ -131,7 +130,7 @@ def test_train_basic(client):
     def noiseC(x,hps):
         return np.identity((len(x)))
 
-    my_gp1 = GP(x_data, y_data, np.array([1., 1., 1., 1., 1., 1.]), gp_noise_function = noiseC)
+    my_gp1 = GP(x_data, y_data, np.array([1., 1., 1., 1., 1., 1.]), noise_function = noiseC)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             method = "local", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
@@ -232,7 +231,7 @@ def test_multi_task(client):
     y_data[:,0] = np.sin(np.linalg.norm(x_data, axis=1))
     y_data[:,1] = np.cos(np.linalg.norm(x_data, axis=1))
 
-    my_fvgp = fvGP(x_data, y_data, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(x_data, y_data, init_hyperparameters = np.array([1, 1]), kernel_function=mkernel)
     my_fvgp.update_gp_data(x_data, y_data, append = True)
     my_fvgp.update_gp_data(x_data, y_data, append = False)
     my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10]]),
@@ -282,12 +281,12 @@ def test_multi_task(client):
     my_fvgp.posterior_probability(np.random.rand(10,5), np.random.rand(20), B, x_out = np.array([0,1]))
 
 
-    my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87.,3.]]), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87.,3.]]), noise_variances = None, init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87.,3.]]), noise_variances = np.random.rand(3,2), init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
-    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87., np.nan]]), noise_variances = np.array([[.1,.2],[.1,.2],[.1, np.nan]]), init_hyperparameters = np.array([1, 1]), gp_kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), noise_variances = None, init_hyperparameters = np.array([1, 1]), kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.random.rand(3,2), noise_variances = None, init_hyperparameters = np.array([1, 1]), kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87.,3.]]), noise_variances = None, init_hyperparameters = np.array([1, 1]), kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87.,3.]]), noise_variances = None, init_hyperparameters = np.array([1, 1]), kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87.,3.]]), noise_variances = np.random.rand(3,2), init_hyperparameters = np.array([1, 1]), kernel_function=mkernel)
+    my_fvgp = fvGP(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87., np.nan]]), noise_variances = np.array([[.1,.2],[.1,.2],[.1, np.nan]]), init_hyperparameters = np.array([1, 1]), kernel_function=mkernel)
     my_fvgp.update_gp_data(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87., np.nan]]), noise_variances_new = np.array([[.1,.2],[.1,.2],[.1, np.nan]]), append = True)
     my_fvgp.update_gp_data(np.random.rand(3,5), np.array([[3.,4.],[1.,6.],[87., np.nan]]), noise_variances_new = np.array([[.1,.2],[.1,.2],[.1, np.nan]]), append = False)
     

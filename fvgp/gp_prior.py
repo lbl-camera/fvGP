@@ -1,5 +1,5 @@
 import numpy as np
-from .gp_kernels import *
+from .kernels import *
 import dask.distributed as distributed
 import warnings
 import itertools
@@ -13,10 +13,10 @@ from loguru import logger
 class GPprior:
     def __init__(self,
                  data,
-                 gp_kernel_function=None,
-                 gp_kernel_function_grad=None,
-                 gp_mean_function=None,
-                 gp_mean_function_grad=None,
+                 kernel_function=None,
+                 kernel_function_grad=None,
+                 prior_mean_function=None,
+                 prior_mean_function_grad=None,
                  hyperparameters=None,
                  ram_economy=False,
                  compute_device='cpu',
@@ -25,15 +25,15 @@ class GPprior:
                  gp2Scale_batch_size=10000
                  ):
 
-        assert callable(gp_kernel_function) or gp_kernel_function is None
-        assert callable(gp_mean_function) or gp_mean_function is None
+        assert callable(kernel_function) or kernel_function is None
+        assert callable(prior_mean_function) or prior_mean_function is None
         assert isinstance(hyperparameters, np.ndarray)
         assert np.ndim(hyperparameters) == 1
 
         self.index_set_dim = data.index_set_dim
         self.Euclidean = data.Euclidean
-        self.gp_kernel_function = gp_kernel_function
-        self.gp_mean_function = gp_mean_function
+        self.kernel_function = kernel_function
+        self.prior_mean_function = prior_mean_function
         self.hyperparameters = hyperparameters
         self.ram_economy = ram_economy
         self.gp2Scale = gp2Scale
@@ -41,51 +41,51 @@ class GPprior:
         self.batch_size = gp2Scale_batch_size
         self.data = data
 
-        if not self.Euclidean and not callable(gp_kernel_function):
+        if not self.Euclidean and not callable(kernel_function):
             raise Exception(
                 "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters.")
 
         if gp2Scale:
-            if not callable(gp_kernel_function):
+            if not callable(kernel_function):
                 warnings.warn("You have chosen to activate gp2Scale. A powerful tool!"
                               "But you have not supplied a kernel that is compactly supported."
                               "I will use an anisotropic Wendland kernel for now.",
                               stacklevel=2)
                 if compute_device == "cpu":
-                    gp_kernel_function = wendland_anisotropic_gp2Scale_cpu
+                    kernel_function = wendland_anisotropic_gp2Scale_cpu
                 elif compute_device == "gpu":
-                    gp_kernel_function = wendland_anisotropic_gp2Scale_gpu
+                    kernel_function = wendland_anisotropic_gp2Scale_gpu
             worker_info = list(self.client.scheduler_info()["workers"].keys())
             if not worker_info: raise Exception("No workers available")
             self.compute_workers = list(worker_info)
 
         # kernel
-        if callable(gp_kernel_function):
-            self.kernel = gp_kernel_function
-        elif gp_kernel_function is None:
+        if callable(kernel_function):
+            self.kernel = kernel_function
+        elif kernel_function is None:
             self.kernel = self._default_kernel
         else:
             raise Exception("No valid kernel function specified")
-        self.d_kernel_dx = self._d_gp_kernel_dx
-        if callable(gp_kernel_function_grad):
-            self.dk_dh = gp_kernel_function_grad
+        self.d_kernel_dx = self._d_kernel_dx
+        if callable(kernel_function_grad):
+            self.dk_dh = kernel_function_grad
         else:
             if self.ram_economy is True:
-                self.dk_dh = self._gp_kernel_derivative
+                self.dk_dh = self._kernel_derivative
             else:
-                self.dk_dh = self._gp_kernel_gradient
+                self.dk_dh = self._kernel_gradient
 
         # prior mean
-        if callable(gp_mean_function):
-            self.mean_function = gp_mean_function
+        if callable(prior_mean_function):
+            self.mean_function = prior_mean_function
             self.default_m = False
         else:
             self.mean_function = self._default_mean_function
             self.default_m = True
 
-        if callable(gp_mean_function_grad):
-            self.dm_dh = gp_mean_function_grad
-        elif callable(gp_mean_function):
+        if callable(prior_mean_function_grad):
+            self.dm_dh = prior_mean_function_grad
+        elif callable(prior_mean_function):
             self.dm_dh = self._finitediff_dm_dh
         else:
             self.dm_dh = self._default_dm_dh
@@ -293,7 +293,7 @@ class GPprior:
         distance_matrix = np.sqrt(distance_matrix)
         return hps[0] * matern_kernel_diff1(distance_matrix, 1)
 
-    def _d_gp_kernel_dx(self, points1, points2, direction, hyperparameters):
+    def _d_kernel_dx(self, points1, points2, direction, hyperparameters):
         new_points = np.array(points1)
         epsilon = 1e-8
         new_points[:, direction] += epsilon
@@ -302,13 +302,13 @@ class GPprior:
         derivative = (a - b) / epsilon
         return derivative
 
-    def _gp_kernel_gradient(self, points1, points2, hyperparameters):
+    def _kernel_gradient(self, points1, points2, hyperparameters):
         gradient = np.empty((len(hyperparameters), len(points1), len(points2)))
         for direction in range(len(hyperparameters)):
             gradient[direction] = self._dkernel_dh(points1, points2, direction, hyperparameters)
         return gradient
 
-    def _gp_kernel_derivative(self, points1, points2, direction, hyperparameters):
+    def _kernel_derivative(self, points1, points2, direction, hyperparameters):
         # gradient = np.empty((len(hyperparameters), len(points1),len(points2)))
         derivative = self._dkernel_dh(points1, points2, direction, hyperparameters)
         return derivative

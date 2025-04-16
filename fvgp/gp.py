@@ -48,10 +48,10 @@ class GP:
     noise_variances : np.ndarray, optional
         An numpy array defining the uncertainties/noise in the
         `y_data` in form of a point-wise variance. Shape (V).
-        Note: if no noise_variances are provided here, the gp_noise_function
+        Note: if no noise_variances are provided here, the noise_function
         callable will be used; if the callable is not provided, the noise variances
         will be set to `abs(np.mean(y_data)) / 100.0`. If
-        noise covariances are required (correlated noise), make use of the `gp_noise_function`.
+        noise covariances are required (correlated noise), make use of the `noise_function`.
         Only provide a noise function OR `noise_variances`, not both.
     compute_device : str, optional
         One of `cpu` or `gpu`, determines how linear algebra computations are executed. The default is `cpu`.
@@ -60,7 +60,7 @@ class GP:
         will be particularly important. In that case, the default Wendland kernel will be computed on
         the cpu or the gpu which will significantly change the compute time depending on the compute
         architecture.
-    gp_kernel_function : Callable, optional
+    kernel_function : Callable, optional
         A symmetric positive definite covariance function (a kernel)
         that calculates the covariance between
         data points. It is a function of the form k(x1,x2,hyperparameters).
@@ -71,8 +71,8 @@ class GP:
         The default is a stationary anisotropic kernel
         (`fvgp.GP.default_kernel`) which performs automatic relevance determination (ARD).
         The output is a matrix, an N1 x N2 numpy array.
-    gp_kernel_function_grad : Callable, optional
-        A function that calculates the derivative of the `gp_kernel_function` with respect to the hyperparameters.
+    kernel_function_grad : Callable, optional
+        A function that calculates the derivative of the `kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
         It accepts as input `x1` (a N1 x D array of positions),
         `x2` (a N2 x D array of positions) and
@@ -82,13 +82,13 @@ class GP:
         The output is a numpy array of shape (len(hps) x N).
         If `ram_economy` is `False`, the function's input is x1, x2, and hyperparameters.
         The output is a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
-    gp_mean_function : Callable, optional
+    prior_mean_function : Callable, optional
         A function that evaluates the prior mean at a set of input position. It accepts as input
         an array of positions (of shape N1 x D) and hyperparameters (a 1d array of length D+1 for the default kernel).
         The return value is a 1d array of length N1. If None is provided,
         `fvgp.GP._default_mean_function` is used, which is the average of the `y_data`.
-    gp_mean_function_grad : Callable, optional
-        A function that evaluates the gradient of the `gp_mean_function` at
+    prior_mean_function_grad : Callable, optional
+        A function that evaluates the gradient of the `prior_mean_function` at
         a set of input positions with respect to the hyperparameters.
         It accepts as input an array of positions (of size N1 x D) and hyperparameters
         (a 1d array of length D+1 for the default kernel).
@@ -96,16 +96,16 @@ class GP:
         shape (len(hyperparameters) x N1). If None is provided, either
         zeros are returned since the default mean function does not depend on hyperparameters,
         or a finite-difference approximation
-        is used if `gp_mean_function` is provided.
-    gp_noise_function : Callable, optional
+        is used if `prior_mean_function` is provided.
+    noise_function : Callable, optional
         The noise function is a callable f(x,hyperparameters) that returns a
         vector (1d np.ndarray) of len(x), a matrix of shape (length(x),length(x)) or a sparse matrix
         of the same shape.
         The input `x` is a numpy array of shape (N x D). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
-    gp_noise_function_grad : Callable, optional
-        A function that evaluates the gradient of the `gp_noise_function`
+    noise_function_grad : Callable, optional
+        A function that evaluates the gradient of the `noise_function`
         at an input position with respect to the hyperparameters.
         It accepts as input an array of positions (of size N x D) and
         hyperparameters (a 1d array of length D+1 for the default kernel).
@@ -113,7 +113,7 @@ class GP:
         shape (len(hyperparameters) x N) or a 3d np.ndarray of shape (len(hyperparameters) x N x N).
         If None is provided, either
         zeros are returned since the default noise function does not depend on
-        hyperparameters, or, if `gp_noise_function` is provided but no noise function,
+        hyperparameters, or, if `noise_function` is provided but no noise function,
         a finite-difference approximation will be used.
         The same rules regarding `ram_economy` as for the kernel definition apply here.
     gp2Scale: bool, optional
@@ -154,7 +154,7 @@ class GP:
         If True, components of the derivative of the log marginal likelihood are
         calculated sequentially, leading to a slow-down
         but much less RAM usage. If the derivative of the kernel (and noise function) with
-        respect to the hyperparameters (gp_kernel_function_grad) is
+        respect to the hyperparameters (kernel_function_grad) is
         going to be provided, it has to be tailored: for `ram_economy=True` it should be
         of the form f(x, direction, hyperparameters)
         and return a 2d numpy array of shape len(x1) x len(x2).
@@ -190,12 +190,12 @@ class GP:
         init_hyperparameters=None,
         noise_variances=None,
         compute_device="cpu",
-        gp_kernel_function=None,
-        gp_kernel_function_grad=None,
-        gp_noise_function=None,
-        gp_noise_function_grad=None,
-        gp_mean_function=None,
-        gp_mean_function_grad=None,
+        kernel_function=None,
+        kernel_function_grad=None,
+        noise_function=None,
+        noise_function_grad=None,
+        prior_mean_function=None,
+        prior_mean_function_grad=None,
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
@@ -216,7 +216,7 @@ class GP:
         ########################################
         # prepare initial hyperparameters and bounds
         if self.data.Euclidean:
-            if callable(gp_kernel_function) or callable(gp_mean_function) or callable(gp_noise_function):
+            if callable(kernel_function) or callable(prior_mean_function) or callable(noise_function):
                 if init_hyperparameters is None: raise Exception(
                     "You have provided callables for kernel, mean, or noise functions but no "
                     "initial hyperparameters.")
@@ -254,10 +254,10 @@ class GP:
         ########################################
         self.prior = GPprior(self.data,
                              hyperparameters=hyperparameters,
-                             gp_kernel_function=gp_kernel_function,
-                             gp_mean_function=gp_mean_function,
-                             gp_kernel_function_grad=gp_kernel_function_grad,
-                             gp_mean_function_grad=gp_mean_function_grad,
+                             kernel_function=kernel_function,
+                             prior_mean_function=prior_mean_function,
+                             kernel_function_grad=kernel_function_grad,
+                             prior_mean_function_grad=prior_mean_function_grad,
                              gp2Scale=gp2Scale,
                              gp2Scale_dask_client=gp2Scale_dask_client,
                              gp2Scale_batch_size=gp2Scale_batch_size,
@@ -268,8 +268,8 @@ class GP:
         ########################################
         self.likelihood = GPlikelihood(self.data,
                                        hyperparameters=self.prior.hyperparameters,
-                                       gp_noise_function=gp_noise_function,
-                                       gp_noise_function_grad=gp_noise_function_grad,
+                                       noise_function=noise_function,
+                                       noise_function_grad=noise_function_grad,
                                        ram_economy=ram_economy,
                                        gp2Scale=gp2Scale
                                        )
