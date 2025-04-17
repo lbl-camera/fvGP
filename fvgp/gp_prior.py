@@ -190,18 +190,18 @@ class GPprior:
                    if i<=j
                    }
 
-            dsk.update({f'stack-blocks_{r}':(self.stack_blocks,
+            dsk.update({f'stack_blocks_{r}':(self.stack_blocks,
                                              [f'kernel_{i}_{r}' for i in range(0, r)], # blocks that need to be reflected up to upper triangle
                                              [f'kernel_{r}_{j}' for j in range(r, NUM_RANGES)] # blocks in the row on upper triangle
                                              )
                         for r in range(NUM_RANGES)})
 
-            dsk.update({f'make-csr_{r}':(self.make_csr, f'stack-blocks_{r}')
+            dsk.update({f'make_csr_{r}':(self.make_csr, f'stack_blocks_{r}')
                         for r in range(NUM_RANGES)})
 
-            dsk.update({'stack-csr':(self.stack_csr, [f'make-csr_{r}' for r in range(NUM_RANGES)])})
+            dsk.update({'stack_csr':(self.stack_csr, [f'make_csr_{r}' for r in range(NUM_RANGES)])})
 
-            K = client.get(dsk, 'stack-csr')
+            K = client.get(dsk, 'stack_csr')
 
             logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
             logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
