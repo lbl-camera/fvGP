@@ -208,64 +208,89 @@ class GPprior:
         return K
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
-        client = self.client
-        """computes the covariance matrix from the kernel on HPC in sparse format"""
+        with log_time(cumulative_key='compute_prior_covariance_gp2Scale'):
+            st = time.time()
+            client = self.client
+            """computes the covariance matrix from the kernel on HPC in sparse format"""
 
-        self.x_new_scatter_future = client.scatter(
-            x_new, workers=self.compute_workers, broadcast=True)
-        self.x_old_scatter_future = client.scatter(
-            x_old, workers=self.compute_workers, broadcast=True)
+            self.x_new_scatter_future = client.scatter(
+                x_new, workers=self.compute_workers, broadcast=True)
+            self.x_old_scatter_future = client.scatter(
+                x_old, workers=self.compute_workers, broadcast=True)
 
-        point_number = len(x_old)
-        num_batches = point_number // self.batch_size
-        NUM_RANGES = num_batches
-        ranges_data = self._ranges(len(x_old), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
-        num_batches2 = len(x_new) // self.batch_size
-        ranges_input = self._ranges(len(x_new), num_batches2)
-        ranges_ij = list(itertools.product(ranges_data, ranges_input))
+            point_number = len(x_old)
+            num_batches = -(-point_number // self.batch_size)
+            ranges_data = self._ranges(len(x_old), num_batches)  # the chunk ranges, as (start, end) tuples
+            num_batches2 = -(-len(x_new) // self.batch_size)
+            ranges_input = self._ranges(len(x_new), num_batches2)
+            ranges_ij = list(itertools.product(ranges_data, ranges_input))
 
-        # K = np.block([[self.K, B],
-        #               [B,      C]])
-        # Calculate B
+            ranges_ij2 = list(itertools.product(ranges_input, ranges_input))
+            ranges_ij2 = [range_ij2 for range_ij2 in ranges_ij2 if
+                          range_ij2[0][0] <= range_ij2[1][0]]  # filter lower diagonal
 
-        results = list(map(self._harvest_result,
-                           distributed.as_completed(client.map(
-                               partial(kernel_function_update,
-                                       hyperparameters=hyperparameters,
-                                       kernel=self.kernel),
-                               ranges_ij,
-                               [self.x_old_scatter_future] * len(ranges_ij),
-                               [self.x_new_scatter_future] * len(ranges_ij)),
-                               with_results=True)))
+            ranges = np.array(ranges_ij).reshape(num_batches, num_batches2, 2, 2)
+            ranges_corner = np.array(ranges_ij2).reshape(num_batches2, num_batches2, 2, 2)
 
-        data, i_s, j_s = map(np.hstack, zip(*results))
-        B = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_old), len(x_new)))
+            dsk = {f'kernel_{i}_{j}': (kernel_function,
+                                   ranges[i][j],
+                                   self.x_old_scatter_future,
+                                   self.x_new_scatter_future,
+                                   hyperparameters,
+                                   self.kernel)
+                   for i in range(num_batches) for j in range(num_batches2)
+                   }
 
-        # mirror across diagonal
-        ranges_ij2 = list(itertools.product(ranges_input, ranges_input))
-        ranges_ij2 = [range_ij2 for range_ij2 in ranges_ij2 if
-                      range_ij2[0][0] <= range_ij2[1][0]]  # filter lower diagonal
+            dsk.update({f'kernel_corner_{i}_{j}': (kernel_function,
+                                   ranges_corner[i][j],
+                                   self.x_new_scatter_future,
+                                   self.x_new_scatter_future,
+                                   hyperparameters,
+                                   self.kernel)
+                   for i in range(num_batches2) for j in range(num_batches2)
+                   })
 
-        results = list(map(self._harvest_result,
-                           distributed.as_completed(client.map(
-                               partial(kernel_function,
-                                       hyperparameters=hyperparameters,
-                                       kernel=self.kernel),
-                               ranges_ij2,
-                               [self.x_new_scatter_future] * len(ranges_ij2),
-                               [self.x_new_scatter_future] * len(ranges_ij2)),
-                               with_results=True)))
-        data, i_s, j_s = map(np.hstack, zip(*results))
-        diagonal_mask = i_s != j_s
-        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
-            np.hstack([i_s, j_s[diagonal_mask]]), \
-            np.hstack([j_s, i_s[diagonal_mask]])
-        D = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_new), len(x_new)))
+            dsk.update({f'stack_blocks_upper_{r}':(self.stack_blocks,
+                                             [], # blocks that need to be reflected up to upper triangle
+                                             [f'kernel_{r}_{j}' for j in range(num_batches2)] # blocks in the row on upper triangle
+                                             )
+                        for r in range(num_batches)})
 
-        res = block_array([[self.K, B],
-                           [B.transpose(), D]])
+            dsk.update({f'stack_blocks_lower_{r}':(self.stack_blocks,
+                                             [f'kernel_{j}_{r}' for j in range(num_batches)],
+                                             []
+                                             )
+                        for r in range(num_batches2)})
 
-        return res
+            dsk.update({f'stack_blocks_corner_{r}': (self.stack_blocks,
+                                                     [f'kernel_corner_{i}_{r}' for i in range(0, r)],
+                                                     [f'kernel_corner_{r}_{j}' for j in range(r, num_batches2)]
+                                                    )
+                        for r in range(num_batches2)})
+
+            dsk.update({f'make_csr_upper_{r}':(self.make_csr, f'stack_blocks_upper_{r}')
+                        for r in range(num_batches)})
+
+            dsk.update({f'make_csr_lower_{r}':(self.make_csr, f'stack_blocks_lower_{r}')
+                        for r in range(num_batches2)})
+
+            dsk.update({f'make_csr_corner_{r}':(self.make_csr, f'stack_blocks_corner_{r}')
+                        for r in range(num_batches2)})
+
+            dsk.update({'stack_csr_upper':(self.stack_csr, [f'make_csr_upper_{r}' for r in range(num_batches)])})
+
+            dsk.update({'stack_csr_lower': (self.stack_csr, [f'make_csr_lower_{r}' for r in range(num_batches2)])})
+
+            dsk.update({'stack_csr_corner': (self.stack_csr, [f'make_csr_corner_{r}' for r in range(num_batches2)])})
+
+            B, B_T, C = client.get(dsk, ['stack_csr_upper', 'stack_csr_lower', 'stack_csr_corner'])
+
+            K = sparse.block_array([[self.K, B],[B_T, C]], format='csr')
+
+            logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
+            logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
+
+            return K
 
     @staticmethod
     def stack_blocks(symmetric_blocks: List[sparse.coo_matrix], row_blocks: List[sparse.coo_matrix]):
