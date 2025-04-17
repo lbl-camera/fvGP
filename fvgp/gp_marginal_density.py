@@ -57,7 +57,7 @@ class GPMarginalDensity:
         y_mean = self.data_obj.y_data - m
         KV = self._addKV(K, V)
         self.KVlinalg.update_KV(KV)
-        KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY)
+        KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY).reshape(len(y_mean))
         return KVinvY.reshape(len(y_mean))
 
     def _set_KVinvY(self, K, V, m, mode):
@@ -66,7 +66,7 @@ class GPMarginalDensity:
         #update lin alg obj
         KV = self._addKV(K, V)
         self.KVlinalg.set_KV(KV, mode)
-        KVinvY = self.KVlinalg.solve(y_mean)
+        KVinvY = self.KVlinalg.solve(y_mean).reshape(len(y_mean))
         return KVinvY.reshape(len(y_mean))
 
     ##################################################################
@@ -80,7 +80,7 @@ class GPMarginalDensity:
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
             if mode == "sparseLU":
-                LU_factor = calculate_LU_factor(KV)
+                LU_factor = calculate_sparse_LU_factor(KV)
                 KVinvY = calculate_LU_solve(LU_factor, y_mean)
             elif mode == "Chol":
                 if issparse(KV): KV = KV.toarray()
@@ -115,7 +115,7 @@ class GPMarginalDensity:
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
             if mode == "sparseLU":
-                LU_factor = calculate_LU_factor(KV)
+                LU_factor = calculate_sparse_LU_factor(KV)
                 KVinvY = calculate_LU_solve(LU_factor, y_mean)
                 KVlogdet = calculate_LU_logdet(LU_factor)
             elif mode == "Chol":
@@ -144,9 +144,9 @@ class GPMarginalDensity:
                 raise Exception("No mode in gp2Scale", mode)
         else:
             Chol_factor = calculate_Chol_factor(KV)
-            KVinvY = calculate_Chol_solve(Chol_factor, y_mean).reshape(len(y_mean))
+            KVinvY = calculate_Chol_solve(Chol_factor, y_mean)
             KVlogdet = calculate_Chol_logdet(Chol_factor)
-        return KVinvY, KVlogdet
+        return KVinvY.reshape(len(y_mean)), KVlogdet
 
     def _get_KVm(self):
         K = self.prior_obj.K
@@ -395,7 +395,7 @@ class KVlinalg:
         elif self.mode == "sparseCG":
             self.KV = KV
         elif self.mode == "sparseLU":
-            self.LU_factor = calculate_LU_factor(KV)
+            self.LU_factor = calculate_sparse_LU_factor(KV)
         elif self.mode == "sparseMINRESpre":
             self.KV = KV
         elif self.mode == "sparseCGpre":
@@ -432,7 +432,7 @@ class KVlinalg:
         elif self.mode == "sparseCG":
             self.KV = KV
         elif self.mode == "sparseLU":
-            self.LU_factor = calculate_LU_factor(KV)
+            self.LU_factor = calculate_sparse_LU_factor(KV)
         elif self.mode == "sparseMINRESpre":
             self.KV = KV
         elif self.mode == "sparseCGpre":

@@ -10,25 +10,32 @@ from scipy.linalg import cho_factor, cho_solve, solve_triangular
 from scipy import sparse
 
 
-def calculate_LU_factor(M):
-    logger.debug("calculate_LU_factor")
+def calculate_sparse_LU_factor(M):
+    assert sparse.issparse(M)
+    logger.debug("calculate_sparse_LU_factor")
     LU = splu(M.tocsc())
     return LU
 
 
 def calculate_LU_solve(LU, vec):
+    assert isinstance(vec, np.ndarray)
+    if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     logger.debug("calculate_LU_solve")
-    return LU.solve(vec)
+    res = LU.solve(vec)
+    assert np.ndim(res) == 2
+    return res
 
 
 def calculate_LU_logdet(LU):
     logger.debug("calculate_LU_logdet")
     upper_diag = abs(LU.U.diagonal())
     logdet = np.sum(np.log(upper_diag))
+    assert np.isscalar(logdet)
     return logdet
 
 
 def calculate_Chol_factor(M):
+    assert isinstance(M, np.ndarray)
     logger.debug("calculate_Chol_factor")
     c, l = cho_factor(M, lower=True)
     c = np.tril(c)
@@ -36,6 +43,7 @@ def calculate_Chol_factor(M):
 
 
 def update_Chol_factor(old_chol_factor, new_matrix):
+    assert isinstance(new_matrix, np.ndarray)
     logger.debug("update_Chol_factor")
     size = len(old_chol_factor)
     KV = new_matrix
@@ -45,8 +53,11 @@ def update_Chol_factor(old_chol_factor, new_matrix):
 
 
 def calculate_Chol_solve(factor, vec):
+    assert isinstance(vec, np.ndarray)
+    if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     logger.debug("calculate_Chol_solve")
     res = cho_solve((factor, True), vec)
+    assert np.ndim(res) == 2
     return res
 
 
@@ -54,10 +65,13 @@ def calculate_Chol_logdet(factor):
     logger.debug("calculate_Chol_logdet")
     upper_diag = abs(factor.diagonal())
     logdet = 2.0 * np.sum(np.log(upper_diag))
+    assert np.isscalar(logdet)
     return logdet
 
 
 def spai(A, m):
+    assert sparse.issparse(A)
+    assert isinstance(m, int)
     logger.debug("spai preconditioning")
     """Perform m step of the SPAI iteration."""
     n = A.shape[0]
@@ -74,10 +88,12 @@ def spai(A, m):
         alpha = trace / np.linalg.norm(AG.data) ** 2
         M = M + alpha * G
 
+    assert sparse.issparse(M)
     return M
 
 
 def calculate_random_logdet(KV, compute_device):
+    assert sparse.issparse(KV)
     logger.debug("calculate_random_logdet")
     from imate import logdet as imate_logdet
     st = time.time()
@@ -90,10 +106,12 @@ def calculate_random_logdet(KV, compute_device):
                                     lanczos_degree=10, error_rtol=0.01, gpu=gpu,
                                     return_info=True, plot=False, verbose=False, orthogonalize=0)
     logger.debug("Stochastic Lanczos logdet() compute time: {} seconds", time.time() - st)
+    assert np.isscalar(logdet)
     return logdet
 
 
 def calculate_sparse_minres(KV, vec, x0=None, M=None):
+    assert sparse.issparse(KV)
     logger.debug("calculate_sparse_minres")
     st = time.time()
     logger.debug("MINRES solve in progress ...")
@@ -104,10 +122,12 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None):
         res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], M=M, rtol=1e-5, x0=x0)
         if exit_code == 1: warnings.warn("MINRES not successful")
     logger.debug("MINRES compute time: {} seconds.", time.time() - st)
+    assert np.ndim(res) == 2
     return res
 
 
 def calculate_sparse_conj_grad(KV, vec, x0=None, M=None):
+    assert sparse.issparse(KV)
     logger.debug("calculate_sparse_conj_grad")
     st = time.time()
     logger.debug("CG solve in progress ...")
@@ -118,15 +138,19 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None):
         res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-5, x0=x0)
         if exit_code == 1: warnings.warn("CG not successful")
     logger.debug("CG compute time: {} seconds.", time.time() - st)
+    assert np.ndim(res) == 2
     return res
 
 
 def calculate_sparse_solve(KV, vec):
+    assert sparse.issparse(KV)
+    if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     logger.debug("calculate_sparse_conj_grad")
     st = time.time()
     logger.debug("Sparse solve in progress ...")
     res = sparse.linalg.spsolve(KV, vec)
     logger.debug("Sparse solve compute time: {} seconds.", time.time() - st)
+    assert np.ndim(res) == 2
     return res
 
 
@@ -171,6 +195,7 @@ def calculate_logdet(A, compute_device='cpu'):
     logger.debug("calculate_logdet")
     if compute_device == "cpu":
         s, logdet = np.linalg.slogdet(A)
+        assert np.isscalar(logdet)
         return logdet
     elif compute_device == "gpu":
         try:
@@ -179,14 +204,17 @@ def calculate_logdet(A, compute_device='cpu'):
             sign, logdet = torch.slogdet(A)
             logdet = logdet.cpu().numpy()
             logdet = np.nan_to_num(logdet)
+            assert np.isscalar(logdet)
             return logdet
         except Exception as e:
             warnings.warn(
                 "I encountered a problem using the GPU via pytorch. Falling back to Numpy and the CPU.")
             s, logdet = np.linalg.slogdet(A)
+            assert np.isscalar(logdet)
             return logdet
     else:
         sign, logdet = np.linalg.slogdet(A)
+        assert np.isscalar(logdet)
         return logdet
 
 
@@ -197,10 +225,13 @@ def update_logdet(old_logdet, old_inv, new_matrix, compute_device="cpu"):
     kk = KV[size:, size:]
     k = KV[size:, 0:size]
     res = old_logdet + calculate_logdet(kk - k @ old_inv @ k.T, compute_device=compute_device)
+    assert np.isscalar(res)
     return res
 
 
 def calculate_inv(A, compute_device='cpu'):
+    assert isinstance(A, np.ndarray)
+    assert np.ndim(A) == 2
     logger.debug("calculate_inv")
     if compute_device == "cpu":
         return np.linalg.inv(A)
@@ -218,6 +249,7 @@ def calculate_inv_from_chol(L):
     A_inv = cho_solve((L, True), np.eye(L.shape[0]))
     return A_inv
 
+
 def update_inv(old_inv, new_matrix, compute_device="cpu"):
     logger.debug("update_inv")
     size = len(old_inv)
@@ -232,13 +264,15 @@ def update_inv(old_inv, new_matrix, compute_device="cpu"):
 
 
 def solve(A, b, compute_device='cpu'):
+    assert isinstance(A, np.ndarray)
     logger.debug("solve")
-    if np.ndim(b) == 1: b = np.expand_dims(b, axis=1)
+    if np.ndim(b) == 1: b = b.reshape(len(b), 1)
     if compute_device == "cpu":
         try:
             x = np.linalg.solve(A, b)
         except:
             x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
+        assert np.ndim(x) == np.ndim(b)
         return x
     elif compute_device == "gpu" or A.ndim < 3:
         try:
@@ -254,6 +288,7 @@ def solve(A, b, compute_device='cpu'):
                 x = np.linalg.solve(A, b)
             except:
                 x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
+            assert np.ndim(x) == np.ndim(b)
             return x
     elif compute_device == "multi-gpu":
         try:
@@ -278,6 +313,7 @@ def solve(A, b, compute_device='cpu'):
                 x = np.linalg.solve(A, b)
             except:
                 x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
+            assert np.ndim(x) == np.ndim(b)
             return x
     else:
         raise Exception("No valid solve method specified")

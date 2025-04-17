@@ -7,8 +7,8 @@ class GPlikelihood:
     def __init__(self,
                  data,
                  hyperparameters=None,
-                 gp_noise_function=None,
-                 gp_noise_function_grad=None,
+                 noise_function=None,
+                 noise_function_grad=None,
                  ram_economy=False,
                  gp2Scale=False,
                  ):
@@ -23,10 +23,10 @@ class GPlikelihood:
 
         self.gp2Scale = gp2Scale
 
-        if self.data.noise_variances is not None and callable(gp_noise_function):
+        if self.data.noise_variances is not None and callable(noise_function):
             raise Exception("Noise function and measurement noise provided. Decide which one to use.")
-        if callable(gp_noise_function):
-            self.noise_function = gp_noise_function
+        if callable(noise_function):
+            self.noise_function = noise_function
         elif self.data.noise_variances is not None:
             self.noise_function = self._measured_noise_function
         else:
@@ -36,9 +36,9 @@ class GPlikelihood:
                 stacklevel=2)
             self.noise_function = self._default_noise_function
 
-        if callable(gp_noise_function_grad):
-            self.noise_function_grad = gp_noise_function_grad
-        elif callable(gp_noise_function):
+        if callable(noise_function_grad):
+            self.noise_function_grad = noise_function_grad
+        elif callable(noise_function):
             if ram_economy is True:
                 self.noise_function_grad = self._finitediff_dnoise_dh_econ
             else:
