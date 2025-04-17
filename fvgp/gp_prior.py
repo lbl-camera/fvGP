@@ -168,7 +168,7 @@ class GPprior:
             st = time.time()
             client = self.client
             point_number = len(x_data)
-            num_batches = point_number // self.batch_size
+            num_batches = -(-point_number // self.batch_size)
             NUM_RANGES = num_batches
             logger.debug("client id: {}", client.id)
 
@@ -275,7 +275,7 @@ class GPprior:
 
     @staticmethod
     def make_csr(block_row: sparse.coo_matrix):
-        csr = block_row.tocsr()  # TODO: this could *maybe* be faster by making each block csr before stacking, but I don't feel like its worth the added complexity
+        csr = block_row.tocsr()
         return csr
 
     @staticmethod
