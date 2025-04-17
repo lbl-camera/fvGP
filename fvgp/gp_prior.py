@@ -2,12 +2,9 @@ from typing import List
 
 import numpy as np
 from .gp_kernels import *
-import dask.distributed as distributed
 import warnings
 import itertools
-from functools import partial
 import scipy.sparse as sparse
-from scipy.sparse import block_array
 import time
 from loguru import logger
 
