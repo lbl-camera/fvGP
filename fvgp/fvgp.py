@@ -176,8 +176,6 @@ class fvGP(GP):
         and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
-    args : any, optional
-        args will be a class attribute and therefore available to kernel, noise and prior mean functions.
 
     Attributes
     ----------
@@ -293,9 +291,9 @@ class fvGP(GP):
         gp2Scale_linalg_mode=None,
         calc_inv=False,
         ram_economy=False,
-        args=None,
     ):
-        assert isinstance(y_data, np.ndarray)
+        assert isinstance(x_data, list) or isinstance(x_data, np.ndarray), "wrong format in x_data"
+        assert isinstance(y_data, np.ndarray), "wrong format in y_data"
 
         if isinstance(x_data, np.ndarray):
             assert np.ndim(x_data) == 2
@@ -335,8 +333,7 @@ class fvGP(GP):
             gp2Scale_batch_size=gp2Scale_batch_size,
             gp2Scale_linalg_mode=gp2Scale_linalg_mode,
             calc_inv=calc_inv,
-            ram_economy=ram_economy,
-            args=args)
+            ram_economy=ram_economy)
 
         if self.data.Euclidean: assert self.index_set_dim == self.input_space_dim + 1
         self.posterior.x_out = np.arange(0, self.output_num)

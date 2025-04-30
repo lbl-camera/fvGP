@@ -23,6 +23,7 @@ class GPMarginalDensity:
         self.gp2Scale = gp2Scale
         self.compute_device = compute_device
         self.gp2Scale_linalg_mode = gp2Scale_linalg_mode
+
         if self.gp2Scale:
             self.calc_inv = False
             warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False")
@@ -30,10 +31,8 @@ class GPMarginalDensity:
         K, V, m = self._get_KVm()
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(K)
-        elif self.calc_inv:
-            mode = "CholInv"
-        else:
-            mode = "Chol"
+        elif self.calc_inv: mode = "CholInv"
+        else: mode = "Chol"
 
         self.KVinvY = self._set_KVinvY(K, V, m, mode)
 
@@ -170,6 +169,7 @@ class GPMarginalDensity:
                 KV.setdiag(KV.diagonal() + V)
                 return KV.tocsr()
         elif isinstance(K, np.ndarray):
+            if issparse(V): V = V.toarray()
             assert isinstance(V, np.ndarray), "K is np.ndarray, V is not"
             assert np.ndim(V) == 1 or np.ndim(V) == 2, "V has strange dimensionality"
             if np.ndim(V) == 2:
@@ -225,6 +225,7 @@ class GPMarginalDensity:
             logger.debug("   KVinvY and logdet computed after {} seconds.", time.time() - st)
 
         n = len(self.data_obj.y_data)
+
         return -(0.5 * ((self.data_obj.y_data - m).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
 
     ##################################################################################
@@ -372,6 +373,8 @@ class KVlinalg:
         self.KV = None
         self.Chol_factor = None
         self.LU_factor = None
+        self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
+                              "sparseLU", "sparseMINRESpre", "sparseCGpre", "sparseSolve"]
 
     def set_KV(self, KV, mode):
         self.mode = mode
@@ -387,7 +390,7 @@ class KVlinalg:
             if issparse(KV): KV = KV.toarray()
             self.Chol_factor = calculate_Chol_factor(KV)
             self.KVinv = calculate_inv_from_chol(self.Chol_factor)
-        elif self.mode == "Inv":  #depreciated
+        elif self.mode == "Inv":
             self.KV = KV
             self.KVinv = calculate_inv(KV, compute_device=self.compute_device)
         elif self.mode == "sparseMINRES":
@@ -402,8 +405,10 @@ class KVlinalg:
             self.KV = KV
         elif self.mode == "sparseSolve":
             self.KV = KV
+        elif callable(self.mode[0]):
+            self.KV = KV
         else:
-            raise Exception("No Mode")
+            raise Exception("No Mode. Choose from: ", self.allowed_modes)
 
     def update_KV(self, KV):
         if self.mode == "Chol":
@@ -421,7 +426,7 @@ class KVlinalg:
                 res = update_Chol_factor(self.Chol_factor, KV)
             self.Chol_factor = res
             self.KVinv = calculate_inv_from_chol(self.Chol_factor)
-        elif self.mode == "Inv": #depreciated
+        elif self.mode == "Inv":
             self.KV = KV
             if len(KV) <= len(self.KVinv):
                 self.KVinv = calculate_inv(KV, compute_device=self.compute_device)
@@ -439,15 +444,17 @@ class KVlinalg:
             self.KV = KV
         elif self.mode == "sparseSolve":
             self.KV = KV
+        elif callable(self.mode[0]):
+            self.KV = KV
         else:
-            raise Exception("No Mode")
+            raise Exception("No Mode. Choose from: ", self.allowed_modes)
 
     def solve(self, b, x0=None):
         if self.mode == "Chol":
             return calculate_Chol_solve(self.Chol_factor, b)
         elif self.mode == "CholInv":
             return calculate_Chol_solve(self.Chol_factor, b)
-        elif self.mode == "Inv": #depreciated
+        elif self.mode == "Inv":
             return self.KVinv @ b
         elif self.mode == "sparseCG":
             return calculate_sparse_conj_grad(self.KV, b, x0=x0)
@@ -463,18 +470,22 @@ class KVlinalg:
             return calculate_sparse_conj_grad(self.KV, b, M=B.L.T @ B.L, x0=x0)
         elif self.mode == "sparseSolve":
             return calculate_sparse_solve(self.KV, b)
+        elif callable(self.mode[0]):
+            return self.mode[0](self.KV, b)
         else:
-            raise Exception("No Mode")
+            raise Exception("No Mode. Choose from: ", self.allowed_modes)
 
     def logdet(self):
         if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor)
         elif self.mode == "CholInv": return calculate_Chol_logdet(self.Chol_factor)
         elif self.mode == "sparseLU": return calculate_LU_logdet(self.LU_factor)
-        elif self.mode == "Inv": return calculate_logdet(self.KV) #depreciated
+        elif self.mode == "Inv": return calculate_logdet(self.KV)
         elif self.mode == "sparseCG": return calculate_random_logdet(self.KV, self.compute_device)
         elif self.mode == "sparseMINRES": return calculate_random_logdet(self.KV, self.compute_device)
         elif self.mode == "sparseMINRESpre": return calculate_random_logdet(self.KV, self.compute_device)
         elif self.mode == "sparseCGpre": return calculate_random_logdet(self.KV, self.compute_device)
         elif self.mode == "sparseSolve": return calculate_random_logdet(self.KV, self.compute_device)
+        elif callable(self.mode[0]): return mode[1](self.KV)
+        else: raise Exception("No Mode. Choose from: ", self.allowed_modes)
 
 

@@ -43,8 +43,8 @@ class GPposterior:
         else: posterior_mean_re = posterior_mean
 
         return {"x": x_orig,
-                "f(x)": posterior_mean_re,
-                "f(x)_flat": posterior_mean,
+                "m(x)": posterior_mean_re,
+                "m(x)_flat": posterior_mean,
                 "x_pred": x_pred}
 
     def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None):
@@ -88,7 +88,7 @@ class GPposterior:
 
         return {"x": x_orig,
                 "direction": direction,
-                "df/dx": posterior_mean_grad}
+                "dm/dx": posterior_mean_grad}
 
     ###########################################################################
     def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
@@ -307,9 +307,9 @@ class GPposterior:
         if x_out is None: x_out = self.x_out
 
         res = self.posterior_mean(x_pred, x_out=x_out)
-        gp_mean = res["f(x)_flat"]
+        gp_mean = res["m(x)_flat"]
         gp_cov = self.posterior_covariance(x_pred, x_out=x_out)["S_flat"]
-        gp_cov = gp_cov + + np.identity(len(gp_cov)) * 1e-9
+        gp_cov = gp_cov + np.identity(len(gp_cov)) * 1e-9
         comp_cov = comp_cov + np.identity(len(comp_cov)) * 1e-9
         return {"x": x_pred,
                 "gp posterior mean": gp_mean,
@@ -368,7 +368,7 @@ class GPposterior:
         post_cov = self.posterior_covariance(x_pred, x_out=x_out, add_noise=add_noise)["S_flat"]
         post_cov = post_cov + (np.identity(len(post_cov)) * 1e-9)
         hyperparameters = self.prior_obj.hyperparameters
-        post_mean = self.posterior_mean(x_pred, x_out=x_out)["f(x)_flat"]
+        post_mean = self.posterior_mean(x_pred, x_out=x_out)["m(x)_flat"]
         prio_mean = self.mean_function(x_pred_aux, hyperparameters)
         return {"x": x_orig,
                 "RIE": self.kl_div(prio_mean, post_mean, kk, post_cov)}
@@ -393,7 +393,7 @@ class GPposterior:
         self._perform_input_checks(x_pred, x_out)
         #if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        gp_mean = self.posterior_mean(x_pred, x_out=x_out)["f(x)_flat"]
+        gp_mean = self.posterior_mean(x_pred, x_out=x_out)["m(x)_flat"]
         gp_cov = self.posterior_covariance(x_pred, x_out=x_out, add_noise=True)["S_flat"]
         gp_cov_inv = calculate_inv(gp_cov)
         comp_cov_inv = calculate_inv(comp_cov)

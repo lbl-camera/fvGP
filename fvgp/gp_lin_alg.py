@@ -31,6 +31,7 @@ def calculate_LU_logdet(LU):
     upper_diag = abs(LU.U.diagonal())
     logdet = np.sum(np.log(upper_diag))
     assert np.isscalar(logdet)
+
     return logdet
 
 
@@ -102,8 +103,8 @@ def calculate_random_logdet(KV, compute_device):
     else:
         gpu = False
 
-    logdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=10, max_num_samples=1000,
-                                    lanczos_degree=10, error_rtol=0.01, gpu=gpu,
+    logdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=10, max_num_samples=5000,
+                                    lanczos_degree=20, error_rtol=0.01, gpu=gpu,
                                     return_info=True, plot=False, verbose=False, orthogonalize=0)
     logger.debug("Stochastic Lanczos logdet() compute time: {} seconds", time.time() - st)
     assert np.isscalar(logdet)
@@ -112,14 +113,13 @@ def calculate_random_logdet(KV, compute_device):
 
 def calculate_sparse_minres(KV, vec, x0=None, M=None):
     assert sparse.issparse(KV)
-    logger.debug("calculate_sparse_minres")
     st = time.time()
     logger.debug("MINRES solve in progress ...")
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], M=M, rtol=1e-5, x0=x0)
+        res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], M=M, rtol=1e-8, x0=x0)
         if exit_code == 1: warnings.warn("MINRES not successful")
     logger.debug("MINRES compute time: {} seconds.", time.time() - st)
     assert np.ndim(res) == 2
@@ -128,14 +128,13 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None):
 
 def calculate_sparse_conj_grad(KV, vec, x0=None, M=None):
     assert sparse.issparse(KV)
-    logger.debug("calculate_sparse_conj_grad")
     st = time.time()
     logger.debug("CG solve in progress ...")
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-5, x0=x0)
+        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-8, x0=x0)
         if exit_code == 1: warnings.warn("CG not successful")
     logger.debug("CG compute time: {} seconds.", time.time() - st)
     assert np.ndim(res) == 2
@@ -145,7 +144,6 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None):
 def calculate_sparse_solve(KV, vec):
     assert sparse.issparse(KV)
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
-    logger.debug("calculate_sparse_conj_grad")
     st = time.time()
     logger.debug("Sparse solve in progress ...")
     res = sparse.linalg.spsolve(KV, vec)

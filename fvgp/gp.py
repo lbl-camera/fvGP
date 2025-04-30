@@ -14,7 +14,7 @@ from .gp_posterior import GPposterior
 
 
 # TODO: search below "TODO"
-#   as work on function is completed and functions are maintained, add verbose assert statement.
+#   as work on functions is completed and functions are maintained, add verbose assert statements.
 
 
 class GP:
@@ -162,8 +162,7 @@ class GP:
         and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
-    args : any, optional
-        args will be a class attribute and therefore available to kernel, noise and prior mean functions.
+
 
     Attributes
     ----------
@@ -202,7 +201,6 @@ class GP:
         gp2Scale_linalg_mode=None,
         calc_inv=False,
         ram_economy=False,
-        args=None,
     ):
         assert isinstance(x_data, list) or isinstance(x_data, np.ndarray), "wrong format in x_data"
         assert isinstance(y_data, np.ndarray) and np.ndim(y_data) == 1, "wrong format in y_data"
@@ -217,10 +215,10 @@ class GP:
         assert callable(prior_mean_function_grad) or prior_mean_function_grad is None, "wrong format in prior_mean_function"
 
         self.compute_device = compute_device
-        self.args = args
         self.calc_inv = calc_inv
         self.gp2Scale = gp2Scale
         hyperparameters = init_hyperparameters
+
         ########################################
         ###init data instance###################
         ########################################
@@ -314,7 +312,7 @@ class GP:
                                      )
         self.x_data = self.data.x_data
         self.y_data = self.data.y_data
-        self.index_set_dim = self.prior.index_set_dim
+        self.index_set_dim = self.data.index_set_dim
 
     def update_gp_data(
         self,
@@ -411,10 +409,10 @@ class GP:
               objective_function_gradient=None,
               objective_function_hessian=None,
               init_hyperparameters=None,
-              method="global",
+              method="mcmc",
               pop_size=20,
               tolerance=0.0001,
-              max_iter=120,
+              max_iter=200,
               local_optimizer="L-BFGS-B",
               global_optimizer="genetic",
               constraints=(),
@@ -457,7 +455,7 @@ class GP:
             The method used to train the hyperparameters.
             The options are `global`, `local`, `hgdl`, `mcmc`, and a callable.
             The callable gets a `gp.GP` instance and has to return a 1d np.ndarray of hyperparameters.
-            The default is `global` (scipy's differential evolution).
+            The default is `mcmc` (scipy's differential evolution).
             If method = `mcmc`,
             the attribute `fvgp.GP.mcmc_info` is updated and contains convergence and distribution information.
         pop_size : int, optional
@@ -1314,7 +1312,7 @@ class GP:
         CRPS, standard dev. of CRPS : (float, float)
         """
 
-        mean = self.posterior_mean(x_test)["f(x)"]
+        mean = self.posterior_mean(x_test)["m(x)"]
         sigma = self.posterior_covariance(x_test)["v(x)"]
         r = self._crps_s(y_test, mean, np.sqrt(sigma))
         return r
@@ -1338,7 +1336,7 @@ class GP:
         """
 
         v1 = y_test.reshape(len(y_test))
-        v2 = self.posterior_mean(x_test)["f(x)"].reshape(len(v1))
+        v2 = self.posterior_mean(x_test)["m(x)"].reshape(len(v1))
         return np.sqrt(np.sum((v1 - v2) ** 2) / len(v1))
 
     def nlpd(self, x_test, y_test):
@@ -1359,7 +1357,7 @@ class GP:
         NLPD : float
         """
 
-        mean = self.posterior_mean(x_test)["f(x)"]
+        mean = self.posterior_mean(x_test)["m(x)"]
         sigma = np.sqrt(self.posterior_covariance(x_test)["v(x)"])
 
         g = self.gaussian_1d(y_test, mean, sigma)
@@ -1467,6 +1465,9 @@ class GP:
 ####################################################################################
 
 def out_of_bounds(x, bounds):
+    assert isinstance(x, np.ndarray)
+    assert isinstance(bounds, np.ndarray)
+    assert np.ndim(bounds) == 2
     for i in range(len(x)):
         if x[i] < bounds[i, 0] or x[i] > bounds[i, 1]:
             return True

@@ -86,7 +86,8 @@ class GPtraining:
         return opt_obj
 
     ##################################################################################
-    def stop_training(self, opt_obj):
+    @staticmethod
+    def stop_training(opt_obj):
         """
         This function stops the training if HGDL is used. It leaves the dask client alive.
 
@@ -103,7 +104,8 @@ class GPtraining:
             no training is running.", stacklevel=2)
 
     ###################################################################################
-    def kill_training(self, opt_obj):
+    @staticmethod
+    def kill_training(opt_obj):
         """
         This function stops the training if HGDL is used, and kills the dask client.
 
@@ -119,7 +121,8 @@ class GPtraining:
         except:
             warnings.warn("No asynchronous training to be killed, no training is running.", stacklevel=2)
 
-    def update_hyperparameters(self, opt_obj):
+    @staticmethod
+    def update_hyperparameters(opt_obj):
         """
         This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
@@ -282,9 +285,10 @@ class GPtraining:
         else: raise ValueError("No optimization mode specified in fvGP")
         return hyperparameters
 
-    def _in_bounds(self, v, bounds):
+    @staticmethod
+    def _in_bounds(v, bounds):
         assert isinstance(bounds, np.ndarray)
-        if any(v < bounds[:, 0]) or any(v > bounds[:, 1]): return False
+        if np.any(v < bounds[:, 0]) or np.any(v > bounds[:, 1]): return False
         return True
 
 

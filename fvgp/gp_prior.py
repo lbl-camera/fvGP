@@ -30,7 +30,6 @@ class GPprior:
         assert isinstance(hyperparameters, np.ndarray)
         assert np.ndim(hyperparameters) == 1
 
-        self.index_set_dim = data.index_set_dim
         self.Euclidean = data.Euclidean
         self.kernel_function = kernel_function
         self.prior_mean_function = prior_mean_function

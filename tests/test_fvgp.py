@@ -86,12 +86,12 @@ def test_single_task_init_basic():
     my_gp1 = GP(x_data, y_data)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = False)
-    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), args = {'a':2.})
+    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1.update_gp_data(x_data, y_data, append = True)
     my_gp1.update_gp_data(x_data, y_data, append = False)
 
     
-    my_gp1 = GP(x_data, y_data, noise_variances = np.zeros(y_data.shape) + 0.01,init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), args = {'a':2.})
+    my_gp1 = GP(x_data, y_data, noise_variances = np.zeros(y_data.shape) + 0.01,init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1.update_gp_data(x_data, y_data, noise_variances_new = np.zeros(y_data.shape) + 0.01, append = True)
     my_gp1.update_gp_data(x_data, y_data, noise_variances_new = np.zeros(y_data.shape) + 0.01, append = False)
     
@@ -236,10 +236,10 @@ def test_multi_task(client):
     my_fvgp.update_gp_data(x_data, y_data, append = False)
     my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10]]),
             method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2, dask_client=client, info = True)
-    my_fvgp.posterior_mean(np.random.rand(10,5), x_out = np.array([0,1]))["f(x)"]
-    my_fvgp.posterior_mean(np.random.rand(10,5))["f(x)"]
-    my_fvgp.posterior_mean_grad(np.random.rand(10,5), x_out = np.array([0,1]))["df/dx"]
-    my_fvgp.posterior_mean_grad(np.random.rand(10,5))["df/dx"]
+    my_fvgp.posterior_mean(np.random.rand(10,5), x_out = np.array([0,1]))["m(x)"]
+    my_fvgp.posterior_mean(np.random.rand(10,5))["m(x)"]
+    my_fvgp.posterior_mean_grad(np.random.rand(10,5), x_out = np.array([0,1]))["dm/dx"]
+    my_fvgp.posterior_mean_grad(np.random.rand(10,5))["dm/dx"]
     my_fvgp.posterior_covariance(np.random.rand(10,5), x_out = np.array([0,1]))["v(x)"]
     my_fvgp.posterior_covariance(np.random.rand(10,5))["v(x)"]
     my_fvgp.posterior_covariance_grad(np.random.rand(10,5))
@@ -366,7 +366,7 @@ def test_gp2Scale(client):
     my_gp2S.set_hyperparameters(mcmc_result["x"][-1])
     my_gp2S.get_gp2Scale_exec_time(1.,10)
     x_pred = np.linspace(0,1,1000)
-    mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["f(x)"]
+    mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["m(x)"]
     var1 =  my_gp2S.posterior_covariance(x_pred.reshape(-1,1))["v(x)"]
     
     pd = ProposalDistribution([0,1], init_prop_Sigma = init_s, adapt_callable = "normal")
