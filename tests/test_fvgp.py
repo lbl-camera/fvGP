@@ -329,7 +329,7 @@ def test_gp2Scale(client):
     def obj_func(hps,args):
         return my_gp2S.log_likelihood(hyperparameters=hps[0:2])
 
-    from fvgp.gpMCMC import ProposalDistribution
+    from fvgp import ProposalDistribution
     init_s = (np.diag(hps_bounds[:,1]-hps_bounds[:,0])/100.)**2
 
     from fvgp import gpMCMC

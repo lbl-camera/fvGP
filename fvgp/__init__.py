@@ -13,8 +13,10 @@ from loguru import logger
 import sys
 from .gp import GP
 from .fvgp import fvGP
-from .gpMCMC import gpMCMC
+from .gp_mcmc import gpMCMC, ProposalDistribution
 
-__all__ = ['GP', 'fvGP', 'gpMCMC']
+
+
+__all__ = ['GP', 'fvGP', 'gpMCMC', 'ProposalDistribution']
 
 logger.disable('fvgp')

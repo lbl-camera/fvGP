@@ -33,9 +33,6 @@ import warnings
 # K .............................................. adapt every K iterations
 #                                                                         #
 
-# TODO:
-# *
-
 
 class gpMCMC:
     """
