@@ -1,6 +1,6 @@
 # Kernels
 
 ```{eval-rst}
-.. autofunction:: kernels
+.. automodule:: kernels
     :members:
 ```
