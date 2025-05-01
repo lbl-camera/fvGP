@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 from loguru import logger
 from .gp_lin_alg import *
@@ -97,6 +99,9 @@ class GPMarginalDensity:
                 KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L)
             elif mode == "sparseSolve":
                 KVinvY = calculate_sparse_solve(KV, y_mean)
+            elif callable(mode[0]) and callable(mode[1]):
+                factor = mode[0](KV)
+                KVinvY = mode[1](factor, y_mean)
             else:
                 raise Exception("No mode in gp2Scale", mode)
         else:
@@ -139,6 +144,10 @@ class GPMarginalDensity:
             elif mode == "sparseSolve":
                 KVinvY = calculate_sparse_solve(KV, y_mean)
                 KVlogdet = calculate_random_logdet(KV, self.compute_device)
+            elif callable(mode[0]) and callable(mode[1]) and callable(mode[2]):
+                factor = mode[0](KV)
+                KVinvY = mode[1](factor, y_mean)
+                KVlogdet = mode[2](factor)
             else:
                 raise Exception("No mode in gp2Scale", mode)
         else:
@@ -183,10 +192,11 @@ class GPMarginalDensity:
             raise Exception("K+V not possible with the given formats")
 
     ##################################################################################
-    def _set_gp2Scale_mode(self, KV):
-        if self.gp2Scale_linalg_mode is not None: return self.gp2Scale_linalg_mode
+    def _set_gp2Scale_mode(self, KV: object) -> str | list:
         Ksparsity = float(KV.nnz) / float(len(self.data_obj.x_data) ** 2)
-        if len(self.data_obj.x_data) < 50001 and Ksparsity < 0.0001:
+        if self.gp2Scale_linalg_mode is not None:
+            return self.gp2Scale_linalg_mode
+        elif len(self.data_obj.x_data) < 50001 and Ksparsity < 0.0001:
             mode = "sparseLU"
         elif len(self.data_obj.x_data) < 2001 and Ksparsity >= 0.0001:
             mode = "Chol"
@@ -373,8 +383,9 @@ class KVlinalg:
         self.KV = None
         self.Chol_factor = None
         self.LU_factor = None
+        self.custom_obj = None
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
-                              "sparseLU", "sparseMINRESpre", "sparseCGpre", "sparseSolve"]
+                              "sparseLU", "sparseMINRESpre", "sparseCGpre", "sparseSolve", "a set of callables"]
 
     def set_KV(self, KV, mode):
         self.mode = mode
@@ -406,7 +417,7 @@ class KVlinalg:
         elif self.mode == "sparseSolve":
             self.KV = KV
         elif callable(self.mode[0]):
-            self.KV = KV
+            self.custom_obj = self.mode[0](KV)
         else:
             raise Exception("No Mode. Choose from: ", self.allowed_modes)
 
@@ -445,7 +456,7 @@ class KVlinalg:
         elif self.mode == "sparseSolve":
             self.KV = KV
         elif callable(self.mode[0]):
-            self.KV = KV
+            self.custom_obj = self.mode[0](KV)
         else:
             raise Exception("No Mode. Choose from: ", self.allowed_modes)
 
@@ -470,8 +481,8 @@ class KVlinalg:
             return calculate_sparse_conj_grad(self.KV, b, M=B.L.T @ B.L, x0=x0)
         elif self.mode == "sparseSolve":
             return calculate_sparse_solve(self.KV, b)
-        elif callable(self.mode[0]):
-            return self.mode[0](self.KV, b)
+        elif callable(self.mode[1]):
+            return self.mode[1](self.custom_obj, b)
         else:
             raise Exception("No Mode. Choose from: ", self.allowed_modes)
 
@@ -485,7 +496,7 @@ class KVlinalg:
         elif self.mode == "sparseMINRESpre": return calculate_random_logdet(self.KV, self.compute_device)
         elif self.mode == "sparseCGpre": return calculate_random_logdet(self.KV, self.compute_device)
         elif self.mode == "sparseSolve": return calculate_random_logdet(self.KV, self.compute_device)
-        elif callable(self.mode[0]): return mode[1](self.KV)
+        elif callable(self.mode[2]): return mode[2](self.custom_obj)
         else: raise Exception("No Mode. Choose from: ", self.allowed_modes)
 
 

@@ -177,18 +177,18 @@ class GPprior:
             logger.debug("        gp2Scale covariance matrix init done after {} seconds.", time.time() - st)
 
             dsk = {f'kernel_{i}_{j}': (kernel_function,
-                                   ranges[i][j],
-                                   self.x_data_scatter_future,
-                                   self.x_data_scatter_future,
-                                   hyperparameters,
-                                   self.kernel)
+                                       ranges[i][j],
+                                       self.x_data_scatter_future,
+                                       self.x_data_scatter_future,
+                                       hyperparameters,
+                                       self.kernel)
                    for i in range(NUM_RANGES) for j in range(NUM_RANGES)
                    if i<=j
                    }
 
             dsk.update({f'stack_blocks_{r}':(self.stack_blocks,
-                                             [f'kernel_{i}_{r}' for i in range(0, r)], # blocks that need to be reflected up to upper triangle
-                                             [f'kernel_{r}_{j}' for j in range(r, NUM_RANGES)] # blocks in the row on upper triangle
+                    [f'kernel_{i}_{r}' for i in range(0, r)], # blocks that need to be reflected up to upper triangle
+                    [f'kernel_{r}_{j}' for j in range(r, NUM_RANGES)] # blocks in the row on upper triangle
                                              )
                         for r in range(NUM_RANGES)})
 

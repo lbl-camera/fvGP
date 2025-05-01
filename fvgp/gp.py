@@ -134,7 +134,12 @@ class GP:
     gp2Scale_linalg_mode : str, optional
         One of `Chol`, `sparseLU`, `sparseCG`, `sparseMINRES`, `sparseSolve`, `sparseCGpre`
         (incomplete LU preconditioner), or `sparseMINRESpre`. The default is None which amounts to
-        an automatic determination of the mode.
+        an automatic determination of the mode. For advanced customization options
+        this can also be an iterable with three callables: the first f(K), where K is the covariance matrix
+        to compute a factorization object
+        which is available in the second and third callable. The second being the linear solve f(obj, vec),
+        and the third being the logdet=f(obj). If a factorization object is not required, the first callable
+        can return the matrix itself (K).
     calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
@@ -213,6 +218,7 @@ class GP:
         assert callable(noise_function_grad) or noise_function_grad is None, "wrong format in noise_function"
         assert callable(prior_mean_function) or prior_mean_function is None, "wrong format in prior_mean_function"
         assert callable(prior_mean_function_grad) or prior_mean_function_grad is None, "wrong format in prior_mean_function"
+        assert len(x_data) == len(y_data), "x_data and y_data do not have the same lengths."
 
         self.compute_device = compute_device
         self.calc_inv = calc_inv
@@ -355,6 +361,7 @@ class GP:
         assert isinstance(x_new, list) or isinstance(x_new, np.ndarray), "wrong format in x_new"
         assert isinstance(y_new, np.ndarray) and np.ndim(y_new) == 1, "wrong format in y_new"
         assert isinstance(noise_variances_new, np.ndarray) or noise_variances_new is None, "wrong format in noise_variances_new"
+        assert len(x_new) == len(y_new), "updated x and y do not have the same lengths."
         old_x_data = self.data.x_data.copy()
         if gp_rank_n_update is None: gp_rank_n_update = append
         # update data

@@ -294,6 +294,7 @@ class fvGP(GP):
     ):
         assert isinstance(x_data, list) or isinstance(x_data, np.ndarray), "wrong format in x_data"
         assert isinstance(y_data, np.ndarray), "wrong format in y_data"
+        assert len(x_data) == len(y_data), "x_data and y_data do not have the same lengths."
 
         if isinstance(x_data, np.ndarray):
             assert np.ndim(x_data) == 2
@@ -382,9 +383,9 @@ class fvGP(GP):
             is `gp_rank_n_update=append`, meaning if data is only appended, the rank_n_update will
             be performed.
         """
-        assert isinstance(x_new, np.ndarray) or isinstance(x_new, list)
-        assert isinstance(y_new, np.ndarray)
-        assert len(x_new) == len(y_new)
+        assert isinstance(x_new, np.ndarray) or isinstance(x_new, list), "Wrong format in x_new."
+        assert isinstance(y_new, np.ndarray), "Wrong format in y_new."
+        assert len(x_new) == len(y_new), "updated x and y do now have the same lengths."
         if append:
             if noise_variances_new is not None:
                 assert isinstance(noise_variances_new, np.ndarray) or isinstance(noise_variances_new, list)
