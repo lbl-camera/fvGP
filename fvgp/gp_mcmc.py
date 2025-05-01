@@ -97,6 +97,7 @@ class gpMCMC:
         run_in_every_iteration : callable, optional
             A callable that is executed in every iteration. Form: func(obj). Default no-op.
 
+
         Return
         ------
         trace information : dict
@@ -159,8 +160,8 @@ class gpMCMC:
 
         return self.mcmc_info
 
-    ###############################################################
-    def _default_break_condition(self, obj):
+    @staticmethod
+    def _default_break_condition(obj):
         x = obj.trace["x"]
         if len(x) > 201:
             latest_mean = np.mean(x[-100:], axis=0)

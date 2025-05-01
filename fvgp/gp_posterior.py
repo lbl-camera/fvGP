@@ -277,7 +277,7 @@ class GPposterior:
 
     ###########################################################################
     @staticmethod
-    def kl_div_grad(self, mu1, dmu1dx, mu2, S1, dS1dx, S2):
+    def kl_div_grad(mu1, dmu1dx, mu2, S1, dS1dx, S2):
         x1 = solve(S2, dS1dx)
         mu = np.subtract(mu2, mu1)
         x2 = solve(S2, mu)
@@ -286,7 +286,8 @@ class GPposterior:
         return kld
 
     ###########################################################################
-    def kl_div(self, mu1, mu2, S1, S2):
+    @staticmethod
+    def kl_div(mu1, mu2, S1, S2):
         logdet1 = calculate_logdet(S1)
         logdet2 = calculate_logdet(S2)
         x1 = solve(S2, S1)

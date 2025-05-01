@@ -217,7 +217,8 @@ class GP:
         assert callable(noise_function) or noise_function is None, "wrong format in noise_function"
         assert callable(noise_function_grad) or noise_function_grad is None, "wrong format in noise_function"
         assert callable(prior_mean_function) or prior_mean_function is None, "wrong format in prior_mean_function"
-        assert callable(prior_mean_function_grad) or prior_mean_function_grad is None, "wrong format in prior_mean_function"
+        assert callable(prior_mean_function_grad) or prior_mean_function_grad is None, \
+            "wrong format in prior_mean_function"
         assert len(x_data) == len(y_data), "x_data and y_data do not have the same lengths."
 
         self.compute_device = compute_device
