@@ -21,7 +21,7 @@ api/logging.md
 ```{toctree}
 ---
 hidden: true
-maxdepth: 2
+maxdepth: 1
 caption: Examples
 ---
 examples/SingleTaskTest.ipynb

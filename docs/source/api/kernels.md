@@ -1,6 +1,6 @@
-# GP
+# Kernels
 
 ```{eval-rst}
-.. autoclass:: fvgp.kernels
+.. automodule:: kernels.py
     :members:
 ```
