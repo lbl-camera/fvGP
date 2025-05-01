@@ -1,6 +1,6 @@
 # Kernels
 
 ```{eval-rst}
-.. automodule:: kernels.py
+.. autofunction:: kernels
     :members:
 ```
