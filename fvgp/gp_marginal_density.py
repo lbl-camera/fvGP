@@ -64,9 +64,11 @@ class GPMarginalDensity:
     def _set_KVinvY(self, K, V, m, mode):
         """Set or reset KVinvY for new hyperparameters"""
         y_mean = self.data_obj.y_data - m
-        #update lin alg obj
         KV = self._addKV(K, V)
+        logger.debug("K+V computed")
         self.KVlinalg.set_KV(KV, mode)
+        logger.debug("KVlinalg obj set")
+        logger.debug("Solve in progress")
         KVinvY = self.KVlinalg.solve(y_mean).reshape(len(y_mean))
         return KVinvY.reshape(len(y_mean))
 
@@ -157,10 +159,7 @@ class GPMarginalDensity:
         return KVinvY.reshape(len(y_mean)), KVlogdet
 
     def _get_KVm(self):
-        K = self.prior_obj.K
-        m = self.prior_obj.m
-        V = self.likelihood_obj.V
-        return K, V, m
+        return self.prior_obj.K, self.likelihood_obj.V, self.prior_obj.m
 
     @staticmethod
     def _addKV(K, V):
@@ -174,8 +173,11 @@ class GPMarginalDensity:
             else:
                 assert np.ndim(V) == 1, "K is sparse, but V is a dense matrix"
                 assert len(V) == K.shape[0]
+                logger.debug("Evaluating K+V in gp2Scale")
+                #KV = K.copy()
                 K_diag = K.diagonal()
                 K.setdiag(K_diag + V)
+                logger.debug("K+V in gp2Scale Computed")
                 return K.tocsr()
         elif isinstance(K, np.ndarray):
             if issparse(V): V = V.toarray()
