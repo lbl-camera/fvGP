@@ -13,7 +13,7 @@ from scipy import sparse
 def calculate_sparse_LU_factor(M):
     assert sparse.issparse(M)
     logger.debug("calculate_sparse_LU_factor")
-    LU = splu(M.tocsc())
+    LU = splu(M)
     return LU
 
 
@@ -119,7 +119,7 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None):
     if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res[:, i], exit_code = minres(KV.tocsc(), vec[:, i], M=M, rtol=1e-8, x0=x0)
+        res[:, i], exit_code = minres(KV, vec[:, i], M=M, rtol=1e-8, x0=x0)
         if exit_code == 1: warnings.warn("MINRES not successful")
     logger.debug("MINRES compute time: {} seconds.", time.time() - st)
     assert np.ndim(res) == 2
@@ -134,7 +134,7 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None):
     if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res[:, i], exit_code = cg(KV.tocsc(), vec[:, i], M=M, rtol=1e-8, x0=x0)
+        res[:, i], exit_code = cg(KV, vec[:, i], M=M, rtol=1e-8, x0=x0)
         if exit_code == 1: warnings.warn("CG not successful")
     logger.debug("CG compute time: {} seconds.", time.time() - st)
     assert np.ndim(res) == 2

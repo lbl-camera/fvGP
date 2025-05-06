@@ -170,13 +170,13 @@ class GPMarginalDensity:
         if issparse(K):
             if issparse(V):
                 KV = K + V
-                return KV
+                return KV.tocsc()
             else:
                 assert np.ndim(V) == 1, "K is sparse, but V is a dense matrix"
                 assert len(V) == K.shape[0]
                 K_diag = K.diagonal()
                 K.setdiag(K_diag + V)
-                return K.tocsr()
+                return K.tocsc()
         elif isinstance(K, np.ndarray):
             if issparse(V): V = V.toarray()
             assert isinstance(V, np.ndarray), "K is np.ndarray, V is not"
