@@ -271,9 +271,9 @@ class GP:
         ########################################
         self.prior = GPprior(self.data,
                              hyperparameters=hyperparameters,
-                             kernel_function=kernel_function,
+                             kernel=kernel_function,
                              prior_mean_function=prior_mean_function,
-                             kernel_function_grad=kernel_function_grad,
+                             kernel_grad=kernel_function_grad,
                              prior_mean_function_grad=prior_mean_function_grad,
                              gp2Scale=gp2Scale,
                              gp2Scale_dask_client=gp2Scale_dask_client,
