@@ -199,11 +199,11 @@ class GPprior:
         data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
             np.hstack([i_s, j_s[diagonal_mask]]), \
             np.hstack([j_s, i_s[diagonal_mask]])
-        #K = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_data), len(x_data)))
-        #del data
+        K = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_data), len(x_data)))
+        del data
         logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
-        K = self._coo_to_csr_chunked(i_s, j_s, data, (len(data), len(data)), len(data)/2)
-        #K = K.tocsr()
+        #K = self._coo_to_csr_chunked(i_s, j_s, data, (len(data), len(data)), int(len(data)/2))
+        K = K.tocsr()
         logger.debug("        gp2Scale covariance matrix in CSR after {} seconds.", time.time() - st)
         logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
         return K
