@@ -90,22 +90,27 @@ class GPprior:
             self.dm_dh = self._default_dm_dh
 
         self.m, self.K = self._compute_prior(data.x_data)
+        logger.debug("Prior successfully initialized.")
 
     def augment_data(self, x_old, x_new):
         self.m, self.K = self._update_prior(x_old, x_new)
+        logger.debug("Prior mean and covariance updated after data augmentation.")
 
     def update_data(self):
         self.m, self.K = self._compute_prior(self.data.x_data)
+        logger.debug("Prior mean and covariance updated after data change.")
 
     def update_hyperparameters(self, hyperparameters):
         self.hyperparameters = hyperparameters
         self.m, self.K = self._compute_prior(self.data.x_data)
+        logger.debug("Prior mean and covariance updated after hyperparameter change.")
 
     def _compute_prior(self, x_data):
         m = self.compute_mean(x_data)
         K = self.compute_prior_covariance_matrix(x_data)
         assert np.ndim(m) == 1
         assert np.ndim(K) == 2
+        logger.debug("Prior mean and covariance matrix successfully computed.")
         return m, K
 
     def _update_prior(self, x_old, x_new):
@@ -196,6 +201,8 @@ class GPprior:
         K = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_data), len(x_data)))
         del data
         logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
+        K = K.tocsr()
+        logger.debug("        gp2Scale covariance matrix in CSR after {} seconds.", time.time() - st)
         logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
         return K
 
