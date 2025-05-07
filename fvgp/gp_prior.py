@@ -192,19 +192,37 @@ class GPprior:
 
         # reshape the result set into COO components
         data, i_s, j_s = map(np.hstack, zip(*results))
+        logger.debug("        gp2Scale covariance matrix result stacked after {} seconds.", time.time() - st)
         del results
         # mirror across diagonal
         diagonal_mask = i_s != j_s
         data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
             np.hstack([i_s, j_s[diagonal_mask]]), \
             np.hstack([j_s, i_s[diagonal_mask]])
-        K = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_data), len(x_data)))
-        del data
+        #K = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_data), len(x_data)))
+        #del data
         logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
-        K = K.tocsr()
+        K = self._coo_to_csr_chunked(i_s, j_s, data, (len(data), len(data)), len(data)/2)
+        #K = K.tocsr()
         logger.debug("        gp2Scale covariance matrix in CSR after {} seconds.", time.time() - st)
         logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
         return K
+
+    @staticmethod
+    def _coo_to_csr_chunked(row, col, data, shape, chunk_size):
+        from scipy.sparse import coo_matrix, vstack
+        n_rows = shape[0]
+        chunks = []
+        for start in range(0, n_rows, chunk_size):
+            end = min(start + chunk_size, n_rows)
+            mask = (row >= start) & (row < end)
+            r = row[mask] - start  # Normalize to chunk
+            c = col[mask]
+            d = data[mask]
+            coo_chunk = coo_matrix((d, (r, c)), shape=(end - start, shape[1]))
+            csr_chunk = coo_chunk.tocsr()
+            chunks.append(csr_chunk)
+        return vstack(chunks, format='csr')
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
         client = self.client
