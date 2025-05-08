@@ -176,11 +176,11 @@ class GPMarginalDensity:
                 assert np.ndim(V) == 1, "K is sparse, but V is a dense matrix"
                 assert len(V) == K.shape[0]
                 logger.debug("Evaluating K+V in gp2Scale")
-                #KV = K.copy()
+                KV = K.copy()
                 K_diag = K.diagonal()
-                K.setdiag(K_diag + V)
+                KV.setdiag(K_diag + V)
                 logger.debug("K+V in gp2Scale Computed")
-                return K
+                return KV
         elif isinstance(K, np.ndarray):
             if issparse(V): V = V.toarray()
             assert isinstance(V, np.ndarray), "K is np.ndarray, V is not"
