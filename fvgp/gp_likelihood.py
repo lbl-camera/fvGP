@@ -1,7 +1,6 @@
 import numpy as np
 import warnings
-import scipy.sparse as sparse
-
+from loguru import logger
 
 class GPlikelihood:
     def __init__(self,
@@ -52,12 +51,14 @@ class GPlikelihood:
 
     ##################################################################################
     def update(self, hyperparameters):
+        logger.debug("Updating noise matrix V after new hyperparameters communicated.")
         self.V = self.calculate_V(hyperparameters)
 
     #def augment(self, x_old, x_new): #for later to augment V given new data instead of recompute
     #    self.V =
 
     def calculate_V(self, hyperparameters):
+        logger.debug("Calculating V.")
         noise = self.noise_function(self.data.x_data, hyperparameters)
         return noise
 

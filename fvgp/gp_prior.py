@@ -312,6 +312,7 @@ class GPprior:
         ------
         Covariance matrix : np.ndarray
         """
+        logger.debug("Default kernel in use.")
         hps = hyperparameters
         distance_matrix = np.zeros((len(x1), len(x2)))
         for i in range(len(x1[0])):

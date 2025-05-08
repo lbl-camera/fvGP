@@ -41,6 +41,7 @@ class GPMarginalDensity:
     ##################################################################
     def update_data(self, append):
         """Update the marginal PDF when the data has changed in data likelihood or prior objects"""
+        logger.debug("Updating marginal density after new data was appended.")
         K, V, m = self._get_KVm()
         if append:
             self.KVinvY = self._update_KVinvY(K, V, m)
@@ -49,6 +50,7 @@ class GPMarginalDensity:
 
     def update_hyperparameters(self):
         """Update the marginal PDF when if hyperparameters have changed"""
+        logger.debug("Updating marginal density after new hyperparameters were appended.")
         K, V, m = self._get_KVm()
         self.KVinvY = self._set_KVinvY(K, V, m, self.KVlinalg.mode)
 
