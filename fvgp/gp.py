@@ -167,6 +167,8 @@ class GP:
         and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
+    args: dict, optional
+        A dictionary of advances settings.
 
 
     Attributes
@@ -206,6 +208,7 @@ class GP:
         gp2Scale_linalg_mode=None,
         calc_inv=False,
         ram_economy=False,
+        args=None
     ):
         assert isinstance(x_data, list) or isinstance(x_data, np.ndarray), "wrong format in x_data"
         assert isinstance(y_data, np.ndarray) and np.ndim(y_data) == 1, "wrong format in y_data"
@@ -224,6 +227,8 @@ class GP:
         self.compute_device = compute_device
         self.calc_inv = calc_inv
         self.gp2Scale = gp2Scale
+        if args is None: self.args = {}
+        else: self.args = args
         hyperparameters = init_hyperparameters
 
         ########################################
@@ -278,7 +283,8 @@ class GP:
                              gp2Scale=gp2Scale,
                              gp2Scale_dask_client=gp2Scale_dask_client,
                              gp2Scale_batch_size=gp2Scale_batch_size,
-                             ram_economy=ram_economy
+                             ram_economy=ram_economy,
+                             args=self.args
                              )
         ########################################
         ###init likelihood instance#############
@@ -288,7 +294,8 @@ class GP:
                                        noise_function=noise_function,
                                        noise_function_grad=noise_function_grad,
                                        ram_economy=ram_economy,
-                                       gp2Scale=gp2Scale
+                                       gp2Scale=gp2Scale,
+                                       args=self.args
                                        )
 
         ##########################################
@@ -301,13 +308,14 @@ class GP:
             calc_inv=calc_inv,
             gp2Scale=gp2Scale,
             gp2Scale_linalg_mode=gp2Scale_linalg_mode,
-            compute_device=compute_device
+            compute_device=compute_device,
+            args=self.args
         )
 
         ##########################################
         #######prepare training###################
         ##########################################
-        self.trainer = GPtraining(gp2Scale=gp2Scale)
+        self.trainer = GPtraining(gp2Scale=gp2Scale, args=self.args)
 
         ##########################################
         #######prepare posterior evaluations######
@@ -315,10 +323,12 @@ class GP:
         self.posterior = GPposterior(self.data,
                                      self.prior,
                                      self.marginal_density,
-                                     self.likelihood
+                                     self.likelihood,
+                                     args=self.args
                                      )
         self.x_data = self.data.x_data
         self.y_data = self.data.y_data
+        self.noise_variances = self.data.noise_variances
         self.index_set_dim = self.data.index_set_dim
 
     def update_gp_data(
@@ -382,6 +392,18 @@ class GP:
         ##########################################
         self.x_data = self.data.x_data
         self.y_data = self.data.y_data
+
+    def set_args(self, args):
+        self.args = args
+        self.prior.args = args
+        self.likelihood.args = args
+        self.marginal_density.args = args
+        self.trainer.args = args
+        self.posterior.args = args
+        self.marginal_density.KVlinalg.args = args
+
+    def get_args(self):
+        return self.args
 
     def _get_default_hyperparameter_bounds(self):
         """

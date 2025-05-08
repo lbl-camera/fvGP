@@ -8,7 +8,8 @@ class GPposterior:
                  data_obj,
                  prior_obj,
                  marginal_density_obj,
-                 likelihood_obj):
+                 likelihood_obj,
+                 args=None):
 
         self.marginal_density_obj = marginal_density_obj
         self.prior_obj = prior_obj
@@ -18,6 +19,7 @@ class GPposterior:
         self.mean_function = self.prior_obj.mean_function
         self.d_kernel_dx = self.prior_obj.d_kernel_dx
         self.x_out = None
+        self.args = args
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
         x_data, KVinvY = self.data_obj.x_data.copy(), self.marginal_density_obj.KVinvY.copy()

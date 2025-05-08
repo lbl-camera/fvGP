@@ -71,7 +71,7 @@ class fvGP(GP):
         will be particularly important. In that case, the default Wendland kernel will be computed on
         the cpu or the gpu which will significantly change the compute time depending on the compute
         architecture.
-    gp_kernel_function : Callable, optional
+    kernel_function : Callable, optional
         A symmetric positive definite covariance function (a kernel)
         that calculates the covariance between
         data points. It is a function of the form k(x1,x2,hyperparameters).
@@ -83,7 +83,7 @@ class fvGP(GP):
         direction is simply considered an additional dimension. This kernel should only be used for tests and in the
         simplest of cases.
         The output is a matrix, an N1 x N2 numpy array.
-    gp_kernel_function_grad : Callable, optional
+    kernel_function_grad : Callable, optional
         A function that calculates the derivative of the `gp_kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
         It accepts as input `x1` (a N1 x Di + 1 array of positions),
@@ -176,6 +176,8 @@ class fvGP(GP):
         and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
+    args: dict, optional
+        A dictionary of advances settings.
 
     Attributes
     ----------
@@ -291,6 +293,7 @@ class fvGP(GP):
         gp2Scale_linalg_mode=None,
         calc_inv=False,
         ram_economy=False,
+        args=None
     ):
         assert isinstance(x_data, list) or isinstance(x_data, np.ndarray), "wrong format in x_data"
         assert isinstance(y_data, np.ndarray), "wrong format in y_data"
@@ -334,7 +337,8 @@ class fvGP(GP):
             gp2Scale_batch_size=gp2Scale_batch_size,
             gp2Scale_linalg_mode=gp2Scale_linalg_mode,
             calc_inv=calc_inv,
-            ram_economy=ram_economy)
+            ram_economy=ram_economy,
+            args=args)
 
         if self.data.Euclidean: assert self.index_set_dim == self.input_space_dim + 1
         self.posterior.x_out = np.arange(0, self.output_num)

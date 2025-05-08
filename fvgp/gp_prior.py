@@ -22,7 +22,8 @@ class GPprior:
                  compute_device='cpu',
                  gp2Scale=False,
                  gp2Scale_dask_client=None,
-                 gp2Scale_batch_size=10000
+                 gp2Scale_batch_size=10000,
+                 args=None
                  ):
 
         assert callable(kernel) or kernel is None
@@ -39,6 +40,7 @@ class GPprior:
         self.client = gp2Scale_dask_client
         self.batch_size = gp2Scale_batch_size
         self.data = data
+        self.args = args
 
         if not self.Euclidean and not callable(kernel):
             raise Exception(

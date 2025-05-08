@@ -8,9 +8,11 @@ from scipy.optimize import minimize
 
 
 class GPtraining:
-    def __init__(self, gp2Scale=False):
+    def __init__(self, gp2Scale=False,args=None):
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
+        self.args = args
+
 
     def train(self,
               objective_function=None,

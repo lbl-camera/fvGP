@@ -10,6 +10,7 @@ class GPlikelihood:
                  noise_function_grad=None,
                  ram_economy=False,
                  gp2Scale=False,
+                 args=None
                  ):
 
         assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
@@ -21,6 +22,7 @@ class GPlikelihood:
             assert all(self.data.noise_variances > 0.0)
 
         self.gp2Scale = gp2Scale
+        self.args = args
 
         if self.data.noise_variances is not None and callable(noise_function):
             raise Exception("Noise function and measurement noise provided. Decide which one to use.")
