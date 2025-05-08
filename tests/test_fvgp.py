@@ -63,6 +63,12 @@ def test_lin_alg():
     i = calculate_inv(B, args = {"xz": 3.})
     update_inv(i, A, args = {"xz": 3.})
     solve(A, np.random.rand(len(A)), args = {"xz": 3.})
+    calculate_sparse_solve(sparse.coo_matrix(A), np.random.rand(len(A)), args = {"ds":3.})
+    calculate_logdet(A, compute_device='gpu')
+    calculate_inv(A, compute_device='gpu')
+    b = np.random.rand(len(A))
+    solve(A, b, compute_device='gpu')
+    solve(A, b, compute_device='multi-gpu')
     is_sparse(A)
     how_sparse_is(A)
 
@@ -140,7 +146,7 @@ def test_train_basic(client):
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
+            method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 20, dask_client=client)
 
     res = my_gp1.posterior_mean(np.random.rand(len(x_data),len(x_data[0])))
     res = my_gp1.posterior_mean_grad(np.random.rand(10,len(x_data[0])))
@@ -314,12 +320,35 @@ def test_gp2Scale(client):
     init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseLU")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S.update_gp_data(x_new,y_new, append = True)
+    
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCG")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S.update_gp_data(x_new,y_new, append = True)
+    
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRES")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S.update_gp_data(x_new,y_new, append = True)
+    
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S.update_gp_data(x_new,y_new, append = True)
+    
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
+    my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S.update_gp_data(x_new,y_new, append = True)
+    
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = False, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="Inv")
+    my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S.update_gp_data(x_new,y_new, append = True)
+    
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRESpre")
+    my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S.update_gp_data(x_new,y_new, append = True)
+    
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseSolve")
+    my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S.update_gp_data(x_new,y_new, append = True)
 
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client)
 

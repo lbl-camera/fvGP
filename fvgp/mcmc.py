@@ -3,13 +3,6 @@ import time
 from loguru import logger
 
 
-def project_onto_bounds(x, bounds):
-    for i in range(len(x)):
-        if x[i] < bounds[i, 0]: x[i] = bounds[i, 0]
-        if x[i] > bounds[i, 1]: x[i] = bounds[i, 1]
-    return x
-
-
 def in_bounds(v, bounds):
     for i in range(len(v)):
         if v[i] < bounds[i, 0] or v[i] > bounds[i, 1]: return False

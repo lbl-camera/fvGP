@@ -160,6 +160,7 @@ def calculate_sparse_solve(KV, vec, args=None):
     logger.debug("Sparse solve in progress ...")
     res = sparse.linalg.spsolve(KV, vec)
     logger.debug("Sparse solve compute time: {} seconds.", time.time() - st)
+    if vec.shape[1] == 1: res = res.reshape(len(vec), 1)
     assert np.ndim(res) == 2
     return res
 

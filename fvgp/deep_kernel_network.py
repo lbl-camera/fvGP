@@ -37,11 +37,10 @@ class Network(nn.Module):  # pragma: no cover
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 
 
 # Define a simple neural network to warp a 3D space
-class WarpNet(nn.Module):
+class WarpNet(nn.Module):   # pragma: no cover
     def __init__(self, input_dim=3, hidden_dim=64, output_dim=3):
         super(WarpNet, self).__init__()
 
