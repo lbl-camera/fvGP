@@ -8,6 +8,7 @@ import scipy.sparse as sparse
 from scipy.sparse import block_array
 import time
 from loguru import logger
+from scipy.sparse import coo_matrix, vstack
 
 
 class GPprior:
@@ -211,8 +212,7 @@ class GPprior:
         return K
 
     @staticmethod
-    def _coo_to_csr_chunked(row, col, data, shape, chunk_size):
-        from scipy.sparse import coo_matrix, vstack
+    def _coo_to_csr_chunked(row, col, data, shape, chunk_size):  #pragma: no cover
         n_rows = shape[0]
         chunks = []
         for start in range(0, n_rows, chunk_size):
@@ -379,8 +379,6 @@ class GPprior:
 ########################################################
 ########################################################
 ########################################################
-
-
 def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
     """
     Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the

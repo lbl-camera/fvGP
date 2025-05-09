@@ -308,7 +308,7 @@ def polynomial_kernel(x1, x2, p):
     return p
 
 
-def wendland_function(d):
+def wendland_kernel(d):
     """
     Function for the Wendland kernel with a given distance matrix.
     The Wendland kernel is compactly supported, leading to sparse covariance matrices.
@@ -552,32 +552,17 @@ def wasserstein_1d(a, b):
     ------
     Wasserstein distance : float
     """
-    a = a/np.sum(a)
-    b = b/np.sum(b)
+    a = a / np.sum(a)
+    b = b / np.sum(b)
     a_sorted = np.sort(a)
     b_sorted = np.sort(b)
     return np.mean(np.abs(a_sorted - b_sorted))
 
 
-def wasserstein_1d_vec(a, b):
-    """
-    The 1d vectorized Wasserstein distance.
+def wasserstein_1d_outer_vec(a, b):
+    a = a / a.sum(axis=1, keepdims=True)
+    b = b / b.sum(axis=1, keepdims=True)
 
-    Parameters
-    ----------
-    a : np.ndarray
-        2d Numpy array of input distribution. Shape (U,V), where
-        U is the number of input distributions and V is the length of each distribution.
-    b : np.ndarray
-        2d Numpy array of input distribution. Shape (U,V), where
-        U is the number of input distributions and V is the length of each distribution.
-
-    Return
-    ------
-    Wasserstein distance : float
-    """
-    a = a/np.sum(a, axis=1)
-    b = b/np.sum(b, axis=1)
     a_sorted = np.sort(a, axis=1)
     b_sorted = np.sort(b, axis=1)
     s = a_sorted[:, None, :] - b_sorted[None, :, :]

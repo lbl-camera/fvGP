@@ -817,6 +817,22 @@ class GP:
             assert np.ndim(hyperparameters) == 1, "wrong format in hyperparameters"
         return self.marginal_density.log_likelihood(hyperparameters=hyperparameters)
 
+    def neg_log_likelihood_gradient(self, hyperparameters=None):
+        """
+        Function that computes the gradient of the marginal log-likelihood.
+
+        Parameters
+        ----------
+        hyperparameters : np.ndarray, optional
+            Vector of hyperparameters of shape (N).
+            If not provided, the covariance will not be recomputed.
+
+        Return
+        ------
+        Gradient of the negative log marginal likelihood : np.ndarray
+        """
+        return self.marginal_density.log_likelihood(hyperparameters=hyperparameters)
+
     def test_log_likelihood_gradient(self, hyperparameters):
         """
         Function to test your gradient of the log-likelihood and therefore of the kernel function.
@@ -988,23 +1004,6 @@ class GP:
         return self.posterior.joint_gp_prior_grad(x_pred, direction, x_out=x_out)
 
     ###########################################################################
-    def entropy(self, S):
-        """
-        Function computing the entropy of a normal distribution
-        res = entropy(S); S is a 2d np.ndarray array, a covariance matrix which is non-singular.
-
-        Parameters
-        ----------
-        S : np.ndarray
-            A covariance matrix.
-
-        Return
-        ------
-        Entropy : float
-        """
-        return self.posterior.entropy(S)
-
-    ###########################################################################
     def gp_entropy(self, x_pred, x_out=None):
         """
         Function to compute the entropy of the gp prior probability distribution.
@@ -1052,55 +1051,6 @@ class GP:
         return self.posterior.gp_entropy_grad(x_pred, direction, x_out=x_out)
 
     ###########################################################################
-    def kl_div_grad(self, mu1, dmu1dx, mu2, S1, dS1dx, S2):
-        """
-        This function computes the gradient of the KL divergence between two normal distributions
-        when the gradients of the mean and covariance are given.
-
-        Parameters
-        ----------
-        mu1 : np.ndarray
-            Mean vector of distribution 1.
-        dmu1dx : np.ndarray
-            Mean vector 1 gradient of shape (N).
-        mu2 : np.ndarray
-            Mean vector of distribution 2.
-        S1 : np.ndarray
-            Covariance matrix of distribution 1.
-        dS1dx: np.ndarray
-            Covariance matrix 1 gradient of shape (N,N).
-        S2 : np.ndarray
-            Covariance matrix of distribution 2.
-
-        Return
-        ------
-        KL divergence gradient : float
-        """
-        return self.posterior.kl_div_grad(mu1, dmu1dx, mu2, S1, dS1dx, S2)
-
-    ###########################################################################
-    def kl_div(self, mu1, mu2, S1, S2):
-        """
-        Function to compute the KL divergence between two Gaussian distributions.
-
-        Parameters
-        ----------
-        mu1 : np.ndarray
-            Mean vector of distribution 1.
-        mu2 : np.ndarray
-            Mean vector of distribution 2.
-        S1 : np.ndarray
-            Covariance matrix of distribution 1.
-        S2 : np.ndarray
-            Covariance matrix of distribution 2.
-
-        Return
-        ------
-        KL divergence : float
-        """
-        return self.posterior.kl_div(mu1, mu2, S1, S2)
-
-    ###########################################################################
     def gp_kl_div(self, x_pred, comp_mean, comp_cov, x_out=None):
         """
         Function to compute the kl divergence of a posterior at given points
@@ -1125,54 +1075,6 @@ class GP:
         Solution : dict
         """
         return self.posterior.gp_kl_div(x_pred, comp_mean, comp_cov, x_out=x_out)
-
-    ###########################################################################
-    def gp_kl_div_grad(self, x_pred, comp_mean, comp_cov, direction, x_out=None):
-        """
-        Function to compute the gradient of the kl divergence of a posterior at given points.
-
-        Parameters
-        ----------
-        x_pred : np.ndarray  or list
-            A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
-            GPs on non-Euclidean input spaces.
-        comp_mean : np.ndarray
-            Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
-        comp_cov : np.ndarray
-            Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
-        direction: int
-            The direction in which the gradient will be computed.
-        x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
-
-        Return
-        ------
-        Solution : dict
-        """
-        return self.posterior.gp_kl_div_grad(x_pred, comp_mean, comp_cov, direction, x_out=x_out)
-
-    ###########################################################################
-    def mutual_information(self, joint, m1, m2):
-        """
-        Function to calculate the mutual information between two normal distributions, which is
-        equivalent to the KL divergence(joint, marginal1 * marginal1).
-
-        Parameters
-        ----------
-        joint : np.ndarray
-            The joint covariance matrix.
-        m1 : np.ndarray
-            The first marginal distribution
-        m2 : np.ndarray
-            The second marginal distribution
-
-        Return
-        ------
-        Mutual information : float
-        """
-        return self.posterior.mutual_information(joint, m1, m2)
 
     ###########################################################################
     def gp_mutual_information(self, x_pred, x_out=None, add_noise=False):
