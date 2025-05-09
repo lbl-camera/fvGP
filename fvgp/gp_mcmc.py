@@ -91,9 +91,10 @@ class gpMCMC:
             Whether to print information about the mcmc iterations.
         break_condition : callable or string or None
             A break condition that specified when the mcmc is terminated. If None,
-            mcmc will run until `n_updates` is reached. If callable will get the mcmc object instance as
-            input: def break(obj). The only allowed string is `default` and in that case the mcmc
-            will be terminated if the mean of the position has not changed significantly in the lsat 200 iterations.
+            mcmc will run until `n_updates` is reached. If a callable is provided,
+            it will get the mcmc object instance as input: def break(obj).
+            The only allowed string is `default` and in that case the mcmc
+            will be terminated if the mean of the position has not changed significantly in the last 200 iterations.
         run_in_every_iteration : callable, optional
             A callable that is executed in every iteration. Form: func(obj). Default no-op.
 

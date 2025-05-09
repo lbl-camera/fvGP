@@ -85,31 +85,32 @@ class GPMarginalDensity:
         """
         y_mean = self.data_obj.y_data - m
         if self.gp2Scale:
-            mode = self._set_gp2Scale_mode(KV)
-            if mode == "sparseLU":
-                LU_factor = calculate_sparse_LU_factor(KV, args=self.args)
-                KVinvY = calculate_LU_solve(LU_factor, y_mean, args=self.args)
-            elif mode == "Chol":
-                if issparse(KV): KV = KV.toarray()
-                Chol_factor = calculate_Chol_factor(KV, args=self.args)
-                KVinvY = calculate_Chol_solve(Chol_factor, y_mean, args=self.args)
-            elif mode == "sparseCG":
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, args=self.args)
-            elif mode == "sparseMINRES":
-                KVinvY = calculate_sparse_minres(KV, y_mean, args=self.args)
-            elif mode == "sparseMINRESpre":
-                B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_minres(KV, y_mean, M=B.L.T @ B.L, args=self.args)
-            elif mode == "sparseCGpre":
-                B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L, args=self.args)
-            elif mode == "sparseSolve":
-                KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
-            elif callable(mode[0]) and callable(mode[1]):
-                factor = mode[0](KV)
-                KVinvY = mode[1](factor, y_mean)
-            else:
-                raise Exception("No mode in gp2Scale", mode)
+            raise Exception("Can't compute a new KVinvY")
+            #mode = self._set_gp2Scale_mode(KV)
+            #if mode == "sparseLU":
+            #    LU_factor = calculate_sparse_LU_factor(KV, args=self.args)
+            #    KVinvY = calculate_LU_solve(LU_factor, y_mean, args=self.args)
+            #elif mode == "Chol":
+            #    if issparse(KV): KV = KV.toarray()
+            #    Chol_factor = calculate_Chol_factor(KV, args=self.args)
+            #    KVinvY = calculate_Chol_solve(Chol_factor, y_mean, args=self.args)
+            #elif mode == "sparseCG":
+            #    KVinvY = calculate_sparse_conj_grad(KV, y_mean, args=self.args)
+            #elif mode == "sparseMINRES":
+            #    KVinvY = calculate_sparse_minres(KV, y_mean, args=self.args)
+            #elif mode == "sparseMINRESpre":
+            #    B = sparse.linalg.spilu(KV, drop_tol=1e-8)
+            #    KVinvY = calculate_sparse_minres(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+            #elif mode == "sparseCGpre":
+            #    B = sparse.linalg.spilu(KV, drop_tol=1e-8)
+            #    KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+            #elif mode == "sparseSolve":
+            #    KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
+            #elif callable(mode[0]) and callable(mode[1]):
+            #    factor = mode[0](KV)
+            #    KVinvY = mode[1](factor, y_mean)
+            #else:
+            #    raise Exception("No mode in gp2Scale", mode)
         else:
             Chol_factor = calculate_Chol_factor(KV, args=self.args)
             KVinvY = calculate_Chol_solve(Chol_factor, y_mean, args=self.args)
