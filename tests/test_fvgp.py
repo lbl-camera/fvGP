@@ -238,7 +238,7 @@ def test_train_hgdl_async(client):
     time.sleep(5)
     my_gp2.update_hyperparameters(opt_obj)
     my_gp2.stop_training(opt_obj)
-    my_gp2.kill_training(opt_obj)
+    my_gp2.kill_client(opt_obj)
     my_gp2.set_hyperparameters(np.array([1., 1., 1., 1., 1., 1.]))
     my_gp2.get_hyperparameters()
     my_gp2.get_prior_pdf()
@@ -441,4 +441,6 @@ def test_gp2Scale(client):
                     args={"bounds":hps_bounds})
 
     mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
+
+
 

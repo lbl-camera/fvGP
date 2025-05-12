@@ -488,6 +488,7 @@ class GP:
             The default is `mcmc` (scipy's differential evolution).
             If method = `mcmc`,
             the attribute `fvgp.GP.mcmc_info` is updated and contains convergence and distribution information.
+            For `hgdl`, please provide a `distributed.Client()`.
         pop_size : int, optional
             A number of individuals used for any optimizer with a global component. Default = 20.
         tolerance : float, optional
@@ -504,8 +505,7 @@ class GP:
             If the optimizer is `hgdl` see `hgdl.readthedocs.io`.
             If the optimizer is a `scipy` optimizer, see the scipy documentation.
         dask_client : distributed.client.Client, optional
-            A Dask Distributed Client instance for distributed training if `hgdl` is used. If None is provided, a new
-            `dask.distributed.Client` instance is constructed.
+            A Dask Distributed Client instance for distributed training if `hgdl` is used.
         info : bool, optional
             Provides a way how to access information reports during training of the GP. The default is False.
             If other information is needed please utilize `logger` as described in the online
@@ -517,6 +517,7 @@ class GP:
         optimized hyperparameters (only fyi, gp is already updated) : np.ndarray
         """
         if self.gp2Scale: method = 'mcmc'
+        if method == "hgdl" and dask_client is None: raise Exception("Please provide a dask_client for method =`hgdl`")
         if hyperparameter_bounds is None:
             hyperparameter_bounds = self._get_default_hyperparameter_bounds()
             warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
@@ -632,8 +633,8 @@ class GP:
             If the optimizer is `hgdl` see `hgdl.readthedocs.io`.
             If the optimizer is a `scipy` optimizer, see the scipy documentation.
         dask_client : distributed.client.Client, optional
-            A Dask Distributed Client instance for distributed training if `hgdl` is used. If None is provided, a new
-            `dask.distributed.Client` instance is constructed.
+            A Dask Distributed Client instance for distributed training. If None is provided, a new
+            `dask.distributed.Client` instance is constructed. It should be closed down manually when no longer needed.
 
 
         Return
@@ -695,16 +696,17 @@ class GP:
         self.trainer.stop_training(opt_obj)
 
     ###################################################################################
-    def kill_training(self, opt_obj):
+    def kill_client(self, opt_obj):
         """
-        Function to kill an asynchronous training. This shuts down the associated :py:class:`distributed.client.Client`.
+        Function to kill an asynchronous training client. This shuts down the
+        associated :py:class:`distributed.client.Client`.
 
         Parameters
         ----------
         opt_obj : object instance
             Object created by :py:meth:`train_async()`.
         """
-        self.trainer.kill_training(opt_obj)
+        self.trainer.kill_client(opt_obj)
 
     ##################################################################################
     def update_hyperparameters(self, opt_obj):

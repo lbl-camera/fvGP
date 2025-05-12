@@ -8,11 +8,10 @@ from scipy.optimize import minimize
 
 
 class GPtraining:
-    def __init__(self, gp2Scale=False,args=None):
+    def __init__(self, gp2Scale=False, args=None):
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
         self.args = args
-
 
     def train(self,
               objective_function=None,
@@ -107,7 +106,7 @@ class GPtraining:
 
     ###################################################################################
     @staticmethod
-    def kill_training(opt_obj):
+    def kill_client(opt_obj):
         """
         This function stops the training if HGDL is used, and kills the dask client.
 
@@ -147,7 +146,7 @@ class GPtraining:
         except Exception as err:
             logger.debug("      The optimizer object could not be queried")
             logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
-            warnings.warn("     Hyperparameter update failed with ERROR: "+str(err))
+            warnings.warn("     Hyperparameter update failed with ERROR: " + str(err))
             updated_hyperparameters = None
 
         return updated_hyperparameters
@@ -236,17 +235,19 @@ class GPtraining:
             logger.debug("maximum number of iterations: {}", max_iter)
             logger.debug("termination tolerance: {}", tolerance)
             logger.debug("bounds: {}", hp_bounds)
-            OptimumEvaluation = minimize(
-                objective_function,
-                starting_hps,
-                method=local_optimizer,
-                jac=objective_function_gradient,
-                hess=objective_function_hessian,
-                bounds=hp_bounds,
-                tol=tolerance,
-                callback=None,
-                constraints=constraints,
-                options={"maxiter": max_iter})
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                OptimumEvaluation = minimize(
+                    objective_function,
+                    starting_hps,
+                    method=local_optimizer,
+                    jac=objective_function_gradient,
+                    hess=objective_function_hessian,
+                    bounds=hp_bounds,
+                    tol=tolerance,
+                    callback=None,
+                    constraints=constraints,
+                    options={"maxiter": max_iter})
 
             if OptimumEvaluation["success"]:
                 logger.debug(f"fvGP local optimization successfully concluded with result: "
@@ -276,7 +277,7 @@ class GPtraining:
                 hyperparameters = opt_obj.get_final()[0]["x"]
             except Exception as ex:
                 raise Exception("Something has gone wrong with the objective function evaluation.") from ex
-            opt_obj.kill_client()
+
         elif method == "mcmc":
             logger.debug("MCMC started in fvGP")
             logger.debug('bounds are {}', hp_bounds)
