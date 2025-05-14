@@ -95,7 +95,9 @@ def mcmc(likelihood_fn, bounds, x0=None, n_updates=10000,
         if prior_star != -np.inf:
             likelihood_star = likelihood_fn(hyperparameters=theta_star)
             if np.isnan(likelihood_star): likelihood_star = -np.inf
-            metr_ratio = np.exp(prior_star + likelihood_star - prior - likelihood)
+            s = prior_star + likelihood_star - prior - likelihood
+            if s > 100.: metr_ratio = 1.
+            else: metr_ratio = np.exp(prior_star + likelihood_star - prior - likelihood)
             if np.isnan(metr_ratio):  metr_ratio = 0.
             if metr_ratio > np.random.uniform(0, 1, 1):
                 theta = theta_star
@@ -129,9 +131,9 @@ def mcmc(likelihood_fn, bounds, x0=None, n_updates=10000,
         # Echo every 100 iterations
         if info:
             if (i % 10) == 0: print("Finished ", i, " out of ", n_updates, " MCMC iterations. f(x)= ", likelihood)
-        if i > 400 and np.sum(abs(np.mean(trace_as_array[-10:], axis=0) -
-                                  np.mean(trace_as_array[-20:-10], axis=0))) \
-                                  < 0.01 * np.sum(abs(np.mean(trace_as_array[-10:], axis=0))):
+        if i > 400 and np.sum(abs(np.mean(trace_as_array[-40:], axis=0) -
+                                  np.mean(trace_as_array[-80:-40], axis=0))) \
+                                  < 0.01 * np.sum(abs(np.mean(trace_as_array[-40:], axis=0))):
             break
     # End main loop
     #########################################################

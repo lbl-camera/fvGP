@@ -1228,7 +1228,7 @@ class GP:
                            - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.))))
         return np.mean(res), np.sqrt(np.var(res))
 
-    def crps(self, x_test, y_test):
+    def crps(self, x_test, y_test):  # correct, tested
         """
         This function calculates the continuous rank probability score.
         Note that in the multi-task setting the user should perform their
@@ -1251,7 +1251,7 @@ class GP:
         r = self._crps_s(y_test, mean, np.sqrt(sigma))
         return r
 
-    def rmse(self, x_test, y_test):
+    def rmse(self, x_test, y_test):  # correct, tested
         """
         This function calculates the root mean squared error.
         Note that in the multi-task setting the user should perform their
@@ -1273,7 +1273,7 @@ class GP:
         v2 = self.posterior_mean(x_test)["m(x)"].reshape(len(v1))
         return np.sqrt(np.sum((v1 - v2) ** 2) / len(v1))
 
-    def nlpd(self, x_test, y_test):
+    def nlpd(self, x_test, y_test):  # correct, tested
         """
         This function calculates the Negative log predictive density.
         Note that in the multi-task setting the user should perform their
@@ -1298,6 +1298,28 @@ class GP:
         g[g == 0.] = 1e-16
         g = np.log(g)
         return -np.mean(g)
+
+    def r2(self, x_test, y_test):
+        """
+        This function calculates the R2 prediction score.
+        Note that in the multi-task setting the user should perform their
+        input point transformation beforehand.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape V. These are the y data to compare against
+
+        Return
+        ------
+        NR2 : float
+        """
+        y_pred_mean = self.posterior_mean(x_test)["m(x)"]
+        ss_res = np.sum((y_test - y_pred_mean) ** 2)
+        ss_tot = np.sum((y_test - np.mean(y_test)) ** 2)
+        return 1. - ss_res / ss_tot
 
     @staticmethod
     def gaussian_1d(x, mu, sigma):
