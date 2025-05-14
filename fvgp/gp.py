@@ -1231,15 +1231,13 @@ class GP:
     def crps(self, x_test, y_test):  # correct, tested
         """
         This function calculates the continuous rank probability score.
-        Note that in the multi-task setting the user should perform their
-        input point transformation beforehand.
 
         Parameters
         ----------
         x_test : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         y_test : np.ndarray
-            A numpy array of shape (V x 1). These are the y data to compare against.
+            A numpy array of shape (V x No) in the multi-output case. These are the y data to compare against.
 
         Return
         ------
@@ -1247,8 +1245,9 @@ class GP:
         """
 
         mean = self.posterior_mean(x_test)["m(x)"]
-        sigma = self.posterior_covariance(x_test)["v(x)"]
-        r = self._crps_s(y_test, mean, np.sqrt(sigma))
+        sigma = np.sqrt(self.posterior_covariance(x_test)["v(x)"])
+        assert mean.shape == sigma.shape == y_test.shape, (mean.shape, sigma.shape, y_test.shape)
+        r = self._crps_s(y_test, mean, sigma)
         return r
 
     def rmse(self, x_test, y_test):  # correct, tested
@@ -1262,29 +1261,28 @@ class GP:
         x_test : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         y_test : np.ndarray
-            A numpy array of shape V. These are the y data to compare against
+            A numpy array of shape V or (V x No) in the multi-output case. These are the y data to compare against.
 
         Return
         ------
         RMSE : float
         """
 
-        v1 = y_test.reshape(len(y_test))
-        v2 = self.posterior_mean(x_test)["m(x)"].reshape(len(v1))
-        return np.sqrt(np.sum((v1 - v2) ** 2) / len(v1))
+        v1 = y_test
+        v2 = self.posterior_mean(x_test)["m(x)"]
+        assert v1.shape == v2.shape, (v1.shape, v2.shape)
+        return np.sqrt(np.sum((v1 - v2) ** 2) / v1.size)
 
     def nlpd(self, x_test, y_test):  # correct, tested
         """
         This function calculates the Negative log predictive density.
-        Note that in the multi-task setting the user should perform their
-        input point transformation beforehand.
 
         Parameters
         ----------
         x_test : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         y_test : np.ndarray
-            A numpy array of shape V. These are the y data to compare against
+            A numpy array of shape V or (V x No) in the multi-output case. These are the y data to compare against.
 
         Return
         ------
@@ -1294,6 +1292,8 @@ class GP:
         mean = self.posterior_mean(x_test)["m(x)"]
         sigma = np.sqrt(self.posterior_covariance(x_test)["v(x)"])
 
+        assert mean.shape == sigma.shape == y_test.shape, (mean.shape, sigma.shape, y_test.shape)
+
         g = self.gaussian_1d(y_test, mean, sigma)
         g[g == 0.] = 1e-16
         g = np.log(g)
@@ -1302,21 +1302,20 @@ class GP:
     def r2(self, x_test, y_test):
         """
         This function calculates the R2 prediction score.
-        Note that in the multi-task setting the user should perform their
-        input point transformation beforehand.
 
         Parameters
         ----------
         x_test : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         y_test : np.ndarray
-            A numpy array of shape V. These are the y data to compare against
+            A numpy array of shape V or (V x No) in the multi-output case. These are the y data to compare against.
 
         Return
         ------
-        NR2 : float
+        R2 : float
         """
         y_pred_mean = self.posterior_mean(x_test)["m(x)"]
+        assert y_pred_mean.shape == y_test.shape, (y_pred_mean.shape, y_test.shape)
         ss_res = np.sum((y_test - y_pred_mean) ** 2)
         ss_tot = np.sum((y_test - np.mean(y_test)) ** 2)
         return 1. - ss_res / ss_tot
