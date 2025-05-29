@@ -28,7 +28,7 @@ class GPMarginalDensity:
         self.gp2Scale_linalg_mode = gp2Scale_linalg_mode
         self.args = args
 
-        if self.gp2Scale:
+        if self.gp2Scale and self.calc_inv:
             self.calc_inv = False
             warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False")
         self.KVlinalg = KVlinalg(compute_device, self.args)
