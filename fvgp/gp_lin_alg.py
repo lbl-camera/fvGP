@@ -125,7 +125,9 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
     st = time.time()
     logger.debug("MINRES solve in progress ...")
     minres_tol = 1e-5
-    if "sparse_minres_tol" in args: minres_tol = args["sparse_minres_tol"]
+    if "sparse_minres_tol" in args:
+        minres_tol = args["sparse_minres_tol"]
+        logger.debug("sparse_minres_tol changed to ", minres_tol)
 
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
