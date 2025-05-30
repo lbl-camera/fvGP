@@ -124,7 +124,7 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
     assert sparse.issparse(KV)
     st = time.time()
     logger.debug("MINRES solve in progress ...")
-    minres_tol = 1e-8
+    minres_tol = 1e-5
     if "sparse_minres_tol" in args: minres_tol = args["sparse_minres_tol"]
 
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
@@ -142,11 +142,13 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
     assert sparse.issparse(KV)
     st = time.time()
     logger.debug("CG solve in progress ...")
+    cg_tol = 1e-5
+    if "sparse_cg_tol" in args: cg_tol = args["sparse_minres_tol"]
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
-        res[:, i], exit_code = cg(KV, vec[:, i], M=M, rtol=1e-8, x0=x0)
+        res[:, i], exit_code = cg(KV, vec[:, i], M=M, rtol=cg_tol, x0=x0)
         if exit_code == 1: warnings.warn("CG not successful")
     logger.debug("CG compute time: {} seconds.", time.time() - st)
     assert np.ndim(res) == 2
