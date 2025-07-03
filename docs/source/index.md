@@ -13,6 +13,7 @@ caption: API
 api/overview.md
 api/GP.md
 api/fvGP.md
+api/kernels.md
 api/gpMCMC.md
 api/logging.md
 ```
@@ -20,7 +21,7 @@ api/logging.md
 ```{toctree}
 ---
 hidden: true
-maxdepth: 2
+maxdepth: 1
 caption: Examples
 ---
 examples/SingleTaskTest.ipynb

@@ -14,7 +14,8 @@ Python package for highly flexible function-valued Gaussian processes (fvGP)
 It is recommended to use this package via [gpCAM](https://gpcam.lbl.gov/).
 
 Specialties: Extreme-Scale GPs, GPs Tailored for HPC training, Advanced Kernel Designs, Domain-Aware Stochastic Function Approximation
-Coming soon: All those advancements for stochastic manifold learning
+
+Coming soon: All those capabilitites for stochastic manifold learning
 
 fvGP holds the world record for exact large-scale Gaussian Processes!
 ## Credits

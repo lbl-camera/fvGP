@@ -8,7 +8,8 @@ class GPposterior:
                  data_obj,
                  prior_obj,
                  marginal_density_obj,
-                 likelihood_obj):
+                 likelihood_obj,
+                 args=None):
 
         self.marginal_density_obj = marginal_density_obj
         self.prior_obj = prior_obj
@@ -18,15 +19,16 @@ class GPposterior:
         self.mean_function = self.prior_obj.mean_function
         self.d_kernel_dx = self.prior_obj.d_kernel_dx
         self.x_out = None
+        self.args = args
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
-        x_data, y_data, KVinvY = \
-            self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
+        x_data, KVinvY = self.data_obj.x_data.copy(), self.marginal_density_obj.KVinvY.copy()
         if hyperparameters is not None:
-            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            K = self.prior_obj.compute_prior_covariance_matrix(x_data, hyperparameters=hyperparameters)
             V = self.likelihood_obj.calculate_V(hyperparameters)
-            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
-            KVinvY = self.compute_new_KVinvY(K + V, m)
+            m = self.prior_obj.compute_mean(x_data, hyperparameters=hyperparameters)
+            if np.ndim(V) == 1: V = np.diag(V)
+            KVinvY = self.marginal_density_obj.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.prior_obj.hyperparameters
 
@@ -43,19 +45,19 @@ class GPposterior:
         else: posterior_mean_re = posterior_mean
 
         return {"x": x_orig,
-                "f(x)": posterior_mean_re,
-                "f(x)_flat": posterior_mean,
+                "m(x)": posterior_mean_re,
+                "m(x)_flat": posterior_mean,
                 "x_pred": x_pred}
 
     def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None):
-        x_data, y_data, KVinvY = \
-            self.data_obj.x_data.copy(), self.data_obj.y_data.copy(), self.marginal_density_obj.KVinvY.copy()
+        x_data, KVinvY = self.data_obj.x_data.copy(), self.marginal_density_obj.KVinvY.copy()
 
         if hyperparameters is not None:
-            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            K = self.prior_obj.compute_prior_covariance_matrix(x_data, hyperparameters=hyperparameters)
             V = self.likelihood_obj.calculate_V(hyperparameters)
-            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
-            KVinvY = self.compute_new_KVinvY(K + V, m)
+            m = self.prior_obj.compute_mean(x_data, hyperparameters=hyperparameters)
+            if np.ndim(V) == 1: V = np.diag(V)
+            KVinvY = self.marginal_density_obj.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.prior_obj.hyperparameters
 
@@ -88,7 +90,7 @@ class GPposterior:
 
         return {"x": x_orig,
                 "direction": direction,
-                "df/dx": posterior_mean_grad}
+                "dm/dx": posterior_mean_grad}
 
     ###########################################################################
     def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
@@ -277,16 +279,7 @@ class GPposterior:
 
     ###########################################################################
     @staticmethod
-    def kl_div_grad(self, mu1, dmu1dx, mu2, S1, dS1dx, S2):
-        x1 = solve(S2, dS1dx)
-        mu = np.subtract(mu2, mu1)
-        x2 = solve(S2, mu)
-        x3 = solve(S2, -dmu1dx)
-        kld = 0.5 * (np.trace(x1) + ((x3.T @ mu) + (x2.T @ -dmu1dx)) - np.trace(calculate_inv(S1) @ dS1dx))
-        return kld
-
-    ###########################################################################
-    def kl_div(self, mu1, mu2, S1, S2):
+    def kl_div(mu1, mu2, S1, S2):
         logdet1 = calculate_logdet(S1)
         logdet2 = calculate_logdet(S2)
         x1 = solve(S2, S1)
@@ -307,9 +300,9 @@ class GPposterior:
         if x_out is None: x_out = self.x_out
 
         res = self.posterior_mean(x_pred, x_out=x_out)
-        gp_mean = res["f(x)_flat"]
+        gp_mean = res["m(x)_flat"]
         gp_cov = self.posterior_covariance(x_pred, x_out=x_out)["S_flat"]
-        gp_cov = gp_cov + + np.identity(len(gp_cov)) * 1e-9
+        gp_cov = gp_cov + np.identity(len(gp_cov)) * 1e-9
         comp_cov = comp_cov + np.identity(len(comp_cov)) * 1e-9
         return {"x": x_pred,
                 "gp posterior mean": gp_mean,
@@ -368,7 +361,7 @@ class GPposterior:
         post_cov = self.posterior_covariance(x_pred, x_out=x_out, add_noise=add_noise)["S_flat"]
         post_cov = post_cov + (np.identity(len(post_cov)) * 1e-9)
         hyperparameters = self.prior_obj.hyperparameters
-        post_mean = self.posterior_mean(x_pred, x_out=x_out)["f(x)_flat"]
+        post_mean = self.posterior_mean(x_pred, x_out=x_out)["m(x)_flat"]
         prio_mean = self.mean_function(x_pred_aux, hyperparameters)
         return {"x": x_orig,
                 "RIE": self.kl_div(prio_mean, post_mean, kk, post_cov)}
@@ -393,7 +386,7 @@ class GPposterior:
         self._perform_input_checks(x_pred, x_out)
         #if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        gp_mean = self.posterior_mean(x_pred, x_out=x_out)["f(x)_flat"]
+        gp_mean = self.posterior_mean(x_pred, x_out=x_out)["m(x)_flat"]
         gp_cov = self.posterior_covariance(x_pred, x_out=x_out, add_noise=True)["S_flat"]
         gp_cov_inv = calculate_inv(gp_cov)
         comp_cov_inv = calculate_inv(comp_cov)
@@ -436,16 +429,16 @@ class GPposterior:
         return ((2.0 * np.pi) ** (len(S) / 2.0)) * np.sqrt(np.linalg.det(S))
 
     def _perform_input_checks(self, x_pred, x_out):
-        assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list)
+        assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list), "wrong format in x_pred"
         if isinstance(x_pred, np.ndarray):
-            assert np.ndim(x_pred) == 2
+            assert np.ndim(x_pred) == 2, "wrong dim in x_pred, has to be 2-d"
             if isinstance(x_out, np.ndarray) or isinstance(x_out, list):
-                assert x_pred.shape[1] == self.data_obj.index_set_dim - 1
+                assert x_pred.shape[1] == self.data_obj.index_set_dim - 1, "wrong number of columns in x_pred"
             else:
-                assert x_pred.shape[1] == self.data_obj.index_set_dim
+                assert x_pred.shape[1] == self.data_obj.index_set_dim, "wrong number of columns in x_pred"
 
-        assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list)
-        if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1
+        assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list), "wrong format in x_out"
+        if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1, "wrong dim in x_out, has to be 1-d"
 
     @staticmethod
     def cartesian_product(x, y):
