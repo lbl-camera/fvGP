@@ -316,7 +316,6 @@ def test_multi_task(client):
 
 
 def test_gp2Scale(client):
-    from imate import logdet as imate_logdet
     input_dim = 1
     N = 2000
     x_data = np.random.rand(N,input_dim)

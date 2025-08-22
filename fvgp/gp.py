@@ -3,7 +3,7 @@
 import warnings
 import numpy as np
 from loguru import logger
-from dask.distributed import Client
+from distributed import Client
 from scipy.stats import norm
 from .gp_prior import GPprior
 from .gp_data import GPdata
