@@ -107,7 +107,7 @@ def calculate_random_logdet(KV, compute_device, args=None):
     print_info = False
 
     if "random_logdet_lanczos_degree" in args: lanczos_degree = args["random_logdet_lanczos_degree"]
-    if "random_logdet_error_rtol" in args: lanczos_degree = args["random_logdet_error_rtol"]
+    if "random_logdet_error_rtol" in args: error_rtol = args["random_logdet_error_rtol"]
     if "random_logdet_verbose" in args: verbose = args["random_logdet_verbose"]
     if "random_logdet_print_info" in args: print_info = args["random_logdet_print_info"]
 
