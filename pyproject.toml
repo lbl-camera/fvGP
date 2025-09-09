@@ -15,7 +15,7 @@ dependencies = [
 ]
 # imate
 # pytorch
-requires-python = ">=3.10"
+requires-python = ">=3.1"
 authors = [
     { name = "Marcus Michael Noack", email = "MarcusNoack@lbl.gov" },
     { name = "Ronald J. Pandolfi", email = "ronpandolfi@lbl.gov" },
@@ -33,7 +33,6 @@ classifiers = [
     'Intended Audience :: Developers',
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
-    'Programming Language :: Python :: 3.10',
     'Programming Language :: Python :: 3.11',
     'Programming Language :: Python :: 3.12',
     "Natural Language :: English",
