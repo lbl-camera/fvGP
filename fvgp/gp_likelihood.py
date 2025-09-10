@@ -85,7 +85,6 @@ class GPlikelihood:
 
     ##########################
     def _finitediff_dnoise_dh(self, x, hps):
-        #gr = np.zeros((len(hps), len(x)))
         gr = np.array([np.zeros(self.V.shape)] * len(hps))
         for i in range(len(hps)):
             temp_hps1 = np.array(hps)
@@ -114,9 +113,9 @@ class GPlikelihood:
             gp2Scale=self.gp2Scale,
             args=self.args,
             noise_function=self.noise_function,
-            V=self.V
+            V=self.V,
+            noise_function_grad=self.noise_function_grad,
             )
-
         return state
 
     def __setstate__(self, state):

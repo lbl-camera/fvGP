@@ -374,7 +374,7 @@ class GPprior:
         return gr
 
     @staticmethod
-    def _default_dm_dh(self, x, hps):
+    def _default_dm_dh(x, hps):
         gr = np.zeros((len(hps), len(x)))
         return gr
 
@@ -385,7 +385,7 @@ class GPprior:
             prior_mean_function=self.prior_mean_function,
             hyperparameters=self.hyperparameters,
             ram_economy=self.ram_economy,
-            gp2Scale=self. gp2Scale,
+            gp2Scale=self.gp2Scale,
             batch_size=self.batch_size,
             data=self.data,
             args=self.args,

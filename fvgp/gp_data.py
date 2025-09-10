@@ -64,7 +64,6 @@ class GPdata:
             if np.isnan(np.sum(self.x_data) + np.sum(self.y_data)): raise Exception("NaNs encountered in dataset.")
 
     def __getstate__(self):
-        #state = self.__dict__.copy()
         state = dict(
             x_data=self.x_data,
             y_data=self.y_data,
@@ -73,7 +72,6 @@ class GPdata:
             noise_variances=self.noise_variances,
             point_number=self.point_number
             )
-
         return state
 
     def __setstate__(self, state):
