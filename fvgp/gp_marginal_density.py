@@ -383,6 +383,24 @@ class GPMarginalDensity:
         analytical = -self.neg_log_likelihood_gradient(hyperparameters=thps)
         return grad, analytical
 
+    def __getstate__(self):
+        state = dict(
+            data_obj=self.data_obj,
+            prior_obj=self.prior_obj,
+            likelihood_obj=self.likelihood_obj,
+            calc_inv=self.calc_inv,
+            gp2Scale=self.gp2Scale,
+            compute_device=self.compute_device,
+            gp2Scale_linalg_mode=self.gp2Scale_linalg_mode,
+            args=self.args,
+            KVlinalg=self.KVlinalg,
+            KVinvY=self.KVinvY
+        )
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
 
 class KVlinalg:
     def __init__(self, compute_device, args):
@@ -508,5 +526,22 @@ class KVlinalg:
         elif self.mode == "sparseSolve": return calculate_random_logdet(self.KV, self.compute_device, args=self.args)
         elif callable(self.mode[2]): return self.mode[2](self.custom_obj)
         else: raise Exception("No Mode. Choose from: ", self.allowed_modes)
+
+    def __getstate__(self):
+        state = dict(
+            mode=self.mode,
+            compute_device=self.compute_device,
+            KVinv=self.KVinv,
+            KV=self.KV,
+            Chol_factor=self.Chol_factor,
+            LU_factor=self.LU_factor,
+            custom_obj=self.custom_obj,
+            args=self.args,
+            allowed_modes=self.allowed_modes
+        )
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
 

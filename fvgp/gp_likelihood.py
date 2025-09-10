@@ -2,6 +2,7 @@ import numpy as np
 import warnings
 from loguru import logger
 
+
 class GPlikelihood:
     def __init__(self,
                  data,
@@ -106,3 +107,17 @@ class GPlikelihood:
         b = self.noise_function(x, temp_hps2)
         gr = (a - b) / 2e-6
         return gr
+
+    def __getstate__(self):
+        state = dict(
+            data=self.data,
+            gp2Scale=self.gp2Scale,
+            args=self.args,
+            noise_function=self.noise_function,
+            V=self.V
+            )
+
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)

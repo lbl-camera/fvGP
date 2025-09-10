@@ -462,3 +462,20 @@ class GPposterior:
             return np.asarray(res)
         else:
             raise Exception("Cartesian product out of options")
+
+    def __getstate__(self):
+        state = dict(
+            marginal_density_obj=self.marginal_density_obj,
+            prior_obj=self.prior_obj,
+            likelihood_obj=self.likelihood_obj,
+            data_obj=self.data_obj,
+            kernel=self.kernel,
+            mean_function=self.mean_function,
+            d_kernel_dx=self.d_kernel_dx,
+            x_out=self.x_out,
+            args=self.args,
+        )
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)

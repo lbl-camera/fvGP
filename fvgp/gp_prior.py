@@ -57,9 +57,11 @@ class GPprior:
                     kernel = wendland_anisotropic_gp2Scale_cpu
                 elif compute_device == "gpu":
                     kernel = wendland_anisotropic_gp2Scale_gpu
-            worker_info = list(self.client.scheduler_info()["workers"].keys())
-            if not worker_info: raise Exception("No workers available")
-            self.compute_workers = list(worker_info)
+            if self.client is not None:
+                worker_info = list(self.client.scheduler_info()["workers"].keys())
+                self.compute_workers = list(worker_info)
+            else: worker_info = False
+            if not worker_info: logger.debug("No workers available")
 
         # kernel
         if callable(kernel):
@@ -371,9 +373,35 @@ class GPprior:
             gr[i] = (a - b) / 2e-6
         return gr
 
+    @staticmethod
     def _default_dm_dh(self, x, hps):
         gr = np.zeros((len(hps), len(x)))
         return gr
+
+    def __getstate__(self):
+        state = dict(
+            Euclidean=self.Euclidean,
+            kernel_function=self.kernel_function,
+            prior_mean_function=self.prior_mean_function,
+            hyperparameters=self.hyperparameters,
+            ram_economy=self.ram_economy,
+            gp2Scale=self. gp2Scale,
+            batch_size=self.batch_size,
+            data=self.data,
+            args=self.args,
+            kernel=self.kernel,
+            d_kernel_dx=self.d_kernel_dx,
+            dk_dh=self.dk_dh,
+            mean_function=self.mean_function,
+            default_m=self.default_m,
+            dm_dh=self.dm_dh,
+            m=self.m,
+            K=self.K,
+        )
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
 
 ########################################################

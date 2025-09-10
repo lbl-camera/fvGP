@@ -262,7 +262,8 @@ class GP:
                     " manually for this to work.")
             if gp2Scale_dask_client is None:
                 logger.debug("Creating my own local client.")
-                gp2Scale_dask_client = Client()
+                try: gp2Scale_dask_client = Client()
+                except: logger.debug("no client available")
 
         if compute_device == 'gpu':
             try:
@@ -1411,6 +1412,28 @@ class GP:
         tb = time_per_worker_execution
         n = number_of_workers
         return (D ** 2 * tb) / (2. * n * b ** 2)
+
+    def __getstate__(self):
+        state = dict(
+            compute_device=self.compute_device,
+            calc_inv=self.calc_inv,
+            gp2Scale=self.gp2Scale,
+            args=self.args,
+            x_data=self.data.x_data,
+            y_data=self.data.y_data,
+            noise_variances=self.data.noise_variances,
+            index_set_dim=self.data.index_set_dim,
+            data=self.data,
+            prior=self.prior,
+            likelihood=self.likelihood,
+            marginal_density=self.marginal_density,
+            trainer=self.trainer,
+            posterior=self.posterior
+            )
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
 
 ####################################################################################
