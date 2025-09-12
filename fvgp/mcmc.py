@@ -128,12 +128,12 @@ def mcmc(likelihood_fn, bounds, x0=None, n_updates=10000,
         trace_as_array = np.asarray(trace[:, 0:i].T)
         f.append(likelihood)
         ctime.append(time.time() - start_time)
-        # Echo every 100 iterations
+
         if info:
             if (i % 10) == 0: print("Finished ", i, " out of ", n_updates, " MCMC iterations. f(x)= ", likelihood)
         if i > 400 and np.sum(abs(np.mean(trace_as_array[-40:], axis=0) -
                                   np.mean(trace_as_array[-80:-40], axis=0))) \
-                                  < 0.01 * np.sum(abs(np.mean(trace_as_array[-40:], axis=0))):
+                                  < 0.001 * np.sum(abs(np.mean(trace_as_array[-40:], axis=0))):
             break
     # End main loop
     #########################################################

@@ -443,7 +443,7 @@ class GP:
               method="mcmc",
               pop_size=20,
               tolerance=0.0001,
-              max_iter=200,
+              max_iter=1000,
               local_optimizer="L-BFGS-B",
               global_optimizer="genetic",
               constraints=(),
