@@ -312,10 +312,9 @@ class fvGP(GP):
 
         assert len(x_data) == len(y_data)
         ####transform the space
-        self.fvgp_x_data = x_data
-        self.fvgp_y_data = y_data
-        self.fvgp_noise_variances = noise_variances
-        self.index_set_dim = self.input_space_dim + 1
+        fvgp_x_data = x_data
+        fvgp_y_data = y_data
+        fvgp_noise_variances = noise_variances
         x_data, y_data, noise_variances = self._transform_index_set2(x_data, y_data, noise_variances)
 
         ####init GP
@@ -340,8 +339,22 @@ class fvGP(GP):
             ram_economy=ram_economy,
             args=args)
 
+        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances)
+
         if self.data.Euclidean: assert self.index_set_dim == self.input_space_dim + 1
         self.posterior.x_out = np.arange(0, self.output_num)
+
+    @property
+    def fvgp_x_data(self):
+        return self.data.fvgp_x_data
+
+    @property
+    def fvgp_y_data(self):
+        return self.data.fvgp_y_data
+
+    @property
+    def fvgp_noise_variances(self):
+        return self.data.fvgp_noise_variances
 
     def update_gp_data(
         self,
@@ -393,17 +406,23 @@ class fvGP(GP):
         if append:
             if noise_variances_new is not None:
                 assert isinstance(noise_variances_new, np.ndarray) or isinstance(noise_variances_new, list)
-                if isinstance(noise_variances_new, np.ndarray): self.fvgp_noise_variances = (
+                if isinstance(noise_variances_new, np.ndarray): fvgp_noise_variances = (
                     np.vstack([self.fvgp_noise_variances, noise_variances_new]))
-                if isinstance(noise_variances_new, list): self.fvgp_noise_variances = (
+                elif isinstance(noise_variances_new, list): fvgp_noise_variances = (
                     self.fvgp_noise_variances + noise_variances_new)
-            if isinstance(x_new, np.ndarray): self.fvgp_x_data = np.vstack([self.fvgp_x_data, x_new])
-            if isinstance(x_new, list): self.fvgp_x_data = self.fvgp_x_data + x_new
-            self.fvgp_y_data = np.vstack([self.fvgp_y_data, y_new])
+                else: raise Exception("noise_variances_new not given in an allowed format")
+            else: fvgp_noise_variances = None
+
+            if isinstance(x_new, np.ndarray): fvgp_x_data = np.vstack([self.fvgp_x_data, x_new])
+            elif isinstance(x_new, list): fvgp_x_data = self.fvgp_x_data + x_new
+            else: raise Exception("x_new not given in an allowed format")
+
+            fvgp_y_data = np.vstack([self.fvgp_y_data, y_new])
         else:
-            self.fvgp_noise_variances = noise_variances_new
-            self.fvgp_x_data = x_new
-            self.fvgp_y_data = y_new
+            fvgp_noise_variances = noise_variances_new
+            fvgp_x_data = x_new
+            fvgp_y_data = y_new
+        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances)
 
         ######################################
         #####transform to index set###########

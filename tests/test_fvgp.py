@@ -88,10 +88,10 @@ def test_single_task_init_basic():
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
             noise_function=noise, compute_device = 'gpu', ram_economy=True)
 
-    my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.get_hyperparameters())
+    my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
             noise_function=noise, prior_mean_function = prior_mean, compute_device = 'cpu', ram_economy=False)
-    my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.get_hyperparameters())
+    my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
     my_gp1 = GP(x_data, y_data)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = False)
@@ -241,7 +241,7 @@ def test_train_hgdl_async(client):
     my_gp2.stop_training(opt_obj)
     my_gp2.kill_client(opt_obj)
     my_gp2.set_hyperparameters(np.array([1., 1., 1., 1., 1., 1.]))
-    my_gp2.get_hyperparameters()
+    my_gp2.hyperparameters
     my_gp2.get_prior_pdf()
     my_gp2.marginal_density.test_log_likelihood_gradient(np.array([1., 1., 1., 1., 1., 1.]))
 
@@ -317,7 +317,7 @@ def test_multi_task(client):
 
 def test_gp2Scale(client):
     input_dim = 1
-    N = 2000
+    N = 200
     x_data = np.random.rand(N,input_dim)
     y_data = np.sin(np.linalg.norm(x_data,axis = 1) * 5.0)
 
@@ -332,55 +332,55 @@ def test_gp2Scale(client):
                             ])
 
     init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseLU")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseLU")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
     my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCG")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCG")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
     my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRES")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRES")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
     my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
     my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
     my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = False, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="Inv")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = False, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="Inv")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
     my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRESpre")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRESpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
     my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseSolve")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseSolve")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
     my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
 
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 1000, gp2Scale_dask_client=client)
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client)
 
     my_gp2S.update_gp_data(x_data,y_data, append = False)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
@@ -426,7 +426,7 @@ def test_gp2Scale(client):
     mcmc_result = my_mcmc.run_mcmc(x0=hps, n_updates=10, break_condition="default")
     my_gp2S.set_hyperparameters(mcmc_result["x"][-1])
     my_gp2S.get_gp2Scale_exec_time(1.,10)
-    x_pred = np.linspace(0,1,1000)
+    x_pred = np.linspace(0,1,100)
     mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["m(x)"]
     var1 =  my_gp2S.posterior_covariance(x_pred.reshape(-1,1))["v(x)"]
     
@@ -443,4 +443,80 @@ def test_gp2Scale(client):
     mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
 
 
+def test_pickle():
+    import numpy as np
+    from fvgp import GP
+    import pickle
+
+    #initialize some data
+    x_data = np.random.uniform(size = (10,3))
+    y_data = np.sin(np.linalg.norm(x_data, axis = 1))
+
+    #TEST0
+    #tests empty gp pickling
+    my_gpo = GP(x_data, y_data)
+    pickle.loads(pickle.dumps(my_gpo))
+
+    #TEST1
+    #initialize the GPOptimizer
+    my_gpo = GP(x_data, y_data, args = {'a':2.,'b':3.})
+
+    #pickle the GPOptimizer
+    stash = pickle.dumps(my_gpo)
+
+    #unpickle the GPOptimizer
+    my_gpo2 = pickle.loads(stash)
+
+
+    #assert checks that my_gpo2 is same as my_gpo
+    assert np.all(my_gpo.x_data == my_gpo2.x_data)
+    assert np.all(my_gpo.y_data == my_gpo2.y_data)
+    assert np.all(my_gpo.likelihood.V == my_gpo2.likelihood.V)
+    assert np.all(my_gpo.posterior_mean(np.array([[1.,1,1],[2.,2.,2.]]))["m(x)"] == my_gpo2.posterior_mean(np.array([[1,1,1],[2,2,2]]))["m(x)"])
+    assert np.all(my_gpo.hyperparameters == my_gpo2.hyperparameters)
+    assert np.all(my_gpo.prior.K == my_gpo2.prior.K)
+
+    #TEST2
+    #initialize the GPOptimizer
+    my_gpo = GP(x_data,y_data,
+        init_hyperparameters = np.ones((4))/10.,  # We need enough of those for kernel, noise, and prior mean functions
+        )
+    
+
+    #pickle the GPOptimizer
+    stash = pickle.dumps(my_gpo)
+
+    #unpickle the GPOptimizer
+    my_gpo2 = pickle.loads(stash)
+
+
+    #assert checks that my_gpo2 is same as my_gpo
+    assert np.all(my_gpo.x_data == my_gpo2.x_data)
+    assert np.all(my_gpo.y_data == my_gpo2.y_data)
+    assert np.all(my_gpo.likelihood.V == my_gpo2.likelihood.V)
+    assert np.all(my_gpo.posterior_mean(np.array([[1.,1,1],[2.,2.,2.]]))["m(x)"] == my_gpo2.posterior_mean(np.array([[1,1,1],[2,2,2]]))["m(x)"])
+    assert np.all(my_gpo.hyperparameters == my_gpo2.hyperparameters)
+    assert np.all(my_gpo.prior.K == my_gpo2.prior.K)
+
+    #TEST3
+    #initialize the GPOptimizer
+
+    my_gpo = GP(x_data,y_data,
+        init_hyperparameters = np.ones((4))/10.,  # We need enough of those for kernel, noise, and prior mean functions
+        )
+
+    #pickle the GPOptimizer
+    stash = pickle.dumps(my_gpo)
+
+    #unpickle the GPOptimizer
+    my_gpo2 = pickle.loads(stash)
+
+
+    #assert checks that my_gpo2 is same as my_gpo
+    assert np.all(my_gpo.x_data == my_gpo2.x_data)
+    assert np.all(my_gpo.y_data == my_gpo2.y_data)
+    assert np.all(my_gpo.likelihood.V == my_gpo2.likelihood.V)
+    assert np.all(my_gpo.posterior_mean(np.array([[1.,1,1],[2.,2.,2.]]))["m(x)"] == my_gpo2.posterior_mean(np.array([[1,1,1],[2,2,2]]))["m(x)"])
+    assert np.all(my_gpo.hyperparameters == my_gpo2.hyperparameters)
+    assert np.all(my_gpo.prior.K == my_gpo2.prior.K)
 

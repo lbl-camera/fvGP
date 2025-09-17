@@ -14,7 +14,9 @@ from .gp_posterior import GPposterior
 
 
 # TODO: search below "TODO"
-#   as work on functions is completed and functions are maintained, add verbose assert statements.
+#   - as work on functions is completed and functions are maintained, add verbose assert statements.
+#   - make shape(y_data)=(V,U) work (tensor GP), change docstrings
+#   -
 
 
 class GP:
@@ -211,7 +213,8 @@ class GP:
         args=None
     ):
         assert isinstance(x_data, list) or isinstance(x_data, np.ndarray), "wrong format in x_data"
-        assert isinstance(y_data, np.ndarray) and np.ndim(y_data) == 1, "wrong format in y_data"
+        assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2), \
+            "wrong format in y_data"
         assert isinstance(noise_variances, np.ndarray) or noise_variances is None, "wrong format in noise_variances"
         assert init_hyperparameters is None or isinstance(init_hyperparameters,np.ndarray), "wrong init_hyperparameters"
         assert isinstance(compute_device, str), "wrong format in compute_device"
@@ -252,6 +255,7 @@ class GP:
         # warn if they could not be prepared
         if hyperparameters is None:
             raise Exception("'init_hyperparameters' not provided and could not be calculated. Please provide them ")
+        self.hyperparameters = hyperparameters
 
         if gp2Scale:
             try:
@@ -291,7 +295,7 @@ class GP:
         ###init likelihood instance#############
         ########################################
         self.likelihood = GPlikelihood(self.data,
-                                       hyperparameters=self.prior.hyperparameters,
+                                       hyperparameters=hyperparameters,
                                        noise_function=noise_function,
                                        noise_function_grad=noise_function_grad,
                                        ram_economy=ram_economy,
@@ -325,12 +329,29 @@ class GP:
                                      self.prior,
                                      self.marginal_density,
                                      self.likelihood,
-                                     args=self.args
-                                     )
-        self.x_data = self.data.x_data
-        self.y_data = self.data.y_data
-        self.noise_variances = self.data.noise_variances
-        self.index_set_dim = self.data.index_set_dim
+                                     self.hyperparameters,
+                                     args=self.args)
+    #########PROPERTIES#########################################
+    @property
+    def x_data(self):
+        return self.data.x_data
+
+    @property
+    def y_data(self):
+        return self.data.y_data
+
+    @property
+    def noise_variances(self):
+        return self.noise_variances
+
+    @property
+    def index_set_dim(self):
+        return self.data.index_set_dim
+
+    @property
+    def mcmc_info(self):
+        return self.trainer.mcmc_info
+    ###############################################################
 
     def update_gp_data(
         self,
@@ -357,7 +378,7 @@ class GP:
             The values of the data points. Shape (V).
         noise_variances_new : np.ndarray, optional
             An numpy array defining the uncertainties in the data `y_data` in form of a point-wise variance.
-            Shape (len(y_data)).
+            Shape(y_new)==Shape(noise_variances_new).
             Note: if no variances are provided here, the noise_covariance
             callable will be used; if the callable is not provided the noise variances
             will be set to `abs(np.mean(y_data)) / 100.0`. If you provided a noise function at initialization,
@@ -371,8 +392,9 @@ class GP:
             be performed.
         """
         assert isinstance(x_new, list) or isinstance(x_new, np.ndarray), "wrong format in x_new"
-        assert isinstance(y_new, np.ndarray) and np.ndim(y_new) == 1, "wrong format in y_new"
-        assert isinstance(noise_variances_new, np.ndarray) or noise_variances_new is None, "wrong format in noise_variances_new"
+        assert isinstance(y_new, np.ndarray) and (np.ndim(y_new) == 1 or np.ndim(y_new) == 2), "wrong format in y_new"
+        assert isinstance(noise_variances_new, np.ndarray) or noise_variances_new is None, \
+            "wrong format in noise_variances_new"
         assert len(x_new) == len(y_new), "updated x and y do not have the same lengths."
         old_x_data = self.data.x_data.copy()
         if gp_rank_n_update is None: gp_rank_n_update = append
@@ -381,18 +403,16 @@ class GP:
 
         # update prior
         if append:
-            self.prior.augment_data(old_x_data, x_new)
+            self.prior.augment_data(old_x_data, x_new, self.hyperparameters)
         else:
-            self.prior.update_data()
+            self.prior.update_data(self.hyperparameters)
 
         # update likelihood
-        self.likelihood.update(self.prior.hyperparameters)
+        self.likelihood.update(self.hyperparameters)
 
         # update marginal density
         self.marginal_density.update_data(gp_rank_n_update)
         ##########################################
-        self.x_data = self.data.x_data
-        self.y_data = self.data.y_data
 
     def set_args(self, args):
         self.args = args
@@ -418,7 +438,7 @@ class GP:
         """
         if not self.data.Euclidean: raise Exception("Please provide custom hyperparameter bounds to "
                                                     "the training in the non-Euclidean setting")
-        if len(self.prior.hyperparameters) != self.data.index_set_dim + 1:
+        if len(self.hyperparameters) != self.data.index_set_dim + 1:
             raise Exception("Please provide custom hyperparameter_bounds when kernel, mean or noise"
                             " functions are customized")
         hyperparameter_bounds = np.zeros((self.data.index_set_dim + 1, 2))
@@ -526,12 +546,12 @@ class GP:
                           " mean, or noise functions")
 
         if init_hyperparameters is None:
-            if out_of_bounds(self.prior.hyperparameters, hyperparameter_bounds):
+            if out_of_bounds(self.hyperparameters, hyperparameter_bounds):
                 init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
                                                          high=hyperparameter_bounds[:, 1],
                                                          size=len(hyperparameter_bounds))
             else:
-                init_hyperparameters = self.prior.hyperparameters
+                init_hyperparameters = self.hyperparameters
         else:
             if out_of_bounds(init_hyperparameters, hyperparameter_bounds):
                 warnings.warn("Your init_hyperparameters are out of bounds. They will be over-written")
@@ -570,10 +590,7 @@ class GP:
             dask_client=dask_client,
             info=info
         )
-
-        self.prior.update_hyperparameters(hyperparameters)
-        self.likelihood.update(self.prior.hyperparameters)
-        self.marginal_density.update_hyperparameters()
+        self.set_hyperparameters(hyperparameters)
         assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
         return hyperparameters
 
@@ -650,12 +667,12 @@ class GP:
                           " mean, or noise functions")
 
         if init_hyperparameters is None:
-            if out_of_bounds(self.prior.hyperparameters, hyperparameter_bounds):
+            if out_of_bounds(self.hyperparameters, hyperparameter_bounds):
                 init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
                                                          high=hyperparameter_bounds[:, 1],
                                                          size=len(hyperparameter_bounds))
             else:
-                init_hyperparameters = self.prior.hyperparameters
+                init_hyperparameters = self.hyperparameters
         else:
             if out_of_bounds(init_hyperparameters, hyperparameter_bounds):
                 warnings.warn("Your init_hyperparameters are out of bounds. They will be over-written")
@@ -730,22 +747,20 @@ class GP:
             l_o = self.marginal_density.neg_log_likelihood()
             if l_n - l_o < 0.000001:
                 hyperparameters = res
-                self.prior.update_hyperparameters(hyperparameters)
-                self.likelihood.update(self.prior.hyperparameters)
-                self.marginal_density.update_hyperparameters()
+                self.set_hyperparameters(hyperparameters)
                 logger.debug("    fvGP async hyperparameter update successful")
                 logger.debug("    Latest hyperparameters: {}", hyperparameters)
             else:
                 logger.debug(
                     "    The update was attempted but the new hyperparameters led to a \n \
                     lower likelihood, so I kept the old ones")
-                logger.debug(f"Old likelihood: {-l_o} at {self.prior.hyperparameters}")
+                logger.debug(f"Old likelihood: {-l_o} at {self.hyperparameters}")
                 logger.debug(f"New likelihood: {-l_n} at {res}")
         else:
             logger.debug("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
-            logger.debug("    hyperparameters: {}", self.prior.hyperparameters)
+            logger.debug("    hyperparameters: {}", self.hyperparameters)
 
-        return self.prior.hyperparameters
+        return self.hyperparameters
 
     ##################################################################################
     def set_hyperparameters(self, hps):
@@ -760,8 +775,10 @@ class GP:
         """
         assert isinstance(hps, np.ndarray), "wrong format in hyperparameters"
         assert np.ndim(hps) == 1, "wrong format in hyperparameters"
+        self.hyperparameters = hps
         self.prior.update_hyperparameters(hps)
-        self.likelihood.update(self.prior.hyperparameters)
+        self.likelihood.update(hps)
+        self.posterior.update_hyperparameters(hps)
         self.marginal_density.update_hyperparameters()
 
     ##################################################################################
@@ -778,8 +795,9 @@ class GP:
         ------
         hyperparameters : np.ndarray
         """
-
-        return self.prior.hyperparameters
+        warnings.warn('`get_hyperparameters()` is deprecated. Please use `hyperparameters`',
+                      DeprecationWarning, stacklevel=2)
+        return self.hyperparameters
 
     ##################################################################################
     def get_prior_pdf(self):
@@ -1418,11 +1436,8 @@ class GP:
             compute_device=self.compute_device,
             calc_inv=self.calc_inv,
             gp2Scale=self.gp2Scale,
+            hyperparameters=self.hyperparameters,
             args=self.args,
-            x_data=self.x_data,
-            y_data=self.y_data,
-            noise_variances=self.noise_variances,
-            index_set_dim=self.index_set_dim,
             data=self.data,
             prior=self.prior,
             likelihood=self.likelihood,

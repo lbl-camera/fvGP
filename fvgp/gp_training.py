@@ -294,6 +294,17 @@ class GPtraining:
         if np.any(v < bounds[:, 0]) or np.any(v > bounds[:, 1]): return False
         return True
 
+    def __getstate__(self):
+        state = dict(
+            mcmc_info=self.mcmc_info,
+            gp2Scale=self.gp2Scale,
+            args=self.args
+            )
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
 
 if __name__ == "__main__":
     a = GPtraining()

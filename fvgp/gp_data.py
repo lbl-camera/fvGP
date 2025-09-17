@@ -25,6 +25,14 @@ class GPdata:
         self.noise_variances = noise_variances
         self.point_number = len(self.x_data)
         self._check_for_nan()
+        self.fvgp_x_data = None
+        self.fvgp_y_data = None
+        self.fvgp_noise_variances = None
+
+    def set_fvgp_data(self, fvgp_x_data, fvgp_y_data, fvgp_noise_variances):
+        self.fvgp_x_data = fvgp_x_data
+        self.fvgp_y_data = fvgp_y_data
+        self.fvgp_noise_variances = fvgp_noise_variances
 
     def update(self, x_data_new, y_data_new, noise_variances_new=None, append=True):
         assert isinstance(x_data_new, np.ndarray) or isinstance(x_data_new, list)
@@ -70,7 +78,10 @@ class GPdata:
             Euclidean=self.Euclidean,
             index_set_dim=self.index_set_dim,
             noise_variances=self.noise_variances,
-            point_number=self.point_number
+            point_number=self.point_number,
+            fvgp_x_data=self.fvgp_x_data,
+            fvgp_y_data=self.fvgp_y_data,
+            fvgp_noise_variances=self.fvgp_noise_variances
             )
         return state
 

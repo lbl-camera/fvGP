@@ -63,7 +63,7 @@ class GPMarginalDensity:
         KV = self._addKV(K, V)
         self.KVlinalg.update_KV(KV)
         KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY).reshape(len(y_mean))
-        return KVinvY.reshape(len(y_mean))
+        return KVinvY.reshape(y_mean.shape)
 
     def _set_KVinvY(self, K, V, m, mode):
         """Set or reset KVinvY for new hyperparameters"""
@@ -74,7 +74,7 @@ class GPMarginalDensity:
         logger.debug("KVlinalg obj set")
         logger.debug("Solve in progress")
         KVinvY = self.KVlinalg.solve(y_mean).reshape(len(y_mean))
-        return KVinvY.reshape(len(y_mean))
+        return KVinvY.reshape(y_mean.shape)
 
     ##################################################################
     def compute_new_KVinvY(self, KV, m):
@@ -114,7 +114,7 @@ class GPMarginalDensity:
         else:
             Chol_factor = calculate_Chol_factor(KV, args=self.args)
             KVinvY = calculate_Chol_solve(Chol_factor, y_mean, args=self.args)
-        return KVinvY.reshape(len(y_mean))
+        return KVinvY.reshape(y_mean.shape)
 
     def compute_new_KVlogdet_KVinvY(self, K, V, m):
         """
@@ -232,11 +232,11 @@ class GPMarginalDensity:
             KVlogdet = self.KVlinalg.logdet()
         else:
             st = time.time()
-            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters)
             logger.debug("   Prior covariance matrix computed after {} seconds.", time.time() - st)
             V = self.likelihood_obj.calculate_V(hyperparameters)
             logger.debug("   V computed after {} seconds.", time.time() - st)
-            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters)
             logger.debug("   Prior mean computed after {} seconds.", time.time() - st)
             KVinvY, KVlogdet = self.compute_new_KVlogdet_KVinvY(K, V, m)
             logger.debug("   KVinvY and logdet computed after {} seconds.", time.time() - st)
@@ -284,9 +284,9 @@ class GPMarginalDensity:
             V = self.likelihood_obj.V
             KV = self._addKV(K, V)
         else:
-            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters=hyperparameters)
+            K = self.prior_obj.compute_prior_covariance_matrix(self.data_obj.x_data, hyperparameters)
             V = self.likelihood_obj.calculate_V(hyperparameters)
-            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters=hyperparameters)
+            m = self.prior_obj.compute_mean(self.data_obj.x_data, hyperparameters)
             KV = self._addKV(K, V)
             KVinvY = self.compute_new_KVinvY(KV, m)
 
