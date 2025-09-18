@@ -498,7 +498,7 @@ def test_pickle():
     #initialize the GPOptimizer
     my_gpo = GP(x_data,y_data,
         init_hyperparameters = np.ones((4))/10.,  # We need enough of those for kernel, noise, and prior mean functions
-        )
+        args = {"df":3})
     
 
     #pickle the GPOptimizer
@@ -515,6 +515,8 @@ def test_pickle():
     assert np.all(my_gpo.posterior_mean(np.array([[1.,1,1],[2.,2.,2.]]))["m(x)"] == my_gpo2.posterior_mean(np.array([[1,1,1],[2,2,2]]))["m(x)"])
     assert np.all(my_gpo.hyperparameters == my_gpo2.hyperparameters)
     assert np.all(my_gpo.prior.K == my_gpo2.prior.K)
+    assert my_gpo._args == my_gpo2._args
+    assert my_gpo.args == my_gpo2.args
 
     #TEST3
     #initialize the GPOptimizer

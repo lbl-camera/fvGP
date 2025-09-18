@@ -1451,6 +1451,7 @@ class GP:
             hyperparameters=self.hyperparameters,
             args=self.args,
             data=self.data,
+            _args=self._args,
             prior=self.prior,
             likelihood=self.likelihood,
             marginal_density=self.marginal_density,
