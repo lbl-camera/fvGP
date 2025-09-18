@@ -104,8 +104,26 @@ def test_single_task_init_basic():
     my_gp1.update_gp_data(x_data, y_data, noise_variances_new = np.zeros(y_data.shape) + 0.01, append = True)
     my_gp1.update_gp_data(x_data, y_data, noise_variances_new = np.zeros(y_data.shape) + 0.01, append = False)
     my_gp1.set_args({"dcf":4.})
-    my_gp1.get_args()
-    
+    my_gp1.args
+    assert my_gp1.args == my_gp1._args == {"dcf":4.}
+    assert my_gp1.args == my_gp1.prior.args
+    assert my_gp1.args == my_gp1.likelihood.args
+    assert my_gp1.args == my_gp1.marginal_density.args
+    assert my_gp1.args == my_gp1.trainer.args
+    assert my_gp1.args == my_gp1.posterior.args
+    assert my_gp1.args == my_gp1.marginal_density.KVlinalg.args
+
+    my_gp1 = GP(x_data, y_data, noise_variances = np.zeros(y_data.shape) + 0.01,init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
+    my_gp1.set_args({"dcf":4.})
+    assert my_gp1.args == my_gp1._args == {"dcf":4.}
+    assert my_gp1.args == my_gp1.prior.args
+    assert my_gp1.args == my_gp1.likelihood.args
+    assert my_gp1.args == my_gp1.marginal_density.args
+    assert my_gp1.args == my_gp1.trainer.args
+    assert my_gp1.args == my_gp1.posterior.args
+    assert my_gp1.args == my_gp1.marginal_density.KVlinalg.args
+
+
     res = my_gp1.posterior_mean(x_pred)
     res = my_gp1.posterior_mean(x_pred, hyperparameters = np.ones((6)))
     res = my_gp1.posterior_mean_grad(x_pred,direction=0)

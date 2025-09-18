@@ -230,8 +230,8 @@ class GP:
         self.compute_device = compute_device
         self.calc_inv = calc_inv
         self.gp2Scale = gp2Scale
-        if args is None: self.args = {}
-        else: self.args = args
+        if args is None: self._args = {}
+        else: self._args = args
         hyperparameters = init_hyperparameters
 
         ########################################
@@ -351,7 +351,31 @@ class GP:
     @property
     def mcmc_info(self):
         return self.trainer.mcmc_info
+
+    @property
+    def args(self):
+        return self._args
+
+    @args.setter
+    def args(self, args):
+        self._args = args
+        self.prior.args = args
+        self.likelihood.args = args
+        self.marginal_density.args = args
+        self.trainer.args = args
+        self.posterior.args = args
+        self.marginal_density.KVlinalg.args = args
     ###############################################################
+    def set_args(self, new_args):
+        """
+        Use this function to charge the arguments for the GP.
+
+        Parameters
+        ----------
+        new_args : dict
+            The new advanced settings.
+        """
+        self.args = new_args
 
     def update_gp_data(
         self,
@@ -413,18 +437,6 @@ class GP:
         # update marginal density
         self.marginal_density.update_data(gp_rank_n_update)
         ##########################################
-
-    def set_args(self, args):
-        self.args = args
-        self.prior.args = args
-        self.likelihood.args = args
-        self.marginal_density.args = args
-        self.trainer.args = args
-        self.posterior.args = args
-        self.marginal_density.KVlinalg.args = args
-
-    def get_args(self):
-        return self.args
 
     def _get_default_hyperparameter_bounds(self):
         """
