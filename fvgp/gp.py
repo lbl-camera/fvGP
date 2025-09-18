@@ -342,7 +342,7 @@ class GP:
 
     @property
     def noise_variances(self):
-        return self.noise_variances
+        return self.data.noise_variances
 
     @property
     def index_set_dim(self):
