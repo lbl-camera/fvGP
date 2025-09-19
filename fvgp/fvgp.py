@@ -436,7 +436,7 @@ class fvGP(GP):
                 else: new_x_data.append([x_data[j], output_indices[i]])
                 new_y_data.append(y_data[j, i])
                 if new_variances is not None:
-                    new_variances.append(noise_variances[j,i])
+                    new_variances.append(noise_variances[j, i])
         if isinstance(x_data, np.ndarray): new_x_data = np.asarray(new_x_data)
         new_y_data = np.asarray(new_y_data)
         if new_variances is not None: new_variances = np.asarray(new_variances)

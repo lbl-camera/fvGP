@@ -37,7 +37,7 @@ class GPdata:
         self.fvgp_y_data = fvgp_y_data
         self.fvgp_noise_variances = fvgp_noise_variances
         self.x_out = x_out
-        self.input_set_dim = self.index_set_dim - 1
+        if self.Euclidean: self.input_set_dim = self.index_set_dim - 1
 
     def update(self, x_data_new, y_data_new, noise_variances_new=None, append=True):
         assert isinstance(x_data_new, np.ndarray) or isinstance(x_data_new, list)
