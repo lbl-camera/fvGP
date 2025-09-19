@@ -6,18 +6,20 @@ class GPdata:
     def __init__(self, x_data, y_data, noise_variances=None):
         # make sure the inputs are in the right format
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
-        assert isinstance(y_data, np.ndarray) and np.ndim(y_data) == 1
+        assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2)
         assert ((isinstance(noise_variances, np.ndarray) and np.ndim(noise_variances) == 1)
                 or noise_variances is None)
-        if len(x_data) != len(y_data): warnings.warn("x_data and y_data have different lengths.")
+        assert len(x_data) == len(y_data), "x_data and y_data have different lengths."
 
         # analyse data
         if isinstance(x_data, np.ndarray):
             assert np.ndim(x_data) == 2
             self.index_set_dim = len(x_data[0])
+            self.input_set_dim = len(x_data[0])
             self.Euclidean = True
         if isinstance(x_data, list):
-            self.index_set_dim = 1
+            self.index_set_dim = 1  #in non-Euclidean spaces there is no notion of dimensionality
+            self.input_set_dim = 1
             self.Euclidean = False
 
         self.x_data = x_data
@@ -28,11 +30,14 @@ class GPdata:
         self.fvgp_x_data = None
         self.fvgp_y_data = None
         self.fvgp_noise_variances = None
+        self.x_out = None
 
-    def set_fvgp_data(self, fvgp_x_data, fvgp_y_data, fvgp_noise_variances):
+    def set_fvgp_data(self, fvgp_x_data, fvgp_y_data, fvgp_noise_variances, x_out):
         self.fvgp_x_data = fvgp_x_data
         self.fvgp_y_data = fvgp_y_data
         self.fvgp_noise_variances = fvgp_noise_variances
+        self.x_out = x_out
+        self.input_set_dim = self.index_set_dim - 1
 
     def update(self, x_data_new, y_data_new, noise_variances_new=None, append=True):
         assert isinstance(x_data_new, np.ndarray) or isinstance(x_data_new, list)
@@ -81,7 +86,9 @@ class GPdata:
             point_number=self.point_number,
             fvgp_x_data=self.fvgp_x_data,
             fvgp_y_data=self.fvgp_y_data,
-            fvgp_noise_variances=self.fvgp_noise_variances
+            fvgp_noise_variances=self.fvgp_noise_variances,
+            x_out=self.x_out,
+            input_set_dim=self.input_set_dim
             )
         return state
 

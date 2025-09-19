@@ -30,7 +30,7 @@ class GPMarginalDensity:
 
         if self.gp2Scale and self.calc_inv:
             self.calc_inv = False
-            warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False")
+            warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False.")
         self.KVlinalg = KVlinalg(compute_device, self.args)
         K, V, m = self._get_KVm()
         if self.gp2Scale:

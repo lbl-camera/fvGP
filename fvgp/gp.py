@@ -212,9 +212,7 @@ class GP:
         ram_economy=False,
         args=None
     ):
-        assert isinstance(x_data, list) or isinstance(x_data, np.ndarray), "wrong format in x_data"
-        assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2), \
-            "wrong format in y_data"
+
         assert isinstance(noise_variances, np.ndarray) or noise_variances is None, "wrong format in noise_variances"
         assert init_hyperparameters is None or isinstance(init_hyperparameters,np.ndarray), "wrong init_hyperparameters"
         assert isinstance(compute_device, str), "wrong format in compute_device"
@@ -247,7 +245,7 @@ class GP:
                     "initial hyperparameters.")
             else:
                 if init_hyperparameters is None:
-                    hyperparameters = np.ones((self.data.index_set_dim + 1))
+                    hyperparameters = np.ones((self.index_set_dim + 1))
                     warnings.warn("Hyperparameters initialized to a vector of ones.")
         else:
             hyperparameters = init_hyperparameters
@@ -349,6 +347,10 @@ class GP:
         return self.data.index_set_dim
 
     @property
+    def input_set_dim(self):
+        return self.data.input_set_dim
+
+    @property
     def mcmc_info(self):
         return self.trainer.mcmc_info
 
@@ -420,7 +422,7 @@ class GP:
         assert isinstance(noise_variances_new, np.ndarray) or noise_variances_new is None, \
             "wrong format in noise_variances_new"
         assert len(x_new) == len(y_new), "updated x and y do not have the same lengths."
-        old_x_data = self.data.x_data.copy()
+        old_x_data = self.x_data.copy()
         if gp_rank_n_update is None: gp_rank_n_update = append
         # update data
         self.data.update(x_new, y_new, noise_variances_new, append=append)
@@ -450,13 +452,13 @@ class GP:
         """
         if not self.data.Euclidean: raise Exception("Please provide custom hyperparameter bounds to "
                                                     "the training in the non-Euclidean setting")
-        if len(self.hyperparameters) != self.data.index_set_dim + 1:
+        if len(self.hyperparameters) != self.index_set_dim + 1:
             raise Exception("Please provide custom hyperparameter_bounds when kernel, mean or noise"
                             " functions are customized")
-        hyperparameter_bounds = np.zeros((self.data.index_set_dim + 1, 2))
-        hyperparameter_bounds[0] = np.array([np.var(self.data.y_data) / 100., np.var(self.data.y_data) * 10.])
-        for i in range(self.data.index_set_dim):
-            range_xi = np.max(self.data.x_data[:, i]) - np.min(self.data.x_data[:, i])
+        hyperparameter_bounds = np.zeros((self.index_set_dim + 1, 2))
+        hyperparameter_bounds[0] = np.array([np.var(self.y_data) / 100., np.var(self.y_data) * 10.])
+        for i in range(self.index_set_dim):
+            range_xi = np.max(self.x_data[:, i]) - np.min(self.x_data[:, i])
             hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
         assert isinstance(hyperparameter_bounds, np.ndarray) and np.ndim(hyperparameter_bounds) == 2
         return hyperparameter_bounds

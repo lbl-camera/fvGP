@@ -40,7 +40,7 @@ class fvGP(GP):
     Parameters
     ----------
     x_data : np.ndarray or list
-        The input point positions. Shape (V x Di), where Di is the :py:attr:`fvgp.fvGP.input_space_dim`.
+        The input point positions. Shape (V x Di), where Di is the :py:attr:`fvgp.fvGP.input_set_dim`.
         For multi-task GPs, the index set dimension = input space dimension + 1.
         If dealing with non-Euclidean inputs
         x_data should be a list, not a numpy array.
@@ -295,17 +295,7 @@ class fvGP(GP):
         ram_economy=False,
         args=None
     ):
-        assert isinstance(x_data, list) or isinstance(x_data, np.ndarray), "wrong format in x_data"
-        assert isinstance(y_data, np.ndarray), "wrong format in y_data"
-        assert len(x_data) == len(y_data), "x_data and y_data do not have the same lengths."
-
-        if isinstance(x_data, np.ndarray):
-            assert np.ndim(x_data) == 2
-            self.input_space_dim = x_data.shape[1]
-        else: self.input_space_dim = 1
-
         self.output_num = y_data.shape[1]
-
         if isinstance(y_data, np.ndarray):
             if np.ndim(y_data) == 1:
                 raise ValueError("The output number is 1, you can use the GP class for single-task GPs")
@@ -318,7 +308,6 @@ class fvGP(GP):
         x_data, y_data, noise_variances = self._transform_index_set2(x_data, y_data, noise_variances)
 
         ####init GP
-
         super().__init__(
             x_data,
             y_data,
@@ -339,10 +328,7 @@ class fvGP(GP):
             ram_economy=ram_economy,
             args=args)
 
-        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances)
-
-        if self.data.Euclidean: assert self.index_set_dim == self.input_space_dim + 1
-        self.posterior.x_out = np.arange(0, self.output_num)
+        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances, np.arange(0, self.output_num))
 
     @property
     def fvgp_x_data(self):
@@ -374,7 +360,7 @@ class fvGP(GP):
         Parameters
         ----------
         x_new : np.ndarray or list
-            The input point positions. Shape (V x Di), where Di is the :py:attr:`fvgp.fvGP.input_space_dim`.
+            The input point positions. Shape (V x Di), where Di is the :py:attr:`fvgp.fvGP.input_set_dim`.
             For multi-task GPs, the index set dimension = input space dimension + 1.
             If dealing with non-Euclidean inputs
             x_new should be a list, not a numpy array.
@@ -422,7 +408,7 @@ class fvGP(GP):
             fvgp_noise_variances = noise_variances_new
             fvgp_x_data = x_new
             fvgp_y_data = y_new
-        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances)
+        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances, np.arange(0, self.output_num))
 
         ######################################
         #####transform to index set###########
@@ -461,3 +447,12 @@ class fvGP(GP):
         return new_x_data, new_y_data, new_variances
 
     ################################################################################################
+    def __getstate__(self):
+        state = dict(
+            output_num=self.output_num
+            )
+        state.update(super().__getstate__())
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)

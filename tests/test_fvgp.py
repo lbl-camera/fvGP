@@ -540,3 +540,29 @@ def test_pickle():
     assert np.all(my_gpo.hyperparameters == my_gpo2.hyperparameters)
     assert np.all(my_gpo.prior.K == my_gpo2.prior.K)
 
+
+
+    #TEST4
+    #initialize the GPOptimizer
+
+    my_gpo = fvGP(x_data,np.random.rand(len(x_data),2),
+        init_hyperparameters = np.ones((5))/10.,  # We need enough of those for kernel, noise, and prior mean functions
+        )
+
+    #pickle the GPOptimizer
+    stash = pickle.dumps(my_gpo)
+
+    #unpickle the GPOptimizer
+    my_gpo2 = pickle.loads(stash)
+
+
+    #assert checks that my_gpo2 is same as my_gpo
+    assert np.all(my_gpo.x_data == my_gpo2.x_data)
+    assert np.all(my_gpo.y_data == my_gpo2.y_data)
+    assert np.all(my_gpo.likelihood.V == my_gpo2.likelihood.V)
+    assert np.all(my_gpo.posterior_mean(np.array([[1.,1,1],[2.,2.,2.]]))["m(x)"] == my_gpo2.posterior_mean(np.array([[1,1,1],[2,2,2]]))["m(x)"])
+    assert np.all(my_gpo.hyperparameters == my_gpo2.hyperparameters)
+    assert np.all(my_gpo.prior.K == my_gpo2.prior.K)
+    assert my_gpo.input_set_dim == my_gpo2.input_set_dim
+    assert my_gpo.index_set_dim == my_gpo2.index_set_dim
+
