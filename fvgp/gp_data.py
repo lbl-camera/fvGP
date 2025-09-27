@@ -3,7 +3,7 @@ import warnings
 
 
 class GPdata:
-    def __init__(self, x_data, y_data, noise_variances=None):
+    def __init__(self, x_data, y_data, args=None, noise_variances=None):
         # make sure the inputs are in the right format
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
         assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2)
@@ -31,6 +31,7 @@ class GPdata:
         self.fvgp_y_data = None
         self.fvgp_noise_variances = None
         self.x_out = None
+        self.args = args
 
     def set_fvgp_data(self, fvgp_x_data, fvgp_y_data, fvgp_noise_variances, x_out):
         self.fvgp_x_data = fvgp_x_data
@@ -88,7 +89,8 @@ class GPdata:
             fvgp_y_data=self.fvgp_y_data,
             fvgp_noise_variances=self.fvgp_noise_variances,
             x_out=self.x_out,
-            input_set_dim=self.input_set_dim
+            input_set_dim=self.input_set_dim,
+            args=self.args
             )
         return state
 

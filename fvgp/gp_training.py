@@ -8,10 +8,14 @@ from scipy.optimize import minimize
 
 
 class GPtraining:
-    def __init__(self, gp2Scale=False, args=None):
+    def __init__(self, data, gp2Scale=False):
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
-        self.args = args
+        self.data = data
+
+    @property
+    def args(self):
+        return self.data.args
 
     def train(self,
               objective_function=None,
@@ -296,15 +300,12 @@ class GPtraining:
 
     def __getstate__(self):
         state = dict(
+            data=self.data,
             mcmc_info=self.mcmc_info,
             gp2Scale=self.gp2Scale,
-            args=self.args
             )
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
 
-
-if __name__ == "__main__":
-    a = GPtraining()

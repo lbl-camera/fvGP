@@ -16,7 +16,7 @@ from .gp_posterior import GPposterior
 # TODO: search below "TODO"
 #   - as work on functions is completed and functions are maintained, add verbose assert statements.
 #   - make shape(y_data)=(V,U) work (tensor GP), change docstrings
-#   -
+#   - hyperparameters should only be in data, prior and likelihood use a property pointing there.
 
 
 class GP:
@@ -228,14 +228,13 @@ class GP:
         self.compute_device = compute_device
         self.calc_inv = calc_inv
         self.gp2Scale = gp2Scale
-        if args is None: self._args = {}
-        else: self._args = args
+        if args is None: args = {}
         hyperparameters = init_hyperparameters
 
         ########################################
         ###init data instance###################
         ########################################
-        self.data = GPdata(x_data, y_data, noise_variances)
+        self.data = GPdata(x_data, y_data, args = args, noise_variances = noise_variances)
         ########################################
         # prepare initial hyperparameters and bounds
         if self.data.Euclidean:
@@ -286,8 +285,7 @@ class GP:
                              gp2Scale=gp2Scale,
                              gp2Scale_dask_client=gp2Scale_dask_client,
                              gp2Scale_batch_size=gp2Scale_batch_size,
-                             ram_economy=ram_economy,
-                             args=self.args
+                             ram_economy=ram_economy
                              )
         ########################################
         ###init likelihood instance#############
@@ -297,8 +295,7 @@ class GP:
                                        noise_function=noise_function,
                                        noise_function_grad=noise_function_grad,
                                        ram_economy=ram_economy,
-                                       gp2Scale=gp2Scale,
-                                       args=self.args
+                                       gp2Scale=gp2Scale
                                        )
 
         ##########################################
@@ -312,13 +309,12 @@ class GP:
             gp2Scale=gp2Scale,
             gp2Scale_linalg_mode=gp2Scale_linalg_mode,
             compute_device=compute_device,
-            args=self.args
         )
 
         ##########################################
         #######prepare training###################
         ##########################################
-        self.trainer = GPtraining(gp2Scale=gp2Scale, args=self.args)
+        self.trainer = GPtraining(self.data, gp2Scale=gp2Scale)
 
         ##########################################
         #######prepare posterior evaluations######
@@ -327,8 +323,7 @@ class GP:
                                      self.prior,
                                      self.marginal_density,
                                      self.likelihood,
-                                     self.hyperparameters,
-                                     args=self.args)
+                                     self.hyperparameters)
     #########PROPERTIES#########################################
     @property
     def x_data(self):
@@ -356,16 +351,11 @@ class GP:
 
     @property
     def args(self):
-        return self._args
+        return self.data.args
 
     @args.setter
     def args(self, args):
-        self._args = args
-        self.prior.args = args
-        self.likelihood.args = args
-        self.marginal_density.args = args
-        self.trainer.args = args
-        self.posterior.args = args
+        self.data.args = args
         self.marginal_density.KVlinalg.args = args
     ###############################################################
     def set_args(self, new_args):
@@ -1451,9 +1441,7 @@ class GP:
             calc_inv=self.calc_inv,
             gp2Scale=self.gp2Scale,
             hyperparameters=self.hyperparameters,
-            args=self.args,
             data=self.data,
-            _args=self.args,
             prior=self.prior,
             likelihood=self.likelihood,
             marginal_density=self.marginal_density,

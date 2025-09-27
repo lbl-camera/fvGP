@@ -24,7 +24,6 @@ class GPprior:
                  gp2Scale=False,
                  gp2Scale_dask_client=None,
                  gp2Scale_batch_size=10000,
-                 args=None
                  ):
 
         assert callable(kernel) or kernel is None
@@ -40,7 +39,6 @@ class GPprior:
         self.client = gp2Scale_dask_client
         self.batch_size = gp2Scale_batch_size
         self.data = data
-        self.args = args
 
         if not self.Euclidean and not callable(kernel):
             raise Exception(
@@ -115,6 +113,10 @@ class GPprior:
         m = self.mean_function(x_data, hyperparameters)
         return m
     #END: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS
+
+    @property
+    def args(self):
+        return self.data.args
 
     def _compute_prior(self, x_data, hyperparameters):
         m = self.compute_mean(x_data, hyperparameters)
@@ -382,7 +384,6 @@ class GPprior:
             gp2Scale=self.gp2Scale,
             batch_size=self.batch_size,
             data=self.data,
-            args=self.args,
             kernel=self.kernel,
             d_kernel_dx=self.d_kernel_dx,
             dk_dh=self.dk_dh,

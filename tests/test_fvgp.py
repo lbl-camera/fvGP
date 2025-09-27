@@ -105,7 +105,7 @@ def test_single_task_init_basic():
     my_gp1.update_gp_data(x_data, y_data, noise_variances_new = np.zeros(y_data.shape) + 0.01, append = False)
     my_gp1.set_args({"dcf":4.})
     my_gp1.args
-    assert my_gp1.args == my_gp1._args == {"dcf":4.}
+    assert my_gp1.args == my_gp1.args == {"dcf":4.}
     assert my_gp1.args == my_gp1.prior.args
     assert my_gp1.args == my_gp1.likelihood.args
     assert my_gp1.args == my_gp1.marginal_density.args
@@ -115,7 +115,7 @@ def test_single_task_init_basic():
 
     my_gp1 = GP(x_data, y_data, noise_variances = np.zeros(y_data.shape) + 0.01,init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1.set_args({"dcf":4.})
-    assert my_gp1.args == my_gp1._args == {"dcf":4.}
+    assert my_gp1.args == my_gp1.args == {"dcf":4.}
     assert my_gp1.args == my_gp1.prior.args
     assert my_gp1.args == my_gp1.likelihood.args
     assert my_gp1.args == my_gp1.marginal_density.args
@@ -515,7 +515,6 @@ def test_pickle():
     assert np.all(my_gpo.posterior_mean(np.array([[1.,1,1],[2.,2.,2.]]))["m(x)"] == my_gpo2.posterior_mean(np.array([[1,1,1],[2,2,2]]))["m(x)"])
     assert np.all(my_gpo.hyperparameters == my_gpo2.hyperparameters)
     assert np.all(my_gpo.prior.K == my_gpo2.prior.K)
-    assert my_gpo._args == my_gpo2._args
     assert my_gpo.args == my_gpo2.args
 
     #TEST3

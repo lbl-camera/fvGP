@@ -11,7 +11,6 @@ class GPlikelihood:
                  noise_function_grad=None,
                  ram_economy=False,
                  gp2Scale=False,
-                 args=None
                  ):
 
         assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
@@ -23,7 +22,6 @@ class GPlikelihood:
             assert all(self.data.noise_variances > 0.0)
 
         self.gp2Scale = gp2Scale
-        self.args = args
 
         if self.data.noise_variances is not None and callable(noise_function):
             raise Exception("Noise function and measurement noise provided. Decide which one to use.")
@@ -57,8 +55,9 @@ class GPlikelihood:
         logger.debug("Updating noise matrix V after new hyperparameters communicated.")
         self.V = self.calculate_V(hyperparameters)
 
-    #def augment(self, x_old, x_new): #for later to augment V given new data instead of recompute
-    #    self.V =
+    @property
+    def args(self):
+        return self.data.args
 
     def calculate_V(self, hyperparameters):
         logger.debug("Calculating V.")
@@ -111,7 +110,6 @@ class GPlikelihood:
         state = dict(
             data=self.data,
             gp2Scale=self.gp2Scale,
-            args=self.args,
             noise_function=self.noise_function,
             V=self.V,
             noise_function_grad=self.noise_function_grad,
