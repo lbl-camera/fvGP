@@ -8,10 +8,11 @@ from scipy.optimize import minimize
 
 
 class GPtraining:
-    def __init__(self, data, gp2Scale=False):
+    def __init__(self, data, hyperparameters, gp2Scale=False):
         self.mcmc_info = None
         self.gp2Scale = gp2Scale
         self.data = data
+        self.hyperparameters = hyperparameters
 
     @property
     def args(self):
@@ -55,6 +56,8 @@ class GPtraining:
             dask_client,
             info
         )
+        assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
+        self.hyperparameters = hyperparameters
         return hyperparameters
 
     ##################################################################################
@@ -126,8 +129,7 @@ class GPtraining:
         except:
             warnings.warn("No asynchronous training to be killed, no training is running.", stacklevel=2)
 
-    @staticmethod
-    def update_hyperparameters(opt_obj):
+    def update_hyperparameters(self, opt_obj):
         """
         This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
@@ -147,12 +149,13 @@ class GPtraining:
 
         try:
             updated_hyperparameters = opt_obj.get_latest()[0]["x"]
+            assert isinstance(updated_hyperparameters, np.ndarray) and np.ndim(updated_hyperparameters) == 1
+            self.hyperparameters = updated_hyperparameters
         except Exception as err:
             logger.debug("      The optimizer object could not be queried")
             logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
             warnings.warn("     Hyperparameter update failed with ERROR: " + str(err))
             updated_hyperparameters = None
-
         return updated_hyperparameters
 
     def _optimize_log_likelihood_async(self,
@@ -303,6 +306,7 @@ class GPtraining:
             data=self.data,
             mcmc_info=self.mcmc_info,
             gp2Scale=self.gp2Scale,
+            hyperparameters=self.hyperparameters
             )
         return state
 

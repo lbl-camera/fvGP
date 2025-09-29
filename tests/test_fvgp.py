@@ -275,7 +275,7 @@ def test_multi_task(client):
     my_fvgp = fvGP(x_data, y_data, init_hyperparameters = np.array([1, 1]), kernel_function=mkernel)
     my_fvgp.update_gp_data(x_data, y_data, append = True)
     my_fvgp.update_gp_data(x_data, y_data, append = False)
-    my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10]]),
+    my_fvgp.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,1]]),
             method = "global", pop_size = 10, tolerance = 0.001, max_iter = 2, dask_client=client, info = True)
     my_fvgp.posterior_mean(np.random.rand(10,5), x_out = np.array([0,1]))["m(x)"]
     my_fvgp.posterior_mean(np.random.rand(10,5))["m(x)"]

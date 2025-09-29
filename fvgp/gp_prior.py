@@ -14,22 +14,17 @@ from scipy.sparse import coo_matrix, vstack
 class GPprior:
     def __init__(self,
                  data,
+                 trainer,
                  kernel=None,
                  prior_mean_function=None,
                  kernel_grad=None,
                  prior_mean_function_grad=None,
-                 hyperparameters=None,
                  ram_economy=False,
                  compute_device='cpu',
                  gp2Scale=False,
                  gp2Scale_dask_client=None,
                  gp2Scale_batch_size=10000,
                  ):
-
-        assert callable(kernel) or kernel is None
-        assert callable(prior_mean_function) or prior_mean_function is None
-        assert isinstance(hyperparameters, np.ndarray)
-        assert np.ndim(hyperparameters) == 1
 
         self.Euclidean = data.Euclidean
         self.kernel_function = kernel
@@ -39,6 +34,12 @@ class GPprior:
         self.client = gp2Scale_dask_client
         self.batch_size = gp2Scale_batch_size
         self.data = data
+        self.trainer = trainer
+
+        assert callable(kernel) or kernel is None
+        assert callable(prior_mean_function) or prior_mean_function is None
+        assert isinstance(self.hyperparameters, np.ndarray)
+        assert np.ndim(self.hyperparameters) == 1
 
         if not self.Euclidean and not callable(kernel):
             raise Exception(
@@ -84,20 +85,38 @@ class GPprior:
         elif callable(prior_mean_function): self.dm_dh = self._finitediff_dm_dh
         else: self.dm_dh = self._default_dm_dh
 
-        self.m, self.K = self._compute_prior(data.x_data, hyperparameters)
+        self.m, self.K = self._compute_prior(data.x_data, self.hyperparameters)
         logger.debug("Prior successfully initialized.")
 
+    ##############################################################
+    @property
+    def args(self):
+        return self.data.args
+
+    @property
+    def hyperparameters(self):
+        return self.trainer.hyperparameters
+
+    @property
+    def x_data(self):
+        return self.data.x_data
+
+    @property
+    def y_data(self):
+        return self.data.y_data
+
+    ################################################################
     #START: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS
-    def augment_data(self, x_old, x_new, hyperparameters):
-        self.m, self.K = self._update_prior(x_old, x_new, hyperparameters)
+    def augment_state_data(self, x_old, x_new):
+        self.m, self.K = self._update_prior(x_old, x_new, self.hyperparameters)
         logger.debug("Prior mean and covariance updated after data augmentation.")
 
-    def update_data(self, hyperparameters):
-        self.m, self.K = self._compute_prior(self.data.x_data, hyperparameters)
+    def update_state_data(self):
+        self.m, self.K = self._compute_prior(self.x_data, self.hyperparameters)
         logger.debug("Prior mean and covariance updated after data change.")
 
-    def update_hyperparameters(self, hyperparameters):
-        self.m, self.K = self._compute_prior(self.data.x_data, hyperparameters)
+    def update_state_hyperparameters(self):
+        self.m, self.K = self._compute_prior(self.x_data, self.hyperparameters)
         logger.debug("Prior mean and covariance updated after hyperparameter change.")
 
     def compute_prior_covariance_matrix(self, x, hyperparameters):
@@ -113,10 +132,7 @@ class GPprior:
         m = self.mean_function(x_data, hyperparameters)
         return m
     #END: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS
-
-    @property
-    def args(self):
-        return self.data.args
+    #################################################################
 
     def _compute_prior(self, x_data, hyperparameters):
         m = self.compute_mean(x_data, hyperparameters)
@@ -349,12 +365,12 @@ class GPprior:
 
     def _default_mean_function(self, x, hyperparameters):
         """evaluates the gp mean function at the data points """
-        if np.ndim(self.data.y_data) == 1:
+        if np.ndim(self.y_data) == 1:
             mean = np.zeros((len(x)))
-            mean[:] = np.mean(self.data.y_data)
-        elif np.ndim(self.data.y_data) == 2:
+            mean[:] = np.mean(self.y_data)
+        elif np.ndim(self.y_data) == 2:
             mean = np.zeros((len(x),self.data.shape[1]))
-            for i in range(mean.shape[1]): mean[:,i] = np.mean(self.data.y_data, axis=0)
+            for i in range(mean.shape[1]): mean[:,i] = np.mean(self.y_data, axis=0)
         else: raise Exception("Wrong dim in default mean function")
         return mean
 
@@ -384,6 +400,7 @@ class GPprior:
             gp2Scale=self.gp2Scale,
             batch_size=self.batch_size,
             data=self.data,
+            trainer=self.trainer,
             kernel=self.kernel,
             d_kernel_dx=self.d_kernel_dx,
             dk_dh=self.dk_dh,

@@ -38,6 +38,8 @@ class GPdata:
         self.fvgp_y_data = fvgp_y_data
         self.fvgp_noise_variances = fvgp_noise_variances
         self.x_out = x_out
+        assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list), "wrong format in x_out"
+        if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1, "wrong dim in x_out, has to be 1-d"
         if self.Euclidean: self.input_set_dim = self.index_set_dim - 1
 
     def update(self, x_data_new, y_data_new, noise_variances_new=None, append=True):

@@ -1,5 +1,6 @@
 import numpy as np
 import warnings
+warnings.simplefilter("once", UserWarning)
 import time
 from loguru import logger
 from scipy.sparse.linalg import splu
@@ -13,7 +14,7 @@ from scipy import sparse
 def calculate_sparse_LU_factor(M, args=None):
     assert sparse.issparse(M)
     logger.debug("calculate_sparse_LU_factor")
-    LU = splu(M)
+    LU = splu(M.tocsc())
     return LU
 
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import warnings
+warnings.simplefilter("once", UserWarning)
 import numpy as np
 from loguru import logger
 from distributed import Client
@@ -11,6 +12,7 @@ from .gp_marginal_density import GPMarginalDensity
 from .gp_likelihood import GPlikelihood
 from .gp_training import GPtraining
 from .gp_posterior import GPposterior
+import importlib
 
 
 # TODO: search below "TODO"
@@ -176,19 +178,19 @@ class GP:
     Attributes
     ----------
     x_data : np.ndarray
-        Datapoint positions
+        Datapoint positions.
     y_data : np.ndarray
-        Datapoint values
+        Datapoint values.
     noise_variances : np.ndarray
-        Datapoint observation variances
-    prior.hyperparameters : np.ndarray
+        Datapoint observation variances.
+    hyperparameters : np.ndarray
         Current hyperparameters in use.
-    prior.K : np.ndarray
-        Current prior covariance matrix of the GP
-    prior.m : np.ndarray
+    K : np.ndarray
+        Current prior covariance matrix of the GP.
+    m : np.ndarray
         Current prior mean vector.
-    likelihood.V : np.ndarray
-        the noise covariance matrix
+    V : np.ndarray
+        the noise covariance matrix.
     """
 
     def __init__(
@@ -234,7 +236,7 @@ class GP:
         ########################################
         ###init data instance###################
         ########################################
-        self.data = GPdata(x_data, y_data, args = args, noise_variances = noise_variances)
+        self.data = GPdata(x_data, y_data, args=args, noise_variances=noise_variances)
         ########################################
         # prepare initial hyperparameters and bounds
         if self.data.Euclidean:
@@ -252,32 +254,23 @@ class GP:
         # warn if they could not be prepared
         if hyperparameters is None:
             raise Exception("'init_hyperparameters' not provided and could not be calculated. Please provide them ")
-        self.hyperparameters = hyperparameters
-
-        if gp2Scale:
-            try:
-                from imate import logdet as imate_logdet
-            except:
-                raise Exception(
-                    "You have activated `gp2Scale`. You need to install imate"
-                    " manually for this to work.")
-            if gp2Scale_dask_client is None:
-                logger.debug("Creating my own local client.")
-                try: gp2Scale_dask_client = Client()
-                except: logger.debug("no client available")
 
         if compute_device == 'gpu':
-            try:
-                import torch
-            except:
-                raise Exception(
-                    "You have specified the 'gpu' as your compute device. You need to install pytorch "
-                    "manually for this to work.")
+            if not importlib.util.find_spec("torch") or not importlib.util.find_spec("cupy"):
+                warnings.warn("You have specified the 'gpu' as your compute device. You need to install pytorch or cupy"
+                              " manually for this to work.")
+        # Check gp2Scale
+        gp2Scale_dask_client = self.initialize_gp2Scale_dask_client(gp2Scale, gp2Scale_dask_client)
+
+        ##########################################
+        #######prepare training###################
+        ##########################################
+        self.trainer = GPtraining(self.data, hyperparameters, gp2Scale=gp2Scale)
         ########################################
         ###init prior instance##################
         ########################################
         self.prior = GPprior(self.data,
-                             hyperparameters=hyperparameters,
+                             self.trainer,
                              kernel=kernel_function,
                              prior_mean_function=prior_mean_function,
                              kernel_grad=kernel_function_grad,
@@ -291,7 +284,7 @@ class GP:
         ###init likelihood instance#############
         ########################################
         self.likelihood = GPlikelihood(self.data,
-                                       hyperparameters=hyperparameters,
+                                       self.trainer,
                                        noise_function=noise_function,
                                        noise_function_grad=noise_function_grad,
                                        ram_economy=ram_economy,
@@ -312,18 +305,14 @@ class GP:
         )
 
         ##########################################
-        #######prepare training###################
-        ##########################################
-        self.trainer = GPtraining(self.data, gp2Scale=gp2Scale)
-
-        ##########################################
         #######prepare posterior evaluations######
         ##########################################
         self.posterior = GPposterior(self.data,
                                      self.prior,
+                                     self.trainer,
                                      self.marginal_density,
-                                     self.likelihood,
-                                     self.hyperparameters)
+                                     self.likelihood)
+
     #########PROPERTIES#########################################
     @property
     def x_data(self):
@@ -357,10 +346,26 @@ class GP:
     def args(self, args):
         self.data.args = args
         self.marginal_density.KVlinalg.args = args
+
+    @property
+    def K(self):
+        return self.prior.K
+
+    @property
+    def m(self):
+        return self.prior.m
+
+    @property
+    def V(self):
+        return self.likelihood.V
+
+    @property
+    def hyperparameters(self):
+        return self.trainer.hyperparameters
     ###############################################################
     def set_args(self, new_args):
         """
-        Use this function to charge the arguments for the GP.
+        Use this function to change the arguments for the GP.
 
         Parameters
         ----------
@@ -418,16 +423,14 @@ class GP:
         self.data.update(x_new, y_new, noise_variances_new, append=append)
 
         # update prior
-        if append:
-            self.prior.augment_data(old_x_data, x_new, self.hyperparameters)
-        else:
-            self.prior.update_data(self.hyperparameters)
+        if append: self.prior.augment_state_data(old_x_data, x_new)
+        else: self.prior.update_state_data()
 
         # update likelihood
-        self.likelihood.update(self.hyperparameters)
+        self.likelihood.update_state()
 
         # update marginal density
-        self.marginal_density.update_data(gp_rank_n_update)
+        self.marginal_density.update_state_data(gp_rank_n_update)
         ##########################################
 
     def _get_default_hyperparameter_bounds(self):
@@ -594,8 +597,6 @@ class GP:
             dask_client=dask_client,
             info=info
         )
-        self.set_hyperparameters(hyperparameters)
-        assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
         return hyperparameters
 
     ##################################################################################
@@ -751,7 +752,6 @@ class GP:
             l_o = self.marginal_density.neg_log_likelihood()
             if l_n - l_o < 0.000001:
                 hyperparameters = res
-                self.set_hyperparameters(hyperparameters)
                 logger.debug("    fvGP async hyperparameter update successful")
                 logger.debug("    Latest hyperparameters: {}", hyperparameters)
             else:
@@ -779,11 +779,10 @@ class GP:
         """
         assert isinstance(hps, np.ndarray), "wrong format in hyperparameters"
         assert np.ndim(hps) == 1, "wrong format in hyperparameters"
-        self.hyperparameters = hps
-        self.prior.update_hyperparameters(hps)
-        self.likelihood.update(hps)
-        self.posterior.update_hyperparameters(hps)
-        self.marginal_density.update_hyperparameters()
+        self.trainer.hyperparameters = hps
+        self.prior.update_state_hyperparameters()
+        self.likelihood.update_state()
+        self.marginal_density.update_state_hyperparameters()
 
     ##################################################################################
     def get_hyperparameters(self):
@@ -1434,6 +1433,21 @@ class GP:
         tb = time_per_worker_execution
         n = number_of_workers
         return (D ** 2 * tb) / (2. * n * b ** 2)
+
+    def initialize_gp2Scale_dask_client(self, gp2Scale, gp2Scale_dask_client):
+        if gp2Scale:
+            try:
+                from imate import logdet as imate_logdet
+            except:
+                raise Exception(
+                    "You have activated `gp2Scale`. You need to install imate"
+                    " manually for this to work.")
+            if gp2Scale_dask_client is None:
+                logger.debug("Creating my own local client.")
+                try: gp2Scale_dask_client = Client()
+                except: logger.debug("no client available")
+        return gp2Scale_dask_client
+
 
     def __getstate__(self):
         state = dict(

@@ -43,16 +43,36 @@ class GPMarginalDensity:
     def args(self):
         return self.data.args
 
-    def update_data(self, append):
+    @property
+    def x_data(self):
+        return self.data.x_data
+
+    @property
+    def y_data(self):
+        return self.data.y_data
+
+    @property
+    def K(self):
+        return self.prior.K
+
+    @property
+    def m(self):
+        return self.prior.m
+
+    @property
+    def V(self):
+        return self.likelihood.V
+
+    ##################################################################
+
+    def update_state_data(self, append):
         """Update the marginal PDF when the data has changed in data likelihood or prior objects"""
         logger.debug("Updating marginal density after new data was appended.")
         K, V, m = self._get_KVm()
-        if append:
-            self.KVinvY = self._update_KVinvY(K, V, m)
-        else:
-            self.KVinvY = self._set_KVinvY(K, V, m, self.KVlinalg.mode)
+        if append: self.KVinvY = self._update_KVinvY(K, V, m)
+        else: self.KVinvY = self._set_KVinvY(K, V, m, self.KVlinalg.mode)
 
-    def update_hyperparameters(self):
+    def update_state_hyperparameters(self):
         """Update the marginal PDF when if hyperparameters have changed"""
         logger.debug("Updating marginal density after new hyperparameters were appended.")
         K, V, m = self._get_KVm()
@@ -61,7 +81,7 @@ class GPMarginalDensity:
     ##################################################################
     def _update_KVinvY(self, K, V, m):
         """This updates KVinvY after new data was communicated"""
-        y_mean = self.data.y_data - m
+        y_mean = self.y_data - m
         KV = self._addKV(K, V)
         self.KVlinalg.update_KV(KV)
         KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY).reshape(len(y_mean))
@@ -69,7 +89,7 @@ class GPMarginalDensity:
 
     def _set_KVinvY(self, K, V, m, mode):
         """Set or reset KVinvY for new hyperparameters"""
-        y_mean = self.data.y_data - m
+        y_mean = self.y_data - m
         KV = self._addKV(K, V)
         logger.debug("K+V computed")
         self.KVlinalg.set_KV(KV, mode)
@@ -85,7 +105,7 @@ class GPMarginalDensity:
         This is only used by some posterior functions and in the log likelihood functions.
         This does not change the KV obj
         """
-        y_mean = self.data.y_data - m
+        y_mean = self.y_data - m
         if self.gp2Scale:
             raise Exception("Can't compute a new KVinvY")
             #mode = self._set_gp2Scale_mode(KV)
@@ -124,7 +144,7 @@ class GPMarginalDensity:
         This is only used by the training (the log likelihood)
         """
         KV = self._addKV(K, V)
-        y_mean = self.data.y_data - m
+        y_mean = self.y_data - m
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
             if mode == "sparseLU":
@@ -166,7 +186,7 @@ class GPMarginalDensity:
         return KVinvY.reshape(len(y_mean)), KVlogdet
 
     def _get_KVm(self):
-        return self.prior.K, self.likelihood.V, self.prior.m
+        return self.K, self.V, self.m
 
     @staticmethod
     def _addKV(K, V):
@@ -202,12 +222,12 @@ class GPMarginalDensity:
 
     ##################################################################################
     def _set_gp2Scale_mode(self, KV: object) -> str | list:
-        Ksparsity = float(KV.nnz) / float(len(self.data.x_data) ** 2)
+        Ksparsity = float(KV.nnz) / float(len(self.x_data) ** 2)
         if self.gp2Scale_linalg_mode is not None:
             return self.gp2Scale_linalg_mode
-        elif len(self.data.x_data) < 50001 and Ksparsity < 0.0001:
+        elif len(self.x_data) < 50001 and Ksparsity < 0.0001:
             mode = "sparseLU"
-        elif len(self.data.x_data) < 2001 and Ksparsity >= 0.0001:
+        elif len(self.x_data) < 2001 and Ksparsity >= 0.0001:
             mode = "Chol"
         else:
             mode = "sparseMINRES"
@@ -234,18 +254,18 @@ class GPMarginalDensity:
             KVlogdet = self.KVlinalg.logdet()
         else:
             st = time.time()
-            K = self.prior.compute_prior_covariance_matrix(self.data.x_data, hyperparameters)
+            K = self.prior.compute_prior_covariance_matrix(self.x_data, hyperparameters)
             logger.debug("   Prior covariance matrix computed after {} seconds.", time.time() - st)
-            V = self.likelihood.calculate_V(hyperparameters)
+            V = self.likelihood.calculate_V(self.x_data, hyperparameters)
             logger.debug("   V computed after {} seconds.", time.time() - st)
-            m = self.prior.compute_mean(self.data.x_data, hyperparameters)
+            m = self.prior.compute_mean(self.x_data, hyperparameters)
             logger.debug("   Prior mean computed after {} seconds.", time.time() - st)
             KVinvY, KVlogdet = self.compute_new_KVlogdet_KVinvY(K, V, m)
             logger.debug("   KVinvY and logdet computed after {} seconds.", time.time() - st)
 
-        n = len(self.data.y_data)
+        n = len(self.y_data)
 
-        return -(0.5 * ((self.data.y_data - m).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
+        return -(0.5 * ((self.y_data - m).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
 
     ##################################################################################
     def neg_log_likelihood(self, hyperparameters=None):
@@ -282,13 +302,13 @@ class GPMarginalDensity:
 
         if hyperparameters is None:
             KVinvY = self.KVinvY
-            K = self.prior.K
-            V = self.likelihood.V
+            K = self.K
+            V = self.V
             KV = self._addKV(K, V)
         else:
-            K = self.prior.compute_prior_covariance_matrix(self.data.x_data, hyperparameters)
-            V = self.likelihood.calculate_V(hyperparameters)
-            m = self.prior.compute_mean(self.data.x_data, hyperparameters)
+            K = self.prior.compute_prior_covariance_matrix(self.x_data, hyperparameters)
+            V = self.likelihood.calculate_V(self.x_data, hyperparameters)
+            m = self.prior.compute_mean(self.x_data, hyperparameters)
             KV = self._addKV(K, V)
             KVinvY = self.compute_new_KVinvY(KV, m)
 
@@ -297,13 +317,13 @@ class GPMarginalDensity:
         a = None
         if self.prior.ram_economy is False:
             try:
-                noise_der = self.likelihood.noise_function_grad(self.data.x_data, hyperparameters)
+                noise_der = self.likelihood.noise_function_grad(self.x_data, hyperparameters)
                 assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 3
                 if np.ndim(noise_der) == 2:
-                    noise_der_V = np.zeros((len(hyperparameters), len(self.data.x_data), len(self.data.x_data)))
+                    noise_der_V = np.zeros((len(hyperparameters), len(self.x_data), len(self.x_data)))
                     for i in range(len(hyperparameters)): np.fill_diagonal(noise_der_V[i], noise_der[i])
                 else: noise_der_V = noise_der
-                dK_dH = self.prior.dk_dh(self.data.x_data, self.data.x_data, hyperparameters) + noise_der_V
+                dK_dH = self.prior.dk_dh(self.x_data, self.x_data, hyperparameters) + noise_der_V
             except Exception as e:
                 raise Exception(
                     "The gradient evaluation dK/dh + dNoise/dh was not successful. "
@@ -315,7 +335,7 @@ class GPMarginalDensity:
         bbT = np.outer(b, b.T)
         dL_dH = np.zeros((len(hyperparameters)))
         dL_dHm = np.zeros((len(hyperparameters)))
-        dm_dh = self.prior.dm_dh(self.data.x_data, hyperparameters)
+        dm_dh = self.prior.dm_dh(self.x_data, hyperparameters)
 
         for i in range(len(hyperparameters)):
             dL_dHm[i] = -dm_dh[i].T @ b
@@ -323,14 +343,14 @@ class GPMarginalDensity:
                 matr = a[i]
             else:
                 try:
-                    noise_der = self.likelihood.noise_function_grad(self.data.x_data, i, hyperparameters)
+                    noise_der = self.likelihood.noise_function_grad(self.x_data, i, hyperparameters)
                     assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 1
                     if np.ndim(noise_der) == 1:
                         dK_dH = self.prior.dk_dh(
-                            self.data.x_data, self.data.x_data, i, hyperparameters) + np.diag(noise_der)
+                            self.x_data, self.x_data, i, hyperparameters) + np.diag(noise_der)
                     else:
                         dK_dH = self.prior.dk_dh(
-                            self.data.x_data, self.data.x_data, i, hyperparameters) + noise_der
+                            self.x_data, self.x_data, i, hyperparameters) + noise_der
                 except:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "

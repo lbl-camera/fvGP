@@ -6,28 +6,28 @@ from loguru import logger
 class GPlikelihood:
     def __init__(self,
                  data,
-                 hyperparameters=None,
+                 trainer,
                  noise_function=None,
                  noise_function_grad=None,
                  ram_economy=False,
                  gp2Scale=False,
                  ):
 
-        assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
         self.data = data
-        assert self.data.noise_variances is None or isinstance(self.data.noise_variances, np.ndarray)
+        self.trainer = trainer
+        assert self.noise_variances is None or isinstance(self.noise_variances, np.ndarray)
 
-        if isinstance(self.data.noise_variances, np.ndarray):
-            assert np.ndim(self.data.noise_variances) == 1
-            assert all(self.data.noise_variances > 0.0)
+        if isinstance(self.noise_variances, np.ndarray):
+            assert np.ndim(self.noise_variances) == 1
+            assert all(self.noise_variances > 0.0)
 
         self.gp2Scale = gp2Scale
 
-        if self.data.noise_variances is not None and callable(noise_function):
+        if self.noise_variances is not None and callable(noise_function):
             raise Exception("Noise function and measurement noise provided. Decide which one to use.")
         if callable(noise_function):
             self.noise_function = noise_function
-        elif self.data.noise_variances is not None:
+        elif self.noise_variances is not None:
             self.noise_function = self._measured_noise_function
         else:
             warnings.warn(
@@ -48,28 +48,47 @@ class GPlikelihood:
                 self.noise_function_grad = self._default_dnoise_dh_econ
             else:
                 self.noise_function_grad = self._default_dnoise_dh
-        self.V = self.noise_function(self.data.x_data, hyperparameters)
+        self.V = self.noise_function(self.x_data, self.hyperparameters)
 
     ##################################################################################
-    def update(self, hyperparameters):
-        logger.debug("Updating noise matrix V after new hyperparameters communicated.")
-        self.V = self.calculate_V(hyperparameters)
-
     @property
     def args(self):
         return self.data.args
 
-    def calculate_V(self, hyperparameters):
+    @property
+    def hyperparameters(self):
+        return self.trainer.hyperparameters
+
+    @property
+    def x_data(self):
+        return self.data.x_data
+
+    @property
+    def y_data(self):
+        return self.data.y_data
+
+    @property
+    def noise_variances(self):
+        return self.data.noise_variances
+
+    ##################################################################################
+    #functions available from outside the class
+    def update_state(self):
+        logger.debug("Updating noise matrix V after new hyperparameters communicated.")
+        self.V = self.calculate_V(self.x_data, self.hyperparameters)
+
+    def calculate_V(self, x_data, hyperparameters):
         logger.debug("Calculating V.")
-        noise = self.noise_function(self.data.x_data, hyperparameters)
+        noise = self.noise_function(x_data, hyperparameters)
         return noise
 
+    ##################################################################################
     def _default_noise_function(self, x, hyperparameters):
-        noise = np.ones((len(x))) * (np.mean(abs(self.data.y_data)) / 100.0)**2
+        noise = np.ones((len(x))) * (np.mean(abs(self.y_data)) / 100.0)**2
         return noise
 
     def _measured_noise_function(self, x, hyperparameters):
-        if len(x) == len(self.data.noise_variances): return self.data.noise_variances
+        if len(x) == len(self.noise_variances): return self.noise_variances
         else: return np.zeros((len(x))) + 0.0000001
 
     @staticmethod
@@ -109,9 +128,10 @@ class GPlikelihood:
     def __getstate__(self):
         state = dict(
             data=self.data,
+            trainer=self.trainer,
             gp2Scale=self.gp2Scale,
-            noise_function=self.noise_function,
             V=self.V,
+            noise_function=self.noise_function,
             noise_function_grad=self.noise_function_grad,
             )
         return state
