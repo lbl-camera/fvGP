@@ -9,6 +9,7 @@ from scipy.sparse import block_array
 import time
 from loguru import logger
 from scipy.sparse import coo_matrix, vstack
+import inspect
 
 
 class GPprior:
@@ -64,26 +65,29 @@ class GPprior:
         # kernel
         if callable(kernel):
             self.kernel = kernel
+            k_n_params = len(inspect.signature(kernel).parameters)
         elif kernel is None:
             self.kernel = self._default_kernel
         else:
             raise Exception("No valid kernel function specified")
         self.d_kernel_dx = self._d_kernel_dx
         if callable(kernel_grad):
-            self.dk_dh = kernel_grad
+            self._dk_dh = kernel_grad
         else:
             if self.ram_economy is True:
-                self.dk_dh = self._kernel_derivative
+                self._dk_dh = self._kernel_derivative
             else:
-                self.dk_dh = self._kernel_gradient
+                self._dk_dh = self._kernel_gradient
 
         # prior-mean
-        if callable(prior_mean_function): self.mean_function = prior_mean_function
+        if callable(prior_mean_function):
+            self.mean_function = prior_mean_function
+            m_n_params = len(inspect.signature(prior_mean_function).parameters)
         else: self.mean_function = self._default_mean_function
 
-        if callable(prior_mean_function_grad): self.dm_dh = prior_mean_function_grad
-        elif callable(prior_mean_function): self.dm_dh = self._finitediff_dm_dh
-        else: self.dm_dh = self._default_dm_dh
+        if callable(prior_mean_function_grad): self._dm_dh = prior_mean_function_grad
+        elif callable(prior_mean_function): self._dm_dh = self._finitediff_dm_dh
+        else: self._dm_dh = self._default_dm_dh
 
         self.m, self.K = self._compute_prior(data.x_data, self.hyperparameters)
         logger.debug("Prior successfully initialized.")
@@ -124,13 +128,25 @@ class GPprior:
         if self.gp2Scale:
             K = self._compute_prior_covariance_gp2Scale(x, hyperparameters)
         else:
-            K = self.kernel(x, x, hyperparameters)
+            K = self.compute_covariances(x, x, hyperparameters)
         return K
 
-    def compute_mean(self, x_data, hyperparameters):
+    def compute_covariances(self, x1, x2, hps):
+        return self.kernel(x1, x2, hps)
+
+    def compute_mean(self, x, hyperparameters):
         """computes the covariance matrix from the kernel"""
-        m = self.mean_function(x_data, hyperparameters)
+        m = self.mean_function(x, hyperparameters)
         return m
+
+    def dk_dh(self, x1, x2, hyperparameters, direction=None):
+        #if direction is None: return self._dk_dh(x1, x2, hyperparameters)
+        #else: return self._dk_dh(x1, x2, direction, hyperparameters)
+        if self.ram_economy: return self._dk_dh(x1, x2, direction, hyperparameters)
+        else: return self._dk_dh(x1, x2, hyperparameters)
+
+    def dm_dh(self, x_data, hyperparameters):
+        return self._dm_dh(x_data, hyperparameters)
     #END: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS
     #################################################################
 
@@ -154,8 +170,8 @@ class GPprior:
         if self.gp2Scale:
             K = self._update_prior_covariance_gp2Scale(x_old, x_new, hyperparameters)
         else:
-            k = self.kernel(x_old, x_new, hyperparameters)
-            kk = self.kernel(x_new, x_new, hyperparameters)
+            k = self.compute_covariances(x_old, x_new, hyperparameters)
+            kk = self.compute_covariances(x_new, x_new, hyperparameters)
             K = np.block([
                 [self.K, k],
                 [k.T, kk]
@@ -163,8 +179,8 @@ class GPprior:
         return K
 
     def _update_mean(self, x_new, hyperparameters):
-        if np.ndim(self.m) == 1: m = np.append(self.m, self.mean_function(x_new, hyperparameters))
-        elif np.ndim(self.m) == 2: m = np.vstack([self.m, self.mean_function(x_new, hyperparameters)])
+        if np.ndim(self.m) == 1: m = np.append(self.m, self.compute_mean(x_new, hyperparameters))
+        elif np.ndim(self.m) == 2: m = np.vstack([self.m, self.compute_mean(x_new, hyperparameters)])
         else: raise Exception("Prior mean in wrong format")
         return m
 
@@ -336,8 +352,8 @@ class GPprior:
         new_points = np.array(points1)
         epsilon = 1e-8
         new_points[:, direction] += epsilon
-        a = self.kernel(new_points, points2, hyperparameters)
-        b = self.kernel(points1, points2, hyperparameters)
+        a = self.compute_covariances(new_points, points2, hyperparameters)
+        b = self.compute_covariances(points1, points2, hyperparameters)
         derivative = (a - b) / epsilon
         return derivative
 
@@ -358,8 +374,8 @@ class GPprior:
         epsilon = 1e-8
         new_hyperparameters1[direction] += epsilon
         new_hyperparameters2[direction] -= epsilon
-        a = self.kernel(points1, points2, new_hyperparameters1)
-        b = self.kernel(points1, points2, new_hyperparameters2)
+        a = self.compute_covariances(points1, points2, new_hyperparameters1)
+        b = self.compute_covariances(points1, points2, new_hyperparameters2)
         derivative = (a - b) / (2.0 * epsilon)
         return derivative
 
@@ -381,8 +397,8 @@ class GPprior:
             temp_hps1[i] = temp_hps1[i] + 1e-6
             temp_hps2 = np.array(hps)
             temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.mean_function(x, temp_hps1)
-            b = self.mean_function(x, temp_hps2)
+            a = self.compute_mean(x, temp_hps1)
+            b = self.compute_mean(x, temp_hps2)
             gr[i] = (a - b) / 2e-6
         return gr
 
@@ -403,9 +419,9 @@ class GPprior:
             trainer=self.trainer,
             kernel=self.kernel,
             d_kernel_dx=self.d_kernel_dx,
-            dk_dh=self.dk_dh,
+            _dk_dh=self._dk_dh,
             mean_function=self.mean_function,
-            dm_dh=self.dm_dh,
+            _dm_dh=self._dm_dh,
             m=self.m,
             K=self.K,
         )

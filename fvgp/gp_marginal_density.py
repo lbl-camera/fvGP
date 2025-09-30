@@ -114,8 +114,8 @@ class GPMarginalDensity:
             #    KVinvY = calculate_LU_solve(LU_factor, y_mean, args=self.args)
             #elif mode == "Chol":
             #    if issparse(KV): KV = KV.toarray()
-            #    Chol_factor = calculate_Chol_factor(KV, args=self.args)
-            #    KVinvY = calculate_Chol_solve(Chol_factor, y_mean, args=self.args)
+            #    Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
+            #    KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
             #elif mode == "sparseCG":
             #    KVinvY = calculate_sparse_conj_grad(KV, y_mean, args=self.args)
             #elif mode == "sparseMINRES":
@@ -134,8 +134,8 @@ class GPMarginalDensity:
             #else:
             #    raise Exception("No mode in gp2Scale", mode)
         else:
-            Chol_factor = calculate_Chol_factor(KV, args=self.args)
-            KVinvY = calculate_Chol_solve(Chol_factor, y_mean, args=self.args)
+            Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
+            KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
         return KVinvY.reshape(y_mean.shape)
 
     def compute_new_KVlogdet_KVinvY(self, K, V, m):
@@ -153,9 +153,9 @@ class GPMarginalDensity:
                 KVlogdet = calculate_LU_logdet(LU_factor, args=self.args)
             elif mode == "Chol":
                 if issparse(KV): KV = KV.toarray()
-                Chol_factor = calculate_Chol_factor(KV, args=self.args)
-                KVinvY = calculate_Chol_solve(Chol_factor, y_mean, args=self.args)
-                KVlogdet = calculate_Chol_logdet(Chol_factor, args=self.args)
+                Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
+                KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
+                KVlogdet = calculate_Chol_logdet(Chol_factor, compute_device=self.compute_device, args=self.args)
             elif mode == "sparseCG":
                 KVinvY = calculate_sparse_conj_grad(KV, y_mean, args=self.args)
                 KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
@@ -180,9 +180,9 @@ class GPMarginalDensity:
             else:
                 raise Exception("No mode in gp2Scale", mode)
         else:
-            Chol_factor = calculate_Chol_factor(KV, args=self.args)
-            KVinvY = calculate_Chol_solve(Chol_factor, y_mean, args=self.args)
-            KVlogdet = calculate_Chol_logdet(Chol_factor, args=self.args)
+            Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
+            KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
+            KVlogdet = calculate_Chol_logdet(Chol_factor, compute_device=self.compute_device, args=self.args)
         return KVinvY.reshape(len(y_mean)), KVlogdet
 
     def _get_KVm(self):
@@ -347,10 +347,10 @@ class GPMarginalDensity:
                     assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 1
                     if np.ndim(noise_der) == 1:
                         dK_dH = self.prior.dk_dh(
-                            self.x_data, self.x_data, i, hyperparameters) + np.diag(noise_der)
+                            self.x_data, self.x_data, hyperparameters, direction = i) + np.diag(noise_der)
                     else:
                         dK_dH = self.prior.dk_dh(
-                            self.x_data, self.x_data, i, hyperparameters) + noise_der
+                            self.x_data, self.x_data, hyperparameters, direction = i) + noise_der
                 except:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "
@@ -445,11 +445,11 @@ class KVlinalg:
         assert self.mode is not None
         if self.mode == "Chol":
             if issparse(KV): KV = KV.toarray()
-            self.Chol_factor = calculate_Chol_factor(KV, args=self.args)
+            self.Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv":
             if issparse(KV): KV = KV.toarray()
-            self.Chol_factor = calculate_Chol_factor(KV, args=self.args)
-            self.KVinv = calculate_inv_from_chol(self.Chol_factor, args=self.args)
+            self.Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
+            self.KVinv = calculate_inv_from_chol(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "Inv":
             self.KV = KV
             self.KVinv = calculate_inv(KV, compute_device=self.compute_device, args=self.args)
@@ -474,18 +474,18 @@ class KVlinalg:
         if self.mode == "Chol":
             if issparse(KV): KV = KV.toarray()
             if len(KV) <= len(self.Chol_factor):
-                res = calculate_Chol_factor(KV, args=self.args)
+                res = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
             else:
                 res = update_Chol_factor(self.Chol_factor, KV, args=self.args)
             self.Chol_factor = res
         elif self.mode == "CholInv":
             if issparse(KV): KV = KV.toarray()
             if len(KV) <= len(self.Chol_factor):
-                res = calculate_Chol_factor(KV, args=self.args)
+                res = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
             else:
                 res = update_Chol_factor(self.Chol_factor, KV, args=self.args)
             self.Chol_factor = res
-            self.KVinv = calculate_inv_from_chol(self.Chol_factor, args=self.args)
+            self.KVinv = calculate_inv_from_chol(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "Inv":
             self.KV = KV
             if len(KV) <= len(self.KVinv):
@@ -511,9 +511,9 @@ class KVlinalg:
 
     def solve(self, b, x0=None):
         if self.mode == "Chol":
-            return calculate_Chol_solve(self.Chol_factor, b, args=self.args)
+            return calculate_Chol_solve(self.Chol_factor, b, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv":
-            return calculate_Chol_solve(self.Chol_factor, b, args=self.args)
+            return calculate_Chol_solve(self.Chol_factor, b, compute_device=self.compute_device, args=self.args)
         elif self.mode == "Inv":
             return self.KVinv @ b
         elif self.mode == "sparseCG":
@@ -536,8 +536,8 @@ class KVlinalg:
             raise Exception("No Mode. Choose from: ", self.allowed_modes)
 
     def logdet(self):
-        if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor, args=self.args)
-        elif self.mode == "CholInv": return calculate_Chol_logdet(self.Chol_factor, args=self.args)
+        if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
+        elif self.mode == "CholInv": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "sparseLU": return calculate_LU_logdet(self.LU_factor, args=self.args)
         elif self.mode == "Inv": return calculate_logdet(self.KV, args=self.args)
         elif self.mode == "sparseCG": return calculate_random_logdet(self.KV, self.compute_device, args=self.args)
