@@ -137,7 +137,7 @@ class GPposterior:
                 v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T,
                                             self.marginal_density.KVlinalg.KVinv, k, optimize=True)
             else:
-                S = kk - (k.T @ self.marginal_density.KVlinalg.KVinv @ k)
+                S = kk - (k.T @ self.marginal_density.KVlinalg.solve(k))
                 v = np.array(np.diag(S))
         else:
             k_cov_prod = self.marginal_density.KVlinalg.solve(k)

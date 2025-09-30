@@ -489,10 +489,8 @@ def solve(A, b, compute_device='cpu', args=None):
         raise Exception("No valid solve method specified")
 
 
-def mat_mul(A, B, compute_device="cpu", args=None):
-    assert isinstance(A, np.ndarray)
-    assert isinstance(B, np.ndarray)
-    if np.ndim(B) == 1: B = B.reshape(len(B), 1)
+def matmul(A, B, compute_device="cpu", args=None):
+    if sparse.issparse(A) or sparse.issparse(B): compute_device = "cpu"
     logger.debug("matrix multiplication")
     if compute_device == "cpu":
         res = A @ B
@@ -513,11 +511,11 @@ def mat_mul(A, B, compute_device="cpu", args=None):
         else: res = None
     else:
         raise Exception("NO valid compute device found. ")
-    assert np.ndim(res) == 2
     return res
 
 
-def mat_mul3(A, B, C, compute_device="cpu", args=None):
+def matmul3(A, B, C, compute_device="cpu", args=None):
+    if sparse.issparse(A) or sparse.issparse(B) or sparse.issparse(C): compute_device = "cpu"
     assert isinstance(A, np.ndarray)
     assert isinstance(B, np.ndarray)
     assert isinstance(C, np.ndarray)
@@ -544,7 +542,6 @@ def mat_mul3(A, B, C, compute_device="cpu", args=None):
         else: res = None
     else:
         raise Exception("NO valid compute device found. ")
-    assert np.ndim(res) == 2
     return res
 
 

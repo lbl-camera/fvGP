@@ -515,6 +515,7 @@ class KVlinalg:
         elif self.mode == "CholInv":
             return calculate_Chol_solve(self.Chol_factor, b, compute_device=self.compute_device, args=self.args)
         elif self.mode == "Inv":
+            #return matmul(self.KVinv, b, compute_device=self.compute_device) #is this really faster?
             return self.KVinv @ b
         elif self.mode == "sparseCG":
             return calculate_sparse_conj_grad(self.KV, b, x0=x0, args=self.args)
