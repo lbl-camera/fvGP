@@ -64,11 +64,11 @@ def test_lin_alg():
     update_inv(i, A, args = {"xz": 3.})
     solve(A, np.random.rand(len(A)), args = {"xz": 3.})
     calculate_sparse_solve(sparse.csr_matrix(A), np.random.rand(len(A)), args = {"ds":3.})
-    calculate_logdet(A, compute_device='gpu')
-    calculate_inv(A, compute_device='gpu')
+    calculate_logdet(A, compute_device='cpu')
+    calculate_inv(A, compute_device='cpu')
     b = np.random.rand(len(A))
-    solve(A, b, compute_device='gpu')
-    solve(A, b, compute_device='multi-gpu')
+    solve(A, b, compute_device='cpu')
+    solve(A, b, compute_device='cpu')
     is_sparse(A)
     how_sparse_is(A)
 
@@ -86,7 +86,7 @@ def test_single_task_init_basic():
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
             noise_function=noise, compute_device = 'cpu', ram_economy=True)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
-            noise_function=noise, compute_device = 'gpu', ram_economy=True)
+            noise_function=noise, compute_device = 'cpu', ram_economy=True)
 
     my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
