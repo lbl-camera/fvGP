@@ -12,7 +12,8 @@ from scipy import sparse
 import importlib
 
 
-def get_gpu_engine():
+def get_gpu_engine(args):
+    if "GPU_engine" in args: return args["GPU_engine"]
     if importlib.util.find_spec("torch"): return "torch"
     elif importlib.util.find_spec("cupy"): return "cupy"
     else: return None
@@ -50,7 +51,7 @@ def calculate_Chol_factor(M, compute_device="cpu", args=None):
         c, l = cho_factor(M, lower=True)
         c = np.tril(c)
     elif compute_device == "gpu":
-        engine = get_gpu_engine()
+        engine = get_gpu_engine(args)
         if engine == "torch":
             import torch
             A = torch.tensor(M, device="cuda:0", dtype=torch.float32)
@@ -87,7 +88,7 @@ def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
     if compute_device == "cpu":
         res = cho_solve((factor, True), vec)
     elif compute_device == "gpu":
-        engine = get_gpu_engine()
+        engine = get_gpu_engine(args)
         if engine == "torch":
             import torch
             # Move to GPU
@@ -118,7 +119,7 @@ def calculate_Chol_logdet(factor, compute_device="cpu", args=None):
         upper_diag = abs(factor.diagonal())
         logdet = 2.0 * np.sum(np.log(upper_diag))
     elif compute_device == "gpu":
-        engine = get_gpu_engine()
+        engine = get_gpu_engine(args)
         if engine == "torch":
             import torch
             L = torch.tensor(factor, device="cuda", dtype=torch.float32)
@@ -250,7 +251,7 @@ def cholesky_update_rank_1(L, b, c, compute_device="cpu", args=None):
     """
     if compute_device == "cpu": L_prime = cholesky_update_rank_1_numpy(L, b, c)
     elif compute_device == "gpu":
-        engine = get_gpu_engine()
+        engine = get_gpu_engine(args)
         if engine == "torch":
             L_prime = cholesky_update_rank_1_torch(L, b, c)
         elif engine == "cupy":
@@ -501,7 +502,7 @@ def matmul(A, B, compute_device="cpu", args=None):
     if compute_device == "cpu":
         res = A @ B
     elif compute_device == "gpu":
-        engine = get_gpu_engine()
+        engine = get_gpu_engine(args)
         if engine == "torch":
             import torch
             A = torch.tensor(A, device="cuda", dtype=torch.float32)
@@ -530,7 +531,7 @@ def matmul3(A, B, C, compute_device="cpu", args=None):
     if compute_device == "cpu":
         res = A @ B @ C
     elif compute_device == "gpu":
-        engine = get_gpu_engine()
+        engine = get_gpu_engine(args)
         if engine == "torch":
             import torch
             A = torch.tensor(A, device="cuda", dtype=torch.float32)

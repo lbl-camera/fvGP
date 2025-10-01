@@ -185,6 +185,7 @@ class GP:
         - "update_Chol_factor_compute_device": str; default = "cpu"/"gpu"
         - "Chol_solve_compute_device" : str; default = "cpu"/"gpu"
         - "Chol_logdet_compute_device" : str; default = "cpu"/"gpu"
+        - "GPU_engine" : str; default = "torch"/"cupy"
 
         All other keys will be stored and are available as part of the object instance.
 
