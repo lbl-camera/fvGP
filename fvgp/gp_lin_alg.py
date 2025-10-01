@@ -44,8 +44,9 @@ def calculate_LU_logdet(LU, args=None):
 
 def calculate_Chol_factor(M, compute_device="cpu", args=None):
     assert isinstance(M, np.ndarray)
-    if compute_device=="cpu":
-        logger.debug("calculate_Chol_factor")
+    if "Chol_factor_compute_device" in args: compute_device = args["Chol_factor_compute_device"]
+    logger.debug(f"calculate_Chol_factor on {compute_device}")
+    if compute_device == "cpu":
         c, l = cho_factor(M, lower=True)
         c = np.tril(c)
     elif compute_device == "gpu":
@@ -62,24 +63,27 @@ def calculate_Chol_factor(M, compute_device="cpu", args=None):
             c = cp.asnumpy(L)
         else: c = None
     else:
-        raise Exception("NO valid compute device found. ")
+        raise Exception("No valid compute device found. ")
     return c
 
 
-def update_Chol_factor(old_chol_factor, new_matrix, args=None):
+def update_Chol_factor(old_chol_factor, new_matrix, compute_device="cpu", args=None):
     assert isinstance(new_matrix, np.ndarray)
-    logger.debug("update_Chol_factor")
+    compute_device = "cpu"
+    if "update_Chol_factor_compute_device" in args: compute_device = args["update_Chol_factor_compute_device"]
+    logger.debug(f"update_Chol_factor on {compute_device}")
     size = len(old_chol_factor)
     KV = new_matrix
     kk = KV[size:, size:]
     k = KV[size:, 0:size]
-    return cholesky_update_rank_n(old_chol_factor, k.T, kk)
+    return cholesky_update_rank_n(old_chol_factor, k.T, kk, compute_device=compute_device)
 
 
 def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
     assert isinstance(vec, np.ndarray)
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
-    logger.debug("calculate_Chol_solve")
+    if "Chol_solve_compute_device" in args: compute_device = args["Chol_solve_compute_device"]
+    logger.debug(f"calculate_Chol_solve on {compute_device}")
     if compute_device == "cpu":
         res = cho_solve((factor, True), vec)
     elif compute_device == "gpu":
@@ -108,7 +112,8 @@ def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
 
 
 def calculate_Chol_logdet(factor, compute_device="cpu", args=None):
-    logger.debug("calculate_Chol_logdet")
+    if "Chol_logdet_compute_device" in args: compute_device = args["Chol_logdet_compute_device"]
+    logger.debug(f"calculate_Chol_logdet on {compute_device}")
     if compute_device == "cpu":
         upper_diag = abs(factor.diagonal())
         logdet = 2.0 * np.sum(np.log(upper_diag))
@@ -169,6 +174,7 @@ def calculate_random_logdet(KV, compute_device, args=None):
     if "random_logdet_error_rtol" in args: error_rtol = args["random_logdet_error_rtol"]
     if "random_logdet_verbose" in args: verbose = args["random_logdet_verbose"]
     if "random_logdet_print_info" in args: print_info = args["random_logdet_print_info"]
+    if "random_logdet_lanczos_compute_device" in args: lanczos_degree = args["random_logdet_lanczos_compute_device"]
 
     logdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=10, max_num_samples=5000,
                                     lanczos_degree=lanczos_degree, error_rtol=error_rtol, gpu=gpu,
@@ -301,7 +307,7 @@ def cholesky_update_rank_1_torch(L, b, c):
     L = torch.tensor(L, device="cuda", dtype=torch.float32)
     b = torch.tensor(b, device="cuda", dtype=torch.float32)
 
-    v = torch.linalg.solve_triangular(L, b, upper=False)
+    v = torch.linalg.solve_triangular(L, b.unsqueeze(1), upper=False).squeeze(1)
 
     # Compute d = sqrt(c - v^T v)
     d = torch.sqrt(c - torch.dot(v, v))
@@ -335,7 +341,7 @@ def cholesky_update_rank_1_cupy(L, b, c):
     L = cp.array(L)
     b = cp.array(b)
     # Solve L v = b
-    v = cp.linalg.solve_triangular(L, b, lower=True)
+    v = cp.linalg.solve_triangular(L, b[:, None], lower=True).squeeze(1)
 
     # Compute d
     d = cp.sqrt(c - cp.dot(v, v))
@@ -351,11 +357,11 @@ def cholesky_update_rank_1_cupy(L, b, c):
     return cp.asnumpy(L_prime)
 
 
-def cholesky_update_rank_n(L, b, c, args=None):
+def cholesky_update_rank_n(L, b, c, compute_device="cpu", args=None):
     # Solve Lv = b for v
     L_prime = L.copy()
     for i in range(b.shape[1]):
-        L_prime = cholesky_update_rank_1(L_prime, np.append(b[:, i], c[0:i, i]), c[i, i])
+        L_prime = cholesky_update_rank_1(L_prime, np.append(b[:, i], c[0:i, i]), c[i, i], compute_device=compute_device)
     return L_prime
 
 
@@ -447,9 +453,9 @@ def solve(A, b, compute_device='cpu', args=None):
     elif compute_device == "gpu" or A.ndim < 3:
         try:
             import torch
-            A = torch.from_numpy(A).cuda()
-            b = torch.from_numpy(b).cuda()
-            x = torch.linalg.solve(A, b)
+            At = torch.from_numpy(A).cuda()
+            bt = torch.from_numpy(b).cuda()
+            x = torch.linalg.solve(At, bt)
             return x.cpu().numpy()
         except Exception as e:
             warnings.warn(
@@ -520,7 +526,7 @@ def matmul3(A, B, C, compute_device="cpu", args=None):
     assert isinstance(B, np.ndarray)
     assert isinstance(C, np.ndarray)
 
-    logger.debug("matrix multiplication")
+    logger.debug("matrix multiplication on", compute_device)
     if compute_device == "cpu":
         res = A @ B @ C
     elif compute_device == "gpu":

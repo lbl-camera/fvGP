@@ -2,6 +2,7 @@ import numpy as np
 from .kernels import *
 import dask.distributed as distributed
 import warnings
+warnings.simplefilter("once", UserWarning)
 import itertools
 from functools import partial
 import scipy.sparse as sparse
@@ -20,18 +21,12 @@ class GPprior:
                  prior_mean_function=None,
                  kernel_grad=None,
                  prior_mean_function_grad=None,
-                 ram_economy=False,
-                 compute_device='cpu',
-                 gp2Scale=False,
                  gp2Scale_dask_client=None,
                  gp2Scale_batch_size=10000,
                  ):
 
-        self.Euclidean = data.Euclidean
         self.kernel_function = kernel
         self.prior_mean_function = prior_mean_function
-        self.ram_economy = ram_economy
-        self.gp2Scale = gp2Scale
         self.client = gp2Scale_dask_client
         self.batch_size = gp2Scale_batch_size
         self.data = data
@@ -46,15 +41,15 @@ class GPprior:
             raise Exception(
                 "For GPs on non-Euclidean input spaces you need a user-defined kernel and initial hyperparameters.")
 
-        if gp2Scale:
+        if self.gp2Scale:
             if not callable(kernel):
                 warnings.warn("You have chosen to activate gp2Scale. A powerful tool!"
                               "But you have not supplied a kernel that is compactly supported."
                               "I will use an anisotropic Wendland kernel for now.",
                               stacklevel=2)
-                if compute_device == "cpu":
+                if self.compute_device == "cpu":
                     kernel = wendland_anisotropic_gp2Scale_cpu
-                elif compute_device == "gpu":
+                elif self.compute_device == "gpu":
                     kernel = wendland_anisotropic_gp2Scale_gpu
             if self.client is not None:
                 worker_info = list(self.client.scheduler_info()["workers"].keys())
@@ -108,6 +103,22 @@ class GPprior:
     @property
     def y_data(self):
         return self.data.y_data
+
+    @property
+    def ram_economy(self):
+        return self.data.ram_economy
+
+    @property
+    def gp2Scale(self):
+        return self.data.gp2Scale
+
+    @property
+    def Euclidean(self):
+        return self.data.Euclidean
+
+    @property
+    def compute_device(self):
+        return self.data.compute_device
 
     ################################################################
     #START: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS
@@ -364,7 +375,6 @@ class GPprior:
         return gradient
 
     def _kernel_derivative(self, points1, points2, direction, hyperparameters):
-        # gradient = np.empty((len(hyperparameters), len(points1),len(points2)))
         derivative = self._dkernel_dh(points1, points2, direction, hyperparameters)
         return derivative
 
@@ -385,8 +395,8 @@ class GPprior:
             mean = np.zeros((len(x)))
             mean[:] = np.mean(self.y_data)
         elif np.ndim(self.y_data) == 2:
-            mean = np.zeros((len(x),self.data.shape[1]))
-            for i in range(mean.shape[1]): mean[:,i] = np.mean(self.y_data, axis=0)
+            mean = np.zeros((len(x), self.y_data.shape[1]))
+            for i in range(mean.shape[1]): mean[:,i] = np.mean(self.y_data[:,i])
         else: raise Exception("Wrong dim in default mean function")
         return mean
 
@@ -409,11 +419,8 @@ class GPprior:
 
     def __getstate__(self):
         state = dict(
-            Euclidean=self.Euclidean,
             kernel_function=self.kernel_function,
             prior_mean_function=self.prior_mean_function,
-            ram_economy=self.ram_economy,
-            gp2Scale=self.gp2Scale,
             batch_size=self.batch_size,
             data=self.data,
             trainer=self.trainer,

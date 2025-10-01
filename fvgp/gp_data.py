@@ -3,7 +3,13 @@ import warnings
 
 
 class GPdata:
-    def __init__(self, x_data, y_data, args=None, noise_variances=None):
+    def __init__(self, x_data, y_data,
+                 args=None,
+                 noise_variances=None,
+                 ram_economy=False,
+                 gp2Scale=False,
+                 compute_device="cpu",
+                 calc_inv="False"):
         # make sure the inputs are in the right format
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
         assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2)
@@ -18,7 +24,7 @@ class GPdata:
             self.input_set_dim = len(x_data[0])
             self.Euclidean = True
         if isinstance(x_data, list):
-            self.index_set_dim = 1  #in non-Euclidean spaces there is no notion of dimensionality
+            self.index_set_dim = 1
             self.input_set_dim = 1
             self.Euclidean = False
 
@@ -32,6 +38,13 @@ class GPdata:
         self.fvgp_noise_variances = None
         self.x_out = None
         self.args = args
+        self.ram_economy = ram_economy
+        self.gp2Scale = gp2Scale
+        self.compute_device = compute_device
+        self.calc_inv = calc_inv
+        if self.gp2Scale and self.calc_inv:
+            self.calc_inv = False
+            warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False.")
 
     def set_fvgp_data(self, fvgp_x_data, fvgp_y_data, fvgp_noise_variances, x_out):
         self.fvgp_x_data = fvgp_x_data
@@ -92,7 +105,11 @@ class GPdata:
             fvgp_noise_variances=self.fvgp_noise_variances,
             x_out=self.x_out,
             input_set_dim=self.input_set_dim,
-            args=self.args
+            args=self.args,
+            ram_economy=self.ram_economy,
+            gp2Scale=self.gp2Scale,
+            compute_device=self.compute_device,
+            calc_inv=self.calc_inv,
             )
         return state
 

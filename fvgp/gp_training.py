@@ -1,4 +1,6 @@
 import warnings
+warnings.simplefilter("once", UserWarning)
+
 from loguru import logger
 import numpy as np
 from scipy.optimize import differential_evolution
@@ -8,15 +10,18 @@ from scipy.optimize import minimize
 
 
 class GPtraining:
-    def __init__(self, data, hyperparameters, gp2Scale=False):
+    def __init__(self, data, hyperparameters):
         self.mcmc_info = None
-        self.gp2Scale = gp2Scale
         self.data = data
         self.hyperparameters = hyperparameters
 
     @property
     def args(self):
         return self.data.args
+
+    @property
+    def gp2Scale(self):
+        return self.data.gp2Scale
 
     def train(self,
               objective_function=None,
@@ -109,7 +114,7 @@ class GPtraining:
             logger.debug("fvGP successfully cancelled the current training.")
         except:
             warnings.warn("No asynchronous training to be cancelled in fvGP, \
-            no training is running.", stacklevel=2)
+            no training is running.", UserWarning, stacklevel=2)
 
     ###################################################################################
     @staticmethod
@@ -127,7 +132,7 @@ class GPtraining:
             opt_obj.kill_client()
             logger.debug("fvGP successfully killed the training.")
         except:
-            warnings.warn("No asynchronous training to be killed, no training is running.", stacklevel=2)
+            warnings.warn("No asynchronous training to be killed, no training is running.", UserWarning, stacklevel=2)
 
     def update_hyperparameters(self, opt_obj):
         """
@@ -146,17 +151,21 @@ class GPtraining:
         ------
         The current hyperparameters : np.ndarray
         """
-
-        try:
-            updated_hyperparameters = opt_obj.get_latest()[0]["x"]
-            assert isinstance(updated_hyperparameters, np.ndarray) and np.ndim(updated_hyperparameters) == 1
-            self.hyperparameters = updated_hyperparameters
+        try: opt_list = opt_obj.get_latest()
         except Exception as err:
             logger.debug("      The optimizer object could not be queried")
             logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
-            warnings.warn("     Hyperparameter update failed with ERROR: " + str(err))
-            updated_hyperparameters = None
-        return updated_hyperparameters
+            logger.info("       Hyperparameter update failed with ERROR: " + str(err))
+            return self.hyperparameters
+        if len(opt_list) == 0:
+            logger.debug("      The list of optima had len=0., No update.")
+            warnings.warn("Hyperparameter update not successful len(optima list) = 0", UserWarning, stacklevel=2)
+            return self.hyperparameters
+        else:
+            updated_hyperparameters = opt_obj.get_latest()[0]["x"]
+            assert isinstance(updated_hyperparameters, np.ndarray) and np.ndim(updated_hyperparameters) == 1
+            self.hyperparameters = updated_hyperparameters
+            return updated_hyperparameters
 
     def _optimize_log_likelihood_async(self,
                                        objective_function,
@@ -305,7 +314,6 @@ class GPtraining:
         state = dict(
             data=self.data,
             mcmc_info=self.mcmc_info,
-            gp2Scale=self.gp2Scale,
             hyperparameters=self.hyperparameters
             )
         return state

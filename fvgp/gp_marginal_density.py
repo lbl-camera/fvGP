@@ -13,23 +13,14 @@ class GPMarginalDensity:
                  data,
                  prior,
                  likelihood,
-                 calc_inv=False,
-                 gp2Scale=False,
-                 gp2Scale_linalg_mode=None,
-                 compute_device='cpu'):
+                 gp2Scale_linalg_mode=None):
 
         self.data = data
         self.prior = prior
         self.likelihood = likelihood
-        self.calc_inv = calc_inv
-        self.gp2Scale = gp2Scale
-        self.compute_device = compute_device
         self.gp2Scale_linalg_mode = gp2Scale_linalg_mode
 
-        if self.gp2Scale and self.calc_inv:
-            self.calc_inv = False
-            warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False.")
-        self.KVlinalg = KVlinalg(compute_device, self.args)
+        self.KVlinalg = KVlinalg(self.compute_device, self.args)
         K, V, m = self._get_KVm()
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(K)
@@ -62,6 +53,41 @@ class GPMarginalDensity:
     @property
     def V(self):
         return self.likelihood.V
+
+    @property
+    def ram_economy(self):
+        return self.data.ram_economy
+
+    @property
+    def gp2Scale(self):
+        return self.data.gp2Scale
+
+    @property
+    def compute_device(self):
+        return self.data.compute_device
+
+    @property
+    def calc_inv(self):
+        return self.data.calc_inv
+
+    ##################################################################
+    def compute_prior_covariance_matrix(self, x_data, hyperparameters):
+        return self.prior.compute_prior_covariance_matrix(x_data, hyperparameters)
+
+    def compute_mean(self, x_data, hyperparameters):
+        return self.prior.compute_mean(x_data, hyperparameters)
+
+    def dk_dh(self, x1, x2, hyperparameters, direction=None):
+        return self.prior.dk_dh(x1, x2, hyperparameters, direction=direction)
+
+    def dm_dh(self, x, hyperparameters):
+        return self.prior.dm_dh(x, hyperparameters)
+
+    def calculate_V(self, x, hyperparameters):
+        return self.likelihood.calculate_V(x, hyperparameters)
+
+    def calculate_V_grad(self, x, hyperparameters, direction=None):
+        return self.likelihood.calculate_V_grad(x, hyperparameters, direction = direction)
 
     ##################################################################
 
@@ -254,11 +280,11 @@ class GPMarginalDensity:
             KVlogdet = self.KVlinalg.logdet()
         else:
             st = time.time()
-            K = self.prior.compute_prior_covariance_matrix(self.x_data, hyperparameters)
+            K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
             logger.debug("   Prior covariance matrix computed after {} seconds.", time.time() - st)
-            V = self.likelihood.calculate_V(self.x_data, hyperparameters)
+            V = self.calculate_V(self.x_data, hyperparameters)
             logger.debug("   V computed after {} seconds.", time.time() - st)
-            m = self.prior.compute_mean(self.x_data, hyperparameters)
+            m = self.compute_mean(self.x_data, hyperparameters)
             logger.debug("   Prior mean computed after {} seconds.", time.time() - st)
             KVinvY, KVlogdet = self.compute_new_KVlogdet_KVinvY(K, V, m)
             logger.debug("   KVinvY and logdet computed after {} seconds.", time.time() - st)
@@ -306,24 +332,24 @@ class GPMarginalDensity:
             V = self.V
             KV = self._addKV(K, V)
         else:
-            K = self.prior.compute_prior_covariance_matrix(self.x_data, hyperparameters)
-            V = self.likelihood.calculate_V(self.x_data, hyperparameters)
-            m = self.prior.compute_mean(self.x_data, hyperparameters)
+            K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
+            V = self.calculate_V(self.x_data, hyperparameters)
+            m = self.compute_mean(self.x_data, hyperparameters)
             KV = self._addKV(K, V)
             KVinvY = self.compute_new_KVinvY(KV, m)
 
         b = KVinvY
         dK_dH = None
         a = None
-        if self.prior.ram_economy is False:
+        if self.ram_economy is False:
             try:
-                noise_der = self.likelihood.noise_function_grad(self.x_data, hyperparameters)
+                noise_der = self.calculate_V_grad(self.x_data, hyperparameters)
                 assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 3
                 if np.ndim(noise_der) == 2:
                     noise_der_V = np.zeros((len(hyperparameters), len(self.x_data), len(self.x_data)))
                     for i in range(len(hyperparameters)): np.fill_diagonal(noise_der_V[i], noise_der[i])
                 else: noise_der_V = noise_der
-                dK_dH = self.prior.dk_dh(self.x_data, self.x_data, hyperparameters) + noise_der_V
+                dK_dH = self.dk_dh(self.x_data, self.x_data, hyperparameters) + noise_der_V
             except Exception as e:
                 raise Exception(
                     "The gradient evaluation dK/dh + dNoise/dh was not successful. "
@@ -335,21 +361,21 @@ class GPMarginalDensity:
         bbT = np.outer(b, b.T)
         dL_dH = np.zeros((len(hyperparameters)))
         dL_dHm = np.zeros((len(hyperparameters)))
-        dm_dh = self.prior.dm_dh(self.x_data, hyperparameters)
+        dm_dh = self.dm_dh(self.x_data, hyperparameters)
 
         for i in range(len(hyperparameters)):
             dL_dHm[i] = -dm_dh[i].T @ b
-            if self.prior.ram_economy is False:
+            if self.ram_economy is False:
                 matr = a[i]
             else:
                 try:
-                    noise_der = self.likelihood.noise_function_grad(self.x_data, i, hyperparameters)
+                    noise_der = self.calculate_V_grad(self.x_data, hyperparameters, direction = i)
                     assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 1
                     if np.ndim(noise_der) == 1:
-                        dK_dH = self.prior.dk_dh(
+                        dK_dH = self.dk_dh(
                             self.x_data, self.x_data, hyperparameters, direction = i) + np.diag(noise_der)
                     else:
-                        dK_dH = self.prior.dk_dh(
+                        dK_dH = self.dk_dh(
                             self.x_data, self.x_data, hyperparameters, direction = i) + noise_der
                 except:
                     raise Exception(
@@ -358,7 +384,7 @@ class GPMarginalDensity:
                         "the gradient function is wrong.")
                 matr = solve(KV, dK_dH, compute_device=self.compute_device)
             if dL_dHm[i] == 0.0:
-                if self.prior.ram_economy is False:
+                if self.ram_economy is False:
                     mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
                 else:
                     mtrace = np.einsum('ij,ji->', bbT, dK_dH)
@@ -476,14 +502,14 @@ class KVlinalg:
             if len(KV) <= len(self.Chol_factor):
                 res = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
             else:
-                res = update_Chol_factor(self.Chol_factor, KV, args=self.args)
+                res = update_Chol_factor(self.Chol_factor, KV, compute_device="cpu", args=self.args)
             self.Chol_factor = res
         elif self.mode == "CholInv":
             if issparse(KV): KV = KV.toarray()
             if len(KV) <= len(self.Chol_factor):
                 res = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
             else:
-                res = update_Chol_factor(self.Chol_factor, KV, args=self.args)
+                res = update_Chol_factor(self.Chol_factor, KV, compute_device="cpu", args=self.args)
             self.Chol_factor = res
             self.KVinv = calculate_inv_from_chol(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "Inv":
@@ -552,7 +578,6 @@ class KVlinalg:
     def __getstate__(self):
         state = dict(
             mode=self.mode,
-            compute_device=self.compute_device,
             KVinv=self.KVinv,
             KV=self.KV,
             Chol_factor=self.Chol_factor,

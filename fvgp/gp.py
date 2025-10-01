@@ -172,7 +172,21 @@ class GP:
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
     args: dict, optional
-        A dictionary of advances settings.
+        Advanced options. Recognized keys are:
+
+        - "random_logdet_lanczos_degree" : int; default = 20
+        - "random_logdet_error_rtol" : float; default = 0.01
+        - "random_logdet_verbose" : True/False; default = False
+        - "random_logdet_print_info" : True/False; default = False
+        - "sparse_minres_tol" : float
+        - "cg_minres_tol" : float
+        - "random_logdet_lanczos_compute_device" : str; default = "cpu"/"gpu"
+        - "Chol_factor_compute_device" : str; default = "cpu"/"gpu"
+        - "update_Chol_factor_compute_device": str; default = "cpu"/"gpu"
+        - "Chol_solve_compute_device" : str; default = "cpu"/"gpu"
+        - "Chol_logdet_compute_device" : str; default = "cpu"/"gpu"
+
+        All other keys will be stored and are available as part of the object instance.
 
 
     Attributes
@@ -227,16 +241,19 @@ class GP:
             "wrong format in prior_mean_function"
         assert len(x_data) == len(y_data), "x_data and y_data do not have the same lengths."
 
-        self.compute_device = compute_device
-        self.calc_inv = calc_inv
-        self.gp2Scale = gp2Scale
         if args is None: args = {}
         hyperparameters = init_hyperparameters
 
         ########################################
         ###init data instance###################
         ########################################
-        self.data = GPdata(x_data, y_data, args=args, noise_variances=noise_variances)
+        self.data = GPdata(x_data, y_data,
+                           args=args,
+                           noise_variances=noise_variances,
+                           ram_economy=ram_economy,
+                           gp2Scale=gp2Scale,
+                           compute_device=compute_device,
+                           calc_inv=calc_inv)
         ########################################
         # prepare initial hyperparameters and bounds
         if self.data.Euclidean:
@@ -256,7 +273,7 @@ class GP:
             raise Exception("'init_hyperparameters' not provided and could not be calculated. Please provide them ")
 
         if compute_device == 'gpu':
-            if not importlib.util.find_spec("torch") or not importlib.util.find_spec("cupy"):
+            if not importlib.util.find_spec("torch") and not importlib.util.find_spec("cupy"):
                 warnings.warn("You have specified the 'gpu' as your compute device. You need to install pytorch or cupy"
                               " manually for this to work.")
         # Check gp2Scale
@@ -265,7 +282,7 @@ class GP:
         ##########################################
         #######prepare training###################
         ##########################################
-        self.trainer = GPtraining(self.data, hyperparameters, gp2Scale=gp2Scale)
+        self.trainer = GPtraining(self.data, hyperparameters)
         ########################################
         ###init prior instance##################
         ########################################
@@ -275,10 +292,8 @@ class GP:
                              prior_mean_function=prior_mean_function,
                              kernel_grad=kernel_function_grad,
                              prior_mean_function_grad=prior_mean_function_grad,
-                             gp2Scale=gp2Scale,
                              gp2Scale_dask_client=gp2Scale_dask_client,
                              gp2Scale_batch_size=gp2Scale_batch_size,
-                             ram_economy=ram_economy
                              )
         ########################################
         ###init likelihood instance#############
@@ -287,8 +302,6 @@ class GP:
                                        self.trainer,
                                        noise_function=noise_function,
                                        noise_function_grad=noise_function_grad,
-                                       ram_economy=ram_economy,
-                                       gp2Scale=gp2Scale
                                        )
 
         ##########################################
@@ -298,10 +311,7 @@ class GP:
             self.data,
             self.prior,
             self.likelihood,
-            calc_inv=calc_inv,
-            gp2Scale=gp2Scale,
             gp2Scale_linalg_mode=gp2Scale_linalg_mode,
-            compute_device=compute_device,
         )
 
         ##########################################
@@ -362,6 +372,10 @@ class GP:
     @property
     def hyperparameters(self):
         return self.trainer.hyperparameters
+
+    @property
+    def gp2Scale(self):
+        return self.data.gp2Scale
     ###############################################################
     def set_args(self, new_args):
         """
@@ -1434,6 +1448,7 @@ class GP:
         n = number_of_workers
         return (D ** 2 * tb) / (2. * n * b ** 2)
 
+
     def initialize_gp2Scale_dask_client(self, gp2Scale, gp2Scale_dask_client):
         if gp2Scale:
             try:
@@ -1448,13 +1463,8 @@ class GP:
                 except: logger.debug("no client available")
         return gp2Scale_dask_client
 
-
     def __getstate__(self):
         state = dict(
-            compute_device=self.compute_device,
-            calc_inv=self.calc_inv,
-            gp2Scale=self.gp2Scale,
-            hyperparameters=self.hyperparameters,
             data=self.data,
             prior=self.prior,
             likelihood=self.likelihood,

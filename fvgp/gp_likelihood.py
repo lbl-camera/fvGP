@@ -9,8 +9,6 @@ class GPlikelihood:
                  trainer,
                  noise_function=None,
                  noise_function_grad=None,
-                 ram_economy=False,
-                 gp2Scale=False,
                  ):
 
         self.data = data
@@ -20,8 +18,6 @@ class GPlikelihood:
         if isinstance(self.noise_variances, np.ndarray):
             assert np.ndim(self.noise_variances) == 1
             assert all(self.noise_variances > 0.0)
-
-        self.gp2Scale = gp2Scale
 
         if self.noise_variances is not None and callable(noise_function):
             raise Exception("Noise function and measurement noise provided. Decide which one to use.")
@@ -39,12 +35,12 @@ class GPlikelihood:
         if callable(noise_function_grad):
             self.noise_function_grad = noise_function_grad
         elif callable(noise_function):
-            if ram_economy is True:
+            if self.ram_economy is True:
                 self.noise_function_grad = self._finitediff_dnoise_dh_econ
             else:
                 self.noise_function_grad = self._finitediff_dnoise_dh
         else:
-            if ram_economy is True:
+            if self.ram_economy is True:
                 self.noise_function_grad = self._default_dnoise_dh_econ
             else:
                 self.noise_function_grad = self._default_dnoise_dh
@@ -71,6 +67,14 @@ class GPlikelihood:
     def noise_variances(self):
         return self.data.noise_variances
 
+    @property
+    def ram_economy(self):
+        return self.data.ram_economy
+
+    @property
+    def gp2Scale(self):
+        return self.data.gp2Scale
+
     ##################################################################################
     #functions available from outside the class
     def update_state(self):
@@ -81,6 +85,11 @@ class GPlikelihood:
         logger.debug("Calculating V.")
         noise = self.noise_function(x_data, hyperparameters)
         return noise
+
+    def calculate_V_grad(self, x, hyperparameters, direction=None):
+        logger.debug("calculating noise gradient")
+        if self.ram_economy is True: return self.noise_function_grad(x, direction, hyperparameters)
+        else: return self.noise_function_grad(x, hyperparameters)
 
     ##################################################################################
     def _default_noise_function(self, x, hyperparameters):
@@ -129,7 +138,6 @@ class GPlikelihood:
         state = dict(
             data=self.data,
             trainer=self.trainer,
-            gp2Scale=self.gp2Scale,
             V=self.V,
             noise_function=self.noise_function,
             noise_function_grad=self.noise_function_grad,

@@ -16,15 +16,31 @@ class GPposterior:
         self.likelihood = likelihood
         self.data = data
         self.trainer = trainer
+        self.noise_function_available = callable(self.likelihood.noise_function)
 
-    def kernel(self, x1, x2, hps):
-        return self.prior.kernel(x1, x2, hps)
+    def compute_covariances(self, x1, x2, hps):
+        return self.prior.compute_covariances(x1, x2, hps)
 
-    def mean_function(self, x, hps):
-        return self.prior.mean_function(x, hps)
+    def compute_mean(self, x, hps):
+        return self.prior.compute_mean(x, hps)
 
     def d_kernel_dx(self, x_pred, x_data, direction, hyperparameters):
         return self.prior.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
+
+    def KVsolve(self, v):
+        return self.marginal_density.KVlinalg.solve(v)
+
+    def compute_new_KVinvY(self, KV, m):
+        return self.marginal_density.compute_new_KVinvY(KV, m)
+
+    def compute_prior_covariance_matrix(self, x_data, hyperparameters):
+        return self.prior.compute_prior_covariance_matrix(x_data, hyperparameters)
+
+    def calculate_V(self, x_data, hyperparameters):
+        return self.likelihood.calculate_V(x_data, hyperparameters)
+
+    def noise_function(self, x_pred, hyperparameters):
+        return self.likelihood.noise_function(x_pred, hyperparameters)
 
     #####################################################
     @property
@@ -46,16 +62,36 @@ class GPposterior:
     @property
     def x_out(self):
         return self.data.x_out
+
+    @property
+    def KVinvY(self):
+        return self.marginal_density.KVinvY
+
+    @property
+    def KVinv(self):
+        return self.marginal_density.KVlinalg.KVinv
+
+    @property
+    def input_set_dim(self):
+        return self.data.input_set_dim
+
+    @property
+    def K(self):
+        return self.prior.K
+
+    @property
+    def m(self):
+        return self.prior.m
     ##########################################################
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
-        x_data, KVinvY = self.x_data.copy(), self.marginal_density.KVinvY.copy()
+        x_data, KVinvY = self.x_data.copy(), self.KVinvY.copy()
         if hyperparameters is not None:
-            K = self.prior.compute_prior_covariance_matrix(x_data, hyperparameters)
-            V = self.likelihood.calculate_V(x_data, hyperparameters)
-            m = self.prior.compute_mean(x_data, hyperparameters)
+            K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
+            V = self.calculate_V(x_data, hyperparameters)
+            m = self.compute_mean(x_data, hyperparameters)
             if np.ndim(V) == 1: V = np.diag(V)
-            KVinvY = self.marginal_density.compute_new_KVinvY(K + V, m)
+            KVinvY = self.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.hyperparameters
 
@@ -64,9 +100,9 @@ class GPposterior:
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, hyperparameters)
+        k = self.compute_covariances(x_data, x_pred, hyperparameters)
         A = k.T @ KVinvY
-        prior_mean = self.mean_function(x_pred, hyperparameters)
+        prior_mean = self.compute_mean(x_pred, hyperparameters)
         assert A.shape == prior_mean.shape
         posterior_mean = prior_mean + A
         if isinstance(x_out, np.ndarray): posterior_mean_re = posterior_mean.reshape(len(x_orig), len(x_out), order='F')
@@ -78,14 +114,14 @@ class GPposterior:
                 "x_pred": x_pred}
 
     def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None):
-        x_data, KVinvY = self.x_data.copy(), self.marginal_density.KVinvY.copy()
+        x_data, KVinvY = self.x_data.copy(), self.KVinvY.copy()
 
         if hyperparameters is not None:
-            K = self.prior.compute_prior_covariance_matrix(x_data, hyperparameters)
-            V = self.likelihood.calculate_V(x_data, hyperparameters)
-            m = self.prior.compute_mean(x_data, hyperparameters)
+            K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
+            V = self.calculate_V(x_data, hyperparameters)
+            m = self.compute_mean(x_data, hyperparameters)
             if np.ndim(V) == 1: V = np.diag(V)
-            KVinvY = self.marginal_density.compute_new_KVinvY(K + V, m)
+            KVinvY = self.compute_new_KVinvY(K + V, m)
         else:
             hyperparameters = self.hyperparameters
 
@@ -94,12 +130,12 @@ class GPposterior:
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        f = self.mean_function(x_pred, hyperparameters)
+        f = self.compute_mean(x_pred, hyperparameters)
         eps = 1e-6
         if direction is not None:
             x1 = np.array(x_pred)
             x1[:, direction] = x1[:, direction] + eps
-            mean_der = (self.mean_function(x1, hyperparameters) - f) / eps
+            mean_der = (self.compute_mean(x1, hyperparameters) - f) / eps
             k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
             posterior_mean_grad = mean_der + (k_g @ KVinvY)
             if isinstance(x_out, np.ndarray):
@@ -109,7 +145,7 @@ class GPposterior:
             for direction in range(len(x_orig[0])):
                 x1 = np.array(x_pred)
                 x1[:, direction] = x1[:, direction] + eps
-                mean_der = (self.mean_function(x1, hyperparameters) - f) / eps
+                mean_der = (self.compute_mean(x1, hyperparameters) - f) / eps
                 k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
                 posterior_mean_grad[:, direction] = mean_der + (k_g @ KVinvY)
             direction = "ALL"
@@ -128,19 +164,19 @@ class GPposterior:
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters)
+        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
+        kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters)
 
-        if self.marginal_density.KVlinalg.KVinv is not None:
+        if self.KVinv is not None:
             if variance_only:
                 S = None
                 v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T,
-                                            self.marginal_density.KVlinalg.KVinv, k, optimize=True)
+                                            self.KVinv, k, optimize=True)
             else:
-                S = kk - (k.T @ self.marginal_density.KVlinalg.solve(k))
+                S = kk - (k.T @ self.KVsolve(k))
                 v = np.array(np.diag(S))
         else:
-            k_cov_prod = self.marginal_density.KVlinalg.solve(k)
+            k_cov_prod = self.KVsolve(k)
             S = kk - (k_cov_prod.T @ k)
             v = np.array(np.diag(S))
         if np.any(v < -0.0001):
@@ -177,16 +213,16 @@ class GPposterior:
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters)
-        k_covariance_prod = self.marginal_density.KVlinalg.solve(k)
+        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
+        k_covariance_prod = self.KVsolve(k)
         if direction is not None:
             k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
             x1 = np.array(x_pred)
             x2 = np.array(x_pred)
             eps = 1e-6
             x1[:, direction] = x1[:, direction] + eps
-            kk_g = (self.kernel(x1, x1, self.hyperparameters) -
-                    self.kernel(x2, x2, self.hyperparameters)) / eps
+            kk_g = (self.compute_covariances(x1, x1, self.hyperparameters) -
+                    self.compute_covariances(x2, x2, self.hyperparameters)) / eps
             dSdx = kk_g - (2.0 * k_g.T @ k_covariance_prod)
             a = np.diag(dSdx)
             if isinstance(x_out, np.ndarray):
@@ -203,8 +239,8 @@ class GPposterior:
                 x2 = np.array(x_pred)
                 eps = 1e-6
                 x1[:, direction] = x1[:, direction] + eps
-                kk_g = (self.kernel(x1, x1, self.hyperparameters) -
-                        self.kernel(x2, x2, self.hyperparameters)) / eps
+                kk_g = (self.compute_covariances(x1, x1, self.hyperparameters) -
+                        self.compute_covariances(x2, x2, self.hyperparameters)) / eps
                 grad_v[:, direction] = np.diag(kk_g - (2.0 * k_g.T @ k_covariance_prod))
 
             if isinstance(x_out, np.ndarray):
@@ -216,15 +252,15 @@ class GPposterior:
     ###########################################################################
     def joint_gp_prior(self, x_pred, x_out=None):
         x_data, K, prior_mean_vec = (self.x_data.copy(),
-                                     self.prior.K.copy() + (np.identity(len(self.prior.K)) * 1e-9),
-                                     self.prior.m.copy())
+                                     self.K.copy() + (np.identity(len(self.K)) * 1e-9),
+                                     self.m.copy())
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters)
-        post_mean = self.mean_function(x_pred, self.hyperparameters)
+        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
+        kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters)
+        post_mean = self.compute_mean(x_pred, self.hyperparameters)
         joint_gp_prior_mean = np.append(prior_mean_vec, post_mean)
         joint_gp_prior_cov = np.block([[K, k], [k.T, kk]])
 
@@ -238,8 +274,8 @@ class GPposterior:
     ###########################################################################
     def joint_gp_prior_grad(self, x_pred, direction, x_out=None):
         x_data, K, prior_mean_vec = (self.x_data.copy(),
-                                     self.prior.K.copy() + (np.identity(len(self.prior.K)) * 1e-9),
-                                     self.prior.m.copy())
+                                     self.K.copy() + (np.identity(len(self.K)) * 1e-9),
+                                     self.m.copy())
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
@@ -250,11 +286,11 @@ class GPposterior:
         eps = 1e-6
         x1[:, direction] = x1[:, direction] + eps
         x2[:, direction] = x2[:, direction] - eps
-        kk_g = (self.kernel(x1, x1, self.hyperparameters) -
-                self.kernel(x2, x2, self.hyperparameters)) / (2.0 * eps)
+        kk_g = (self.compute_covariances(x1, x1, self.hyperparameters) -
+                self.compute_covariances(x2, x2, self.hyperparameters)) / (2.0 * eps)
 
-        mean_der = ((self.mean_function(x1, self.hyperparameters) -
-                     self.mean_function(x2, self.hyperparameters)) /
+        mean_der = ((self.compute_mean(x1, self.hyperparameters) -
+                     self.compute_mean(x2, self.hyperparameters)) /
                     (2.0 * eps))
         full_gp_prior_mean_grad = np.append(np.zeros(prior_mean_vec.shape), mean_der)
         prior_cov_grad = np.zeros(K.shape)
@@ -345,14 +381,14 @@ class GPposterior:
 
     ###########################################################################
     def gp_mutual_information(self, x_pred, x_out=None, add_noise=False):
-        x_data, K = self.x_data.copy(), self.prior.K.copy() + (np.identity(len(self.prior.K)) * 1e-9)
+        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
+        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
+        kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
         if add_noise: v, kk = self.add_noise(x_pred, np.diag(kk), kk)
 
         joint_covariance = np.block([[K, k], [k.T, kk]])
@@ -361,14 +397,14 @@ class GPposterior:
 
     ###########################################################################
     def gp_total_correlation(self, x_pred, x_out=None, add_noise=False):
-        x_data, K = self.x_data.copy(), self.prior.K.copy() + (np.identity(len(self.prior.K)) * 1e-9)
+        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.kernel(x_data, x_pred, self.hyperparameters)
-        kk = self.kernel(x_pred, x_pred, self.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
+        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
+        kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
         if add_noise: v, kk = self.add_noise(x_pred, np.diag(kk), kk)
         joint_covariance = np.block([[K, k], [k.T, kk]])
 
@@ -385,12 +421,12 @@ class GPposterior:
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred_aux = self.cartesian_product(x_pred, x_out)
         else: x_pred_aux = x_pred
-        kk = self.kernel(x_pred_aux, x_pred_aux, self.hyperparameters) + (np.identity(len(x_pred_aux)) * 1e-9)
+        kk = self.compute_covariances(x_pred_aux, x_pred_aux, self.hyperparameters) + (np.identity(len(x_pred_aux)) * 1e-9)
         post_cov = self.posterior_covariance(x_pred, x_out=x_out, add_noise=add_noise)["S_flat"]
         post_cov = post_cov + (np.identity(len(post_cov)) * 1e-9)
         hyperparameters = self.hyperparameters
         post_mean = self.posterior_mean(x_pred, x_out=x_out)["m(x)_flat"]
-        prio_mean = self.mean_function(x_pred_aux, hyperparameters)
+        prio_mean = self.compute_mean(x_pred_aux, hyperparameters)
         return {"x": x_orig,
                 "RIE": self.kl_div(prio_mean, post_mean, kk, post_cov)}
 
@@ -435,8 +471,8 @@ class GPposterior:
                 }
 
     def add_noise(self, x_pred, v, S):
-        if callable(self.likelihood.noise_function):
-            noise = self.likelihood.noise_function(x_pred, self.hyperparameters)
+        if self.noise_function_available:
+            noise = self.noise_function(x_pred, self.hyperparameters)
             assert isinstance(noise, np.ndarray)
             try:
                 if np.ndim(noise) == 1:
@@ -460,7 +496,7 @@ class GPposterior:
         assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list), "wrong format in x_pred"
         if isinstance(x_pred, np.ndarray):
             assert np.ndim(x_pred) == 2, "wrong dim in x_pred, has to be 2-d"
-            assert x_pred.shape[1] == self.data.input_set_dim, "wrong number of columns in x_pred"
+            assert x_pred.shape[1] == self.input_set_dim, "wrong number of columns in x_pred"
 
         assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list), "wrong format in x_out"
         if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1, "wrong dim in x_out, has to be 1-d"
