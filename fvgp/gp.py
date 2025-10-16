@@ -18,14 +18,14 @@ import importlib
 # TODO: search below "TODO"
 #   - as work on functions is completed and functions are maintained, add verbose assert statements.
 #   - make shape(y_data)=(V,U) work (tensor GP), change docstrings
-#   - hyperparameters should only be in data, prior and likelihood use a property pointing there.
 
 
 class GP:
     """
     This class provides all the tools for a single-task Gaussian Process (GP).
     Use fvGP for multi-task GPs. However, the fvGP class inherits all methods from this class.
-    This class allows full HPC support for training via the `hgdl` package.
+    This class allows full HPC distributed training via the `hgdl` package, large-scale sparse GPs
+    via `gp2Scale` and offers GPU support.
 
     V ... number of input points
 
@@ -42,12 +42,13 @@ class GP:
         For multi-task GPs, the index set dimension = input space dimension + 1.
         If dealing with non-Euclidean inputs
         x_data should be a list, not a numpy array.
+        In this case, both the index set and the input space dim are set to 1.
     y_data : np.ndarray
         The values of the data points. Shape (V).
     init_hyperparameters : np.ndarray, optional
         Vector of hyperparameters used to initiate the GP.
         The default is an array of ones with the right length for the anisotropic Matern
-        kernel with automatic relevance determination (ARD). If gp2Scale is
+        kernel with automatic relevance determination (ARD). If `gp2Scale` is
         enabled, the default kernel changes to the anisotropic Wendland kernel.
     noise_variances : np.ndarray, optional
         An numpy array defining the uncertainties/noise in the
@@ -59,8 +60,8 @@ class GP:
         Only provide a noise function OR `noise_variances`, not both.
     compute_device : str, optional
         One of `cpu` or `gpu`, determines how linear algebra computations are executed. The default is `cpu`.
-        For "gpu", pytorch has to be installed manually.
-        If gp2Scale is enabled but no kernel is provided, the choice of the `compute_device`
+        For `gpu`, pytorch or cupy has to be installed manually. For advanced options see `args`.
+        If `gp2Scale` is enabled but no kernel is provided, the choice of the `compute_device`
         will be particularly important. In that case, the default Wendland kernel will be computed on
         the cpu or the gpu which will significantly change the compute time depending on the compute
         architecture.
@@ -82,7 +83,7 @@ class GP:
         `x2` (a N2 x D array of positions) and
         `hyperparameters` (a 1d array of length D+1 for the default kernel).
         The default is a finite difference calculation.
-        If `ram_economy` is True, the function's input is x1, x2, direction (int), and hyperparameters (numpy array).
+        If `ram_economy` is True, the function's input is x1, x2, hyperparameters (numpy array), and a direction (int).
         The output is a numpy array of shape (len(hps) x N).
         If `ram_economy` is `False`, the function's input is x1, x2, and hyperparameters.
         The output is a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
@@ -120,6 +121,7 @@ class GP:
         hyperparameters, or, if `noise_function` is provided but no noise function,
         a finite-difference approximation will be used.
         The same rules regarding `ram_economy` as for the kernel definition apply here.
+        That means the function will have an additional `direction` parameter.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
         This is an advanced feature for HPC GPs up to 10
@@ -143,21 +145,16 @@ class GP:
         to compute a factorization object
         which is available in the second and third callable. The second being the linear solve f(obj, vec),
         and the third being the logdet=f(obj). If a factorization object is not required, the first callable
-        can return the matrix itself (K).
+        should return the matrix itself (K).
     calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster (3-10 times).
-        For larger problems (>2000 data points), the use of inversion should be avoided due
+        For larger problems (>5000 data points), the use of inversion should be avoided due
         to computational instability and costs. The default is
         False. Note, the training will not use the
         inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
-        Caution: this option, together with `append=True` in `tell()` will mean that the inverse of
-        the covariance is updated, not recomputed, which can lead to instability.
-        In application where data is appended many times, it is recommended to either turn
-        `calc_inv` off, or to regularly force the recomputation of the inverse via `gp_rank_n_update` in
-        `update_gp_data`.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the log marginal likelihood is/are used for the training.
         If True, components of the derivative of the log marginal likelihood are
@@ -165,7 +162,7 @@ class GP:
         but much less RAM usage. If the derivative of the kernel (and noise function) with
         respect to the hyperparameters (kernel_function_grad) is
         going to be provided, it has to be tailored: for `ram_economy=True` it should be
-        of the form f(x, direction, hyperparameters)
+        of the form f(x, hyperparameters, direction)
         and return a 2d numpy array of shape len(x1) x len(x2).
         If `ram_economy=False`, the function should be of the form f(x, hyperparameters)
         and return a numpy array of shape
@@ -312,6 +309,7 @@ class GP:
             self.data,
             self.prior,
             self.likelihood,
+            self.trainer,
             gp2Scale_linalg_mode=gp2Scale_linalg_mode,
         )
 
@@ -356,7 +354,6 @@ class GP:
     @args.setter
     def args(self, args):
         self.data.args = args
-        self.marginal_density.KVlinalg.args = args
 
     @property
     def K(self):
@@ -388,6 +385,24 @@ class GP:
             The new advanced settings.
         """
         self.args = new_args
+
+    ##################################################################################
+    def set_hyperparameters(self, hps):
+        """
+        Function to set hyperparameters.
+
+
+        Parameters
+        ----------
+        hps : np.ndarray
+            A 1-d numpy array of hyperparameters.
+        """
+        assert isinstance(hps, np.ndarray), "wrong format in hyperparameters"
+        assert np.ndim(hps) == 1, "wrong format in hyperparameters"
+        self.trainer.hyperparameters = hps
+        self.prior.update_state_hyperparameters()
+        self.likelihood.update_state()
+        self.marginal_density.update_state_hyperparameters()
 
     def update_gp_data(
         self,
@@ -537,7 +552,7 @@ class GP:
         tolerance : float, optional
             Used as termination criterion for local optimizers. Default = 0.0001.
         max_iter : int, optional
-            Maximum number of iterations for global and local optimizers. Default = 120.
+            Maximum number of iterations for global and local optimizers. Default = 1000.
         local_optimizer : str, optional
             Defining the local optimizer. Default = `L-BFGS-B`, most `scipy.optimize.minimize`
             functions are permissible.
@@ -612,6 +627,7 @@ class GP:
             dask_client=dask_client,
             info=info
         )
+        self.set_hyperparameters(hyperparameters)
         return hyperparameters
 
     ##################################################################################
@@ -761,43 +777,9 @@ class GP:
         hyperparameters : np.ndarray
         """
 
-        res = self.trainer.update_hyperparameters(opt_obj)
-        if res is not None:
-            l_n = self.marginal_density.neg_log_likelihood(res)
-            l_o = self.marginal_density.neg_log_likelihood()
-            if l_n - l_o < 0.000001:
-                hyperparameters = res
-                logger.debug("    fvGP async hyperparameter update successful")
-                logger.debug("    Latest hyperparameters: {}", hyperparameters)
-            else:
-                logger.debug(
-                    "    The update was attempted but the new hyperparameters led to a \n \
-                    lower likelihood, so I kept the old ones")
-                logger.debug(f"Old likelihood: {-l_o} at {self.hyperparameters}")
-                logger.debug(f"New likelihood: {-l_n} at {res}")
-        else:
-            logger.debug("    Async Hyper-parameter update not successful in fvGP. I am keeping the old ones.")
-            logger.debug("    hyperparameters: {}", self.hyperparameters)
-
-        return self.hyperparameters
-
-    ##################################################################################
-    def set_hyperparameters(self, hps):
-        """
-        Function to set hyperparameters.
-
-
-        Parameters
-        ----------
-        hps : np.ndarray
-            A 1-d numpy array of hyperparameters.
-        """
-        assert isinstance(hps, np.ndarray), "wrong format in hyperparameters"
-        assert np.ndim(hps) == 1, "wrong format in hyperparameters"
-        self.trainer.hyperparameters = hps
-        self.prior.update_state_hyperparameters()
-        self.likelihood.update_state()
-        self.marginal_density.update_state_hyperparameters()
+        hps = self.trainer.update_hyperparameters(opt_obj)
+        self.set_hyperparameters(hps)
+        return hps
 
     ##################################################################################
     def get_hyperparameters(self):

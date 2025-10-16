@@ -565,3 +565,35 @@ def test_pickle():
     assert my_gpo.input_set_dim == my_gpo2.input_set_dim
     assert my_gpo.index_set_dim == my_gpo2.index_set_dim
 
+    def states_equal(state1, state2):
+        if state1.keys() != state2.keys():
+            return False
+        for k in state1:
+            v1, v2 = state1[k], state2[k]
+            if isinstance(v1, np.ndarray) and isinstance(v2, np.ndarray):
+                if not np.array_equal(v1, v2):
+                    return False
+            else:
+                if v1 != v2:
+                    return False
+        return True
+
+    def compare_state(obj):
+        # Serialize/deserialize
+        dumped = pickle.dumps(obj)
+        restored = pickle.loads(dumped)
+        
+        # Extract states
+        state1 = obj.__getstate__() if hasattr(obj, "__getstate__") else obj.__dict__
+        state2 = restored.__getstate__() if hasattr(restored, "__getstate__") else restored.__dict__
+        
+        # Compare directly
+        return states_equal(state1,state2), state1, state2
+
+
+    my_gpo = fvGP(x_data,np.random.rand(len(x_data),2),
+        init_hyperparameters = np.ones((5))/10.,  # We need enough of those for kernel, noise, and prior mean functions
+        args = {"sfdf": 4.})
+
+    assert compare_state(my_gpo)
+

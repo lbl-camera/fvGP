@@ -1,11 +1,8 @@
-from typing import Any
-
 import numpy as np
-from loguru import logger
 from .gp_lin_alg import *
-import warnings
 from scipy.sparse import issparse
 import scipy.sparse as sparse
+from loguru import logger
 
 
 class GPMarginalDensity:
@@ -13,14 +10,16 @@ class GPMarginalDensity:
                  data,
                  prior,
                  likelihood,
+                 trainer,
                  gp2Scale_linalg_mode=None):
 
         self.data = data
         self.prior = prior
         self.likelihood = likelihood
         self.gp2Scale_linalg_mode = gp2Scale_linalg_mode
+        self.trainer = trainer
 
-        self.KVlinalg = KVlinalg(self.compute_device, self.args)
+        self.KVlinalg = KVlinalg(self.compute_device, data)
         K, V, m = self._get_KVm()
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(K)
@@ -70,6 +69,10 @@ class GPMarginalDensity:
     def calc_inv(self):
         return self.data.calc_inv
 
+    @property
+    def hyperparameters(self):
+        return self.trainer.hyperparameters
+
     ##################################################################
     def compute_prior_covariance_matrix(self, x_data, hyperparameters):
         return self.prior.compute_prior_covariance_matrix(x_data, hyperparameters)
@@ -87,7 +90,7 @@ class GPMarginalDensity:
         return self.likelihood.calculate_V(x, hyperparameters)
 
     def calculate_V_grad(self, x, hyperparameters, direction=None):
-        return self.likelihood.calculate_V_grad(x, hyperparameters, direction = direction)
+        return self.likelihood.calculate_V_grad(x, hyperparameters, direction=direction)
 
     ##################################################################
 
@@ -247,7 +250,7 @@ class GPMarginalDensity:
             raise Exception("K+V not possible with the given formats")
 
     ##################################################################################
-    def _set_gp2Scale_mode(self, KV: object) -> str | list:
+    def _set_gp2Scale_mode(self, KV):
         Ksparsity = float(KV.nnz) / float(len(self.x_data) ** 2)
         if self.gp2Scale_linalg_mode is not None:
             return self.gp2Scale_linalg_mode
@@ -331,6 +334,7 @@ class GPMarginalDensity:
             K = self.K
             V = self.V
             KV = self._addKV(K, V)
+            hyperparameters = self.hyperparameters
         else:
             K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
             V = self.calculate_V(self.x_data, hyperparameters)
@@ -369,7 +373,7 @@ class GPMarginalDensity:
                 matr = a[i]
             else:
                 try:
-                    noise_der = self.calculate_V_grad(self.x_data, hyperparameters, direction = i)
+                    noise_der = self.calculate_V_grad(self.x_data, hyperparameters, direction=i)
                     assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 1
                     if np.ndim(noise_der) == 1:
                         dK_dH = self.dk_dh(
@@ -377,11 +381,11 @@ class GPMarginalDensity:
                     else:
                         dK_dH = self.dk_dh(
                             self.x_data, self.x_data, hyperparameters, direction = i) + noise_der
-                except:
+                except Exception as e:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "
                         "That normally means the combination of ram_economy and definition of "
-                        "the gradient function is wrong.")
+                        "the gradient function is wrong.",e)
                 matr = solve(KV, dK_dH, compute_device=self.compute_device)
             if dL_dHm[i] == 0.0:
                 if self.ram_economy is False:
@@ -450,17 +454,21 @@ class GPMarginalDensity:
 
 
 class KVlinalg:
-    def __init__(self, compute_device, args):
+    def __init__(self, compute_device, data):
         self.mode = None
+        self.data = data
         self.compute_device = compute_device
         self.KVinv = None
         self.KV = None
         self.Chol_factor = None
         self.LU_factor = None
         self.custom_obj = None
-        self.args = args
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
                               "sparseLU", "sparseMINRESpre", "sparseCGpre", "sparseSolve", "a set of callables"]
+
+    @property
+    def args(self):
+        return self.data.args
 
     def set_KV(self, KV, mode):
         self.mode = mode

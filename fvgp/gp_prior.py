@@ -153,7 +153,7 @@ class GPprior:
     def dk_dh(self, x1, x2, hyperparameters, direction=None):
         #if direction is None: return self._dk_dh(x1, x2, hyperparameters)
         #else: return self._dk_dh(x1, x2, direction, hyperparameters)
-        if self.ram_economy: return self._dk_dh(x1, x2, direction, hyperparameters)
+        if self.ram_economy: return self._dk_dh(x1, x2, hyperparameters, direction)
         else: return self._dk_dh(x1, x2, hyperparameters)
 
     def dm_dh(self, x_data, hyperparameters):
@@ -374,7 +374,7 @@ class GPprior:
             gradient[direction] = self._dkernel_dh(points1, points2, direction, hyperparameters)
         return gradient
 
-    def _kernel_derivative(self, points1, points2, direction, hyperparameters):
+    def _kernel_derivative(self, points1, points2, hyperparameters, direction):
         derivative = self._dkernel_dh(points1, points2, direction, hyperparameters)
         return derivative
 

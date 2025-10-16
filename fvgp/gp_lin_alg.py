@@ -71,7 +71,7 @@ def calculate_Chol_factor(M, compute_device="cpu", args=None):
 def update_Chol_factor(old_chol_factor, new_matrix, compute_device="cpu", args=None):
     assert isinstance(new_matrix, np.ndarray)
     compute_device = "cpu"
-    if "update_Chol_factor_compute_device" in args: compute_device = args["update_Chol_factor_compute_device"]
+    #if "update_Chol_factor_compute_device" in args: compute_device = args["update_Chol_factor_compute_device"]
     logger.debug(f"update_Chol_factor on {compute_device}")
     size = len(old_chol_factor)
     KV = new_matrix

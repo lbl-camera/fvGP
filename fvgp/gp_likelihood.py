@@ -88,7 +88,7 @@ class GPlikelihood:
 
     def calculate_V_grad(self, x, hyperparameters, direction=None):
         logger.debug("calculating noise gradient")
-        if self.ram_economy is True: return self.noise_function_grad(x, direction, hyperparameters)
+        if self.ram_economy is True: return self.noise_function_grad(x, hyperparameters, direction)
         else: return self.noise_function_grad(x, hyperparameters)
 
     ##################################################################################
@@ -106,7 +106,7 @@ class GPlikelihood:
         return gr
 
     @staticmethod
-    def _default_dnoise_dh_econ(x, i, hps):
+    def _default_dnoise_dh_econ(x, hps, i):
         gr = np.zeros((len(x)))
         return gr
 
@@ -124,7 +124,7 @@ class GPlikelihood:
         return gr
 
     ##########################
-    def _finitediff_dnoise_dh_econ(self, x, i, hps):
+    def _finitediff_dnoise_dh_econ(self, x, hps, i):
         temp_hps1 = np.array(hps)
         temp_hps1[i] = temp_hps1[i] + 1e-6
         temp_hps2 = np.array(hps)

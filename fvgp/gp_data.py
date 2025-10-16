@@ -16,6 +16,7 @@ class GPdata:
         assert ((isinstance(noise_variances, np.ndarray) and np.ndim(noise_variances) == 1)
                 or noise_variances is None)
         assert len(x_data) == len(y_data), "x_data and y_data have different lengths."
+        if isinstance(noise_variances, np.ndarray): assert len(noise_variances) == len(y_data)
 
         # analyse data
         if isinstance(x_data, np.ndarray):

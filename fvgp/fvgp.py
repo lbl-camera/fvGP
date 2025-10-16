@@ -44,6 +44,7 @@ class fvGP(GP):
         For multi-task GPs, the index set dimension = input space dimension + 1.
         If dealing with non-Euclidean inputs
         x_data should be a list, not a numpy array.
+        In this case, both the index set and the input space dim are set to 1.
     y_data : np.ndarray
         The values of the data points. Shape (V,No).
         It is possible that not every entry in `x_data`
@@ -66,8 +67,8 @@ class fvGP(GP):
         Only provide a noise function OR `noise_variances`, not both.
     compute_device : str, optional
         One of `cpu` or `gpu`, determines how linear algebra computations are executed. The default is `cpu`.
-        For "gpu", pytorch has to be installed manually.
-        If gp2Scale is enabled but no kernel is provided, the choice of the `compute_device`
+        For `gpu`, pytorch or cupy has to be installed manually. For advanced options see `args`.
+        If `gp2Scale` is enabled but no kernel is provided, the choice of the `compute_device`
         will be particularly important. In that case, the default Wendland kernel will be computed on
         the cpu or the gpu which will significantly change the compute time depending on the compute
         architecture.
@@ -90,8 +91,7 @@ class fvGP(GP):
         `x2` (a N2 x Di + 1 array of positions) and
         `hyperparameters` (a 1d array of length Di+2 for the default kernel).
         The default is a finite difference calculation.
-        If `ram_economy` is True, the function's input is x1, x2,
-        direction (int), and hyperparameters (numpy array).
+        If `ram_economy` is True, the function's input is x1, x2,hyperparameters (numpy array), and a direction (int).
         The output is a numpy array of shape (len(hps) x N).
         If `ram_economy` is `False`, the function's input is x1, x2, and hyperparameters.
         The output is a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
@@ -130,6 +130,7 @@ class fvGP(GP):
         hyperparameters, or, if `noise_function` is provided but no noise function,
         a finite-difference approximation will be used.
         The same rules regarding `ram_economy` as for the kernel definition apply here.
+        That means the function will have an additional `direction` parameter.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
         This is an advanced feature for HPC GPs up to 10
@@ -148,21 +149,21 @@ class fvGP(GP):
     gp2Scale_linalg_mode : str, optional
         One of `Chol`, `sparseLU`, `sparseCG`, `sparseMINRES`, `sparseSolve`, `sparseCGpre`
         (incomplete LU preconditioner), or `sparseMINRESpre`. The default is None which amounts to
-        an automatic determination of the mode.
+        an automatic determination of the mode. For advanced customization options
+        this can also be an iterable with three callables: the first f(K), where K is the covariance matrix
+        to compute a factorization object
+        which is available in the second and third callable. The second being the linear solve f(obj, vec),
+        and the third being the logdet=f(obj). If a factorization object is not required, the first callable
+        should return the matrix itself (K).
     calc_inv : bool, optional
         If True, the algorithm calculates and stores the inverse of the covariance
         matrix after each training or update of the dataset or hyperparameters,
         which makes computing the posterior covariance faster (3-10 times).
-        For larger problems (>2000 data points), the use of inversion should be avoided due
+        For larger problems (>5000 data points), the use of inversion should be avoided due
         to computational instability and costs. The default is
         False. Note, the training will not use the
         inverse for stability reasons. Storing the inverse is
         a good option when the dataset is not too large and the posterior covariance is heavily used.
-        Caution: this option, together with `append=True` in `tell()` will mean that the inverse of
-        the covariance is updated, not recomputed, which can lead to instability.
-        In application where data is appended many times, it is recommended to either turn
-        `calc_inv` off, or to regularly force the recomputation of the inverse via `gp_rank_n_update` in
-        `update_gp_data`.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the log marginal likelihood is/are used for the training.
         If True, components of the derivative of the log marginal likelihood are
@@ -170,14 +171,29 @@ class fvGP(GP):
         but much less RAM usage. If the derivative of the kernel (and noise function) with
         respect to the hyperparameters (kernel_function_grad) is
         going to be provided, it has to be tailored: for `ram_economy=True` it should be
-        of the form f(x, direction, hyperparameters)
+        of the form f(x, hyperparameters, direction)
         and return a 2d numpy array of shape len(x1) x len(x2).
         If `ram_economy=False`, the function should be of the form f(x, hyperparameters)
         and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
     args: dict, optional
-        A dictionary of advances settings.
+        Advanced options. Recognized keys are:
+
+        - "random_logdet_lanczos_degree" : int; default = 20
+        - "random_logdet_error_rtol" : float; default = 0.01
+        - "random_logdet_verbose" : True/False; default = False
+        - "random_logdet_print_info" : True/False; default = False
+        - "sparse_minres_tol" : float
+        - "cg_minres_tol" : float
+        - "random_logdet_lanczos_compute_device" : str; default = "cpu"/"gpu"
+        - "Chol_factor_compute_device" : str; default = "cpu"/"gpu"
+        - "update_Chol_factor_compute_device": str; default = "cpu"/"gpu"
+        - "Chol_solve_compute_device" : str; default = "cpu"/"gpu"
+        - "Chol_logdet_compute_device" : str; default = "cpu"/"gpu"
+        - "GPU_engine" : str; default = "torch"/"cupy"
+
+        All other keys will be stored and are available as part of the object instance.
 
     Attributes
     ----------
@@ -193,19 +209,14 @@ class fvGP(GP):
         The data values from the fvgp point of view.
     fvgp_noise_variances : np.ndarray
         Observation variances from the fvgp point of view.
-    prior.hyperparameters : np.ndarray
+    hyperparameters : np.ndarray
         Current hyperparameters in use.
-    prior.K : np.ndarray
+    K : np.ndarray
         Current prior covariance matrix of the GP
-    prior.m : np.ndarray
+    m : np.ndarray
         Current prior mean vector.
-    marginal_density.KVinv : np.ndarray
-        If enabled, the inverse of the prior covariance + nose matrix V
-        inv(K+V)
-    marginal_density.KVlogdet : float
-        logdet(K+V)
-    likelihood.V : np.ndarray
-        the noise covariance matrix
+    V : np.ndarray
+        the noise covariance matrix or a vector.
 
 
     This class inherits all capabilities from :py:class:`fvgp.GP`.
@@ -225,7 +236,7 @@ class fvGP(GP):
 
     :py:meth:`fvgp.GP.set_hyperparameters`
 
-    :py:meth:`fvgp.GP.get_hyperparameters`
+    :py:meth:`fvgp.GP.hyperparameters`
 
     Posterior Evaluations:
 
