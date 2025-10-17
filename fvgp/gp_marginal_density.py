@@ -440,10 +440,8 @@ class GPMarginalDensity:
             data=self.data,
             prior=self.prior,
             likelihood=self.likelihood,
-            calc_inv=self.calc_inv,
-            gp2Scale=self.gp2Scale,
-            compute_device=self.compute_device,
             gp2Scale_linalg_mode=self.gp2Scale_linalg_mode,
+            trainer=self.trainer,
             KVlinalg=self.KVlinalg,
             KVinvY=self.KVinvY
         )
@@ -586,6 +584,8 @@ class KVlinalg:
     def __getstate__(self):
         state = dict(
             mode=self.mode,
+            data=self.data,
+            compute_device=self.compute_device,
             KVinv=self.KVinv,
             KV=self.KV,
             Chol_factor=self.Chol_factor,

@@ -531,6 +531,7 @@ class GPposterior:
             likelihood=self.likelihood,
             data=self.data,
             trainer=self.trainer,
+            noise_function_available=self.noise_function_available
         )
         return state
 

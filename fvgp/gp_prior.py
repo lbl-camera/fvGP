@@ -431,6 +431,7 @@ class GPprior:
             _dm_dh=self._dm_dh,
             m=self.m,
             K=self.K,
+            client=None,
         )
         return state
 
