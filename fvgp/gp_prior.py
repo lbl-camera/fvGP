@@ -58,9 +58,10 @@ class GPprior:
             if not worker_info: logger.debug("No workers available")
 
         # kernel
+        self.k_n_params = 3
         if callable(kernel):
             self.kernel = kernel
-            k_n_params = len(inspect.signature(kernel).parameters)
+            self.k_n_params = len(inspect.signature(kernel).parameters)
         elif kernel is None:
             self.kernel = self._default_kernel
         else:
@@ -75,9 +76,10 @@ class GPprior:
                 self._dk_dh = self._kernel_gradient
 
         # prior-mean
+        self.m_n_params = 2
         if callable(prior_mean_function):
             self.mean_function = prior_mean_function
-            m_n_params = len(inspect.signature(prior_mean_function).parameters)
+            self.m_n_params = len(inspect.signature(prior_mean_function).parameters)
         else: self.mean_function = self._default_mean_function
 
         if callable(prior_mean_function_grad): self._dm_dh = prior_mean_function_grad
@@ -136,23 +138,23 @@ class GPprior:
 
     def compute_prior_covariance_matrix(self, x, hyperparameters):
         """computes the covariance matrix from the kernel"""
-        if self.gp2Scale:
-            K = self._compute_prior_covariance_gp2Scale(x, hyperparameters)
-        else:
-            K = self.compute_covariances(x, x, hyperparameters)
+        if self.gp2Scale: K = self._compute_prior_covariance_gp2Scale(x, hyperparameters)
+        else: K = self.compute_covariances(x, x, hyperparameters)
         return K
 
     def compute_covariances(self, x1, x2, hps):
-        return self.kernel(x1, x2, hps)
+        if self.k_n_params == 3: return self.kernel(x1, x2, hps)
+        elif self.k_n_params == 4: return self.kernel(x1, x2, hps, self.args)
+        else: raise Exception("No valid kernel function signature")
 
     def compute_mean(self, x, hyperparameters):
         """computes the covariance matrix from the kernel"""
-        m = self.mean_function(x, hyperparameters)
+        if self.m_n_params == 2: m = self.mean_function(x, hyperparameters)
+        elif self.m_n_params == 3: m = self.mean_function(x, hyperparameters, self.args)
+        else: raise Exception("No valid mean function signature")
         return m
 
     def dk_dh(self, x1, x2, hyperparameters, direction=None):
-        #if direction is None: return self._dk_dh(x1, x2, hyperparameters)
-        #else: return self._dk_dh(x1, x2, direction, hyperparameters)
         if self.ram_economy: return self._dk_dh(x1, x2, hyperparameters, direction)
         else: return self._dk_dh(x1, x2, hyperparameters)
 
@@ -164,7 +166,7 @@ class GPprior:
     def _compute_prior(self, x_data, hyperparameters):
         m = self.compute_mean(x_data, hyperparameters)
         K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
-        assert np.ndim(m) == 1
+        assert np.ndim(m) == 1, "mean: "+str(m)
         assert np.ndim(K) == 2
         logger.debug("Prior mean and covariance matrix successfully computed.")
         return m, K
@@ -191,7 +193,7 @@ class GPprior:
 
     def _update_mean(self, x_new, hyperparameters):
         if np.ndim(self.m) == 1: m = np.append(self.m, self.compute_mean(x_new, hyperparameters))
-        elif np.ndim(self.m) == 2: m = np.vstack([self.m, self.compute_mean(x_new, hyperparameters)])
+        elif np.ndim(self.m) == 2: raise Exception("prior mean has to be a vector") #m = np.vstack([self.m, self.compute_mean(x_new, hyperparameters)])
         else: raise Exception("Prior mean in wrong format")
         return m
 
@@ -212,7 +214,7 @@ class GPprior:
         logger.debug("client id: {}", client.id)
 
         self.x_data_scatter_future = client.scatter(
-            x_data, workers=self.compute_workers, broadcast=True)
+            x_data, workers=self.compute_workers, broadcast=True, direct=True)
         ranges = self._ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
@@ -268,9 +270,9 @@ class GPprior:
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
         self.x_new_scatter_future = client.scatter(
-            x_new, workers=self.compute_workers, broadcast=True)
+            x_new, workers=self.compute_workers, broadcast=True, direct=True)
         self.x_old_scatter_future = client.scatter(
-            x_old, workers=self.compute_workers, broadcast=True)
+            x_old, workers=self.compute_workers, broadcast=True, direct=True)
 
         point_number = len(x_old)
         num_batches = point_number // self.batch_size
@@ -392,11 +394,11 @@ class GPprior:
     def _default_mean_function(self, x, hyperparameters):
         """evaluates the gp mean function at the data points """
         if np.ndim(self.y_data) == 1:
-            mean = np.zeros((len(x)))
-            mean[:] = np.mean(self.y_data)
+            raise Exception("y_data wrong format")
         elif np.ndim(self.y_data) == 2:
-            mean = np.zeros((len(x), self.y_data.shape[1]))
-            for i in range(mean.shape[1]): mean[:,i] = np.mean(self.y_data[:,i])
+            mean = np.zeros((len(x)))
+            #for i in range(mean.shape[1]): mean[:, i] = np.mean(self.y_data[:, i])
+            mean[:] = np.mean(self.y_data)
         else: raise Exception("Wrong dim in default mean function")
         return mean
 
@@ -421,6 +423,8 @@ class GPprior:
         state = dict(
             kernel_function=self.kernel_function,
             prior_mean_function=self.prior_mean_function,
+            m_n_params = self.m_n_params,
+            k_n_params=self.k_n_params,
             batch_size=self.batch_size,
             data=self.data,
             trainer=self.trainer,

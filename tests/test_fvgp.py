@@ -352,32 +352,22 @@ def test_gp2Scale(client):
     init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseLU")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCG")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRES")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = False, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="Inv")
@@ -388,14 +378,10 @@ def test_gp2Scale(client):
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRESpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseSolve")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
 
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client)

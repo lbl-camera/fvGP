@@ -7,6 +7,7 @@ from scipy.optimize import differential_evolution
 from hgdl.hgdl import HGDL
 from .mcmc import mcmc
 from scipy.optimize import minimize
+from .gp_mcmc import *
 
 
 class GPtraining:
@@ -66,17 +67,17 @@ class GPtraining:
         return hyperparameters
 
     ##################################################################################
-    def train_async(self,
-                    objective_function=None,
-                    objective_function_gradient=None,
-                    objective_function_hessian=None,
-                    hyperparameter_bounds=None,
-                    init_hyperparameters=None,
-                    max_iter=10000,
-                    local_optimizer="L-BFGS-B",
-                    global_optimizer="genetic",
-                    constraints=(),
-                    dask_client=None):
+    def hgdl_async(self,
+                   objective_function=None,
+                   objective_function_gradient=None,
+                   objective_function_hessian=None,
+                   hyperparameter_bounds=None,
+                   init_hyperparameters=None,
+                   max_iter=10000,
+                   local_optimizer="L-BFGS-B",
+                   global_optimizer="genetic",
+                   constraints=(),
+                   dask_client=None):
         """
         This function asynchronously finds the maximum of the log marginal likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
@@ -95,6 +96,29 @@ class GPtraining:
             constraints,
             local_optimizer,
             global_optimizer,
+            dask_client)
+        return opt_obj
+
+    ##################################################################################
+    def mcmc_async(self,
+                   objective_function=None,
+                   hyperparameter_bounds=None,
+                   init_hyperparameters=None,
+                   max_iter=10000,
+                   dask_client=None):
+        """
+        This function asynchronously finds the maximum of the log marginal likelihood and therefore trains the GP.
+        This can be done on a remote cluster/computer by
+        providing a dask client. This function submits the training and returns
+        an object which can be given to `fvgp.GP.update_hyperparameters()`,
+        which will automatically update the GP prior with the new hyperparameters.
+        """
+
+        opt_obj = self._mcmc_async(
+            objective_function,
+            hyperparameter_bounds,
+            init_hyperparameters,
+            max_iter,
             dask_client)
         return opt_obj
 
@@ -151,7 +175,8 @@ class GPtraining:
         ------
         The current hyperparameters : np.ndarray
         """
-        try: opt_list = opt_obj.get_latest()
+        try:
+            opt_list = opt_obj.get_latest()
         except Exception as err:
             logger.debug("      The optimizer object could not be queried")
             logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
@@ -162,10 +187,40 @@ class GPtraining:
             warnings.warn("Hyperparameter update not successful len(optima list) = 0", UserWarning, stacklevel=2)
             return self.hyperparameters
         else:
-            updated_hyperparameters = opt_obj.get_latest()[0]["x"]
+            if isinstance(opt_list, list): updated_hyperparameters = opt_obj.get_latest()[0]["x"]
+            elif isinstance(opt_list, dict): updated_hyperparameters = opt_obj.get_latest().result()["median(x)"]
+            else: raise Exception("Reading the `updated_hyperparameters` was not successful", opt_list)
             assert isinstance(updated_hyperparameters, np.ndarray) and np.ndim(updated_hyperparameters) == 1
             self.hyperparameters = updated_hyperparameters
             return updated_hyperparameters
+
+    def _mcmc_async(self,
+                   objective_function,
+                   hyperparameter_bounds,
+                   init_hyperparameters,
+                   max_iter,
+                   dask_client,
+                   prior=None,
+                   proposal_dists=None,
+                   #add proposal dists, priors, ...?
+                   ):
+        if not self._in_bounds(init_hyperparameters, hyperparameter_bounds):
+            raise Exception("Starting positions outside of optimization bounds.")
+
+        def prior_function(theta, args):
+            bounds = args["bounds"]
+            if self._in_bounds(theta, bounds): return 0.
+            else: return -np.inf
+
+        pd1 = ProposalDistribution(np.arange(len(init_hyperparameters)))
+        opt_obj = dask_client.submit(gpMCMC, objective_function,
+                                    prior_function, [pd1], args={"bounds": hyperparameter_bounds},
+                                    actor=True).result()
+        logger.debug("Async MCMC successfully initialized. Calling run()")
+        opt_obj.run_mcmc(x0=init_hyperparameters, n_updates=max_iter)
+        logger.debug("run() called")
+
+        return opt_obj
 
     def _optimize_log_likelihood_async(self,
                                        objective_function,

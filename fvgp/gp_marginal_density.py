@@ -26,7 +26,7 @@ class GPMarginalDensity:
         elif self.calc_inv: mode = "CholInv"
         else: mode = "Chol"
 
-        self.KVinvY = self._set_KVinvY(K, V, m, mode)
+        self.KVinvY = self._set_state_KVinvY(K, V, m, mode)
 
     ##################################################################
     @property
@@ -93,87 +93,63 @@ class GPMarginalDensity:
         return self.likelihood.calculate_V_grad(x, hyperparameters, direction=direction)
 
     ##################################################################
-
     def update_state_data(self, append):
         """Update the marginal PDF when the data has changed in data likelihood or prior objects"""
         logger.debug("Updating marginal density after new data was appended.")
         K, V, m = self._get_KVm()
-        if append: self.KVinvY = self._update_KVinvY(K, V, m)
-        else: self.KVinvY = self._set_KVinvY(K, V, m, self.KVlinalg.mode)
+        if append: self.KVinvY = self._update_state_KVinvY(K, V, m)
+        else: self.KVinvY = self._set_state_KVinvY(K, V, m, self.KVlinalg.mode)
 
     def update_state_hyperparameters(self):
         """Update the marginal PDF when if hyperparameters have changed"""
         logger.debug("Updating marginal density after new hyperparameters were appended.")
         K, V, m = self._get_KVm()
-        self.KVinvY = self._set_KVinvY(K, V, m, self.KVlinalg.mode)
+        self.KVinvY = self._set_state_KVinvY(K, V, m, self.KVlinalg.mode)
 
-    ##################################################################
-    def _update_KVinvY(self, K, V, m):
-        """This updates KVinvY after new data was communicated"""
-        y_mean = self.y_data - m
-        KV = self._addKV(K, V)
-        self.KVlinalg.update_KV(KV)
-        KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY).reshape(len(y_mean))
-        return KVinvY.reshape(y_mean.shape)
-
-    def _set_KVinvY(self, K, V, m, mode):
-        """Set or reset KVinvY for new hyperparameters"""
-        y_mean = self.y_data - m
-        KV = self._addKV(K, V)
-        logger.debug("K+V computed")
-        self.KVlinalg.set_KV(KV, mode)
-        logger.debug("KVlinalg obj set")
-        logger.debug("Solve in progress")
-        KVinvY = self.KVlinalg.solve(y_mean).reshape(len(y_mean))
-        return KVinvY.reshape(y_mean.shape)
-
-    ##################################################################
     def compute_new_KVinvY(self, KV, m):
         """
         Recompute KVinvY for new hyperparameters (e.g. during training, for instance)
-        This is only used by some posterior functions and in the log likelihood functions.
+        This is only used by some posterior functions and in the gradient of the log likelihood function.
         This does not change the KV obj
         """
-        y_mean = self.y_data - m
+        y_mean = self.y_data - m[:, None]
         if self.gp2Scale:
-            raise Exception("Can't compute a new KVinvY")
-            #mode = self._set_gp2Scale_mode(KV)
-            #if mode == "sparseLU":
-            #    LU_factor = calculate_sparse_LU_factor(KV, args=self.args)
-            #    KVinvY = calculate_LU_solve(LU_factor, y_mean, args=self.args)
-            #elif mode == "Chol":
-            #    if issparse(KV): KV = KV.toarray()
-            #    Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
-            #    KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
-            #elif mode == "sparseCG":
-            #    KVinvY = calculate_sparse_conj_grad(KV, y_mean, args=self.args)
-            #elif mode == "sparseMINRES":
-            #    KVinvY = calculate_sparse_minres(KV, y_mean, args=self.args)
-            #elif mode == "sparseMINRESpre":
-            #    B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-            #    KVinvY = calculate_sparse_minres(KV, y_mean, M=B.L.T @ B.L, args=self.args)
-            #elif mode == "sparseCGpre":
-            #    B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-            #    KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L, args=self.args)
-            #elif mode == "sparseSolve":
-            #    KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
-            #elif callable(mode[0]) and callable(mode[1]):
-            #    factor = mode[0](KV)
-            #    KVinvY = mode[1](factor, y_mean)
-            #else:
-            #    raise Exception("No mode in gp2Scale", mode)
+            raise Exception("Can't compute a new KVinvY for gp2Scale")
         else:
             Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
             KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
         return KVinvY.reshape(y_mean.shape)
+    ##################################################################
+    def _update_state_KVinvY(self, K, V, m):
+        """This updates KVinvY after new data was communicated"""
+        #assert self.y_data.shape == m.shape
+        y_mean = self.y_data - m[:, None]
+        KV = self.addKV(K, V)
+        self.KVlinalg.update_KV(KV)
+        KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY).reshape(y_mean.shape)
+        return KVinvY
 
-    def compute_new_KVlogdet_KVinvY(self, K, V, m):
+    def _set_state_KVinvY(self, K, V, m, mode):
+        """Set or reset KVinvY for new hyperparameters"""
+        #assert self.y_data.shape == m.shape
+        y_mean = self.y_data - m[:, None]
+        KV = self.addKV(K, V)
+        logger.debug("K+V computed")
+        self.KVlinalg.set_KV(KV, mode)
+        logger.debug("KVlinalg obj set")
+        logger.debug("Solve in progress")
+        KVinvY = self.KVlinalg.solve(y_mean).reshape(y_mean.shape)
+        return KVinvY
+
+    ##################################################################
+    def _compute_new_KVlogdet_KVinvY(self, K, V, m):
         """
         Recomputing KVinvY and logdet(KV) for new hyperparameters.
         This is only used by the training (the log likelihood)
         """
-        KV = self._addKV(K, V)
-        y_mean = self.y_data - m
+        KV = self.addKV(K, V)
+        #assert self.y_data.shape == m.shape
+        y_mean = self.y_data - m[:, None]
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
             if mode == "sparseLU":
@@ -212,13 +188,13 @@ class GPMarginalDensity:
             Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
             KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
             KVlogdet = calculate_Chol_logdet(Chol_factor, compute_device=self.compute_device, args=self.args)
-        return KVinvY.reshape(len(y_mean)), KVlogdet
+        return KVinvY.reshape(y_mean.shape), KVlogdet
 
     def _get_KVm(self):
         return self.K, self.V, self.m
 
     @staticmethod
-    def _addKV(K, V):
+    def addKV(K, V):
         assert np.ndim(K) == 2
         assert K.shape[0] == K.shape[1]
 
@@ -289,12 +265,17 @@ class GPMarginalDensity:
             logger.debug("   V computed after {} seconds.", time.time() - st)
             m = self.compute_mean(self.x_data, hyperparameters)
             logger.debug("   Prior mean computed after {} seconds.", time.time() - st)
-            KVinvY, KVlogdet = self.compute_new_KVlogdet_KVinvY(K, V, m)
+            KVinvY, KVlogdet = self._compute_new_KVlogdet_KVinvY(K, V, m)
             logger.debug("   KVinvY and logdet computed after {} seconds.", time.time() - st)
 
         n = len(self.y_data)
-
-        return -(0.5 * ((self.y_data - m).T @ KVinvY)) - (0.5 * KVlogdet) - (0.5 * n * np.log(2.0 * np.pi))
+        y_mean = self.y_data - m[:, None]
+        assert np.ndim(y_mean) == 2
+        assert y_mean.shape == KVinvY.shape, "(y-m).shape != KVinvY.shape in log_likelihood"+str(y_mean.shape)+" ,"+str(KVinvY.shape)
+        if np.ndim(y_mean) == 2: l1 = np.sum(y_mean * KVinvY)/y_mean.shape[1]
+        else: l1 = np.sum(y_mean * KVinvY)
+        L = -0.5 * (l1 + KVlogdet + n * np.log(2.0 * np.pi))
+        return L
 
     ##################################################################################
     def neg_log_likelihood(self, hyperparameters=None):
@@ -314,7 +295,7 @@ class GPMarginalDensity:
         return -self.log_likelihood(hyperparameters=hyperparameters)
 
     ##################################################################################
-    def neg_log_likelihood_gradient(self, hyperparameters=None):
+    def neg_log_likelihood_gradient(self, hyperparameters=None, component=0):
         """
         Function that computes the gradient of the marginal log-likelihood.
 
@@ -323,27 +304,30 @@ class GPMarginalDensity:
         hyperparameters : np.ndarray, optional
             Vector of hyperparameters of shape (N).
             If not provided, the covariance will not be recomputed.
+        component : int, optional
+            In case many GPs are computed in parallel, this specifies which one is considered.
 
         Return
         ------
         Gradient of the negative log marginal likelihood : np.ndarray
         """
+        if self.gp2Scale: raise Exception("Can't compute neg_log_likelihood_gradient for gp2Scale")
 
         if hyperparameters is None:
             KVinvY = self.KVinvY
             K = self.K
             V = self.V
-            KV = self._addKV(K, V)
+            KV = self.addKV(K, V)
             hyperparameters = self.hyperparameters
         else:
             K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
             V = self.calculate_V(self.x_data, hyperparameters)
             m = self.compute_mean(self.x_data, hyperparameters)
-            KV = self._addKV(K, V)
+            KV = self.addKV(K, V)
             KVinvY = self.compute_new_KVinvY(KV, m)
 
-        b = KVinvY
-        dK_dH = None
+        b = KVinvY[:, component]
+        #dK_dH = None
         a = None
         if self.ram_economy is False:
             try:
@@ -377,10 +361,10 @@ class GPMarginalDensity:
                     assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 1
                     if np.ndim(noise_der) == 1:
                         dK_dH = self.dk_dh(
-                            self.x_data, self.x_data, hyperparameters, direction = i) + np.diag(noise_der)
+                            self.x_data, self.x_data, hyperparameters, direction=i) + np.diag(noise_der)
                     else:
                         dK_dH = self.dk_dh(
-                            self.x_data, self.x_data, hyperparameters, direction = i) + noise_der
+                            self.x_data, self.x_data, hyperparameters, direction=i) + noise_der
                 except Exception as e:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "

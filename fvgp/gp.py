@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import warnings
+
 warnings.simplefilter("once", UserWarning)
 import numpy as np
 from loguru import logger
@@ -16,8 +17,9 @@ import importlib
 
 
 # TODO: search below "TODO"
-#   - as work on functions is completed and functions are maintained, add verbose assert statements.
-#   - make shape(y_data)=(V,U) work (tensor GP), change docstrings
+#   - make shape(y_data)=(V,U) work (tensor GP), change docstrings (TEST)
+#   - remove async_train and make it part of train with flag async = True/False (TEST)
+#   - Make MCMC async train possible
 
 
 class GP:
@@ -44,7 +46,9 @@ class GP:
         x_data should be a list, not a numpy array.
         In this case, both the index set and the input space dim are set to 1.
     y_data : np.ndarray
-        The values of the data points. Shape (V).
+        The values of the data points. Shape (V) or (V, N). If shape (V,N) the algorithm will run N independent GPs.
+        This is not to be confused with multi-task learning. In this case, all GPs have to have the same prior
+        mean function.
     init_hyperparameters : np.ndarray, optional
         Vector of hyperparameters used to initiate the GP.
         The default is an array of ones with the right length for the anisotropic Matern
@@ -58,6 +62,8 @@ class GP:
         will be set to `abs(np.mean(y_data)) / 100.0`. If
         noise covariances are required (correlated noise), make use of the `noise_function`.
         Only provide a noise function OR `noise_variances`, not both.
+        If the shape of `y_data` is (V,N) the noise is still of shape (V), e.g., the outputs
+        must have the same noise in this scenario.
     compute_device : str, optional
         One of `cpu` or `gpu`, determines how linear algebra computations are executed. The default is `cpu`.
         For `gpu`, pytorch or cupy has to be installed manually. For advanced options see `args`.
@@ -68,7 +74,8 @@ class GP:
     kernel_function : Callable, optional
         A symmetric positive definite covariance function (a kernel)
         that calculates the covariance between
-        data points. It is a function of the form k(x1,x2,hyperparameters).
+        data points. It is a function of the form k(x1,x2,hyperparameters, [args]).
+        `args` is optional and is used to make `fvgp.gp.args` available.
         The input `x1` is a N1 x D array of positions, `x2` is a N2 x D
         array of positions, the hyperparameters argument
         is a 1d array of length D+1 for the default kernel and of a different
@@ -88,10 +95,13 @@ class GP:
         If `ram_economy` is `False`, the function's input is x1, x2, and hyperparameters.
         The output is a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
     prior_mean_function : Callable, optional
-        A function that evaluates the prior mean at a set of input position. It accepts as input
+        A function f(x, hyperparameters, [args]) that evaluates the prior mean at a set of input position.
+        It accepts as input
         an array of positions (of shape N1 x D) and hyperparameters (a 1d array of length D+1 for the default kernel).
-        The return value is a 1d array of length N1. If None is provided,
-        `fvgp.GP._default_mean_function` is used, which is the average of the `y_data`.
+        Optionally, the third argument `args` can be defined.
+        The return value is a 1d array of length N1.
+        If prior_mean_function is provided, `fvgp.GP._default_mean_function` is used,
+        which is the average of the `y_data`.
     prior_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the `prior_mean_function` at
         a set of input positions with respect to the hyperparameters.
@@ -103,9 +113,10 @@ class GP:
         or a finite-difference approximation
         is used if `prior_mean_function` is provided.
     noise_function : Callable, optional
-        The noise function is a callable f(x,hyperparameters) that returns a
+        The noise function is a callable f(x,hyperparameters, [args]) that returns a
         vector (1d np.ndarray) of len(x), a matrix of shape (length(x),length(x)) or a sparse matrix
         of the same shape.
+        The third argument `args` is optional.
         The input `x` is a numpy array of shape (N x D). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
@@ -184,7 +195,8 @@ class GP:
         - "Chol_logdet_compute_device" : str; default = "cpu"/"gpu"
         - "GPU_engine" : str; default = "torch"/"cupy"
 
-        All other keys will be stored and are available as part of the object instance.
+        All other keys will be stored and are available as part of the object instance and
+        in kernel, mean, and noise functions.
 
 
     Attributes
@@ -228,7 +240,8 @@ class GP:
     ):
 
         assert isinstance(noise_variances, np.ndarray) or noise_variances is None, "wrong format in noise_variances"
-        assert init_hyperparameters is None or isinstance(init_hyperparameters,np.ndarray), "wrong init_hyperparameters"
+        assert init_hyperparameters is None or isinstance(init_hyperparameters,
+                                                          np.ndarray), "wrong init_hyperparameters"
         assert isinstance(compute_device, str), "wrong format in compute_device"
         assert callable(kernel_function) or kernel_function is None, "wrong format in kernel_function"
         assert callable(kernel_function_grad) or kernel_function_grad is None, "wrong format in kernel_function"
@@ -374,6 +387,7 @@ class GP:
     @property
     def gp2Scale(self):
         return self.data.gp2Scale
+
     ###############################################################
     def set_args(self, new_args):
         """
@@ -453,8 +467,10 @@ class GP:
         self.data.update(x_new, y_new, noise_variances_new, append=append)
 
         # update prior
-        if append: self.prior.augment_state_data(old_x_data, x_new)
-        else: self.prior.update_state_data()
+        if append:
+            self.prior.augment_state_data(old_x_data, x_new)
+        else:
+            self.prior.update_state_data()
 
         # update likelihood
         self.likelihood.update_state()
@@ -505,7 +521,8 @@ class GP:
               global_optimizer="genetic",
               constraints=(),
               dask_client=None,
-              info=False):
+              info=False,
+              asynchronous=False):
 
         """
         This function finds the maximum of the log marginal likelihood and therefore trains the GP (synchronously).
@@ -568,14 +585,24 @@ class GP:
             Provides a way how to access information reports during training of the GP. The default is False.
             If other information is needed please utilize `logger` as described in the online
             documentation (separately for HGDL and fvgp if needed).
+        asynchronous : bool, optional
+            MCMC and `hgdl` methods allow for asynchronous execution. In that case, an object will
+            be returned that can be queried for an intermediate or final solution.
 
 
         Return
         ------
         optimized hyperparameters (only fyi, gp is already updated) : np.ndarray
         """
+        if self.gp2Scale and asynchronous:
+            asynchronous = False
+            warnings.warn("gp2Scale does not allow asynchronous training! `asynchronous` set to False")
         if self.gp2Scale: method = 'mcmc'
         if method == "hgdl" and dask_client is None: raise Exception("Please provide a dask_client for method =`hgdl`")
+        if (method == "hgdl" or method == "mcmc") and asynchronous and dask_client is None:
+            raise Exception("Please provide a dask_client for asynchronous training")
+        if method != "hgdl" and method != "mcmc" and asynchronous:
+            warnings.warn("Method not `hgdl` or `mcmc`. Asynchronous=True ignored")
         if hyperparameter_bounds is None:
             hyperparameter_bounds = self._get_default_hyperparameter_bounds()
             warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
@@ -611,130 +638,50 @@ class GP:
         logger.debug("objective function: {}", objective_function)
         logger.debug("method: {}", method)
 
-        hyperparameters = self.trainer.train(
-            objective_function=objective_function,
-            objective_function_gradient=objective_function_gradient,
-            objective_function_hessian=objective_function_hessian,
-            hyperparameter_bounds=hyperparameter_bounds,
-            init_hyperparameters=init_hyperparameters,
-            method=method,
-            pop_size=pop_size,
-            tolerance=tolerance,
-            max_iter=max_iter,
-            local_optimizer=local_optimizer,
-            global_optimizer=global_optimizer,
-            constraints=constraints,
-            dask_client=dask_client,
-            info=info
-        )
-        self.set_hyperparameters(hyperparameters)
-        return hyperparameters
-
-    ##################################################################################
-    def train_async(self,
-                    hyperparameter_bounds=None,
-                    objective_function=None,
-                    objective_function_gradient=None,
-                    objective_function_hessian=None,
-                    init_hyperparameters=None,
-                    max_iter=10000,
-                    local_optimizer="L-BFGS-B",
-                    global_optimizer="genetic",
-                    constraints=(),
-                    dask_client=None):
-        """
-        This function finds the maximum of the log marginal likelihood and therefore trains the GP asynchronously.
-        This can be done on a remote cluster/computer by
-        providing a dask client. This function submits the training and returns
-        an object which can be given to `fvgp.GP.update_hyperparameters()`,
-        which will automatically update the GP with the new hyperparameters.
-
-
-        Parameters
-        ----------
-        hyperparameter_bounds : np.ndarray, optional
-            A 2d numpy array of shape (N x 2), where N is the number of hyperparameters.
-            The default means inferring the bounds from the communicated dataset.
-            This only works for the default kernel.
-        objective_function : callable, optional
-            The function that will be MINIMIZED for training the GP. The form of the function is f(hyperparameters=hps)
-            and returns a scalar. This function can be used to train via non-standard user-defined objectives.
-            The default is the negative log marginal likelihood.
-        objective_function_gradient : callable, optional
-            The gradient of the function that will be MINIMIZED for training the GP.
-            The form of the function is f(hyperparameters=hps)
-            and returns a vector of len(hps). This function can be used to train
-            via non-standard user-defined objectives.
-            The default is the gradient of the negative log marginal likelihood.
-        objective_function_hessian : callable, optional
-            The Hessian of the function that will be MINIMIZED for training the GP.
-            The form of the function is f(hyperparameters=hps)
-            and returns a matrix of shape(len(hps),len(hps)). This function can be used to train
-            via non-standard user-defined objectives.
-            The default is the Hessian of the negative log marginal likelihood.
-        init_hyperparameters : np.ndarray, optional
-            Initial hyperparameters used as starting location for all optimizers.
-            The default is a random draw from a uniform distribution within the `hyperparameter_bounds`.
-        max_iter : int, optional
-            Maximum number of iterations for global and local optimizers. Default = 120.
-        local_optimizer : str, optional
-            Defining the local optimizer. Default = `L-BFGS-B`, most `scipy.optimize.minimize`
-            functions are permissible.
-        global_optimizer : str, optional
-            Defining the global optimizer. Only applicable to `method = hgdl`. Default = `genetic`
-        constraints : tuple of object instances, optional
-            Equality and inequality constraints for the optimization.
-            If the optimizer is `hgdl` see `hgdl.readthedocs.io`.
-            If the optimizer is a `scipy` optimizer, see the scipy documentation.
-        dask_client : distributed.client.Client, optional
-            A Dask Distributed Client instance for distributed training. If None is provided, a new
-            `dask.distributed.Client` instance is constructed. It should be closed down manually when no longer needed.
-
-
-        Return
-        ------
-        Optimization object that can be given to `fvgp.GP.update_hyperparameters()` to update the GP : object instance
-        """
-        if self.gp2Scale: raise Exception("gp2Scale does not allow asynchronous training!")
-        if hyperparameter_bounds is None:
-            hyperparameter_bounds = self._get_default_hyperparameter_bounds()
-            warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
-                          "This will fail for custom kernel,"
-                          " mean, or noise functions")
-
-        if init_hyperparameters is None:
-            if out_of_bounds(self.hyperparameters, hyperparameter_bounds):
-                init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
-                                                         high=hyperparameter_bounds[:, 1],
-                                                         size=len(hyperparameter_bounds))
-            else:
-                init_hyperparameters = self.hyperparameters
+        if not asynchronous:
+            hyperparameters = self.trainer.train(
+                objective_function=objective_function,
+                objective_function_gradient=objective_function_gradient,
+                objective_function_hessian=objective_function_hessian,
+                hyperparameter_bounds=hyperparameter_bounds,
+                init_hyperparameters=init_hyperparameters,
+                method=method,
+                pop_size=pop_size,
+                tolerance=tolerance,
+                max_iter=max_iter,
+                local_optimizer=local_optimizer,
+                global_optimizer=global_optimizer,
+                constraints=constraints,
+                dask_client=dask_client,
+                info=info)
+            self.set_hyperparameters(hyperparameters)
+            return hyperparameters
         else:
-            if out_of_bounds(init_hyperparameters, hyperparameter_bounds):
-                warnings.warn("Your init_hyperparameters are out of bounds. They will be over-written")
-                init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
-                                                         high=hyperparameter_bounds[:, 1],
-                                                         size=len(hyperparameter_bounds))
-
-        if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
-        if objective_function_gradient is None: objective_function_gradient = (
-            self.marginal_density.neg_log_likelihood_gradient)
-        if objective_function_hessian is None: objective_function_hessian = (
-            self.marginal_density.neg_log_likelihood_hessian)
-
-        opt_obj = self.trainer.train_async(
-            objective_function=objective_function,
-            objective_function_gradient=objective_function_gradient,
-            objective_function_hessian=objective_function_hessian,
-            hyperparameter_bounds=hyperparameter_bounds,
-            init_hyperparameters=init_hyperparameters,
-            max_iter=max_iter,
-            local_optimizer=local_optimizer,
-            global_optimizer=global_optimizer,
-            constraints=constraints,
-            dask_client=dask_client
-        )
-        return opt_obj
+            if method == "mcmc":
+                opt_obj = self.trainer.mcmc_async(
+                    objective_function=objective_function,
+                    hyperparameter_bounds=hyperparameter_bounds,
+                    init_hyperparameters=init_hyperparameters,
+                    max_iter=max_iter,
+                    dask_client=dask_client
+                )
+                return opt_obj
+            elif method == 'hgdl':
+                opt_obj = self.trainer.hgdl_async(
+                    objective_function=objective_function,
+                    objective_function_gradient=objective_function_gradient,
+                    objective_function_hessian=objective_function_hessian,
+                    hyperparameter_bounds=hyperparameter_bounds,
+                    init_hyperparameters=init_hyperparameters,
+                    max_iter=max_iter,
+                    local_optimizer=local_optimizer,
+                    global_optimizer=global_optimizer,
+                    constraints=constraints,
+                    dask_client=dask_client
+                )
+                return opt_obj
+            else:
+                raise Exception("Asynchronous training only available for `hgdl` and `mcmc`")
 
     ##################################################################################
     def stop_training(self, opt_obj):
@@ -838,7 +785,7 @@ class GP:
             assert np.ndim(hyperparameters) == 1, "wrong format in hyperparameters"
         return self.marginal_density.log_likelihood(hyperparameters=hyperparameters)
 
-    def neg_log_likelihood_gradient(self, hyperparameters=None):
+    def neg_log_likelihood_gradient(self, hyperparameters=None, component=0):
         """
         Function that computes the gradient of the marginal log-likelihood.
 
@@ -847,12 +794,14 @@ class GP:
         hyperparameters : np.ndarray, optional
             Vector of hyperparameters of shape (N).
             If not provided, the covariance will not be recomputed.
+        component : int, optional
+            In case many GPs are computed in parallel, this specifies which one is considered.
 
         Return
         ------
         Gradient of the negative log marginal likelihood : np.ndarray
         """
-        return self.marginal_density.log_likelihood(hyperparameters=hyperparameters)
+        return self.marginal_density.neg_log_likelihood_gradient(hyperparameters=hyperparameters, component=component)
 
     def test_log_likelihood_gradient(self, hyperparameters):
         """
@@ -901,7 +850,7 @@ class GP:
         """
         return self.posterior.posterior_mean(x_pred, hyperparameters=hyperparameters, x_out=x_out)
 
-    def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None):
+    def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None, component=0):
         """
         This function calculates the gradient of the posterior mean for a set of input points.
 
@@ -921,13 +870,16 @@ class GP:
             Usually this is np.ndarray([0,1,2,...]).
         direction : int, optional
             Direction of derivative, If None (default) the whole gradient will be computed.
+        component : int, optional
+            In case `y_data` is multi-modal and no fvgp.GPOptimizer is used --- this means y_data.shape[1] independent
+            GPs are being executed --- this indicates which GP's gradient is evaluated. The default is 0.
 
         Return
         ------
         Solution : dict
         """
         return self.posterior.posterior_mean_grad(x_pred, hyperparameters=hyperparameters,
-                                                  x_out=x_out, direction=direction)
+                                                  x_out=x_out, direction=direction, component=component)
 
     ###########################################################################
     def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
@@ -1247,7 +1199,7 @@ class GP:
                            - (((x - mu) / sigma) * (2. * norm.cdf((x - mu) / sigma) - 1.))))
         return np.mean(res), np.sqrt(np.var(res))
 
-    def crps(self, x_test, y_test):  # correct, tested
+    def crps(self, x_test, y_test):
         """
         This function calculates the continuous rank probability score.
 
@@ -1292,6 +1244,29 @@ class GP:
         assert v1.shape == v2.shape, (v1.shape, v2.shape)
         return np.sqrt(np.sum((v1 - v2) ** 2) / v1.size)
 
+    def nrmse(self, x_test, y_test):
+        """
+        This function calculates the root mean squared error.
+        Note that in the multi-task setting the user should perform their
+        input point transformation beforehand.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as  an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape V or (V x No) in the multi-output case. These are the y data to compare against.
+
+        Return
+        ------
+        RMSE : float
+        """
+
+        v1 = y_test
+        v2 = self.posterior_mean(x_test)["m(x)"]
+        assert v1.shape == v2.shape, (v1.shape, v2.shape)
+        return np.sum((v1 - v2) ** 2) / np.sum(v1 ** 2)
+
     def nlpd(self, x_test, y_test):  # correct, tested
         """
         This function calculates the Negative log predictive density.
@@ -1309,14 +1284,14 @@ class GP:
         """
 
         mean = self.posterior_mean(x_test)["m(x)"]
-        sigma = np.sqrt(self.posterior_covariance(x_test)["v(x)"])
+        v = self.posterior_covariance(x_test)["v(x)"]
 
-        assert mean.shape == sigma.shape == y_test.shape, (mean.shape, sigma.shape, y_test.shape)
+        assert mean.shape == v.shape == y_test.shape, (mean.shape, v.shape, y_test.shape)
 
-        g = self.gaussian_1d(y_test, mean, sigma)
-        g[g == 0.] = 1e-16
-        g = np.log(g)
-        return -np.mean(g)
+        term1 = 0.5 * np.log(2 * np.pi * v)
+        term2 = 0.5 * ((y_test - mean) ** 2) / v
+        nlpd = np.mean(term1 + term2)
+        return nlpd
 
     def r2(self, x_test, y_test):
         """
@@ -1338,6 +1313,40 @@ class GP:
         ss_res = np.sum((y_test - y_pred_mean) ** 2)
         ss_tot = np.sum((y_test - np.mean(y_test)) ** 2)
         return 1. - ss_res / ss_tot
+
+    def picp(self, x_test, y_true, interval=0.95):
+        """
+        Computes the Prediction Interval Coverage Probability (PICP)
+        for a Gaussian Process posterior.
+
+        Parameters
+        ----------
+        x_test : array-like, shape (N,dim)
+        y_true : array-like, shape (N,)
+            True values of the target variable.
+        interval : float, optional
+            Confidence interval (default 0.95 for 95% intervals).
+
+        Returns
+        -------
+        picp : float
+            Prediction Interval Coverage Probability
+        lower_bounds : ndarray
+            Lower bounds of prediction intervals
+        upper_bounds : ndarray
+            Upper bounds of prediction intervals
+        """
+        mu = self.posterior_mean(x_test)["m(x)"]
+        sigma = np.sqrt(self.posterior_covariance(x_test, add_noise=True)["v(x)"])
+
+        z = norm.ppf(1 - (1 - interval) / 2)
+        lower_bounds = mu - z * sigma
+        upper_bounds = mu + z * sigma
+
+        inside = (y_true >= lower_bounds) & (y_true <= upper_bounds)
+        picp = np.mean(inside)
+
+        return picp
 
     @staticmethod
     def gaussian_1d(x, mu, sigma):
@@ -1431,7 +1440,6 @@ class GP:
         n = number_of_workers
         return (D ** 2 * tb) / (2. * n * b ** 2)
 
-
     def initialize_gp2Scale_dask_client(self, gp2Scale, gp2Scale_dask_client):
         if gp2Scale:
             try:
@@ -1442,8 +1450,10 @@ class GP:
                     " manually for this to work.")
             if gp2Scale_dask_client is None:
                 logger.debug("Creating my own local client.")
-                try: gp2Scale_dask_client = Client()
-                except: logger.debug("no client available")
+                try:
+                    gp2Scale_dask_client = Client()
+                except:
+                    logger.debug("no client available")
         return gp2Scale_dask_client
 
     def __getstate__(self):
@@ -1454,7 +1464,7 @@ class GP:
             marginal_density=self.marginal_density,
             trainer=self.trainer,
             posterior=self.posterior
-            )
+        )
         return state
 
     def __setstate__(self, state):

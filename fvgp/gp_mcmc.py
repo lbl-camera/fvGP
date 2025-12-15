@@ -71,6 +71,8 @@ class gpMCMC:
         self.args = args
         self.trace = None
         self.mcmc_info = None
+        self._running = False
+        self._stop_requested = False
 
     def run_mcmc(self, *, x0,
                  n_updates=10000,
@@ -105,6 +107,7 @@ class gpMCMC:
             Mean, medians, and variances of the last 1% are presented. All other returns consider the whole trace.
             The traces `x` are all the accepted positions in the MCMC.
         """
+        self._running = True
         start_time = time.time()
         n_updates = max(n_updates, 2)
         if not isinstance(x0, np.ndarray): raise Exception("x0 is not a numpy array")
@@ -143,22 +146,33 @@ class gpMCMC:
 
             if info and (i % 100) == 0: print("Finished ", i, " out of ", n_updates, " iterations. f(x)= ", likelihood)
             if break_condition(self): break
+
+
+            # Collect trace objects to return
+            arg_max = np.argmax(self.trace["f(x)"])
+            x = np.asarray(self.trace["x"])
+            dist_index = int(len(x) - (len(x) / 100))
+            self.mcmc_info = {"f(x)": self.trace["f(x)"],
+                              "max f(x)": self.trace["f(x)"][arg_max],
+                              "MAP": self.trace["f(x)"][arg_max],
+                              "max x": x[arg_max],
+                              "time stamps": self.trace["time stamp"],
+                              "x": x,
+                              "mean(x)": np.mean(x[dist_index:], axis=0),
+                              "median(x)": np.median(x[dist_index:], axis=0),
+                              "var(x)": np.var(x[dist_index:], axis=0)}
+            if self._stop_requested: break
         # End main loop
+        self._running = False
+        return self.mcmc_info
 
-        # Collect trace objects to return
-        arg_max = np.argmax(self.trace["f(x)"])
-        x = np.asarray(self.trace["x"])
-        dist_index = int(len(x) - (len(x) / 100))
-        self.mcmc_info = {"f(x)": self.trace["f(x)"],
-                          "max f(x)": self.trace["f(x)"][arg_max],
-                          "MAP": self.trace["f(x)"][arg_max],
-                          "max x": x[arg_max],
-                          "time stamps": self.trace["time stamp"],
-                          "x": x,
-                          "mean(x)": np.mean(x[dist_index:], axis=0),
-                          "median(x)": np.median(x[dist_index:], axis=0),
-                          "var(x)": np.var(x[dist_index:], axis=0)}
+    def is_running(self):
+        return self._running
 
+    def stop(self):
+        self._stop_requested = True
+
+    def get_latest(self):
         return self.mcmc_info
 
     @staticmethod
@@ -206,6 +220,12 @@ class gpMCMC:
             x = x_old
 
         return x, prior_eval, likelihood, jump_trace
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
 
 ###############################################################
@@ -323,3 +343,9 @@ class ProposalDistribution:
 
     def _no_adapt(self, end, mcmc_obj):
         return
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
