@@ -597,6 +597,9 @@ class GP:
         if self.gp2Scale and asynchronous:
             asynchronous = False
             warnings.warn("gp2Scale does not allow asynchronous training! `asynchronous` set to False")
+        if asynchronous and method != "hgdl":
+            warnings.warn("Asynchronous execution is currently only supported for method=`hgdl`. Set to False")
+
         if self.gp2Scale: method = 'mcmc'
         if method == "hgdl" and dask_client is None: raise Exception("Please provide a dask_client for method =`hgdl`")
         if (method == "hgdl" or method == "mcmc") and asynchronous and dask_client is None:
@@ -658,14 +661,7 @@ class GP:
             return hyperparameters
         else:
             if method == "mcmc":
-                opt_obj = self.trainer.mcmc_async(
-                    objective_function=objective_function,
-                    hyperparameter_bounds=hyperparameter_bounds,
-                    init_hyperparameters=init_hyperparameters,
-                    max_iter=max_iter,
-                    dask_client=dask_client
-                )
-                return opt_obj
+                ...
             elif method == 'hgdl':
                 opt_obj = self.trainer.hgdl_async(
                     objective_function=objective_function,

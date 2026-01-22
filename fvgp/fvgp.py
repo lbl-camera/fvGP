@@ -56,7 +56,7 @@ class fvGP(GP):
         simply considered a separate dimension. If gp2Scale is
         enabled, the default kernel changes to the anisotropic Wendland kernel.
     noise_variances : np.ndarray, optional
-        An numpy array or list defining the uncertainties/noise in the
+        An numpy array defining the uncertainties/noise in the
         `y_data` in form of a point-wise variance. Shape (V, No).
         If `y_data` has np.nan entries, the corresponding
         `noise_variances` have to be np.nan.

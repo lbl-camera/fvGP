@@ -3,6 +3,7 @@
 import numpy as np
 import time
 import warnings
+from dask.distributed import get_worker
 
 
 ## --------------------------------------------------------------------- ##
@@ -70,7 +71,7 @@ class gpMCMC:
         self.proposal_distributions = proposal_distributions
         self.args = args
         self.trace = None
-        self.mcmc_info = None
+        self.mcmc_info = {}
         self._running = False
         self._stop_requested = False
 
@@ -110,15 +111,12 @@ class gpMCMC:
         self._running = True
         start_time = time.time()
         n_updates = max(n_updates, 2)
-        if not isinstance(x0, np.ndarray): raise Exception("x0 is not a numpy array")
-        if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
-        if break_condition is None:
-            def break_condition(a):
-                return False
-        elif break_condition == "default":
-            break_condition = self._default_break_condition
-        else:
-            raise Exception("No valid input for break condition provided!")
+        assert isinstance(x0, np.ndarray) and np.ndim(x0) == 1
+
+        #break condition
+        if break_condition is None: break_condition = lambda a: False
+        elif break_condition == "default": break_condition = self._default_break_condition
+        else: raise Exception("No valid input for break condition provided!")
         if run_in_every_iteration is None: run_in_every_iteration = lambda a: False
 
         self.trace = {"f(x)": [], "x": [], "time stamp": []}
@@ -128,8 +126,10 @@ class gpMCMC:
         # Initialize Metropolis
         x = x0.copy()
         likelihood = self.log_likelihood_function(x, self.args)
+
         if info: print("Starting likelihood. f(x)= ", likelihood)
         prior = self.prior_function(x, self.args)
+
         #########################################################
         # Begin main loop
         for i in np.arange(1, n_updates):
@@ -147,20 +147,20 @@ class gpMCMC:
             if info and (i % 100) == 0: print("Finished ", i, " out of ", n_updates, " iterations. f(x)= ", likelihood)
             if break_condition(self): break
 
-
             # Collect trace objects to return
             arg_max = np.argmax(self.trace["f(x)"])
-            x = np.asarray(self.trace["x"])
+            trace = np.asarray(self.trace["x"])
             dist_index = int(len(x) - (len(x) / 100))
             self.mcmc_info = {"f(x)": self.trace["f(x)"],
                               "max f(x)": self.trace["f(x)"][arg_max],
                               "MAP": self.trace["f(x)"][arg_max],
-                              "max x": x[arg_max],
+                              "max x": trace[arg_max],
                               "time stamps": self.trace["time stamp"],
-                              "x": x,
+                              "x": trace,
                               "mean(x)": np.mean(x[dist_index:], axis=0),
                               "median(x)": np.median(x[dist_index:], axis=0),
                               "var(x)": np.var(x[dist_index:], axis=0)}
+            self.log_event(i, get_worker())
             if self._stop_requested: break
         # End main loop
         self._running = False
@@ -174,6 +174,15 @@ class gpMCMC:
 
     def get_latest(self):
         return self.mcmc_info
+
+    def log_event(self, it, worker):
+        worker.log_event(
+            "mcmc_progress",
+            {
+                "iter": it,
+                "trace": self.mcmc_info,
+            }
+        )
 
     @staticmethod
     def _default_break_condition(obj):

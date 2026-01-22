@@ -13,7 +13,7 @@ class GPdata:
         # make sure the inputs are in the right format
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
         assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2)
-        assert ((isinstance(noise_variances, np.ndarray) and np.ndim(noise_variances) <= 2)
+        assert ((isinstance(noise_variances, np.ndarray) and np.ndim(noise_variances) == 1)
                 or noise_variances is None)
         assert len(x_data) == len(y_data), "x_data and y_data have different lengths."
         if isinstance(noise_variances, np.ndarray): assert len(noise_variances) == len(y_data)
