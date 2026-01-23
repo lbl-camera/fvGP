@@ -527,7 +527,7 @@ class GP:
         """
         This function finds the maximum of the log marginal likelihood and therefore trains the GP (synchronously).
         This can be done on a remote cluster/computer by specifying the method to be `hgdl` and
-        providing a dask client. However, in that case `fvgp.GP.train_async()` is preferred.
+        providing a dask client. Method `hgdl` can also be run asynchronously.
         The GP prior will automatically be updated with the new hyperparameters after the training.
 
 
@@ -586,7 +586,7 @@ class GP:
             If other information is needed please utilize `logger` as described in the online
             documentation (separately for HGDL and fvgp if needed).
         asynchronous : bool, optional
-            MCMC and `hgdl` methods allow for asynchronous execution. In that case, an object will
+            Method `hgdl` allows for asynchronous execution. In that case, an object will
             be returned that can be queried for an intermediate or final solution.
 
 
@@ -661,7 +661,7 @@ class GP:
             return hyperparameters
         else:
             if method == "mcmc":
-                ...
+                raise Exception("Asynchronous MCMC not yet implemented.")
             elif method == 'hgdl':
                 opt_obj = self.trainer.hgdl_async(
                     objective_function=objective_function,
@@ -688,7 +688,7 @@ class GP:
         Parameters
         ----------
         opt_obj : object instance
-            Object created by :py:meth:`train_async()`.
+            Object created by :py:meth:`train(asynchronous=True)`.
         """
         self.trainer.stop_training(opt_obj)
 
@@ -701,7 +701,7 @@ class GP:
         Parameters
         ----------
         opt_obj : object instance
-            Object created by :py:meth:`train_async()`.
+            Object created by :py:meth:`train(asynchronous=True)`.
         """
         self.trainer.kill_client(opt_obj)
 
@@ -713,7 +713,7 @@ class GP:
         Parameters
         ----------
         opt_obj : object instance
-            Object created by :py:meth:`train_async()`.
+            Object created by :py:meth:`train(asynchronous=True)`.
 
         Return
         ------

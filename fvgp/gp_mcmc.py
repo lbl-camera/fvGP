@@ -63,12 +63,19 @@ class gpMCMC:
     def __init__(self,
                  log_likelihood_function,
                  prior_function,
-                 proposal_distributions,
+                 proposal_distributions=None,
                  args=None
                  ):
         self.log_likelihood_function = log_likelihood_function
         self.prior_function = prior_function
+        if proposal_distributions is None:
+            bounds = args["bounds"]
+            domain_size = bounds[:, 1] - bounds[:, 0]
+            std_diag = domain_size * 0.2 / np.sqrt(12)
+            proposal_distributions = [ProposalDistribution(np.arange(len(bounds)),
+                                                           init_prop_Sigma=np.diag(std_diag**2))]
         self.proposal_distributions = proposal_distributions
+
         self.args = args
         self.trace = None
         self.mcmc_info = {}
@@ -108,7 +115,6 @@ class gpMCMC:
             Mean, medians, and variances of the last 1% are presented. All other returns consider the whole trace.
             The traces `x` are all the accepted positions in the MCMC.
         """
-        self._running = True
         start_time = time.time()
         n_updates = max(n_updates, 2)
         assert isinstance(x0, np.ndarray) and np.ndim(x0) == 1
@@ -149,40 +155,18 @@ class gpMCMC:
 
             # Collect trace objects to return
             arg_max = np.argmax(self.trace["f(x)"])
-            trace = np.asarray(self.trace["x"])
-            dist_index = int(len(x) - (len(x) / 100))
+            dist_index = int(len(self.trace["x"]) - (len(self.trace["x"]) / 100))
             self.mcmc_info = {"f(x)": self.trace["f(x)"],
                               "max f(x)": self.trace["f(x)"][arg_max],
                               "MAP": self.trace["f(x)"][arg_max],
-                              "max x": trace[arg_max],
+                              "max x": np.asarray(self.trace["x"])[arg_max],
                               "time stamps": self.trace["time stamp"],
-                              "x": trace,
-                              "mean(x)": np.mean(x[dist_index:], axis=0),
-                              "median(x)": np.median(x[dist_index:], axis=0),
-                              "var(x)": np.var(x[dist_index:], axis=0)}
-            self.log_event(i, get_worker())
-            if self._stop_requested: break
+                              "x": np.asarray(self.trace["x"]),
+                              "mean(x)": np.mean(np.asarray(self.trace["x"])[dist_index:], axis=0),
+                              "median(x)": np.median(np.asarray(self.trace["x"])[dist_index:], axis=0),
+                              "var(x)": np.var(np.asarray(self.trace["x"])[dist_index:], axis=0)}
         # End main loop
-        self._running = False
         return self.mcmc_info
-
-    def is_running(self):
-        return self._running
-
-    def stop(self):
-        self._stop_requested = True
-
-    def get_latest(self):
-        return self.mcmc_info
-
-    def log_event(self, it, worker):
-        worker.log_event(
-            "mcmc_progress",
-            {
-                "iter": it,
-                "trace": self.mcmc_info,
-            }
-        )
 
     @staticmethod
     def _default_break_condition(obj):

@@ -249,9 +249,9 @@ def test_train_hgdl_async(client):
     my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]),noise_variances=np.zeros(y_data.shape) + 0.01,
         compute_device="cpu", calc_inv = True, ram_economy = True)
 
-    opt_obj = my_gp2.train_async(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            max_iter = 50, dask_client=client)
-    opt_obj = my_gp2.train_async(max_iter = 5, dask_client=client)
+    opt_obj = my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
+            max_iter = 50, dask_client=client, method = "hgdl", asynchronous=True)
+    opt_obj = my_gp2.train(max_iter = 5, dask_client=client, asynchronous=True, method="hgdl")
 
 
     time.sleep(5)

@@ -17,7 +17,7 @@ class GPlikelihood:
         assert self.noise_variances is None or isinstance(self.noise_variances, np.ndarray)
 
         if isinstance(self.noise_variances, np.ndarray):
-            assert np.ndim(self.noise_variances) <= 2
+            assert np.ndim(self.noise_variances) == 1
             assert np.all(self.noise_variances > 0.0)
 
         if self.noise_variances is not None and callable(noise_function):
