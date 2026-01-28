@@ -39,7 +39,7 @@ class fvGP(GP):
 
     Parameters
     ----------
-    x_data : np.ndarray or list
+    x_data : np.ndarray | list
         The input point positions. Shape (V x Di), where Di is the :py:attr:`fvgp.fvGP.input_set_dim`.
         For multi-task GPs, the index set dimension = input space dimension + 1.
         If dealing with non-Euclidean inputs
@@ -75,7 +75,8 @@ class fvGP(GP):
     kernel_function : Callable, optional
         A symmetric positive definite covariance function (a kernel)
         that calculates the covariance between
-        data points. It is a function of the form k(x1,x2,hyperparameters).
+        data points. It is a function of the form k(x1,x2,hyperparameters, [args]).
+        `args` is optional and is used to make `fvgp.gp.args` available.
         The input `x1` a N1 x Di+1 array of positions, `x2` is a N2 x Di+1
         array of positions, the hyperparameters argument
         is a 1d array of length N depending on how many hyperparameters are initialized.
@@ -96,9 +97,11 @@ class fvGP(GP):
         If `ram_economy` is `False`, the function's input is x1, x2, and hyperparameters.
         The output is a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
     prior_mean_function : Callable, optional
-        A function that evaluates the prior mean at a set of input position. It accepts as input
+        A function f(x, hyperparameters, [args]) that evaluates the prior mean at a set of input position.
+        It accepts as input
         an array of positions (of shape N1 x Di+1) and
-         hyperparameters (a 1d array of length Di+2 for the default kernel).
+        hyperparameters (a 1d array of length Di+2 for the default kernel).
+        Optionally, the third argument `args` can be defined.
         The return value is a 1d array of length N1. If None is provided,
         `fvgp.GP._default_mean_function` is used, which is the average of the `y_data`.
     prior_mean_function_grad : Callable, optional
@@ -112,9 +115,10 @@ class fvGP(GP):
         or a finite-difference approximation
         is used if `prior_mean_function` is provided.
     noise_function : Callable, optional
-        The noise function is a callable f(x,hyperparameters) that returns a
+        The noise function is a callable f(x,hyperparameters, [args]) that returns a
         vector (1d np.ndarray) of len(x), a matrix of shape (length(x),length(x)) or a sparse matrix
         of the same shape.
+        The third argument `args` is optional.
         The input `x` is a numpy array of shape (N x Di+1). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
@@ -197,13 +201,13 @@ class fvGP(GP):
 
     Attributes
     ----------
-    x_data : np.ndarray or list
+    x_data : np.ndarray | list
         Datapoint positions
     y_data : np.ndarray
         Datapoint values
     noise_variances : np.ndarray
         Datapoint observation variances.
-    fvgp_x_data : np.ndarray or list
+    fvgp_x_data : np.ndarray | list
         Data points from the fvgp point of view.
     fvgp_y_data : np.ndarray
         The data values from the fvgp point of view.

@@ -17,8 +17,6 @@ import importlib
 
 
 # TODO: search below "TODO"
-#   - make shape(y_data)=(V,U) work (tensor GP), change docstrings (TEST)
-#   - remove async_train and make it part of train with flag async = True/False (TEST)
 #   - Make MCMC async train possible
 
 
@@ -89,7 +87,7 @@ class GP:
         It accepts as input `x1` (a N1 x D array of positions),
         `x2` (a N2 x D array of positions) and
         `hyperparameters` (a 1d array of length D+1 for the default kernel).
-        The default is a finite difference calculation.
+        The default is an analytical gradient for the default kernel or a finite difference calculation otherwise.
         If `ram_economy` is True, the function's input is x1, x2, hyperparameters (numpy array), and a direction (int).
         The output is a numpy array of shape (len(hps) x N).
         If `ram_economy` is `False`, the function's input is x1, x2, and hyperparameters.
