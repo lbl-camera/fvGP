@@ -98,9 +98,9 @@ def test_single_task_init_basic():
     my_gp1 = GP(x_data, y_data)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = False)
-    res = my_gp1.posterior_covariance(x_pred, variances_only = True)
+    res = my_gp1.posterior_covariance(x_pred, variance_only = True)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = True)
-    res = my_gp1.posterior_covariance(x_pred, variances_only = True)
+    res = my_gp1.posterior_covariance(x_pred, variance_only = True)
 
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1.train()
