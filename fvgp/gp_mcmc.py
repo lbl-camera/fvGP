@@ -79,8 +79,6 @@ class gpMCMC:
         self.args = args
         self.trace = None
         self.mcmc_info = {}
-        self._running = False
-        self._stop_requested = False
 
     def run_mcmc(self, *, x0,
                  n_updates=10000,
@@ -150,7 +148,7 @@ class gpMCMC:
             self.trace["time stamp"].append(time.time() - start_time)
             run_in_every_iteration(self)
 
-            if info and (i % 100) == 0: print("Finished ", i, " out of ", n_updates, " iterations. f(x)= ", likelihood)
+            if info and (i % 10) == 0: print("Finished ", i, " out of ", n_updates, " iterations. f(x)= ", likelihood)
             if break_condition(self): break
 
             # Collect trace objects to return
@@ -171,18 +169,15 @@ class gpMCMC:
     @staticmethod
     def _default_break_condition(obj):
         x = obj.trace["x"]
-        if len(x) > 201:
-            latest_mean = np.mean(x[-100:], axis=0)
-            earlier_mean = np.mean(x[-200:-100], axis=0)
-            abs_diff = abs(latest_mean - earlier_mean)
-            max_index = np.argmax(abs_diff)
-            ratio = (abs_diff[max_index] / abs(latest_mean[max_index])) * 100.
-            if ratio < 0.1:
-                return True
-            else:
-                return False
+        i = len(x)
+        if i < 400: return False
+        if (np.sum(abs(np.mean(x[-40:], axis=0) -
+                np.mean(x[-80:-40], axis=0)))
+                < 0.001 * np.sum(abs(np.mean(x[-40:], axis=0)))):
+            return True
         else:
             return False
+
 
     ###############################################################
     def _jump(self, x_old, obj, prior_eval, likelihood):

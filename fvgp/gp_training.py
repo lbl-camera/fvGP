@@ -310,12 +310,108 @@ class GPtraining:
                 return objective_function(hps)
 
             myMCMC = gpMCMC(likelihood_func, prior_function, args={"bounds": hp_bounds})
-            res = myMCMC.run_mcmc(x0=starting_hps, n_updates=max_iter)
+            res = myMCMC.run_mcmc(x0=starting_hps, n_updates=max_iter, info=info, break_condition="default")
             hyperparameters = res["median(x)"]
             self.mcmc_info = res
+        elif method == "adam":
+            hyperparameters, history = self.adam_optimize(objective_function,
+                                                          objective_function_gradient,
+                                                          starting_hps, max_iter=max_iter)
         elif callable(method): hyperparameters = method(self)
         else: raise ValueError("No optimization mode specified in fvGP")
         return hyperparameters
+
+    @staticmethod
+    def adam_optimize(
+        nlml,
+        grad_nlml,
+        theta0,
+        lr=1e-2,
+        beta1=0.9,
+        beta2=0.999,
+        eps=1e-8,
+        max_iter=1000,
+        tol=1e-6,
+        callback=None,
+    ):
+        """
+        Adam optimizer for GP hyperparameters.
+
+        Parameters
+        ----------
+        nlml : callable
+            Negative log marginal likelihood: f(theta) -> scalar
+        grad_nlml : callable
+            Gradient of nlml: g(theta) -> ndarray (d,)
+        theta0 : ndarray
+            Initial parameter vector (d,)
+        lr : float
+            Learning rate
+        beta1 : float
+            Exponential decay for first moment
+        beta2 : float
+            Exponential decay for second moment
+        eps : float
+            Numerical stability constant
+        max_iter : int
+            Maximum iterations
+        tol : float
+            Stopping tolerance on parameter update norm
+        callback : callable or None
+            Optional: callback(theta, fval, grad, iteration)
+
+        Returns
+        -------
+        theta : ndarray
+            Optimized parameters
+        history : dict
+            Optimization trace
+        """
+
+        theta = theta0.copy()
+        d = theta.size
+
+        m = np.zeros(d)  # first moment
+        v = np.zeros(d)  # second moment
+
+        history = {
+            "theta": [],
+            "nlml": [],
+            "grad_norm": [],
+        }
+
+        for t in range(1, max_iter + 1):
+            fval = nlml(theta)
+            g = grad_nlml(theta)
+
+            # Adam moments
+            m = beta1 * m + (1.0 - beta1) * g
+            v = beta2 * v + (1.0 - beta2) * (g ** 2)
+
+            # Bias correction
+            m_hat = m / (1.0 - beta1 ** t)
+            v_hat = v / (1.0 - beta2 ** t)
+
+            # Parameter update
+            step = lr * m_hat / (np.sqrt(v_hat) + eps)
+            theta_new = theta - step
+
+            # Bookkeeping
+            history["theta"].append(theta.copy())
+            history["nlml"].append(fval)
+            history["grad_norm"].append(np.linalg.norm(g))
+
+            if callback is not None:
+                callback(theta, fval, g, t)
+
+            # Convergence check
+            if np.linalg.norm(theta_new - theta) < tol:
+                theta = theta_new
+                break
+
+            theta = theta_new
+
+        return theta, history
 
     @staticmethod
     def _in_bounds(v, bounds):

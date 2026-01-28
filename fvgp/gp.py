@@ -598,7 +598,9 @@ class GP:
             asynchronous = False
             warnings.warn("gp2Scale does not allow asynchronous training! `asynchronous` set to False")
         if asynchronous and method != "hgdl":
-            warnings.warn("Asynchronous execution is currently only supported for method=`hgdl`. Set to False")
+            warnings.warn("Asynchronous execution is currently only supported for method=`hgdl`. Method switched!")
+            #asynchronous = False
+            method = "hgdl"
 
         if self.gp2Scale: method = 'mcmc'
         if method == "hgdl" and dask_client is None: raise Exception("Please provide a dask_client for method =`hgdl`")
@@ -661,7 +663,7 @@ class GP:
             return hyperparameters
         else:
             if method == "mcmc":
-                raise Exception("Asynchronous MCMC not yet implemented.")
+                raise Exception("Asynchronous MCMC not yet implemented. Use method=`hgdl`")
             elif method == 'hgdl':
                 opt_obj = self.trainer.hgdl_async(
                     objective_function=objective_function,
@@ -799,7 +801,7 @@ class GP:
         """
         return self.marginal_density.neg_log_likelihood_gradient(hyperparameters=hyperparameters, component=component)
 
-    def test_log_likelihood_gradient(self, hyperparameters):
+    def test_log_likelihood_gradient(self, hyperparameters, epsilon=1e-6):
         """
         Function to test your gradient of the log-likelihood and therefore of the kernel function.
 
@@ -814,7 +816,7 @@ class GP:
         """
         assert isinstance(hyperparameters, np.ndarray), "wrong format in hyperparameters"
         assert np.ndim(hyperparameters) == 1, "wrong format in hyperparameters"
-        return self.marginal_density.test_log_likelihood_gradient(hyperparameters)
+        return self.marginal_density.test_log_likelihood_gradient(hyperparameters, epsilon=epsilon)
 
     ##################################################################################
     ##################################################################################

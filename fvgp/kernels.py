@@ -107,6 +107,30 @@ def matern_kernel_diff1(distance, length):
     return kernel
 
 
+def matern_kernel_diff1_grad(distance, dist_der): ##verified
+    """
+    Function for the Matern kernel derivative, order of differentiability = 1.
+    kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
+        -(np.sqrt(3.0) * distance) / length
+
+    Parameters
+    ----------
+    distance : scalar or np.ndarray
+        Distance between a set of points.
+    dist_der : scalar or np.ndarray
+        The derivative of the distance matrix. We assume here that the distance is a function of the hyperparameters.
+
+    Return
+    ------
+    Kernel output : same as distance parameter.
+    """
+    a = (np.sqrt(3.0) * distance)
+    dadl = np.sqrt(3.0) * dist_der
+    ea = np.exp(-a)
+    kernel_der = dadl * ea - (1.+a) * dadl * ea
+    return kernel_der
+
+
 def matern_kernel_diff1_robust(distance, phi):
     """
     Function for the Matern kernel, order of differentiability = 1, robust version.

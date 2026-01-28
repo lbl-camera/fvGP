@@ -408,10 +408,10 @@ class GPMarginalDensity:
             d2L_dmdh[i, i:] = ((self.neg_log_likelihood_gradient(hyperparameters=hps_temp) - grad_at_hps) / epsilon)[i:]
         return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
 
-    def test_log_likelihood_gradient(self, hyperparameters):
+    def test_log_likelihood_gradient(self, hyperparameters, epsilon=1e-6):
         thps = np.array(hyperparameters)
         grad = np.empty((len(thps)))
-        eps = 1e-6
+        eps = epsilon
         for i in range(len(thps)):
             thps_aux = np.array(thps)
             thps_aux[i] = thps_aux[i] + eps
