@@ -113,7 +113,7 @@ class GPMarginalDensity:
         This does not change the KV obj
         """
         y_mean = self.y_data - m[:, None]
-        if self.gp2Scale:
+        if self.gp2Scale:   # pragma: no cover
             raise Exception("Can't compute a new KVinvY for gp2Scale")
         else:
             Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)

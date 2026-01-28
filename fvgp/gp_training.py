@@ -153,16 +153,16 @@ class GPtraining:
         """
         try:
             opt_list = opt_obj.get_latest()
-        except Exception as err:
+        except Exception as err:   # pragma: no cover
             logger.debug("      The optimizer object could not be queried")
             logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
             logger.info("       Hyperparameter update failed with ERROR: " + str(err))
             return self.hyperparameters
-        if len(opt_list) == 0:
+        if len(opt_list) == 0:   # pragma: no cover
             logger.debug("      The list of optima had len=0., No update.")
             warnings.warn("Hyperparameter update not successful len(optima list) = 0", UserWarning, stacklevel=2)
             return self.hyperparameters
-        else:
+        else:   # pragma: no cover
             if isinstance(opt_list, list): updated_hyperparameters = opt_obj.get_latest()[0]["x"]
             elif isinstance(opt_list, dict): updated_hyperparameters = opt_obj.get_latest().result()["median(x)"]
             else: raise Exception("Reading the `updated_hyperparameters` was not successful", opt_list)

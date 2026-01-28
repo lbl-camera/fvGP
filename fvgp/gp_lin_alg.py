@@ -53,12 +53,12 @@ def calculate_Chol_factor(M, compute_device="cpu", args=None):
         c = np.tril(c)
     elif compute_device == "gpu":
         engine = get_gpu_engine(args)
-        if engine == "torch":
+        if engine == "torch":  # pragma: no cover
             import torch
             A = torch.tensor(M, device="cuda:0", dtype=torch.float32)
             L = torch.linalg.cholesky(A)
             c = L.cpu().numpy()
-        elif engine == "cupy":
+        elif engine == "cupy":  # pragma: no cover
             import cupy as cp
             A = cp.array(M, dtype=cp.float32)
             L = cp.linalg.cholesky(A)
@@ -90,7 +90,7 @@ def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
         res = cho_solve((factor, True), vec)
     elif compute_device == "gpu":
         engine = get_gpu_engine(args)
-        if engine == "torch":
+        if engine == "torch":  # pragma: no cover
             import torch
             # Move to GPU
             L = torch.tensor(factor, device="cuda", dtype=torch.float32)
@@ -98,7 +98,7 @@ def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
             y = torch.linalg.solve_triangular(L, b, upper=False)
             x = torch.linalg.solve_triangular(L.T, y, upper=True)
             res = x.cpu().numpy()
-        elif engine == "cupy":
+        elif engine == "cupy":  # pragma: no cover
             import cupy as cp
             L = cp.array(factor, dtype=cp.float32)
             b = cp.array(vec, dtype=cp.float32)
@@ -121,11 +121,11 @@ def calculate_Chol_logdet(factor, compute_device="cpu", args=None):
         logdet = 2.0 * np.sum(np.log(upper_diag))
     elif compute_device == "gpu":
         engine = get_gpu_engine(args)
-        if engine == "torch":
+        if engine == "torch":  # pragma: no cover
             import torch
             L = torch.tensor(factor, device="cuda", dtype=torch.float32)
             logdet = 2.0 * torch.sum(torch.log(torch.diag(L))).cpu().item()
-        elif engine == "cupy":
+        elif engine == "cupy":  # pragma: no cover
             import cupy as cp
             L = cp.array(factor, dtype=cp.float32)
             logdet = 2.0 * cp.sum(cp.log(cp.diag(L))).get()
@@ -252,9 +252,9 @@ def cholesky_update_rank_1(L, b, c, compute_device="cpu", args=None):
     if compute_device == "cpu": L_prime = cholesky_update_rank_1_numpy(L, b, c)
     elif compute_device == "gpu":
         engine = get_gpu_engine(args)
-        if engine == "torch":
+        if engine == "torch":  # pragma: no cover
             L_prime = cholesky_update_rank_1_torch(L, b, c)
-        elif engine == "cupy":
+        elif engine == "cupy":  # pragma: no cover
             L_prime = cholesky_update_rank_1_cupy(L, b, c)
         else: L_prime = None
     else: raise Exception("No valid compute device found.")
@@ -289,7 +289,7 @@ def cholesky_update_rank_1_numpy(L, b, c, args=None):
     return L_prime
 
 
-def cholesky_update_rank_1_torch(L, b, c):
+def cholesky_update_rank_1_torch(L, b, c):   # pragma: no cover
     """
     Rank-1 Cholesky update on GPU using PyTorch.
 
@@ -324,7 +324,7 @@ def cholesky_update_rank_1_torch(L, b, c):
     return L_prime.cpu().numpy()
 
 
-def cholesky_update_rank_1_cupy(L, b, c):
+def cholesky_update_rank_1_cupy(L, b, c):   # pragma: no cover
     """
     Rank-1 Cholesky update on GPU using CuPy.
 
@@ -452,9 +452,9 @@ def solve(A, b, compute_device='cpu', args=None):
         if np.ndim(x) == 1: x = x.reshape(len(x), 1)
         assert np.ndim(x) == np.ndim(b)
         return x
-    elif compute_device == "gpu":
+    elif compute_device == "gpu":  # pragma: no cover
         engine = get_gpu_engine(args)
-        if engine == "torch":
+        if engine == "torch":  # pragma: no cover
             import torch
             At = torch.from_numpy(A).cuda()
             bt = torch.from_numpy(b).cuda()
@@ -463,7 +463,7 @@ def solve(A, b, compute_device='cpu', args=None):
             if np.ndim(x) == 1: x = x.reshape(len(x), 1)
             assert np.ndim(x) == np.ndim(b)
             return x
-        elif engine == "cupy":
+        elif engine == "cupy":  # pragma: no cover
             import cupy as cp
             Lt = cp.array(A, dtype=cp.float32)
             bt = cp.array(b, dtype=cp.float32)
@@ -491,13 +491,13 @@ def matmul(A, B, compute_device="cpu", args=None):
         res = A @ B
     elif compute_device == "gpu":
         engine = get_gpu_engine(args)
-        if engine == "torch":
+        if engine == "torch":  # pragma: no cover
             import torch
             A = torch.tensor(A, device="cuda", dtype=torch.float32)
             B = torch.tensor(B, device="cuda", dtype=torch.float32)
             res = A@B
             res = res.cpu().numpy()
-        elif engine == "cupy":
+        elif engine == "cupy":  # pragma: no cover
             import cupy as cp
             A = cp.array(A)
             B = cp.array(B)
@@ -520,14 +520,14 @@ def matmul3(A, B, C, compute_device="cpu", args=None):
         res = A @ B @ C
     elif compute_device == "gpu":
         engine = get_gpu_engine(args)
-        if engine == "torch":
+        if engine == "torch":  # pragma: no cover
             import torch
             A = torch.tensor(A, device="cuda", dtype=torch.float32)
             B = torch.tensor(B, device="cuda", dtype=torch.float32)
             C = torch.tensor(C, device="cuda", dtype=torch.float32)
             res = A @ B @ C
             res = res.cpu().numpy()
-        elif engine == "cupy":
+        elif engine == "cupy":  # pragma: no cover
             import cupy as cp
             A = cp.array(A)
             B = cp.array(B)

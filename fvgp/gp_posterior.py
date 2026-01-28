@@ -185,7 +185,7 @@ class GPposterior:
         kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters)
 
         if self.KVinv is not None:
-            if variance_only and np.ndim(self.y_data) == 1:
+            if variance_only and self.y_data.shape[1] == 1:
                 S = None
                 v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T,
                                             self.KVinv, k, optimize=True)
@@ -543,31 +543,6 @@ class GPposterior:
             return np.asarray(res)
         else:
             raise Exception("Cartesian product out of options")
-    @staticmethod
-    def squeeze(d):
-        """
-        Returns a copy of the input dictionary where all NumPy array values
-        have been np.squeezed (if applicable). Non-array values are unchanged.
-
-        Parameters
-        ----------
-        d : dict
-            Dictionary of values to squeeze.
-
-        Returns
-        -------
-        dict
-            New dictionary with squeezed NumPy arrays.
-        """
-        out = {}
-
-        for k, v in d.items():
-            if isinstance(v, np.ndarray):
-                out[k] = np.squeeze(v)
-            else:
-                out[k] = v
-
-        return out
 
     def __getstate__(self):
         state = dict(

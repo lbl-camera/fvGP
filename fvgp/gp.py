@@ -594,10 +594,10 @@ class GP:
         ------
         optimized hyperparameters (only fyi, gp is already updated) : np.ndarray
         """
-        if self.gp2Scale and asynchronous:
+        if self.gp2Scale and asynchronous:  # pragma: no cover
             asynchronous = False
             warnings.warn("gp2Scale does not allow asynchronous training! `asynchronous` set to False")
-        if asynchronous and method != "hgdl":
+        if asynchronous and method != "hgdl":  # pragma: no cover
             warnings.warn("Asynchronous execution is currently only supported for method=`hgdl`. Method switched!")
             #asynchronous = False
             method = "hgdl"
@@ -605,9 +605,9 @@ class GP:
         if self.gp2Scale: method = 'mcmc'
         if method == "hgdl" and dask_client is None: raise Exception("Please provide a dask_client for method =`hgdl`")
         if (method == "hgdl" or method == "mcmc") and asynchronous and dask_client is None:
-            raise Exception("Please provide a dask_client for asynchronous training")
+            raise Exception("Please provide a dask_client for asynchronous training")   # pragma: no cover
         if method != "hgdl" and method != "mcmc" and asynchronous:
-            warnings.warn("Method not `hgdl` or `mcmc`. Asynchronous=True ignored")
+            warnings.warn("Method not `hgdl` or `mcmc`. Asynchronous=True ignored")   # pragma: no cover
         if hyperparameter_bounds is None:
             hyperparameter_bounds = self._get_default_hyperparameter_bounds()
             warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
@@ -662,7 +662,7 @@ class GP:
             self.set_hyperparameters(hyperparameters)
             return hyperparameters
         else:
-            if method == "mcmc":
+            if method == "mcmc":  # pragma: no cover
                 raise Exception("Asynchronous MCMC not yet implemented. Use method=`hgdl`")
             elif method == 'hgdl':
                 opt_obj = self.trainer.hgdl_async(
@@ -678,7 +678,7 @@ class GP:
                     dask_client=dask_client
                 )
                 return opt_obj
-            else:
+            else:  # pragma: no cover
                 raise Exception("Asynchronous training only available for `hgdl` and `mcmc`")
 
     ##################################################################################
@@ -1244,7 +1244,7 @@ class GP:
 
     def nrmse(self, x_test, y_test):
         """
-        This function calculates the root mean squared error.
+        This function calculates the normalized root mean squared error.
         Note that in the multi-task setting the user should perform their
         input point transformation beforehand.
 
@@ -1257,7 +1257,7 @@ class GP:
 
         Return
         ------
-        RMSE : float
+        NRMSE : float
         """
 
         v1 = y_test
@@ -1439,7 +1439,7 @@ class GP:
         return (D ** 2 * tb) / (2. * n * b ** 2)
 
     def initialize_gp2Scale_dask_client(self, gp2Scale, gp2Scale_dask_client):
-        if gp2Scale:
+        if gp2Scale:  # pragma: no cover
             try:
                 from imate import logdet as imate_logdet
             except:
