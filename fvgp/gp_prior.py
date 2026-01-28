@@ -2,6 +2,7 @@ import numpy as np
 from .kernels import *
 import dask.distributed as distributed
 import warnings
+
 warnings.simplefilter("once", UserWarning)
 import itertools
 from functools import partial
@@ -54,13 +55,15 @@ class GPprior:
             if self.client is not None:
                 worker_info = list(self.client.scheduler_info()["workers"].keys())
                 self.compute_workers = list(worker_info)
-            else: worker_info = False
+            else:
+                worker_info = False
             if not worker_info: logger.debug("No workers available")
 
         # kernel
+        self.k_n_params = 3
         if callable(kernel):
             self.kernel = kernel
-            k_n_params = len(inspect.signature(kernel).parameters)
+            self.k_n_params = len(inspect.signature(kernel).parameters)
         elif kernel is None:
             self.kernel = self._default_kernel
         else:
@@ -68,6 +71,9 @@ class GPprior:
         self.d_kernel_dx = self._d_kernel_dx
         if callable(kernel_grad):
             self._dk_dh = kernel_grad
+        elif not callable(kernel):
+            self._dk_dh = self._default_kernel_analytical_gradient
+            self.ram_economy = False
         else:
             if self.ram_economy is True:
                 self._dk_dh = self._kernel_derivative
@@ -75,14 +81,19 @@ class GPprior:
                 self._dk_dh = self._kernel_gradient
 
         # prior-mean
+        self.m_n_params = 2
         if callable(prior_mean_function):
             self.mean_function = prior_mean_function
-            m_n_params = len(inspect.signature(prior_mean_function).parameters)
-        else: self.mean_function = self._default_mean_function
+            self.m_n_params = len(inspect.signature(prior_mean_function).parameters)
+        else:
+            self.mean_function = self._default_mean_function
 
-        if callable(prior_mean_function_grad): self._dm_dh = prior_mean_function_grad
-        elif callable(prior_mean_function): self._dm_dh = self._finitediff_dm_dh
-        else: self._dm_dh = self._default_dm_dh
+        if callable(prior_mean_function_grad):
+            self._dm_dh = prior_mean_function_grad
+        elif callable(prior_mean_function):
+            self._dm_dh = self._finitediff_dm_dh
+        else:
+            self._dm_dh = self._default_dm_dh
 
         self.m, self.K = self._compute_prior(data.x_data, self.hyperparameters)
         logger.debug("Prior successfully initialized.")
@@ -107,6 +118,10 @@ class GPprior:
     @property
     def ram_economy(self):
         return self.data.ram_economy
+
+    @ram_economy.setter
+    def ram_economy(self, value):
+        self.data.ram_economy = value
 
     @property
     def gp2Scale(self):
@@ -143,28 +158,39 @@ class GPprior:
         return K
 
     def compute_covariances(self, x1, x2, hps):
-        return self.kernel(x1, x2, hps)
+        if self.k_n_params == 3:
+            return self.kernel(x1, x2, hps)
+        elif self.k_n_params == 4:
+            return self.kernel(x1, x2, hps, self.args)
+        else:
+            raise Exception("No valid kernel function signature")
 
     def compute_mean(self, x, hyperparameters):
         """computes the covariance matrix from the kernel"""
-        m = self.mean_function(x, hyperparameters)
+        if self.m_n_params == 2:
+            m = self.mean_function(x, hyperparameters)
+        elif self.m_n_params == 3:
+            m = self.mean_function(x, hyperparameters, self.args)
+        else:
+            raise Exception("No valid mean function signature")
         return m
 
     def dk_dh(self, x1, x2, hyperparameters, direction=None):
-        #if direction is None: return self._dk_dh(x1, x2, hyperparameters)
-        #else: return self._dk_dh(x1, x2, direction, hyperparameters)
-        if self.ram_economy: return self._dk_dh(x1, x2, hyperparameters, direction)
-        else: return self._dk_dh(x1, x2, hyperparameters)
+        if self.ram_economy:
+            return self._dk_dh(x1, x2, hyperparameters, direction)
+        else:
+            return self._dk_dh(x1, x2, hyperparameters)
 
     def dm_dh(self, x_data, hyperparameters):
         return self._dm_dh(x_data, hyperparameters)
+
     #END: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS
     #################################################################
 
     def _compute_prior(self, x_data, hyperparameters):
         m = self.compute_mean(x_data, hyperparameters)
         K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
-        assert np.ndim(m) == 1
+        assert np.ndim(m) == 1, "mean: " + str(m)
         assert np.ndim(K) == 2
         logger.debug("Prior mean and covariance matrix successfully computed.")
         return m, K
@@ -190,9 +216,13 @@ class GPprior:
         return K
 
     def _update_mean(self, x_new, hyperparameters):
-        if np.ndim(self.m) == 1: m = np.append(self.m, self.compute_mean(x_new, hyperparameters))
-        elif np.ndim(self.m) == 2: m = np.vstack([self.m, self.compute_mean(x_new, hyperparameters)])
-        else: raise Exception("Prior mean in wrong format")
+        if np.ndim(self.m) == 1:
+            m = np.append(self.m, self.compute_mean(x_new, hyperparameters))
+        elif np.ndim(self.m) == 2:
+            raise Exception(
+                "prior mean has to be a vector")  #m = np.vstack([self.m, self.compute_mean(x_new, hyperparameters)])
+        else:
+            raise Exception("Prior mean in wrong format")
         return m
 
     @staticmethod
@@ -212,7 +242,7 @@ class GPprior:
         logger.debug("client id: {}", client.id)
 
         self.x_data_scatter_future = client.scatter(
-            x_data, workers=self.compute_workers, broadcast=True)
+            x_data, workers=self.compute_workers, broadcast=True, direct=True)
         ranges = self._ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
@@ -268,9 +298,9 @@ class GPprior:
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
         self.x_new_scatter_future = client.scatter(
-            x_new, workers=self.compute_workers, broadcast=True)
+            x_new, workers=self.compute_workers, broadcast=True, direct=True)
         self.x_old_scatter_future = client.scatter(
-            x_old, workers=self.compute_workers, broadcast=True)
+            x_old, workers=self.compute_workers, broadcast=True, direct=True)
 
         point_number = len(x_old)
         num_batches = point_number // self.batch_size
@@ -359,45 +389,62 @@ class GPprior:
         distance_matrix = np.sqrt(distance_matrix)
         return hps[0] * matern_kernel_diff1(distance_matrix, 1)
 
-    def _d_kernel_dx(self, points1, points2, direction, hyperparameters):
-        new_points = np.array(points1)
+    def _d_kernel_dx(self, x1, x2, direction, hyperparameters):
+        new_points = np.array(x1)
         epsilon = 1e-8
         new_points[:, direction] += epsilon
-        a = self.compute_covariances(new_points, points2, hyperparameters)
-        b = self.compute_covariances(points1, points2, hyperparameters)
+        a = self.compute_covariances(new_points, x2, hyperparameters)
+        b = self.compute_covariances(x1, x2, hyperparameters)
         derivative = (a - b) / epsilon
         return derivative
 
-    def _kernel_gradient(self, points1, points2, hyperparameters):
-        gradient = np.empty((len(hyperparameters), len(points1), len(points2)))
+    def _kernel_gradient(self, x1, x2, hyperparameters):
+        gradient = np.empty((len(hyperparameters), len(x1), len(x2)))
         for direction in range(len(hyperparameters)):
-            gradient[direction] = self._dkernel_dh(points1, points2, direction, hyperparameters)
+            gradient[direction] = self._dkernel_dh(x1, x2, direction, hyperparameters)
         return gradient
 
-    def _kernel_derivative(self, points1, points2, hyperparameters, direction):
-        derivative = self._dkernel_dh(points1, points2, direction, hyperparameters)
+    def _kernel_derivative(self, x1, x2, hyperparameters, direction):
+        derivative = self._dkernel_dh(x1, x2, direction, hyperparameters)
         return derivative
 
-    def _dkernel_dh(self, points1, points2, direction, hyperparameters):
+    @staticmethod
+    def _default_kernel_analytical_gradient(x1, x2, hyperparameters):
+        gradient = np.zeros((len(hyperparameters), len(x1), len(x2)))
+        hps = hyperparameters
+        dm = np.zeros((len(x1), len(x2)))
+        for i in range(len(x1[0])): dm += abs(np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
+
+        non_zero_ind = np.where(dm != 0.0)
+        for direction in range(len(x1[0])):
+            dddh = np.zeros(dm.shape)
+            dddh[non_zero_ind] = -abs(np.subtract.outer(x1[:, direction], x2[:, direction]))[non_zero_ind] ** 2 / (
+                    hps[direction + 1] ** 3 * dm[non_zero_ind])
+            gradient[direction + 1] = hps[0] * matern_kernel_diff1_grad(dm, dddh)
+        gradient[0] = matern_kernel_diff1(dm, 1)
+        return gradient
+
+    def _dkernel_dh(self, x1, x2, direction, hyperparameters):
         new_hyperparameters1 = np.array(hyperparameters)
         new_hyperparameters2 = np.array(hyperparameters)
         epsilon = 1e-8
         new_hyperparameters1[direction] += epsilon
         new_hyperparameters2[direction] -= epsilon
-        a = self.compute_covariances(points1, points2, new_hyperparameters1)
-        b = self.compute_covariances(points1, points2, new_hyperparameters2)
+        a = self.compute_covariances(x1, x2, new_hyperparameters1)
+        b = self.compute_covariances(x1, x2, new_hyperparameters2)
         derivative = (a - b) / (2.0 * epsilon)
         return derivative
 
     def _default_mean_function(self, x, hyperparameters):
         """evaluates the gp mean function at the data points """
         if np.ndim(self.y_data) == 1:
-            mean = np.zeros((len(x)))
-            mean[:] = np.mean(self.y_data)
+            raise Exception("y_data wrong format")
         elif np.ndim(self.y_data) == 2:
-            mean = np.zeros((len(x), self.y_data.shape[1]))
-            for i in range(mean.shape[1]): mean[:,i] = np.mean(self.y_data[:,i])
-        else: raise Exception("Wrong dim in default mean function")
+            mean = np.zeros((len(x)))
+            #for i in range(mean.shape[1]): mean[:, i] = np.mean(self.y_data[:, i])
+            mean[:] = np.mean(self.y_data)
+        else:
+            raise Exception("Wrong dim in default mean function")
         return mean
 
     def _finitediff_dm_dh(self, x, hps):
@@ -421,6 +468,8 @@ class GPprior:
         state = dict(
             kernel_function=self.kernel_function,
             prior_mean_function=self.prior_mean_function,
+            m_n_params=self.m_n_params,
+            k_n_params=self.k_n_params,
             batch_size=self.batch_size,
             data=self.data,
             trainer=self.trainer,

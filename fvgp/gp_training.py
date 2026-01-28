@@ -5,8 +5,8 @@ from loguru import logger
 import numpy as np
 from scipy.optimize import differential_evolution
 from hgdl.hgdl import HGDL
-from .mcmc import mcmc
 from scipy.optimize import minimize
+from .gp_mcmc import *
 
 
 class GPtraining:
@@ -61,22 +61,22 @@ class GPtraining:
             dask_client,
             info
         )
-        assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1
+        assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1, "hps="+str(hyperparameters)
         self.hyperparameters = hyperparameters
         return hyperparameters
 
     ##################################################################################
-    def train_async(self,
-                    objective_function=None,
-                    objective_function_gradient=None,
-                    objective_function_hessian=None,
-                    hyperparameter_bounds=None,
-                    init_hyperparameters=None,
-                    max_iter=10000,
-                    local_optimizer="L-BFGS-B",
-                    global_optimizer="genetic",
-                    constraints=(),
-                    dask_client=None):
+    def hgdl_async(self,
+                   objective_function=None,
+                   objective_function_gradient=None,
+                   objective_function_hessian=None,
+                   hyperparameter_bounds=None,
+                   init_hyperparameters=None,
+                   max_iter=10000,
+                   local_optimizer="L-BFGS-B",
+                   global_optimizer="genetic",
+                   constraints=(),
+                   dask_client=None):
         """
         This function asynchronously finds the maximum of the log marginal likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
@@ -151,18 +151,21 @@ class GPtraining:
         ------
         The current hyperparameters : np.ndarray
         """
-        try: opt_list = opt_obj.get_latest()
-        except Exception as err:
+        try:
+            opt_list = opt_obj.get_latest()
+        except Exception as err:   # pragma: no cover
             logger.debug("      The optimizer object could not be queried")
             logger.debug("      That probably means you are not optimizing the hyperparameters asynchronously")
             logger.info("       Hyperparameter update failed with ERROR: " + str(err))
             return self.hyperparameters
-        if len(opt_list) == 0:
+        if len(opt_list) == 0:   # pragma: no cover
             logger.debug("      The list of optima had len=0., No update.")
             warnings.warn("Hyperparameter update not successful len(optima list) = 0", UserWarning, stacklevel=2)
             return self.hyperparameters
-        else:
-            updated_hyperparameters = opt_obj.get_latest()[0]["x"]
+        else:   # pragma: no cover
+            if isinstance(opt_list, list): updated_hyperparameters = opt_obj.get_latest()[0]["x"]
+            elif isinstance(opt_list, dict): updated_hyperparameters = opt_obj.get_latest().result()["median(x)"]
+            else: raise Exception("Reading the `updated_hyperparameters` was not successful", opt_list)
             assert isinstance(updated_hyperparameters, np.ndarray) and np.ndim(updated_hyperparameters) == 1
             self.hyperparameters = updated_hyperparameters
             return updated_hyperparameters
@@ -297,12 +300,118 @@ class GPtraining:
         elif method == "mcmc":
             logger.debug("MCMC started in fvGP")
             logger.debug('bounds are {}', hp_bounds)
-            res = mcmc(objective_function, hp_bounds, x0=starting_hps, n_updates=max_iter, info=info)
-            hyperparameters = np.array(res["distribution mean"])
+
+            def prior_function(theta, args):
+                bounds = args["bounds"]
+                if self._in_bounds(theta, bounds): return 0.
+                else: return -np.inf
+
+            def likelihood_func(hps, args):
+                return objective_function(hps)
+
+            myMCMC = gpMCMC(likelihood_func, prior_function, args={"bounds": hp_bounds})
+            res = myMCMC.run_mcmc(x0=starting_hps, n_updates=max_iter, info=info, break_condition="default")
+            hyperparameters = res["median(x)"]
             self.mcmc_info = res
+        elif method == "adam":
+            hyperparameters, history = self.adam_optimize(objective_function,
+                                                          objective_function_gradient,
+                                                          starting_hps, max_iter=max_iter)
         elif callable(method): hyperparameters = method(self)
         else: raise ValueError("No optimization mode specified in fvGP")
         return hyperparameters
+
+    @staticmethod
+    def adam_optimize(
+        nlml,
+        grad_nlml,
+        theta0,
+        lr=1e-2,
+        beta1=0.9,
+        beta2=0.999,
+        eps=1e-8,
+        max_iter=1000,
+        tol=1e-6,
+        callback=None,
+    ):
+        """
+        Adam optimizer for GP hyperparameters.
+
+        Parameters
+        ----------
+        nlml : callable
+            Negative log marginal likelihood: f(theta) -> scalar
+        grad_nlml : callable
+            Gradient of nlml: g(theta) -> ndarray (d,)
+        theta0 : ndarray
+            Initial parameter vector (d,)
+        lr : float
+            Learning rate
+        beta1 : float
+            Exponential decay for first moment
+        beta2 : float
+            Exponential decay for second moment
+        eps : float
+            Numerical stability constant
+        max_iter : int
+            Maximum iterations
+        tol : float
+            Stopping tolerance on parameter update norm
+        callback : callable or None
+            Optional: callback(theta, fval, grad, iteration)
+
+        Returns
+        -------
+        theta : ndarray
+            Optimized parameters
+        history : dict
+            Optimization trace
+        """
+
+        theta = theta0.copy()
+        d = theta.size
+
+        m = np.zeros(d)  # first moment
+        v = np.zeros(d)  # second moment
+
+        history = {
+            "theta": [],
+            "nlml": [],
+            "grad_norm": [],
+        }
+
+        for t in range(1, max_iter + 1):
+            fval = nlml(theta)
+            g = grad_nlml(theta)
+
+            # Adam moments
+            m = beta1 * m + (1.0 - beta1) * g
+            v = beta2 * v + (1.0 - beta2) * (g ** 2)
+
+            # Bias correction
+            m_hat = m / (1.0 - beta1 ** t)
+            v_hat = v / (1.0 - beta2 ** t)
+
+            # Parameter update
+            step = lr * m_hat / (np.sqrt(v_hat) + eps)
+            theta_new = theta - step
+
+            # Bookkeeping
+            history["theta"].append(theta.copy())
+            history["nlml"].append(fval)
+            history["grad_norm"].append(np.linalg.norm(g))
+
+            if callback is not None:
+                callback(theta, fval, g, t)
+
+            # Convergence check
+            if np.linalg.norm(theta_new - theta) < tol:
+                theta = theta_new
+                break
+
+            theta = theta_new
+
+        return theta, history
 
     @staticmethod
     def _in_bounds(v, bounds):

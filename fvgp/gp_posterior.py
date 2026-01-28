@@ -42,6 +42,9 @@ class GPposterior:
     def noise_function(self, x_pred, hyperparameters):
         return self.likelihood.noise_function(x_pred, hyperparameters)
 
+    def addKV(self, K, V):
+        return self.marginal_density.addKV(K, V)
+
     #####################################################
     @property
     def args(self):
@@ -91,7 +94,7 @@ class GPposterior:
             V = self.calculate_V(x_data, hyperparameters)
             m = self.compute_mean(x_data, hyperparameters)
             if np.ndim(V) == 1: V = np.diag(V)
-            KVinvY = self.compute_new_KVinvY(K + V, m)
+            KVinvY = self.compute_new_KVinvY(self.addKV(K, V), m)
         else:
             hyperparameters = self.hyperparameters
 
@@ -103,25 +106,39 @@ class GPposterior:
         k = self.compute_covariances(x_data, x_pred, hyperparameters)
         A = k.T @ KVinvY
         prior_mean = self.compute_mean(x_pred, hyperparameters)
-        assert A.shape == prior_mean.shape
-        posterior_mean = prior_mean + A
+        #assert A.shape == prior_mean.shape, str(KVinvY.shape)+ ", " + str(A.shape) + ", " + str(x_pred.shape)
+        posterior_mean = prior_mean[:, None] + A
         if isinstance(x_out, np.ndarray): posterior_mean_re = posterior_mean.reshape(len(x_orig), len(x_out), order='F')
         else: posterior_mean_re = posterior_mean
 
-        return {"x": x_orig,
-                "m(x)": posterior_mean_re,
-                "m(x)_flat": posterior_mean,
-                "x_pred": x_pred}
+        if KVinvY.shape[1] == 1 and not isinstance(x_out, np.ndarray):
+            return {"x": x_orig,
+                    "m(x)": np.squeeze(posterior_mean_re),
+                    "m(x)_flat": np.squeeze(posterior_mean),
+                    "x_pred": x_pred}
+        elif KVinvY.shape[1] == 1 and isinstance(x_out, np.ndarray):
+            return {"x": x_orig,
+                    "m(x)": posterior_mean_re,
+                    "m(x)_flat": np.squeeze(posterior_mean),
+                    "x_pred": x_pred}
+        elif KVinvY.shape[1] > 1 and isinstance(x_out, np.ndarray):
+            raise Exception("KVinvY.shape[1] > 1 and isinstance(x_out, np.ndarray)=True")
+        else:
+            return {"x": x_orig,
+                    "m(x)": posterior_mean_re,
+                    "m(x)_flat": posterior_mean,
+                    "x_pred": x_pred}
 
-    def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None):
-        x_data, KVinvY = self.x_data.copy(), self.KVinvY.copy()
+    def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None, component=0):
+        x_data, KVinvY = self.x_data.copy(), self.KVinvY.copy()[:, component]
 
         if hyperparameters is not None:
             K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
             V = self.calculate_V(x_data, hyperparameters)
             m = self.compute_mean(x_data, hyperparameters)
             if np.ndim(V) == 1: V = np.diag(V)
-            KVinvY = self.compute_new_KVinvY(K + V, m)
+            KVinvY = self.compute_new_KVinvY(self.addKV(K, V), m)[:, component]
+            assert np.ndim(KVinvY) == 1
         else:
             hyperparameters = self.hyperparameters
 
@@ -168,7 +185,7 @@ class GPposterior:
         kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters)
 
         if self.KVinv is not None:
-            if variance_only:
+            if variance_only and self.y_data.shape[1] == 1:
                 S = None
                 v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T,
                                             self.KVinv, k, optimize=True)
@@ -198,6 +215,9 @@ class GPposterior:
         else:
             v_re = v
             S_re = S
+            if self.y_data.shape[1] > 1:
+                v = np.tile(v[:, None], (1, self.y_data.shape[1]))
+                v_re = np.tile(v_re[:, None], (1, self.y_data.shape[1]))
 
         return {"x": x_orig,
                 "x_pred": x_pred,

@@ -17,6 +17,7 @@ class GPdata:
                 or noise_variances is None)
         assert len(x_data) == len(y_data), "x_data and y_data have different lengths."
         if isinstance(noise_variances, np.ndarray): assert len(noise_variances) == len(y_data)
+        if np.ndim(y_data) == 1: y_data = y_data.reshape(len(y_data), 1)
 
         # analyse data
         if isinstance(x_data, np.ndarray):
@@ -58,7 +59,7 @@ class GPdata:
 
     def update(self, x_data_new, y_data_new, noise_variances_new=None, append=True):
         assert isinstance(x_data_new, np.ndarray) or isinstance(x_data_new, list)
-        assert isinstance(y_data_new, np.ndarray) and np.ndim(y_data_new) == 1
+        assert isinstance(y_data_new, np.ndarray), "y_data_new is of type"+type(y_data_new)
         assert ((isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1)
                 or noise_variances_new is None)
         if self.Euclidean: assert isinstance(x_data_new, np.ndarray) and np.ndim(x_data_new) == 2
@@ -75,6 +76,7 @@ class GPdata:
         if callable(noise_variances_new): raise Exception("The update noise_variances cannot be a callable.")
         if noise_variances_new is not None:
             assert isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1
+        if np.ndim(y_data_new) == 1: y_data_new = y_data_new.reshape(len(y_data_new), 1)
 
         if append is False:
             self.x_data = x_data_new
@@ -83,7 +85,7 @@ class GPdata:
         else:
             if self.Euclidean: self.x_data = np.vstack([self.x_data, x_data_new])
             else: self.x_data = self.x_data + x_data_new
-            self.y_data = np.append(self.y_data, y_data_new)
+            self.y_data = np.vstack([self.y_data, y_data_new])
             if isinstance(noise_variances_new, np.ndarray):
                 self.noise_variances = np.append(self.noise_variances, noise_variances_new)
         self.point_number = len(self.x_data)

@@ -1,6 +1,7 @@
 import numpy as np
 import warnings
 from loguru import logger
+import inspect
 
 
 class GPlikelihood:
@@ -17,12 +18,15 @@ class GPlikelihood:
 
         if isinstance(self.noise_variances, np.ndarray):
             assert np.ndim(self.noise_variances) == 1
-            assert all(self.noise_variances > 0.0)
+            assert np.all(self.noise_variances > 0.0)
 
         if self.noise_variances is not None and callable(noise_function):
             raise Exception("Noise function and measurement noise provided. Decide which one to use.")
+
+        self.v_n_params = 2
         if callable(noise_function):
             self.noise_function = noise_function
+            self.v_n_params = len(inspect.signature(noise_function).parameters)
         elif self.noise_variances is not None:
             self.noise_function = self._measured_noise_function
         else:
@@ -83,7 +87,9 @@ class GPlikelihood:
 
     def calculate_V(self, x_data, hyperparameters):
         logger.debug("Calculating V.")
-        noise = self.noise_function(x_data, hyperparameters)
+        if self.v_n_params == 2: noise = self.noise_function(x_data, hyperparameters)
+        elif self.v_n_params == 3: noise = self.noise_function(x_data, hyperparameters, self.args)
+        else: raise Exception("No valid noise function signature.")
         return noise
 
     def calculate_V_grad(self, x, hyperparameters, direction=None):
@@ -97,8 +103,10 @@ class GPlikelihood:
         return noise
 
     def _measured_noise_function(self, x, hyperparameters):
-        if len(x) == len(self.noise_variances): return self.noise_variances
-        else: return np.zeros((len(x))) + 0.0000001
+        if len(x) == len(self.noise_variances):
+            return self.noise_variances
+        else:
+            return np.zeros((len(x))) + np.mean(self.noise_variances)
 
     @staticmethod
     def _default_dnoise_dh(x, hps):
@@ -141,6 +149,7 @@ class GPlikelihood:
             V=self.V,
             noise_function=self.noise_function,
             noise_function_grad=self.noise_function_grad,
+            v_n_params=self.v_n_params
             )
         return state
 

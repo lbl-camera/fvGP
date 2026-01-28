@@ -3,6 +3,7 @@
 import numpy as np
 import time
 import warnings
+from dask.distributed import get_worker
 
 
 ## --------------------------------------------------------------------- ##
@@ -62,15 +63,22 @@ class gpMCMC:
     def __init__(self,
                  log_likelihood_function,
                  prior_function,
-                 proposal_distributions,
+                 proposal_distributions=None,
                  args=None
                  ):
         self.log_likelihood_function = log_likelihood_function
         self.prior_function = prior_function
+        if proposal_distributions is None:
+            bounds = args["bounds"]
+            domain_size = bounds[:, 1] - bounds[:, 0]
+            std_diag = domain_size * 0.2 / np.sqrt(12)
+            proposal_distributions = [ProposalDistribution(np.arange(len(bounds)),
+                                                           init_prop_Sigma=np.diag(std_diag**2))]
         self.proposal_distributions = proposal_distributions
+
         self.args = args
         self.trace = None
-        self.mcmc_info = None
+        self.mcmc_info = {}
 
     def run_mcmc(self, *, x0,
                  n_updates=10000,
@@ -107,15 +115,12 @@ class gpMCMC:
         """
         start_time = time.time()
         n_updates = max(n_updates, 2)
-        if not isinstance(x0, np.ndarray): raise Exception("x0 is not a numpy array")
-        if np.ndim(x0) != 1: raise Exception("x0 is not a vector in MCMC")
-        if break_condition is None:
-            def break_condition(a):
-                return False
-        elif break_condition == "default":
-            break_condition = self._default_break_condition
-        else:
-            raise Exception("No valid input for break condition provided!")
+        assert isinstance(x0, np.ndarray) and np.ndim(x0) == 1
+
+        #break condition
+        if break_condition is None: break_condition = lambda a: False
+        elif break_condition == "default": break_condition = self._default_break_condition
+        else: raise Exception("No valid input for break condition provided!")
         if run_in_every_iteration is None: run_in_every_iteration = lambda a: False
 
         self.trace = {"f(x)": [], "x": [], "time stamp": []}
@@ -125,8 +130,10 @@ class gpMCMC:
         # Initialize Metropolis
         x = x0.copy()
         likelihood = self.log_likelihood_function(x, self.args)
+
         if info: print("Starting likelihood. f(x)= ", likelihood)
         prior = self.prior_function(x, self.args)
+
         #########################################################
         # Begin main loop
         for i in np.arange(1, n_updates):
@@ -141,41 +148,36 @@ class gpMCMC:
             self.trace["time stamp"].append(time.time() - start_time)
             run_in_every_iteration(self)
 
-            if info and (i % 100) == 0: print("Finished ", i, " out of ", n_updates, " iterations. f(x)= ", likelihood)
+            if info and (i % 10) == 0: print("Finished ", i, " out of ", n_updates, " iterations. f(x)= ", likelihood)
             if break_condition(self): break
+
+            # Collect trace objects to return
+            arg_max = np.argmax(self.trace["f(x)"])
+            dist_index = int(len(self.trace["x"]) - (len(self.trace["x"]) / 100))
+            self.mcmc_info = {"f(x)": self.trace["f(x)"],
+                              "max f(x)": self.trace["f(x)"][arg_max],
+                              "MAP": self.trace["f(x)"][arg_max],
+                              "max x": np.asarray(self.trace["x"])[arg_max],
+                              "time stamps": self.trace["time stamp"],
+                              "x": np.asarray(self.trace["x"]),
+                              "mean(x)": np.mean(np.asarray(self.trace["x"])[dist_index:], axis=0),
+                              "median(x)": np.median(np.asarray(self.trace["x"])[dist_index:], axis=0),
+                              "var(x)": np.var(np.asarray(self.trace["x"])[dist_index:], axis=0)}
         # End main loop
-
-        # Collect trace objects to return
-        arg_max = np.argmax(self.trace["f(x)"])
-        x = np.asarray(self.trace["x"])
-        dist_index = int(len(x) - (len(x) / 100))
-        self.mcmc_info = {"f(x)": self.trace["f(x)"],
-                          "max f(x)": self.trace["f(x)"][arg_max],
-                          "MAP": self.trace["f(x)"][arg_max],
-                          "max x": x[arg_max],
-                          "time stamps": self.trace["time stamp"],
-                          "x": x,
-                          "mean(x)": np.mean(x[dist_index:], axis=0),
-                          "median(x)": np.median(x[dist_index:], axis=0),
-                          "var(x)": np.var(x[dist_index:], axis=0)}
-
         return self.mcmc_info
 
     @staticmethod
     def _default_break_condition(obj):
         x = obj.trace["x"]
-        if len(x) > 201:
-            latest_mean = np.mean(x[-100:], axis=0)
-            earlier_mean = np.mean(x[-200:-100], axis=0)
-            abs_diff = abs(latest_mean - earlier_mean)
-            max_index = np.argmax(abs_diff)
-            ratio = (abs_diff[max_index] / abs(latest_mean[max_index])) * 100.
-            if ratio < 0.1:
-                return True
-            else:
-                return False
+        i = len(x)
+        if i < 400: return False
+        if (np.sum(abs(np.mean(x[-40:], axis=0) -
+                np.mean(x[-80:-40], axis=0)))
+                < 0.001 * np.sum(abs(np.mean(x[-40:], axis=0)))):
+            return True
         else:
             return False
+
 
     ###############################################################
     def _jump(self, x_old, obj, prior_eval, likelihood):
@@ -206,6 +208,12 @@ class gpMCMC:
             x = x_old
 
         return x, prior_eval, likelihood, jump_trace
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
 
 ###############################################################
@@ -323,3 +331,9 @@ class ProposalDistribution:
 
     def _no_adapt(self, end, mcmc_obj):
         return
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)

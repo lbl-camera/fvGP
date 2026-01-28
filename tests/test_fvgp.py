@@ -85,6 +85,9 @@ def test_single_task_init_basic():
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu')
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
             noise_function=noise, compute_device = 'cpu', ram_economy=True)
+    my_gp1 = GP(x_data, np.column_stack([y_data, y_data+1.]), init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
+            noise_function=noise, compute_device = 'cpu', ram_economy=True)
+
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
             noise_function=noise, compute_device = 'cpu', ram_economy=True)
 
@@ -95,8 +98,13 @@ def test_single_task_init_basic():
     my_gp1 = GP(x_data, y_data)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = False)
+    res = my_gp1.posterior_covariance(x_pred, variance_only = True)
+    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = True)
+    res = my_gp1.posterior_covariance(x_pred, variance_only = True)
+
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1.train()
+    my_gp1.train(method = "adam", max_iter = 3)
     my_gp1.update_gp_data(x_data, y_data, append = True)
     my_gp1.update_gp_data(x_data, y_data, append = False)
     
@@ -153,8 +161,10 @@ def test_single_task_init_basic():
     res = my_gp1.prior._default_kernel(x_data,x_data,np.array([1.,1.,1.,1.,1.,1.]))
     my_gp1.crps(x_data[0:2] + 1., np.array([1.,2.]))
     my_gp1.rmse(x_data[0:2] + 1., np.array([1.,2.]))
+    my_gp1.nrmse(x_data[0:2] + 1., np.array([1.,2.]))
     my_gp1.nlpd(x_data[0:2] + 1., np.array([1.,2.]))
     my_gp1.r2(x_data[0:2] + 1., np.array([1.,2.]))
+    my_gp1.picp(x_data[0:2] + 1., np.array([1.,2.]), interval=0.95)
     my_gp1.make_2d_x_pred(np.array([1.,2.]),np.array([3.,4]))
     my_gp1.make_1d_x_pred(np.array([1.,2.]))
     my_gp1._get_default_hyperparameter_bounds()
@@ -249,9 +259,9 @@ def test_train_hgdl_async(client):
     my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]),noise_variances=np.zeros(y_data.shape) + 0.01,
         compute_device="cpu", calc_inv = True, ram_economy = True)
 
-    opt_obj = my_gp2.train_async(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            max_iter = 50, dask_client=client)
-    opt_obj = my_gp2.train_async(max_iter = 5, dask_client=client)
+    opt_obj = my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
+            max_iter = 50, dask_client=client, method = "hgdl", asynchronous=True)
+    opt_obj = my_gp2.train(max_iter = 5, dask_client=client, asynchronous=True, method="hgdl")
 
 
     time.sleep(5)
@@ -352,32 +362,22 @@ def test_gp2Scale(client):
     init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseLU")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCG")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRES")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = False, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="Inv")
@@ -388,14 +388,10 @@ def test_gp2Scale(client):
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRESpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseSolve")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
 
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client)
