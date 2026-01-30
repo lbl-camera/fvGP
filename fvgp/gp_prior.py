@@ -414,6 +414,7 @@ class GPprior:
         hps = hyperparameters
         dm = np.zeros((len(x1), len(x2)))
         for i in range(len(x1[0])): dm += abs(np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
+        dm = np.sqrt(dm)
 
         non_zero_ind = np.where(dm != 0.0)
         for direction in range(len(x1[0])):
