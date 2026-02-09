@@ -229,6 +229,7 @@ class GGMP:
         nlc = NonlinearConstraint(constraint, 0.99, 1.0)
 
         res = differential_evolution(
+            #self.neg_GGMP_log_likelihood,
             self.neg_GGMP_log_likelihood,
             hps_obj.vectorized_bounds,
             disp=True,
@@ -260,30 +261,125 @@ class GGMP:
         print(" New likelihood: ", Eval)
         return weights, hps
 
+    #from scipy.special import logsumexp
+
     def GGMP_log_likelihood(self, v):
         """
-        computes the marginal log-likelihood
-        input:
-            hyperparameters
-        output:
-            negative marginal log-likelihood (scalar)
+        Local mixture-of-experts log-likelihood.
+        No global GP collapse.
         """
+
+        # unpack hyperparameters
         weights_f, hps = self.hps_obj.devectorize_hps(v)
-        weights_y = [self.likelihoods[i].weight for i in range(self.likelihood_terms)]
+        weights_y = np.array([self.likelihoods[k].weight
+                              for k in range(self.likelihood_terms)])
 
-        B = np.empty((self.number_of_GPs, self.likelihood_terms))
-        for i in range(self.number_of_GPs):
-            for j in range(self.likelihood_terms):
-                B[i, j] = np.log(weights_y[j]) + np.log(weights_f[i]) + self.GPs[j][i].log_likelihood(hps[i])
+        logL = 0.0
+        eps = 1e-12  # numerical safety
 
-        B = B.flatten()
-        k = np.argmax(B)
-        B_i0j0 = B[k]
-        diffB = B - B_i0j0
-        diffB = np.delete(diffB, k)
-        S = np.sum(np.exp(diffB))
+        # loop over datapoints
+        for n in range(self.len_data):
 
-        return B_i0j0 + np.log(1.0 + S)
+            # accumulate local mixture terms
+            local_terms = []
+
+            for j in range(self.number_of_GPs):
+                for k in range(self.likelihood_terms):
+                    # GP j likelihood term k evaluated at datapoint n
+                    sigma_k = 1e-3
+                    self.GPs[k][j].set_hyperparameters(hps[j])
+                    domain = self.y_data[n][0]
+                    y_density = self.y_data[n][1]
+                    ll = self.local_predictive_log_likelihood(self.GPs[k][j],
+                                                              self.x_data[n].reshape(1,-1),
+                                                              domain,
+                                                              y_density,
+                                                              sigma_k)
+                    local_terms.append(
+                        np.log(weights_f[j] + eps)
+                        + np.log(weights_y[k] + eps)
+                        + ll
+                    )
+            # log-sum-exp over local mixture
+            local_terms = np.array(local_terms)
+            m = np.max(local_terms)
+            logL += m + np.log(np.sum(np.exp(local_terms - m)))
+
+        return logL
+
+    @staticmethod
+    def local_predictive_log_likelihood(GP,
+                                        x_n,
+                                        y_domain,
+                                        y_density,
+                                        sigma_k2):
+        """
+        Local predictive log-likelihood for GGMP.
+
+        Parameters
+        ----------
+        GP : trained GP object
+            One GP expert (already conditioned on all data)
+        x_n : array-like, shape (1, d)
+            Input location
+        y_domain : array
+            Domain of the output distribution
+        y_density : array
+            Observed histogram (normalized)
+        sigma_k2 : float
+            Variance of likelihood component k
+
+        Returns
+        -------
+        log_likelihood : float
+        """
+        # GP posterior moments at x_n
+        mu = GP.posterior_mean(x_n)["m(x)"]
+        var = GP.posterior_covariance(x_n)["v(x)"]
+
+        total_var = var + sigma_k2
+        total_std = np.sqrt(total_var)
+
+        # model predictive density
+        model_pdf = norm.pdf(y_domain, mu, total_std)
+        model_pdf /= np.trapz(model_pdf, y_domain)
+
+        # Bhattacharyya coefficient
+        bc = np.trapz(np.sqrt(y_density * model_pdf), y_domain)
+
+        # numerical safety
+        bc = np.clip(bc, 1e-12, 1.0)
+
+        return np.log(bc)
+
+    #def GGMP_log_likelihood2(self, v):
+    #    """
+    #    computes the marginal log-likelihood
+    #    input:
+    #        hyperparameters
+    #    output:
+    #        negative marginal log-likelihood (scalar)
+    #    """
+    #    weights_f, hps = self.hps_obj.devectorize_hps(v)
+    #    weights_y = [self.likelihoods[i].weight for i in range(self.likelihood_terms)]
+    #
+    #    B = np.empty((self.number_of_GPs, self.likelihood_terms))
+    #    for i in range(self.number_of_GPs):
+    #        for j in range(self.likelihood_terms):
+    #            B[i, j] = np.log(weights_y[j]) + np.log(weights_f[i]) + self.GPs[j][i].log_likelihood(hps[i])
+
+    #    B = B.flatten()
+    #    k = np.argmax(B)
+    #    B_i0j0 = B[k]
+    #    diffB = B - B_i0j0
+    #    diffB = np.delete(diffB, k)
+    #    S = np.sum(np.exp(diffB))
+    #    res = B_i0j0 + np.log(1.0 + S)
+    #    print("LIKELIHOOD: ", res)
+    #    print(weights_f, hps)
+    #    print("")
+
+    #    return res
 
     def neg_GGMP_log_likelihood(self, v):
         return -self.GGMP_log_likelihood(v)
@@ -291,9 +387,9 @@ class GGMP:
     ##########################################################
     def posterior(self, x_iset, res=100, lb=None, ub=None):
 
-        print([[self.GPs[j][i].prior.hyperparameters for i in range(self.number_of_GPs)] for j in
-               range(self.likelihood_terms)])
-        means = [[self.GPs[j][i].posterior_mean(x_iset)["f(x)"] for i in range(self.number_of_GPs)] for j in
+        #print([[self.GPs[j][i].prior.hyperparameters for i in range(self.number_of_GPs)] for j in
+        #       range(self.likelihood_terms)])
+        means = [[self.GPs[j][i].posterior_mean(x_iset)["m(x)"] for i in range(self.number_of_GPs)] for j in
                  range(self.likelihood_terms)]
         covs = [[self.GPs[j][i].posterior_covariance(x_iset)["v(x)"] for i in range(self.number_of_GPs)] for j in
                 range(self.likelihood_terms)]
@@ -319,7 +415,7 @@ class GGMP:
                                                                                            np.sqrt(covs[k, j, i]),
                                                                                            np.linspace(lb, ub, res))
             pdfs.append(pdf)
-        return {"f(x)": means, "v(x)": covs, "pdf": pdfs, "lb": lb, "ub": ub, "domain": np.linspace(lb, ub, res)}
+        return {"m(x)": means, "v(x)": covs, "pdf": pdfs, "lb": lb, "ub": ub, "domain": np.linspace(lb, ub, res)}
 
     ##########################################################
 
