@@ -103,7 +103,7 @@ def test_single_task_init_basic():
     res = my_gp1.posterior_covariance(x_pred, variance_only = True)
 
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
-    my_gp1.train()
+    my_gp1.train(max_iter = 100)
     my_gp1.train(method = "adam", max_iter = 3)
     my_gp1.update_gp_data(x_data, y_data, append = True)
     my_gp1.update_gp_data(x_data, y_data, append = False)
