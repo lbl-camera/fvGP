@@ -514,7 +514,7 @@ class GP:
               method="mcmc",
               pop_size=20,
               tolerance=0.0001,
-              max_iter=1000,
+              max_iter=10000,
               local_optimizer="L-BFGS-B",
               global_optimizer="genetic",
               constraints=(),
@@ -567,7 +567,7 @@ class GP:
         tolerance : float, optional
             Used as termination criterion for local optimizers. Default = 0.0001.
         max_iter : int, optional
-            Maximum number of iterations for global and local optimizers. Default = 1000.
+            Maximum number of iterations for global and local optimizers. Default = 10000.
         local_optimizer : str, optional
             Defining the local optimizer. Default = `L-BFGS-B`, most `scipy.optimize.minimize`
             functions are permissible.

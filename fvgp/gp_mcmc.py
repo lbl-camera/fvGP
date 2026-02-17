@@ -168,16 +168,15 @@ class gpMCMC:
 
     @staticmethod
     def _default_break_condition(obj):
-        x = obj.trace["x"]
-        i = len(x)
-        if i < 400: return False
-        if (np.sum(abs(np.mean(x[-40:], axis=0) -
-                np.mean(x[-80:-40], axis=0)))
-                < 0.001 * np.sum(abs(np.mean(x[-40:], axis=0)))):
+        loglik = np.asarray(obj.trace["f(x)"])
+        i = len(loglik)
+        W = 100
+        tol = 1e-3
+        if i < 1000: return False
+        stabilized = abs(loglik[-W:].mean() - loglik[-2 * W:-W].mean()) < tol
+        if stabilized:
             return True
-        else:
-            return False
-
+        else: return False
 
     ###############################################################
     def _jump(self, x_old, obj, prior_eval, likelihood):
@@ -194,8 +193,9 @@ class gpMCMC:
         if prior_evaluation_x_star != -np.inf:
             likelihood_star = self.log_likelihood_function(x_star, self.args)
             if np.isnan(likelihood_star): raise Exception("Likelihood evaluation = NaN in gpMCMC")
-            metr_ratio = np.exp(prior_evaluation_x_star + likelihood_star -
-                                prior_eval - likelihood)
+            expo = prior_evaluation_x_star + likelihood_star - prior_eval - likelihood
+            if expo < 50: metr_ratio = np.exp(expo)
+            else: metr_ratio = 1.1
             if np.isnan(metr_ratio):  metr_ratio = 0.
             if metr_ratio > np.random.uniform(0, 1, 1) or obj.auto_accept:
                 x = x_star
@@ -288,7 +288,7 @@ class ProposalDistribution:
 
         if callable(adapt_callable):
             self.adapt = adapt_callable
-        elif adapt_callable == "normal":
+        elif adapt_callable == "normal" or proposal_dist == "normal":
             self.adapt = self._adapt
         else:
             if isinstance(adapt_callable, str): raise Exception("Invalid string provided for adapt callable.")
