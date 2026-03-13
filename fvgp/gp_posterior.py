@@ -8,10 +8,10 @@ class GPposterior:
                  data,
                  prior,
                  trainer,
-                 marginal_density,
+                 marginal_likelihood,
                  likelihood):
 
-        self.marginal_density = marginal_density
+        self.marginal_likelihood = marginal_likelihood
         self.prior = prior
         self.likelihood = likelihood
         self.data = data
@@ -28,10 +28,10 @@ class GPposterior:
         return self.prior.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
 
     def KVsolve(self, v):
-        return self.marginal_density.KVlinalg.solve(v)
+        return self.marginal_likelihood.KVlinalg.solve(v)
 
     def compute_new_KVinvY(self, KV, m):
-        return self.marginal_density.compute_new_KVinvY(KV, m)
+        return self.marginal_likelihood.compute_new_KVinvY(KV, m)
 
     def compute_prior_covariance_matrix(self, x_data, hyperparameters):
         return self.prior.compute_prior_covariance_matrix(x_data, hyperparameters)
@@ -43,7 +43,7 @@ class GPposterior:
         return self.likelihood.noise_function(x_pred, hyperparameters)
 
     def addKV(self, K, V):
-        return self.marginal_density.addKV(K, V)
+        return self.marginal_likelihood.addKV(K, V)
 
     #####################################################
     @property
@@ -68,11 +68,11 @@ class GPposterior:
 
     @property
     def KVinvY(self):
-        return self.marginal_density.KVinvY
+        return self.marginal_likelihood.KVinvY
 
     @property
     def KVinv(self):
-        return self.marginal_density.KVlinalg.KVinv
+        return self.marginal_likelihood.KVlinalg.KVinv
 
     @property
     def input_set_dim(self):
@@ -546,7 +546,7 @@ class GPposterior:
 
     def __getstate__(self):
         state = dict(
-            marginal_density=self.marginal_density,
+            marginal_likelihood=self.marginal_likelihood,
             prior=self.prior,
             likelihood=self.likelihood,
             data=self.data,

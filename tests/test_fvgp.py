@@ -91,10 +91,10 @@ def test_single_task_init_basic():
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
             noise_function=noise, compute_device = 'cpu', ram_economy=True)
 
-    my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
+    my_gp1.marginal_likelihood.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
             noise_function=noise, prior_mean_function = prior_mean, compute_device = 'cpu', ram_economy=False)
-    my_gp1.marginal_density.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
+    my_gp1.marginal_likelihood.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
     my_gp1 = GP(x_data, y_data)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = False)
@@ -116,20 +116,20 @@ def test_single_task_init_basic():
     assert my_gp1.args == my_gp1.args == {"dcf":4.}
     assert my_gp1.args == my_gp1.prior.args
     assert my_gp1.args == my_gp1.likelihood.args
-    assert my_gp1.args == my_gp1.marginal_density.args
+    assert my_gp1.args == my_gp1.marginal_likelihood.args
     assert my_gp1.args == my_gp1.trainer.args
     assert my_gp1.args == my_gp1.posterior.args
-    assert my_gp1.args == my_gp1.marginal_density.KVlinalg.args
+    assert my_gp1.args == my_gp1.marginal_likelihood.KVlinalg.args
 
     my_gp1 = GP(x_data, y_data, noise_variances = np.zeros(y_data.shape) + 0.01,init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1.set_args({"dcf":4.})
     assert my_gp1.args == my_gp1.args == {"dcf":4.}
     assert my_gp1.args == my_gp1.prior.args
     assert my_gp1.args == my_gp1.likelihood.args
-    assert my_gp1.args == my_gp1.marginal_density.args
+    assert my_gp1.args == my_gp1.marginal_likelihood.args
     assert my_gp1.args == my_gp1.trainer.args
     assert my_gp1.args == my_gp1.posterior.args
-    assert my_gp1.args == my_gp1.marginal_density.KVlinalg.args
+    assert my_gp1.args == my_gp1.marginal_likelihood.KVlinalg.args
 
 
     res = my_gp1.posterior_mean(x_pred)
@@ -151,6 +151,7 @@ def test_single_task_init_basic():
     res = sparse_kernel(1,1)
     res = periodic_kernel(1,1,1)
     wendland_kernel(get_anisotropic_distance_matrix(np.ones((2,2)), np.ones((2,2))+1., np.array([1,1])))
+    sle_kernel(np.ones((2,2)), np.ones((2,2))+1.21, np.array([1,1,1,1]), args = {"x_data": np.random.rand(10,2)})
     
     a = np.random.rand(10)
     wasserstein_1d(a,a.copy())
@@ -271,7 +272,7 @@ def test_train_hgdl_async(client):
     my_gp2.set_hyperparameters(np.array([1., 1., 1., 1., 1., 1.]))
     my_gp2.hyperparameters
     my_gp2.get_prior_pdf()
-    my_gp2.marginal_density.test_log_likelihood_gradient(np.array([1., 1., 1., 1., 1., 1.]))
+    my_gp2.marginal_likelihood.test_log_likelihood_gradient(np.array([1., 1., 1., 1., 1., 1.]))
 
 
 def test_multi_task(client):
@@ -587,10 +588,10 @@ def test_pickle():
     assert is_pickle_equal(my_gpo)
     assert is_pickle_equal(my_gpo.prior)
     assert is_pickle_equal(my_gpo.likelihood)
-    assert is_pickle_equal(my_gpo.marginal_density)
+    assert is_pickle_equal(my_gpo.marginal_likelihood)
     assert is_pickle_equal(my_gpo.trainer)
     assert is_pickle_equal(my_gpo.posterior)
     assert is_pickle_equal(my_gpo.data)
-    assert is_pickle_equal(my_gpo.marginal_density.KVlinalg)
+    assert is_pickle_equal(my_gpo.marginal_likelihood.KVlinalg)
 
 

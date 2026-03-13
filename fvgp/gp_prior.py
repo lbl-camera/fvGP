@@ -1,18 +1,17 @@
 import numpy as np
-from .kernels import *
+import inspect
 import dask.distributed as distributed
 import warnings
-
-warnings.simplefilter("once", UserWarning)
 import itertools
-from functools import partial
-import scipy.sparse as sparse
-from scipy.sparse import block_array
 import time
+import scipy.sparse as sparse
+from .kernels import *
+from functools import partial
+from scipy.sparse import block_array
 from loguru import logger
 from scipy.sparse import coo_matrix, vstack
-import inspect
 
+warnings.simplefilter("once", UserWarning)
 
 class GPprior:
     def __init__(self,
@@ -24,6 +23,7 @@ class GPprior:
                  prior_mean_function_grad=None,
                  gp2Scale_dask_client=None,
                  gp2Scale_batch_size=10000,
+                 gplvm=False
                  ):
 
         self.kernel_function = kernel
@@ -32,6 +32,7 @@ class GPprior:
         self.batch_size = gp2Scale_batch_size
         self.data = data
         self.trainer = trainer
+        self.gplvm = gplvm
 
         assert callable(kernel) or kernel is None
         assert callable(prior_mean_function) or prior_mean_function is None
@@ -109,6 +110,7 @@ class GPprior:
 
     @property
     def x_data(self):
+        if self.gplvm: return self.data.y_data
         return self.data.x_data
 
     @property
@@ -473,6 +475,7 @@ class GPprior:
             k_n_params=self.k_n_params,
             batch_size=self.batch_size,
             data=self.data,
+            gplvm=self.gplvm,
             trainer=self.trainer,
             kernel=self.kernel,
             d_kernel_dx=self.d_kernel_dx,

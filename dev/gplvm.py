@@ -1,27 +1,29 @@
+#!/usr/bin/env python
+
 import warnings
+
+warnings.simplefilter("once", UserWarning)
 import numpy as np
 from loguru import logger
 from distributed import Client
 from scipy.stats import norm
-from .gp_prior import GPprior
-from .gp_data import GPdata
-from .gp_marginal_likelihood import GPMarginalLikelihood
+from fvgp.gp_prior import GPprior
+from fvgp.gp_data import GPdata
+from .gp_marginal_density import GPMarginalDensity
 from .gp_likelihood import GPlikelihood
 from .gp_training import GPtraining
 from .gp_posterior import GPposterior
 import importlib
-warnings.simplefilter("once", UserWarning)
+
 
 # TODO: search below "TODO"
-#   - Make MCMC async train possible (since every object is serializable and the MCMC can get a function to execute
-#   (publish state), this is basically accomplished)
+#   - Make MCMC async train possible
 
 
 class GP:
     """
-    This class provides all the tools for a single-task Gaussian Process (GP).
-    Use fvGP for multi-task GPs. However, the fvGP class inherits all methods from this class.
-    This class allows full HPC distributed training via the `hgdl` package, large-scale sparse GPs
+    This class provides all the tools for a Gaussian Process latent variable model (GPlvm).
+    This class allows full HPC large-scale sparse GPlvms
     via `gp2Scale` and offers GPU support.
 
     V ... number of input points
@@ -33,17 +35,16 @@ class GP:
 
     Parameters
     ----------
-    x_data : np.ndarray or list
+    Y : np.ndarray or list
         The input point positions. Shape (V x D), where D is the :py:attr:`fvgp.GP.index_set_dim`.
         For single-task GPs, the index set dimension = input space dimension.
         For multi-task GPs, the index set dimension = input space dimension + 1.
         If dealing with non-Euclidean inputs
         x_data should be a list, not a numpy array.
         In this case, both the index set and the input space dim are set to 1.
-    y_data : np.ndarray
-        The values of the data points. Shape (V) or (V, N). If shape (V,N) the algorithm will run N independent GPs.
-        This is not to be confused with multi-task learning. In this case, all GPs have to have the same prior
-        mean function.
+    initializer : str, optional
+        Specify a method that will a low-fidelity dimensionality reduction for the GPlvm to start with.
+        Default = `umap`
     init_hyperparameters : np.ndarray, optional
         Vector of hyperparameters used to initiate the GP.
         The default is an array of ones with the right length for the anisotropic Matern
@@ -51,7 +52,7 @@ class GP:
         enabled, the default kernel changes to the anisotropic Wendland kernel.
     noise_variances : np.ndarray, optional
         An numpy array defining the uncertainties/noise in the
-        `y_data` in form of a point-wise variance. Shape (V).
+        `y_data` in form of a point-wise variance. Shape (Y.shape).
         Note: if no noise_variances are provided here, the noise_function
         callable will be used; if the callable is not provided, the noise variances
         will be set to `abs(np.mean(y_data)) / 100.0`. If
@@ -78,35 +79,6 @@ class GP:
         The default is a stationary anisotropic kernel
         (`fvgp.GP.default_kernel`) which performs automatic relevance determination (ARD).
         The output is a matrix, an N1 x N2 numpy array.
-    kernel_function_grad : Callable, optional
-        A function that calculates the derivative of the `kernel_function` with respect to the hyperparameters.
-        If provided, it will be used for local training (optimization) and can speed up the calculations.
-        It accepts as input `x1` (a N1 x D array of positions),
-        `x2` (a N2 x D array of positions) and
-        `hyperparameters` (a 1d array of length D+1 for the default kernel).
-        The default is an analytical gradient for the default kernel or a finite difference calculation otherwise.
-        If `ram_economy` is True, the function's input is x1, x2, hyperparameters (numpy array), and a direction (int).
-        The output is a numpy array of shape (len(hps) x N).
-        If `ram_economy` is `False`, the function's input is x1, x2, and hyperparameters.
-        The output is a numpy array of shape (len(hyperparameters) x N1 x N2). See `ram_economy`.
-    prior_mean_function : Callable, optional
-        A function f(x, hyperparameters, [args]) that evaluates the prior mean at a set of input position.
-        It accepts as input
-        an array of positions (of shape N1 x D) and hyperparameters (a 1d array of length D+1 for the default kernel).
-        Optionally, the third argument `args` can be defined.
-        The return value is a 1d array of length N1.
-        If prior_mean_function is provided, `fvgp.GP._default_mean_function` is used,
-        which is the average of the `y_data`.
-    prior_mean_function_grad : Callable, optional
-        A function that evaluates the gradient of the `prior_mean_function` at
-        a set of input positions with respect to the hyperparameters.
-        It accepts as input an array of positions (of size N1 x D) and hyperparameters
-        (a 1d array of length D+1 for the default kernel).
-        The return value is a 2d array of
-        shape (len(hyperparameters) x N1). If None is provided, either
-        zeros are returned since the default mean function does not depend on hyperparameters,
-        or a finite-difference approximation
-        is used if `prior_mean_function` is provided.
     noise_function : Callable, optional
         The noise function is a callable f(x,hyperparameters, [args]) that returns a
         vector (1d np.ndarray) of len(x), a matrix of shape (length(x),length(x)) or a sparse matrix
@@ -115,19 +87,6 @@ class GP:
         The input `x` is a numpy array of shape (N x D). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
-    noise_function_grad : Callable, optional
-        A function that evaluates the gradient of the `noise_function`
-        at an input position with respect to the hyperparameters.
-        It accepts as input an array of positions (of size N x D) and
-        hyperparameters (a 1d array of length D+1 for the default kernel).
-        The return value is a 2d np.ndarray of
-        shape (len(hyperparameters) x N) or a 3d np.ndarray of shape (len(hyperparameters) x N x N).
-        If None is provided, either
-        zeros are returned since the default noise function does not depend on
-        hyperparameters, or, if `noise_function` is provided but no noise function,
-        a finite-difference approximation will be used.
-        The same rules regarding `ram_economy` as for the kernel definition apply here.
-        That means the function will have an additional `direction` parameter.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
         This is an advanced feature for HPC GPs up to 10
@@ -152,28 +111,6 @@ class GP:
         which is available in the second and third callable. The second being the linear solve f(obj, vec),
         and the third being the logdet=f(obj). If a factorization object is not required, the first callable
         should return the matrix itself (K).
-    calc_inv : bool, optional
-        If True, the algorithm calculates and stores the inverse of the covariance
-        matrix after each training or update of the dataset or hyperparameters,
-        which makes computing the posterior covariance faster (3-10 times).
-        For larger problems (>5000 data points), the use of inversion should be avoided due
-        to computational instability and costs. The default is
-        False. Note, the training will not use the
-        inverse for stability reasons. Storing the inverse is
-        a good option when the dataset is not too large and the posterior covariance is heavily used.
-    ram_economy : bool, optional
-        Only of interest if the gradient and/or Hessian of the log marginal likelihood is/are used for the training.
-        If True, components of the derivative of the log marginal likelihood are
-        calculated sequentially, leading to a slow-down
-        but much less RAM usage. If the derivative of the kernel (and noise function) with
-        respect to the hyperparameters (kernel_function_grad) is
-        going to be provided, it has to be tailored: for `ram_economy=True` it should be
-        of the form f(x, hyperparameters, direction)
-        and return a 2d numpy array of shape len(x1) x len(x2).
-        If `ram_economy=False`, the function should be of the form f(x, hyperparameters)
-        and return a numpy array of shape
-        H x len(x1) x len(x2), where H is the number of hyperparameters.
-        CAUTION: This array will be stored and is very large.
     args: dict, optional
         Advanced options. Recognized keys are:
 
@@ -196,10 +133,8 @@ class GP:
 
     Attributes
     ----------
-    x_data : np.ndarray
+    Y : np.ndarray
         Datapoint positions.
-    y_data : np.ndarray
-        Datapoint values.
     noise_variances : np.ndarray
         Datapoint observation variances.
     hyperparameters : np.ndarray
@@ -214,23 +149,17 @@ class GP:
 
     def __init__(
         self,
-        x_data,
-        y_data,
+        Y,
+        initalizer="umap",
         init_hyperparameters=None,
         noise_variances=None,
         compute_device="cpu",
         kernel_function=None,
-        kernel_function_grad=None,
         noise_function=None,
-        noise_function_grad=None,
-        prior_mean_function=None,
-        prior_mean_function_grad=None,
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
         gp2Scale_linalg_mode=None,
-        calc_inv=False,
-        ram_economy=False,
         args=None
     ):
 
@@ -239,21 +168,16 @@ class GP:
                                                           np.ndarray), "wrong init_hyperparameters"
         assert isinstance(compute_device, str), "wrong format in compute_device"
         assert callable(kernel_function) or kernel_function is None, "wrong format in kernel_function"
-        assert callable(kernel_function_grad) or kernel_function_grad is None, "wrong format in kernel_function"
         assert callable(noise_function) or noise_function is None, "wrong format in noise_function"
-        assert callable(noise_function_grad) or noise_function_grad is None, "wrong format in noise_function"
-        assert callable(prior_mean_function) or prior_mean_function is None, "wrong format in prior_mean_function"
-        assert callable(prior_mean_function_grad) or prior_mean_function_grad is None, \
-            "wrong format in prior_mean_function"
-        assert len(x_data) == len(y_data), "x_data and y_data do not have the same lengths."
 
         if args is None: args = {}
+        self.initializer = initializer
         hyperparameters = init_hyperparameters
 
         ########################################
         ###init data instance###################
         ########################################
-        self.data = GPdata(x_data, y_data,
+        self.data = GPdata(np.zeros((len(Y), 1)), Y,
                            args=args,
                            noise_variances=noise_variances,
                            ram_economy=ram_economy,
@@ -262,17 +186,14 @@ class GP:
                            calc_inv=calc_inv)
         ########################################
         # prepare initial hyperparameters and bounds
-        if self.data.Euclidean:
-            if callable(kernel_function) or callable(prior_mean_function) or callable(noise_function):
-                if init_hyperparameters is None: raise Exception(
-                    "You have provided callables for kernel, mean, or noise functions but no "
-                    "initial hyperparameters.")
-            else:
-                if init_hyperparameters is None:
-                    hyperparameters = np.ones((self.index_set_dim + 1))
-                    warnings.warn("Hyperparameters initialized to a vector of ones.")
+        if callable(kernel_function) or callable(noise_function):
+            if init_hyperparameters is None: raise Exception(
+                "You have provided callables for kernel, mean, or noise functions but no "
+                "initial hyperparameters.")
         else:
-            hyperparameters = init_hyperparameters
+            if init_hyperparameters is None:
+                hyperparameters = np.ones((self.index_set_dim + 1))
+                warnings.warn("Hyperparameters initialized to a vector of ones.")
 
         # warn if they could not be prepared
         if hyperparameters is None:
@@ -300,6 +221,7 @@ class GP:
                              prior_mean_function_grad=prior_mean_function_grad,
                              gp2Scale_dask_client=gp2Scale_dask_client,
                              gp2Scale_batch_size=gp2Scale_batch_size,
+                             gplvm=True
                              )
         ########################################
         ###init likelihood instance#############
@@ -311,9 +233,9 @@ class GP:
                                        )
 
         ##########################################
-        #######prepare marginal likelihood###########
+        #######prepare marginal density###########
         ##########################################
-        self.marginal_likelihood = GPMarginalLikelihood(
+        self.marginal_density = GPMarginalDensity(
             self.data,
             self.prior,
             self.likelihood,
@@ -327,17 +249,13 @@ class GP:
         self.posterior = GPposterior(self.data,
                                      self.prior,
                                      self.trainer,
-                                     self.marginal_likelihood,
+                                     self.marginal_density,
                                      self.likelihood)
 
     #########PROPERTIES#########################################
     @property
-    def x_data(self):
+    def Y(self):
         return self.data.x_data
-
-    @property
-    def y_data(self):
-        return self.data.y_data
 
     @property
     def noise_variances(self):
@@ -366,10 +284,6 @@ class GP:
     @property
     def K(self):
         return self.prior.K
-
-    @property
-    def m(self):
-        return self.prior.m
 
     @property
     def V(self):
@@ -411,7 +325,7 @@ class GP:
         self.trainer.hyperparameters = hps
         self.prior.update_state_hyperparameters()
         self.likelihood.update_state()
-        self.marginal_likelihood.update_state_hyperparameters()
+        self.marginal_density.update_state_hyperparameters()
 
     def update_gp_data(
         self,
@@ -447,7 +361,7 @@ class GP:
             Indication whether to append to or overwrite the existing dataset. Default=True.
             In the default case, data will be appended.
         gp_rank_n_update : bool, optional
-            Indicates whether the GP marginal likelihood should be rank-n updated or recomputed. The default
+            Indicates whether the GP marginal should be rank-n updated or recomputed. The default
             is `gp_rank_n_update=append`, meaning if data is only appended, the rank_n_update will
             be performed.
         """
@@ -470,8 +384,8 @@ class GP:
         # update likelihood
         self.likelihood.update_state()
 
-        # update marginal likelihood
-        self.marginal_likelihood.update_state_data(gp_rank_n_update)
+        # update marginal density
+        self.marginal_density.update_state_data(gp_rank_n_update)
         ##########################################
 
     def _get_default_hyperparameter_bounds(self):
@@ -628,12 +542,12 @@ class GP:
         if objective_function is not None and objective_function_gradient is None and (method == 'local' or 'hgdl'):
             raise Exception("For user-defined objective functions and local or hybrid optimization, a gradient and \
                              Hessian function of the objective function have to be defined.")
-        if method == 'mcmc': objective_function = self.marginal_likelihood.log_likelihood
-        if objective_function is None: objective_function = self.marginal_likelihood.neg_log_likelihood
+        if method == 'mcmc': objective_function = self.marginal_density.log_likelihood
+        if objective_function is None: objective_function = self.marginal_density.neg_log_likelihood
         if objective_function_gradient is None:
-            objective_function_gradient = self.marginal_likelihood.neg_log_likelihood_gradient
+            objective_function_gradient = self.marginal_density.neg_log_likelihood_gradient
         if objective_function_hessian is None:
-            objective_function_hessian = self.marginal_likelihood.neg_log_likelihood_hessian
+            objective_function_hessian = self.marginal_density.neg_log_likelihood_hessian
 
         logger.debug("objective function: {}", objective_function)
         logger.debug("method: {}", method)
@@ -776,7 +690,7 @@ class GP:
         if hyperparameters is not None:
             assert isinstance(hyperparameters, np.ndarray), "wrong format in hyperparameters"
             assert np.ndim(hyperparameters) == 1, "wrong format in hyperparameters"
-        return self.marginal_likelihood.log_likelihood(hyperparameters=hyperparameters)
+        return self.marginal_density.log_likelihood(hyperparameters=hyperparameters)
 
     def neg_log_likelihood_gradient(self, hyperparameters=None, component=0):
         """
@@ -794,7 +708,7 @@ class GP:
         ------
         Gradient of the negative log marginal likelihood : np.ndarray
         """
-        return self.marginal_likelihood.neg_log_likelihood_gradient(hyperparameters=hyperparameters, component=component)
+        return self.marginal_density.neg_log_likelihood_gradient(hyperparameters=hyperparameters, component=component)
 
     def test_log_likelihood_gradient(self, hyperparameters, epsilon=1e-6):
         """
@@ -811,7 +725,7 @@ class GP:
         """
         assert isinstance(hyperparameters, np.ndarray), "wrong format in hyperparameters"
         assert np.ndim(hyperparameters) == 1, "wrong format in hyperparameters"
-        return self.marginal_likelihood.test_log_likelihood_gradient(hyperparameters, epsilon=epsilon)
+        return self.marginal_density.test_log_likelihood_gradient(hyperparameters, epsilon=epsilon)
 
     ##################################################################################
     ##################################################################################
@@ -1454,7 +1368,7 @@ class GP:
             data=self.data,
             prior=self.prior,
             likelihood=self.likelihood,
-            marginal_likelihood=self.marginal_likelihood,
+            marginal_density=self.marginal_density,
             trainer=self.trainer,
             posterior=self.posterior
         )
@@ -1469,6 +1383,7 @@ class GP:
 ####################################################################################
 ####################################################################################
 ####################################################################################
+
 def out_of_bounds(x, bounds):
     assert isinstance(x, np.ndarray)
     assert isinstance(bounds, np.ndarray)

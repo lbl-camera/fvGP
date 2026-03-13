@@ -11,6 +11,9 @@ from loguru import logger
 from .utils import log_time
 
 
+#this is an alternative gp_prior class that does assembling the gp2Scale covariance matrix differently.
+
+
 class GPprior:
     def __init__(self,
                  data,

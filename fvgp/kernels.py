@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.spatial.distance import cdist
 
 
 def squared_exponential_kernel(distance, length):
@@ -107,7 +108,7 @@ def matern_kernel_diff1(distance, length):
     return kernel
 
 
-def matern_kernel_diff1_grad(distance, dist_der): ##verified
+def matern_kernel_diff1_grad(distance, dist_der):
     """
     Function for the Matern kernel derivative, order of differentiability = 1.
     kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
@@ -591,3 +592,36 @@ def wasserstein_1d_outer_vec(a, b):
     b_sorted = np.sort(b, axis=1)
     s = a_sorted[:, None, :] - b_sorted[None, :, :]
     return np.mean(np.abs(s), axis=2)
+
+
+def bump(d, r, beta=1., ampl=1.):
+    """
+    evaluates the bump function
+    x ... a point (1d numpy array)
+    x0 ... 1d numpy array of location of bump function
+    returns the bump function b(x,x0) with radius r
+    """
+    #x_new = x - x0
+    #d = np.linalg.norm(x_new, axis = 1)
+    a = np.zeros(d.shape)
+    a = 1.0 - (d**2/r**2)
+    i = np.where(a > 0.0)
+    bump = np.zeros(a.shape)
+    e = np.exp((-beta/a[i])+beta)
+    bump[i] = ampl * e
+    return bump
+
+
+def sle_kernel(x1, x2, hps, args):
+    # Distance to each training point (using all dimensions)
+    x_data = args["x_data"]
+    d1 = get_distance_matrix(x1, x_data)  # (n1, m) - can be geodesic/non-cnd!
+    d2 = get_distance_matrix(x2, x_data)  # (n2, m)
+
+    # Apply bump to create embedding
+    phi_x1 = bump(d1, hps[1], beta=hps[2], ampl=1.0)  # (n1, m)
+    phi_x2 = bump(d2, hps[1], beta=hps[2], ampl=1.0)  # (n2, m)
+
+    # RBF on embeddings
+    D_mat = cdist(phi_x1, phi_x2, metric='euclidean')
+    return hps[0] * np.exp(-D_mat ** 2 / hps[3])

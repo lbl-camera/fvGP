@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 from scipy.optimize import least_squares
 from scipy.stats import norm
+from scipy.special import logsumexp
 
 def integral(f, domain):
     Int = np.sum(f * np.gradient(domain))
@@ -86,6 +87,10 @@ def fit_fixed_weight_gmm(x, y, N, means_init=None, sigmas_init=None):
     means = result.x[:N]
     sigmas = np.exp(result.x[N:])
 
+    idx = np.argsort(means)
+    means = means[idx]
+    sigmas = sigmas[idx]
+
     return means, sigmas, result
 
 
@@ -94,11 +99,10 @@ class GGMP:
             self,
             x_data,
             y_data,
-            number_of_GPs,
             *,
-            hps_obj,
-            kernel_functions=None,
-            prior_mean_functions=None,
+            init_hyperparameters,
+            hps_bounds,
+            kernel_function=None,
             likelihood_terms=100
     ):
         """
@@ -106,19 +110,50 @@ class GGMP:
         type help(GGMP) for more information about attributes, methods and their parameters
         """
         assert len(x_data) == len(y_data)
-        self.number_of_GPs = number_of_GPs
+        number_of_GPs = 1
         self.len_data = len(x_data)
-        self.hps_obj = hps_obj
-        self.init_weights = np.ones(number_of_GPs) / float(number_of_GPs)
+
+        self.hyperparameters = [
+            np.append(init_hyperparameters.copy(), 0.)
+            for _ in range(likelihood_terms)
+        ]
+        self.number_kernel_hyperparameters = len(init_hyperparameters)
+
+        #lower = -0.001 #np.min(np.asarray([np.min(y_data[i][0]) for i in range(len(y_data))]))
+        #upper = 0.001 #np.max(np.asarray([np.max(y_data[i][0]) for i in range(len(y_data))]))
+        lower = np.min(np.asarray([np.min(y_data[i][0]) for i in range(len(y_data))]))
+        upper = np.max(np.asarray([np.max(y_data[i][0]) for i in range(len(y_data))]))
+        self.hps_bounds = np.vstack([np.vstack([hps_bounds, np.array([[lower, upper]])])] * likelihood_terms)
         self.x_data = x_data  # points as usual
         self.y_data = y_data  # each x gets a probability distribution as ordered pairs (domain, image)
         self.likelihood_terms = likelihood_terms
-        self.kernel_functions = kernel_functions
-        self.prior_mean_functions = prior_mean_functions
-        if kernel_functions is None: self.kernel_functions = [None] * number_of_GPs
-        if prior_mean_functions is None: self.prior_mean_functions = [None] * number_of_GPs
+        self.kernel_function = kernel_function
+        self.prior_mean_functions = [
+            lambda x, hps: np.zeros(len(x)) + hps[-1]
+            for _ in range(likelihood_terms)
+        ]
+        #if prior_mean_functions is None: self.prior_mean_functions = [None] * likelihood_terms
         self.GPs = None
         self.likelihoods = None
+
+    def __getattr__(self, name):
+        def not_implemented(*args, **kwargs):
+            print(f"method {name} is not implemented in GGMPs")
+        return not_implemented
+
+    #def gp_hyperparameters(self, hps, index):
+    #    return np.append(hps[0:self.number_kernel_hyperparameters],
+    #                     hps[self.number_kernel_hyperparameters+index])
+
+    #def gp_hyperparameter_bounds(self, index):
+    #    return np.vstack([self.hps_bounds[0:self.number_kernel_hyperparameters],
+    #                      self.hps_bounds[self.number_kernel_hyperparameters+index].reshape(1,-1)])
+
+    def unravel_hps(self, hps: list) -> np.ndarray:
+        return np.concatenate(hps)
+
+    def ravel_hps(self, hps: np.ndarray) -> list:
+        return list(hps.reshape(-1, self.number_kernel_hyperparameters + 1))
 
     def _compute_Gaussian_mixture_outputs(self):
         """
@@ -143,10 +178,13 @@ class GGMP:
 
         return weight_vector, mean_list, vars_list
 
-    def initLikelihoods(self):
+    def initLikelihoods(self, likelihoods=None):
+        if likelihoods is not None:
+            self.likelihoods = likelihoods
+            return self.likelihoods
         weights, means, sigmas = self._compute_Gaussian_mixture_outputs()
         means = np.asarray(means).reshape(len(means), self.likelihood_terms)
-        sigmas  = np.asarray(sigmas).reshape(len(sigmas), self.likelihood_terms)
+        sigmas= np.asarray(sigmas).reshape(len(sigmas), self.likelihood_terms)
 
         self.likelihoods = []
         for i in range(self.likelihood_terms):
@@ -155,11 +193,11 @@ class GGMP:
         return self.likelihoods
 
     def initGPs(self):
-        self.GPs = [[GP(self.x_data, self.likelihoods[j].mean, self.hps_obj.hps[i],
-                        noise_variances=self.likelihoods[j].variance,
-                        kernel_function=self.kernel_functions[i],
-                        prior_mean_function=self.prior_mean_functions[i])
-                    for i in range(self.number_of_GPs)] for j in range(self.likelihood_terms)]
+        self.GPs = [GP(self.x_data, self.likelihoods[j].mean, self.hyperparameters[j],
+                    noise_variances=self.likelihoods[j].variance,
+                    kernel_function=self.kernel_function,
+                    prior_mean_function=self.prior_mean_functions[j])
+                    for j in range(self.likelihood_terms)]
 
     def calculate_data_generation(self, plot=False):
         """
@@ -186,200 +224,160 @@ class GGMP:
         return score / float(self.len_data)
 
     def train(self,
-              hps_obj=None,
               pop_size=20,
               tolerance=0.001,
               max_iter=120,
               dask_client=None
               ):
-        if hps_obj is None: hps_obj = self.hps_obj
-        weights, hps = self.optimize_log_likelihood(
-            hps_obj,
+        #if hps_obj is None: hps_obj = self.hps_obj
+        #(weights,
+        hps = self.optimize_log_likelihood(
             max_iter,
             pop_size,
             tolerance
         )
-        self.hps_obj.set(weights, hps)
-        print("new weights after training: ", self.hps_obj.weights)
-        print("new hps     after training: ", self.hps_obj.hps)
-        for i in range(self.number_of_GPs):
-            for j in range(self.likelihood_terms):
-                self.GPs[j][i].set_hyperparameters(self.hps_obj.hps[i])
-        print("GPs updated")
+        self.hyperparameters = hps
+        print("new hps     after training: ", hps)
+
+        for i in range(self.likelihood_terms): self.GPs[i].set_hyperparameters(self.hyperparameters[i])
 
     def optimize_log_likelihood(self,
-                                hps_obj,
                                 max_iter,
                                 pop_size,
                                 tolerance,
                                 workers=1,
                                 ):
         print("Ensemble fvGP submitted to global optimization")
-        print('bounds are', hps_obj.vectorized_bounds)
+        print('bounds are', self.hps_bounds)
         print("maximum number of iterations: ", max_iter)
         print("termination tolerance: ", tolerance)
-        x0 = self.hps_obj.vectorized_hps
+        x0 = self.unravel_hps(self.hyperparameters)
         Eval = self.GGMP_log_likelihood(x0)
-        print(x0)
+        print("Start @: ", x0)
         print(" Old likelihood: ", Eval)
 
-        def constraint(v):
-            return np.array(np.sum(v[0:self.number_of_GPs]))
-
-        nlc = NonlinearConstraint(constraint, 0.99, 1.0)
-
         res = differential_evolution(
-            #self.neg_GGMP_log_likelihood,
             self.neg_GGMP_log_likelihood,
-            hps_obj.vectorized_bounds,
+            self.hps_bounds,
             disp=True,
             maxiter=max_iter,
             popsize=pop_size,
             tol=tolerance,
             workers=workers,
-            constraints=(nlc),
             x0=x0,
             polish=False
         )
-
-        #r = np.array(res["x"])
-        #r[0:self.number_of_GPs] = 1./self.number_of_GPs
-        #nlc = NonlinearConstraint(constraint,0.9999,1.0)
-        #res = minimize(
-        #        self.GGMP_log_likelihood,r,
-        #        method= "SLSQP",
-        #        jac=self.GGMP_log_likelihood_grad,
-        #        bounds = hps_obj.vectorized_bounds,
-        #        tol = tolerance,
-        #        callback = None,
-        #        options = {"maxiter": max_iter},
-        #        constraints = (nlc,nlc2))
         r = np.array(res["x"])
 
         Eval = self.GGMP_log_likelihood(r)
-        weights, hps = self.hps_obj.devectorize_hps(r)
         print(" New likelihood: ", Eval)
-        return weights, hps
+        return self.ravel_hps(r)
 
-    #from scipy.special import logsumexp
-
-    def GGMP_log_likelihood(self, v):
+    def GGMP_log_likelihood(self, hps):
         """
-        Local mixture-of-experts log-likelihood.
-        No global GP collapse.
+        computes the marginal log-likelihood
+        input:
+            hyperparameters
+        output:
+            marginal log-likelihood (scalar)
         """
+        weights_y = [self.likelihoods[i].weight for i in range(self.likelihood_terms)]
 
-        # unpack hyperparameters
-        weights_f, hps = self.hps_obj.devectorize_hps(v)
-        weights_y = np.array([self.likelihoods[k].weight
-                              for k in range(self.likelihood_terms)])
+        B = np.empty(self.likelihood_terms)
+        if isinstance(hps, np.ndarray): hps = self.ravel_hps(hps)
+        for j in range(self.likelihood_terms):
+            B[j] = np.log(weights_y[j]) + self.GPs[j].log_likelihood(hps[j])
+        res1 = logsumexp(B)
+        return res1
 
-        logL = 0.0
-        eps = 1e-12  # numerical safety
+    #def GGMP_log_likelihood(self, v):
+    #    """
+    #    Local mixture-of-experts log-likelihood.
+    #    No global GP collapse.
+    #    """
+    #
+    #    # unpack hyperparameters
+    #    weights_f, hps = self.hps_obj.devectorize_hps(v)
+    #    weights_y = np.array([self.likelihoods[k].weight
+    #                          for k in range(self.likelihood_terms)])
 
-        # loop over datapoints
-        for n in range(self.len_data):
+    #    logL = 0.0
+    #    eps = 1e-12  # numerical safety
+
+    #    # loop over datapoints
+    #    for n in range(self.len_data):
 
             # accumulate local mixture terms
-            local_terms = []
+    #        local_terms = []
 
-            for j in range(self.number_of_GPs):
-                for k in range(self.likelihood_terms):
-                    # GP j likelihood term k evaluated at datapoint n
-                    sigma_k = 1e-3
-                    self.GPs[k][j].set_hyperparameters(hps[j])
-                    domain = self.y_data[n][0]
-                    y_density = self.y_data[n][1]
-                    ll = self.local_predictive_log_likelihood(self.GPs[k][j],
-                                                              self.x_data[n].reshape(1,-1),
-                                                              domain,
-                                                              y_density,
-                                                              sigma_k)
-                    local_terms.append(
-                        np.log(weights_f[j] + eps)
-                        + np.log(weights_y[k] + eps)
-                        + ll
-                    )
-            # log-sum-exp over local mixture
-            local_terms = np.array(local_terms)
-            m = np.max(local_terms)
-            logL += m + np.log(np.sum(np.exp(local_terms - m)))
+    #        for j in range(self.number_of_GPs):
+    #            for k in range(self.likelihood_terms):
+    #                # GP j likelihood term k evaluated at datapoint n
+    #                sigma_k = 1e-3
+    #                self.GPs[k][j].set_hyperparameters(hps[j])
+    #                domain = self.y_data[n][0]
+    #                y_density = self.y_data[n][1]
+    #                ll = self.local_predictive_log_likelihood(self.GPs[k][j],
+    #                                                          self.x_data[n].reshape(1, -1),
+    #                                                          domain,
+    #                                                          y_density,
+    #                                                          sigma_k)
+    #                local_terms.append(
+    #                    np.log(weights_f[j] + eps)
+    #                    + np.log(weights_y[k] + eps)
+    #                    + ll
+    #                )
+    #        # log-sum-exp over local mixture
+    #        local_terms = np.array(local_terms)
+    #        m = np.max(local_terms)
+    #        logL += m + np.log(np.sum(np.exp(local_terms - m)))
 
-        return logL
+    #    return logL
 
-    @staticmethod
-    def local_predictive_log_likelihood(GP,
-                                        x_n,
-                                        y_domain,
-                                        y_density,
-                                        sigma_k2):
-        """
-        Local predictive log-likelihood for GGMP.
-
-        Parameters
-        ----------
-        GP : trained GP object
-            One GP expert (already conditioned on all data)
-        x_n : array-like, shape (1, d)
-            Input location
-        y_domain : array
-            Domain of the output distribution
-        y_density : array
-            Observed histogram (normalized)
-        sigma_k2 : float
-            Variance of likelihood component k
-
-        Returns
-        -------
-        log_likelihood : float
-        """
-        # GP posterior moments at x_n
-        mu = GP.posterior_mean(x_n)["m(x)"]
-        var = GP.posterior_covariance(x_n)["v(x)"]
-
-        total_var = var + sigma_k2
-        total_std = np.sqrt(total_var)
-
-        # model predictive density
-        model_pdf = norm.pdf(y_domain, mu, total_std)
-        model_pdf /= np.trapz(model_pdf, y_domain)
-
-        # Bhattacharyya coefficient
-        bc = np.trapz(np.sqrt(y_density * model_pdf), y_domain)
-
-        # numerical safety
-        bc = np.clip(bc, 1e-12, 1.0)
-
-        return np.log(bc)
-
-    #def GGMP_log_likelihood2(self, v):
+    #@staticmethod
+    #def local_predictive_log_likelihood(GP,
+    #                                    x_n,
+    #                                    y_domain,
+    #                                    y_density,
+    #                                    sigma_k2):
     #    """
-    #    computes the marginal log-likelihood
-    #    input:
-    #        hyperparameters
-    #    output:
-    #        negative marginal log-likelihood (scalar)
+    #    Local predictive log-likelihood for GGMP.
+
+    #    Parameters
+    #    ----------
+    #    GP : trained GP object
+    #        One GP expert (already conditioned on all data)
+    #    x_n : array-like, shape (1, d)
+    #        Input location
+    #    y_domain : array
+    #        Domain of the output distribution
+    #    y_density : array
+    #        Observed histogram (normalized)
+    #    sigma_k2 : float
+    #        Variance of likelihood component k
+
+    #    Returns
+    #    -------
+    #    log_likelihood : float
     #    """
-    #    weights_f, hps = self.hps_obj.devectorize_hps(v)
-    #    weights_y = [self.likelihoods[i].weight for i in range(self.likelihood_terms)]
-    #
-    #    B = np.empty((self.number_of_GPs, self.likelihood_terms))
-    #    for i in range(self.number_of_GPs):
-    #        for j in range(self.likelihood_terms):
-    #            B[i, j] = np.log(weights_y[j]) + np.log(weights_f[i]) + self.GPs[j][i].log_likelihood(hps[i])
+    #    # GP posterior moments at x_n
+    #    mu = GP.posterior_mean(x_n)["m(x)"]
+    #    var = GP.posterior_covariance(x_n)["v(x)"]
 
-    #    B = B.flatten()
-    #    k = np.argmax(B)
-    #    B_i0j0 = B[k]
-    #    diffB = B - B_i0j0
-    #    diffB = np.delete(diffB, k)
-    #    S = np.sum(np.exp(diffB))
-    #    res = B_i0j0 + np.log(1.0 + S)
-    #    print("LIKELIHOOD: ", res)
-    #    print(weights_f, hps)
-    #    print("")
+    #    total_var = var + sigma_k2
+    #    total_std = np.sqrt(total_var)
 
-    #    return res
+    #    # model predictive density
+    #    model_pdf = norm.pdf(y_domain, mu, total_std)
+    #    model_pdf /= np.trapz(model_pdf, y_domain)
+
+    #    # Bhattacharyya coefficient
+    #    bc = np.trapezoid(np.sqrt(y_density * model_pdf), y_domain)
+
+    #    # numerical safety
+    #    bc = np.clip(bc, 1e-12, 1.0)
+
+    #    return np.log(bc)
 
     def neg_GGMP_log_likelihood(self, v):
         return -self.GGMP_log_likelihood(v)
@@ -389,31 +387,24 @@ class GGMP:
 
         #print([[self.GPs[j][i].prior.hyperparameters for i in range(self.number_of_GPs)] for j in
         #       range(self.likelihood_terms)])
-        means = [[self.GPs[j][i].posterior_mean(x_iset)["m(x)"] for i in range(self.number_of_GPs)] for j in
-                 range(self.likelihood_terms)]
-        covs = [[self.GPs[j][i].posterior_covariance(x_iset)["v(x)"] for i in range(self.number_of_GPs)] for j in
-                range(self.likelihood_terms)]
-
-        m = list(np.concatenate(means))
-        for i in range(len(m)):
-            plt.plot(x_iset.flatten(), m[i])
-        plt.show()
+        if np.ndim(x_iset) == 1: x_iset = x_iset.reshape(1, len(x_iset))
+        means = [self.GPs[j].posterior_mean(x_iset)["m(x)"].reshape(len(x_iset)) for j in range(self.likelihood_terms)]
+        covs = [self.GPs[j].posterior_covariance(x_iset)["v(x)"].reshape(len(x_iset)) for j in range(self.likelihood_terms)]
 
         means = np.array(means)
         covs = np.array(covs)
 
         print("posterior shape: ", means.shape)
-        if lb == None: lb = np.min(means - 3.0 * np.sqrt(covs))
-        if ub == None: ub = np.max(means + 3.0 * np.sqrt(covs))
+        if lb is None: lb = np.min(means - 3.0 * np.sqrt(covs))
+        if ub is None: ub = np.max(means + 3.0 * np.sqrt(covs))
 
         pdfs = []
         for i in range(len(x_iset)):
             pdf = np.zeros((res))
-            for j in range(self.number_of_GPs):
-                for k in range(self.likelihood_terms):
-                    pdf += self.hps_obj.weights[j] * self.likelihoods[k].weight * gaussian(means[k, j, i],
-                                                                                           np.sqrt(covs[k, j, i]),
-                                                                                           np.linspace(lb, ub, res))
+            for k in range(self.likelihood_terms):
+                pdf += self.likelihoods[k].weight * gaussian(means[k, i],
+                                                             np.sqrt(covs[k, i]),
+                                                             np.linspace(lb, ub, res))
             pdfs.append(pdf)
         return {"m(x)": means, "v(x)": covs, "pdf": pdfs, "lb": lb, "ub": ub, "domain": np.linspace(lb, ub, res)}
 
@@ -490,10 +481,10 @@ class hyperparameters:
         * hps_bounds: list of 2d numpy arrays
     """
 
-    def __init__(self, weights, weights_bounds, hps, hps_bounds):
+    def __init__(self, hps, hps_bounds):
         self.hps_bounds = hps_bounds
-        self.weights_bounds = weights_bounds
-        self.weights = weights
+        #self.weights_bounds = weights_bounds
+        #self.weights = weights
         self.hps = hps
         self.number_of_weights = len(weights)
         self.number_of_hps_sets = len(hps)
@@ -570,62 +561,3 @@ class NormalLikelihood:
 
     def marginalize(self, domain, direction):
         return gaussian(self.mean[direction], np.sqrt(self.variances), domain)
-
-"""
-    def find_data_generating_likelihood(self, maxiter=1000, popsize=10, tol=0.001, workers=8):
-        weights0 = np.asarray([1. / self.likelihood_terms] * self.likelihood_terms)
-        #mean0 = np.asarray([likelihood.mean for likelihood in self.likelihoods]).flatten()
-        #sigma0 = np.asarray([likelihood.variance for likelihood in self.likelihoods]).flatten()
-        #x0 = np.concatenate([weights0, mean0, sigma0], axis = 0)
-        x0 = weights0
-
-        weight_bounds = np.vstack([np.array([0, 1])] * self.likelihood_terms)
-        #mean_bounds   = np.vstack([likelihood.mean_bounds for likelihood in self.likelihoods])
-        #sigma_bounds  = np.vstack([likelihood.variance_bounds for likelihood in self.likelihoods])
-        #bounds = np.row_stack([weight_bounds, mean_bounds, sigma_bounds])
-        bounds = weight_bounds
-
-        def constraint(v):
-            return np.array(np.sum(v))
-
-        nlc = NonlinearConstraint(constraint, 0.99, 1.0)
-
-        print("initial score: ", self._get_data_generation(x0))
-
-        res = differential_evolution(
-            self._get_data_generation,
-            bounds,
-            disp=True,
-            maxiter=maxiter,
-            popsize=popsize,
-            tol=tol,
-            x0=x0,
-            constraints=(nlc),
-            workers=workers, polish=False)
-
-        #res = minimize(
-        #        self.data_generation,
-        #        method= "L-BFGS-B",
-        #        x0 = np.random.uniform(low=bounds[:,0], high = bounds[:,1], size = len(bounds)),
-        #        bounds = bounds,
-        #        tol = tol,
-        #        constraints = (nlc,),
-        #        options = {"maxiter": maxiter, "disp": True})
-
-        vec = res["x"]
-        weights = vec
-        weights = weights / np.sum(weights)
-
-        #y = vec[self.likelihood_terms : self.likelihood_terms + self.likelihood_terms * self.len_data]
-        #y = y.reshape(self.len_data, self.likelihood_terms, order = "F")
-
-        #sigma = vec[self.likelihood_terms + self.likelihood_terms * self.len_data : ]
-        #sigma = sigma.reshape(self.len_data, self.likelihood_terms, order = "F")
-
-        for i in range(self.likelihood_terms):
-            #self.likelihoods[i].set_moments(y[:,i], sigma[:,i])
-            self.likelihoods[i].set_weight(weights[i])
-
-        return self.likelihoods
-
-"""

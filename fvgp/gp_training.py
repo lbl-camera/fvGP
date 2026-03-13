@@ -1,12 +1,10 @@
 import warnings
-warnings.simplefilter("once", UserWarning)
-
 from loguru import logger
-import numpy as np
 from scipy.optimize import differential_evolution
 from hgdl.hgdl import HGDL
 from scipy.optimize import minimize
 from .gp_mcmc import *
+warnings.simplefilter("once", UserWarning)
 
 
 class GPtraining:
