@@ -15,10 +15,16 @@ It is recommended to use this package via [gpCAM](https://gpcam.lbl.gov/).
 
 Specialties: Extreme-Scale GPs, GPs Tailored for HPC training, Advanced Kernel Designs, Domain-Aware Stochastic Function Approximation
 
-Coming soon: All those capabilitites for stochastic manifold learning
+Coming soon: All those capabilities for stochastic manifold learning
 
 fvGP holds the world record for exact large-scale Gaussian Processes!
 ## Credits
+
+This code was developed with help from Ron Pandolfi (LBNL), Mark Risser (LBNL), Hengrui Luo (Rice U.), and Vardaan Tekriwal (UCB).
+
+Additional contributions and insights came from across the community, in particular, Kevin Yager, Masafumi Fukuto, and their teams (Brookhaven National Lab).
+
+We acknowledge support from several DOE ASCR, BER, and BES projects, including CAMERA (James Sethian), SPECTRA (Sherry Li), and CASCADE (Bill Collins), as well as support directly from Lawrence Berkeley National Laboratory. 
 
 This package uses the HGDL package of David Perryman and Marcus Noack, which
 is based on the [HGDN](https://www.sciencedirect.com/science/article/pii/S037704271730225X) algorithm by Noack and Funke.
