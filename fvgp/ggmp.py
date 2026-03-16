@@ -7,7 +7,6 @@ from scipy.optimize import minimize, linear_sum_assignment
 from scipy.linalg import LinAlgError
 from contextlib import contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 import hashlib
 import json
 import logging

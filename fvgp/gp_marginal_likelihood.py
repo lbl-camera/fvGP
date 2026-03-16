@@ -386,7 +386,6 @@ class GPMarginalLikelihood:
         dL_dHm = np.zeros((len(hyperparameters)))
         dm_dh = self.dm_dh(self.x_data, hyperparameters)
 
-
         for i in range(len(hyperparameters)):
             dL_dHm[i] = -dm_dh[i].T @ b
             if self.ram_economy is False:

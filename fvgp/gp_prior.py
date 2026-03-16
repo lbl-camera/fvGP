@@ -10,8 +10,8 @@ from functools import partial
 from scipy.sparse import block_array
 from loguru import logger
 from scipy.sparse import coo_matrix, vstack
-
 warnings.simplefilter("once", UserWarning)
+
 
 class GPprior:
     def __init__(self,
@@ -138,7 +138,8 @@ class GPprior:
         return self.data.compute_device
 
     ################################################################
-    #START: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS
+    #START: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS#########
+    ################################################################
     def augment_state_data(self, x_old, x_new):
         self.m, self.K = self._update_prior(x_old, x_new, self.hyperparameters)
         logger.debug("Prior mean and covariance updated after data augmentation.")
@@ -152,7 +153,7 @@ class GPprior:
         logger.debug("Prior mean and covariance updated after hyperparameter change.")
 
     def compute_prior_covariance_matrix(self, x, hyperparameters):
-        """computes the covariance matrix from the kernel"""
+        """computes the prior covariance matrix from the kernel"""
         if self.gp2Scale:
             K = self._compute_prior_covariance_gp2Scale(x, hyperparameters)
         else:
@@ -160,6 +161,7 @@ class GPprior:
         return K
 
     def compute_covariances(self, x1, x2, hps):
+        """computes the covariances via k(x,x')"""
         if self.k_n_params == 3:
             return self.kernel(x1, x2, hps)
         elif self.k_n_params == 4:
@@ -168,7 +170,7 @@ class GPprior:
             raise Exception("No valid kernel function signature")
 
     def compute_mean(self, x, hyperparameters):
-        """computes the covariance matrix from the kernel"""
+        """computes the mean from some x"""
         if self.m_n_params == 2:
             m = self.mean_function(x, hyperparameters)
         elif self.m_n_params == 3:
@@ -185,8 +187,8 @@ class GPprior:
 
     def dm_dh(self, x_data, hyperparameters):
         return self._dm_dh(x_data, hyperparameters)
-
-    #END: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS
+    #################################################################
+    #END: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS############
     #################################################################
 
     def _compute_prior(self, x_data, hyperparameters):
