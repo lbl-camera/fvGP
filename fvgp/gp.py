@@ -597,7 +597,9 @@ class GP:
             #asynchronous = False
             method = "hgdl"
 
-        if self.gp2Scale: method = 'mcmc'
+        if self.gp2Scale:
+            warnings.warn("gp2Scale enabled. Method switched to MCMC!")
+            method = 'mcmc'
         if method == "hgdl" and dask_client is None: raise Exception("Please provide a dask_client for method =`hgdl`")
         if (method == "hgdl" or method == "mcmc") and asynchronous and dask_client is None:
             raise Exception("Please provide a dask_client for asynchronous training")   # pragma: no cover
