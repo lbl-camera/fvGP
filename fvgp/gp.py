@@ -145,7 +145,13 @@ class GP:
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     gp2Scale_linalg_mode : str, optional
         One of `Chol`, `sparseLU`, `sparseCG`, `sparseMINRES`, `sparseSolve`, `sparseCGpre`
-        (incomplete LU preconditioner), or `sparseMINRESpre`. The default is None which amounts to
+        (cached sparse preconditioner; geometry selected via `args["sparse_preconditioner_type"]`),
+        or `sparseMINRESpre`. Supported preconditioner geometries are `ilu`,
+        `incomplete_cholesky`, `block_jacobi`, `additive_schwarz`, and `amg`.
+        Convenience aliases such as `sparseCGpre_ilu`, `sparseCGpre_ic`,
+        `sparseCGpre_blockjacobi`, `sparseCGpre_schwarz`, `sparseCGpre_amg`,
+        and the corresponding `sparseMINRESpre_*` forms are also accepted.
+        The default is None which amounts to
         an automatic determination of the mode. For advanced customization options
         this can also be an iterable with three callables: the first f(K), where K is the covariance matrix
         to compute a factorization object
@@ -182,13 +188,29 @@ class GP:
         - "random_logdet_verbose" : True/False; default = False
         - "random_logdet_print_info" : True/False; default = False
         - "sparse_minres_tol" : float
-        - "cg_minres_tol" : float
-        - "random_logdet_lanczos_compute_device" : str; default = "cpu"/"gpu"
+        - "sparse_cg_tol" : float
+        - "cg_minres_tol" : float; legacy CG tolerance alias still accepted
+        - "sparse_preconditioner_type" : one of `ilu`, `incomplete_cholesky`, `block_jacobi`, `additive_schwarz`, `amg`; optional if a `sparseCGpre_*` or `sparseMINRESpre_*` alias mode is used
+        - "sparse_preconditioner_drop_tol" : float; ILU only
+        - "sparse_preconditioner_fill_factor" : float; ILU only
+        - "sparse_preconditioner_block_size" : int; block Jacobi / additive Schwarz
+        - "sparse_preconditioner_schwarz_overlap" : int; additive Schwarz
+        - "sparse_preconditioner_ic_shift" : float; incomplete Cholesky diagonal shift
+        - "sparse_preconditioner_amg_cycle" : str; AMG cycle, e.g. `V`
+        - "sparse_preconditioner_refresh_interval" : int; rebuild the cached preconditioner every k matrix updates
+        - "sparse_krylov_warm_start" : True/False; reuse the previous iterative solution as the next initial guess
+        - "sparse_krylov_mode" : `single` or `block`; block mode currently applies to CG solves with multiple RHS
+        - "sparse_block_krylov" : True/False; legacy alias for `sparse_krylov_mode=\"block\"`
+        - "sparse_krylov_block_size" : int; number of RHS columns per block-CG group
+        - "sparse_krylov_maxiter" : int; generic Krylov iteration cap
+        - "sparse_cg_maxiter" : int; CG-specific iteration cap
+        - "sparse_minres_maxiter" : int; MINRES-specific iteration cap
         - "Chol_factor_compute_device" : str; default = "cpu"/"gpu"
         - "update_Chol_factor_compute_device": str; default = "cpu"/"gpu"
         - "Chol_solve_compute_device" : str; default = "cpu"/"gpu"
         - "Chol_logdet_compute_device" : str; default = "cpu"/"gpu"
         - "GPU_engine" : str; default = "torch"/"cupy"
+        - "GPU_device" : optional torch device string, e.g. "cuda:0" or "mps"
 
         All other keys will be stored and are available as part of the object instance and
         in kernel, mean, and noise functions.
@@ -320,6 +342,7 @@ class GP:
             self.trainer,
             gp2Scale_linalg_mode=gp2Scale_linalg_mode,
         )
+        self.marginal_density = self.marginal_likelihood
 
         ##########################################
         #######prepare posterior evaluations######
@@ -1457,6 +1480,7 @@ class GP:
             prior=self.prior,
             likelihood=self.likelihood,
             marginal_likelihood=self.marginal_likelihood,
+            marginal_density=self.marginal_likelihood,
             trainer=self.trainer,
             posterior=self.posterior
         )
@@ -1464,6 +1488,10 @@ class GP:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        if "marginal_likelihood" not in self.__dict__ and "marginal_density" in self.__dict__:
+            self.marginal_likelihood = self.marginal_density
+        if "marginal_density" not in self.__dict__ and "marginal_likelihood" in self.__dict__:
+            self.marginal_density = self.marginal_likelihood
 
 
 ####################################################################################

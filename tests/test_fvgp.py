@@ -5,6 +5,7 @@
 
 import unittest
 import numpy as np
+import pytest
 from fvgp import fvGP
 from fvgp import GP
 import time
@@ -20,6 +21,7 @@ from dask.distributed import performance_report
 from distributed.utils_test import gen_cluster, client, loop, cluster_fixture, loop_in_thread, cleanup
 from fvgp.kernels import *
 from fvgp.gp_lin_alg import *
+from fvgp.kv_linalg import KVlinalg
 from scipy import sparse
 from fvgp import deep_kernel_network
 
@@ -71,6 +73,79 @@ def test_lin_alg():
     solve(A, b, compute_device='cpu')
     is_sparse(A)
     how_sparse_is(A)
+
+
+def test_gp2scale_sparse_kernel_matches_dense_kernel():
+    rng = np.random.default_rng(7)
+    x1 = rng.random((24, 3))
+    x2 = rng.random((19, 3))
+    hps = np.array([1.7, 0.35, 0.45, 0.55])
+
+    dense_block = wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
+    sparse_block = wendland_anisotropic_gp2Scale_cpu_sparse(x1, x2, hps)
+
+    assert sparse.isspmatrix_coo(sparse_block)
+    assert np.allclose(dense_block, sparse_block.toarray())
+
+    far_block = wendland_anisotropic_gp2Scale_cpu_sparse(x1, x2 + 10.0, hps)
+    assert sparse.isspmatrix_coo(far_block)
+    assert far_block.nnz == 0
+
+
+def test_gp2scale_linalg_mode_alias_resolution():
+    mode, args = resolve_gp2scale_linalg_mode("sparseCGpre_blockjacobi")
+    assert mode == "sparseCGpre"
+    assert args["sparse_preconditioner_type"] == "block_jacobi"
+
+    mode, args = resolve_gp2scale_linalg_mode(
+        "sparseMINRESpre_ic",
+        {"sparse_preconditioner_ic_shift": 1e-8},
+    )
+    assert mode == "sparseMINRESpre"
+    assert args["sparse_preconditioner_type"] == "incomplete_cholesky"
+    assert args["sparse_preconditioner_ic_shift"] == 1e-8
+
+    with pytest.raises(ValueError):
+        resolve_gp2scale_linalg_mode(
+            "sparseCGpre_ilu",
+            {"sparse_preconditioner_type": "amg"},
+        )
+
+
+def test_kvlinalg_sparse_preconditioner_reuse_and_warm_start():
+    rng = np.random.default_rng(11)
+    A = rng.standard_normal((40, 40))
+    A = A @ A.T + np.eye(40)
+    KV = sparse.csr_matrix(A)
+    data = argparse.Namespace(
+        args={
+            "sparse_preconditioner_block_size": 8,
+            "sparse_preconditioner_refresh_interval": 3,
+            "sparse_krylov_warm_start": True,
+        }
+    )
+    kv = KVlinalg("cpu", data)
+    kv.set_KV(KV, "sparseCGpre_blockjacobi")
+
+    rhs = rng.standard_normal(40)
+    solution = kv.solve(rhs)
+    operator_before = kv.Preconditioner_operator
+
+    assert kv.mode == "sparseCGpre"
+    assert data.args["sparse_preconditioner_type"] == "block_jacobi"
+    assert operator_before is not None
+    assert kv.Last_iterative_solution is not None
+
+    KV_updated = sparse.csr_matrix(A + 0.01 * np.eye(40))
+    kv.update_KV(KV_updated)
+
+    assert kv.Preconditioner_operator is operator_before
+    assert kv.Preconditioner_reuse_counter == 1
+
+    updated_solution = kv.solve(rhs)
+    residual = KV_updated @ np.asarray(updated_solution).reshape(-1) - rhs
+    assert np.linalg.norm(residual) / np.linalg.norm(rhs) < 1e-4
+    assert solution.shape == updated_solution.shape == (40, 1)
 
 
 def test_single_task_init_basic():
@@ -345,6 +420,7 @@ def test_multi_task(client):
 
 
 def test_gp2Scale(client):
+    pytest.importorskip("imate")
     input_dim = 1
     N = 200
     x_data = np.random.rand(N,input_dim)
@@ -399,6 +475,24 @@ def test_gp2Scale(client):
 
     my_gp2S.update_gp_data(x_data,y_data, append = False)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
+
+    my_gp2S = GP(
+        np.sort(x_data, axis=0),
+        y_data,
+        init_hps,
+        gp2Scale=True,
+        kernel_function=wendland_anisotropic_gp2Scale_cpu_sparse,
+        gp2Scale_batch_size=100,
+        gp2Scale_dask_client=client,
+        gp2Scale_linalg_mode="sparseCGpre_blockjacobi",
+        args={
+            "sparse_preconditioner_block_size": 16,
+            "sparse_krylov_warm_start": True,
+        },
+    )
+    my_gp2S.log_likelihood(hyperparameters=init_hps)
+    my_gp2S.log_likelihood(hyperparameters=init_hps)
+    my_gp2S.update_gp_data(x_new, y_new, append=True)
 
     my_gp2S.train(hyperparameter_bounds=hps_bounds, max_iter = 2, init_hyperparameters = init_hps, info = True)
 
@@ -470,7 +564,8 @@ def test_pickle():
     #TEST0
     #tests empty gp pickling
     my_gpo = GP(x_data, y_data)
-    pickle.loads(pickle.dumps(my_gpo))
+    my_gpo2 = pickle.loads(pickle.dumps(my_gpo))
+    assert my_gpo2.marginal_density is my_gpo2.marginal_likelihood
 
     #TEST1
     #initialize the GPOptimizer
@@ -593,5 +688,3 @@ def test_pickle():
     assert is_pickle_equal(my_gpo.posterior)
     assert is_pickle_equal(my_gpo.data)
     assert is_pickle_equal(my_gpo.marginal_likelihood.KVlinalg)
-
-
