@@ -28,7 +28,7 @@ class GPposterior:
         return self.prior.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
 
     def KVsolve(self, v):
-        return self.marginal_likelihood.KVlinalg.solve(v)
+        return self.marginal_likelihood.KVlinalg.solve(v, training=False)
 
     def compute_new_KVinvY(self, KV, m):
         return self.marginal_likelihood.compute_new_KVinvY(KV, m)

@@ -204,13 +204,14 @@ class fvGP(GP):
         - "sparse_preconditioner_ic_shift" : float; incomplete Cholesky diagonal shift
         - "sparse_preconditioner_amg_cycle" : str; AMG cycle, e.g. `V`
         - "sparse_preconditioner_refresh_interval" : int; rebuild the cached preconditioner every k matrix updates
-        - "sparse_krylov_warm_start" : True/False; reuse the previous iterative solution as the next initial guess
+        - "sparse_krylov_warm_start" : True/False; reuse the previous iterative solution as the next initial guess during training-time iterative solves
         - "sparse_krylov_mode" : `single` or `block`; block mode currently applies to CG solves with multiple RHS
         - "sparse_block_krylov" : True/False; legacy alias for `sparse_krylov_mode=\"block\"`
         - "sparse_krylov_block_size" : int; number of RHS columns per block-CG group
         - "sparse_krylov_maxiter" : int; generic Krylov iteration cap
         - "sparse_cg_maxiter" : int; CG-specific iteration cap
         - "sparse_minres_maxiter" : int; MINRES-specific iteration cap
+        - "random_logdet_lanczos_compute_device" : str; overrides the stochastic logdet device with "cpu" or "gpu"
         - "Chol_factor_compute_device" : str; default = "cpu"/"gpu"
         - "update_Chol_factor_compute_device": str; default = "cpu"/"gpu"
         - "Chol_solve_compute_device" : str; default = "cpu"/"gpu"

@@ -6,6 +6,8 @@
 import unittest
 import numpy as np
 import pytest
+import sys
+import types
 from fvgp import fvGP
 from fvgp import GP
 import time
@@ -20,6 +22,8 @@ import sys
 from dask.distributed import performance_report
 from distributed.utils_test import gen_cluster, client, loop, cluster_fixture, loop_in_thread, cleanup
 from fvgp.kernels import *
+import fvgp.gp_lin_alg as gp_lin_alg_module
+import fvgp.kv_linalg as kv_linalg_module
 from fvgp.gp_lin_alg import *
 from fvgp.kv_linalg import KVlinalg
 from scipy import sparse
@@ -112,6 +116,35 @@ def test_gp2scale_linalg_mode_alias_resolution():
         )
 
 
+def test_random_logdet_compute_device_override(monkeypatch):
+    captured_gpu_flags = []
+
+    fake_imate = types.ModuleType("imate")
+
+    def fake_logdet(*args, **kwargs):
+        captured_gpu_flags.append(kwargs["gpu"])
+        return 0.0, {}
+
+    fake_imate.logdet = fake_logdet
+    monkeypatch.setitem(sys.modules, "imate", fake_imate)
+    monkeypatch.setattr(gp_lin_alg_module, "_imate_gpu_enabled", lambda args=None: True)
+
+    KV = sparse.eye(4, format="csr")
+
+    calculate_random_logdet(
+        KV,
+        "cpu",
+        args={"random_logdet_lanczos_compute_device": "gpu"},
+    )
+    calculate_random_logdet(
+        KV,
+        "gpu",
+        args={"random_logdet_lanczos_compute_device": "cpu"},
+    )
+
+    assert captured_gpu_flags == [True, False]
+
+
 def test_kvlinalg_sparse_preconditioner_reuse_and_warm_start():
     rng = np.random.default_rng(11)
     A = rng.standard_normal((40, 40))
@@ -128,7 +161,7 @@ def test_kvlinalg_sparse_preconditioner_reuse_and_warm_start():
     kv.set_KV(KV, "sparseCGpre_blockjacobi")
 
     rhs = rng.standard_normal(40)
-    solution = kv.solve(rhs)
+    solution = kv.solve(rhs, training=True)
     operator_before = kv.Preconditioner_operator
 
     assert kv.mode == "sparseCGpre"
@@ -142,10 +175,33 @@ def test_kvlinalg_sparse_preconditioner_reuse_and_warm_start():
     assert kv.Preconditioner_operator is operator_before
     assert kv.Preconditioner_reuse_counter == 1
 
-    updated_solution = kv.solve(rhs)
+    updated_solution = kv.solve(rhs, training=True)
     residual = KV_updated @ np.asarray(updated_solution).reshape(-1) - rhs
     assert np.linalg.norm(residual) / np.linalg.norm(rhs) < 1e-4
     assert solution.shape == updated_solution.shape == (40, 1)
+
+
+def test_kvlinalg_warm_start_is_training_only(monkeypatch):
+    captured_x0 = []
+
+    def fake_cg(KV, vec, x0=None, M=None, args=None):
+        captured_x0.append(None if x0 is None else np.array(x0, copy=True))
+        return np.ones((KV.shape[0], 1))
+
+    monkeypatch.setattr(kv_linalg_module, "calculate_sparse_conj_grad", fake_cg)
+
+    data = argparse.Namespace(args={"sparse_krylov_warm_start": True})
+    kv = KVlinalg("cpu", data)
+    kv.mode = "sparseCG"
+    kv.KV = sparse.eye(4, format="csr")
+    kv.Last_iterative_solution = 2.0 * np.ones((4, 1))
+
+    rhs = np.arange(4.0)
+    kv.solve(rhs, training=False)
+    kv.solve(rhs, training=True)
+
+    assert captured_x0[0] is None
+    assert np.allclose(captured_x0[1], 2.0 * np.ones((4, 1)))
 
 
 def test_single_task_init_basic():
@@ -565,7 +621,15 @@ def test_pickle():
     #tests empty gp pickling
     my_gpo = GP(x_data, y_data)
     my_gpo2 = pickle.loads(pickle.dumps(my_gpo))
-    assert my_gpo2.marginal_density is my_gpo2.marginal_likelihood
+    assert hasattr(my_gpo2, "marginal_likelihood")
+    assert not hasattr(my_gpo2, "marginal_density")
+
+    legacy_state = my_gpo.__getstate__()
+    legacy_state["marginal_density"] = legacy_state.pop("marginal_likelihood")
+    my_gpo3 = object.__new__(GP)
+    my_gpo3.__setstate__(legacy_state)
+    assert hasattr(my_gpo3, "marginal_likelihood")
+    assert not hasattr(my_gpo3, "marginal_density")
 
     #TEST1
     #initialize the GPOptimizer

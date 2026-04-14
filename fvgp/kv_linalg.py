@@ -94,13 +94,15 @@ class KVlinalg:
     def _iterative_modes(self):
         return {"sparseMINRES", "sparseCG", "sparseMINRESpre", "sparseCGpre"}
 
-    def _store_iterative_solution(self, solution):
-        if self._warm_start_enabled():
+    def _store_iterative_solution(self, solution, training=False):
+        if training and self._warm_start_enabled():
             self.Last_iterative_solution = np.array(solution, copy=True)
 
-    def _consume_warm_start(self, b, x0):
+    def _consume_warm_start(self, b, x0, training=False):
         if x0 is not None:
             return x0
+        if not training:
+            return None
         if not self._warm_start_enabled():
             return None
         if self.Last_iterative_solution is None:
@@ -247,7 +249,7 @@ class KVlinalg:
         if self.mode not in self._iterative_modes():
             self.Last_iterative_solution = None
 
-    def solve(self, b, x0=None):
+    def solve(self, b, x0=None, training=False):
         if self.mode == "Chol":
             return calculate_Chol_solve(self.Chol_factor, b, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv":
@@ -256,12 +258,12 @@ class KVlinalg:
             #return matmul(self.KVinv, b, compute_device=self.compute_device) #is this really faster?
             return self.KVinv @ b
         elif self.mode == "sparseCG":
-            res = calculate_sparse_conj_grad(self.KV, b, x0=self._consume_warm_start(b, x0), args=self.args)
-            self._store_iterative_solution(res)
+            res = calculate_sparse_conj_grad(self.KV, b, x0=self._consume_warm_start(b, x0, training=training), args=self.args)
+            self._store_iterative_solution(res, training=training)
             return res
         elif self.mode == "sparseMINRES":
-            res = calculate_sparse_minres(self.KV, b, x0=self._consume_warm_start(b, x0), args=self.args)
-            self._store_iterative_solution(res)
+            res = calculate_sparse_minres(self.KV, b, x0=self._consume_warm_start(b, x0, training=training), args=self.args)
+            self._store_iterative_solution(res, training=training)
             return res
         elif self.mode == "sparseLU":
             return calculate_LU_solve(self.LU_factor, b, args=self.args)
@@ -270,20 +272,20 @@ class KVlinalg:
                 self.KV,
                 b,
                 M=self._get_sparse_preconditioner(),
-                x0=self._consume_warm_start(b, x0),
+                x0=self._consume_warm_start(b, x0, training=training),
                 args=self.args,
             )
-            self._store_iterative_solution(res)
+            self._store_iterative_solution(res, training=training)
             return res
         elif self.mode == "sparseCGpre":
             res = calculate_sparse_conj_grad(
                 self.KV,
                 b,
                 M=self._get_sparse_preconditioner(),
-                x0=self._consume_warm_start(b, x0),
+                x0=self._consume_warm_start(b, x0, training=training),
                 args=self.args,
             )
-            self._store_iterative_solution(res)
+            self._store_iterative_solution(res, training=training)
             return res
         elif self.mode == "sparseSolve":
             return calculate_sparse_solve(self.KV, b, args=self.args)

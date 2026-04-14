@@ -759,7 +759,8 @@ def calculate_random_logdet(KV, compute_device, args=None):
     logger.debug("calculate_random_logdet")
     from imate import logdet as imate_logdet
     st = time.time()
-    gpu = compute_device == "gpu" and _imate_gpu_enabled(args)
+    logdet_compute_device = str(args.get("random_logdet_lanczos_compute_device", compute_device)).lower()
+    gpu = logdet_compute_device == "gpu" and _imate_gpu_enabled(args)
 
     lanczos_degree = 20
     error_rtol = 0.01

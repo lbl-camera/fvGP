@@ -121,7 +121,7 @@ class GPMarginalLikelihood:
         y_mean = self.y_data - m[:, None]
         KV = self.addKV(K, V)
         self.KVlinalg.update_KV(KV)
-        KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY).reshape(y_mean.shape)
+        KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY, training=False).reshape(y_mean.shape)
         return KVinvY
 
     def _set_state_KVinvY(self, K, V, m, mode):
@@ -133,7 +133,7 @@ class GPMarginalLikelihood:
         self.KVlinalg.set_KV(KV, mode)
         logger.debug("KVlinalg obj set")
         logger.debug("Solve in progress")
-        KVinvY = self.KVlinalg.solve(y_mean).reshape(y_mean.shape)
+        KVinvY = self.KVlinalg.solve(y_mean, training=False).reshape(y_mean.shape)
         return KVinvY
 
     def _build_sparse_preconditioner_or_none(self, KV):
@@ -166,14 +166,14 @@ class GPMarginalLikelihood:
     ##################################################################
     ##################################################################
     ##################################################################
-    def compute_new_KVinvY(self, KV, m):
+    def compute_new_KVinvY(self, KV, m, training=False):
         """
         Recompute KVinvY for new hyperparameters (e.g. during training, for instance)
         This is only used by some posterior functions and in the gradient of the log likelihood function.
         This does not change the KV obj
         """
         y_mean = self.y_data - m[:, None]
-        x0 = self._iterative_initial_guess(y_mean.shape)
+        x0 = self._iterative_initial_guess(y_mean.shape) if training else None
         if self.gp2Scale:   # pragma: no cover
             mode: Any = self._set_gp2Scale_mode(KV)
             if mode == "sparseLU":
