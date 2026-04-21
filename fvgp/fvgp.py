@@ -151,7 +151,17 @@ class fvGP(GP):
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     gp2Scale_linalg_mode : str, optional
         One of `Chol`, `sparseLU`, `sparseCG`, `sparseMINRES`, `sparseSolve`, `sparseCGpre`
-        (incomplete LU preconditioner), or `sparseMINRESpre`. The default is None which amounts to
+        (cached sparse preconditioner; geometry selected via `args["sparse_preconditioner_type"]`),
+        or `sparseMINRESpre`. Supported preconditioner geometries are `ilu`,
+        compiled incomplete Cholesky (`ic`, `ichol`, or `incomplete_cholesky`) and
+        zero-fill `ichol0`; these use the optional `ilupp` backend. `native_ic` keeps
+        the legacy Python IC(0) implementation for debugging/comparison. Other options are `block_jacobi`,
+        `additive_schwarz`, and `amg`.
+        Convenience aliases such as `sparseCGpre_ilu`, `sparseCGpre_ic`,
+        `sparseCGpre_ichol0`, `sparseCGpre_native_ic`, `sparseCGpre_blockjacobi`,
+        `sparseCGpre_schwarz`, `sparseCGpre_amg`,
+        and the corresponding `sparseMINRESpre_*` forms are also accepted.
+        The default is None which amounts to
         an automatic determination of the mode. For advanced customization options
         this can also be an iterable with three callables: the first f(K), where K is the covariance matrix
         to compute a factorization object
@@ -188,13 +198,49 @@ class fvGP(GP):
         - "random_logdet_verbose" : True/False; default = False
         - "random_logdet_print_info" : True/False; default = False
         - "sparse_minres_tol" : float
-        - "cg_minres_tol" : float
-        - "random_logdet_lanczos_compute_device" : str; default = "cpu"/"gpu"
+        - "sparse_cg_tol" : float
+        - "cg_minres_tol" : float; legacy CG tolerance alias still accepted
+        - "sparse_preconditioner_type" : one of `ilu`, `ic`, `ichol`, `incomplete_cholesky`, `ichol0`, `native_ic`, `block_jacobi`, `additive_schwarz`, `amg`; optional if a `sparseCGpre_*` or `sparseMINRESpre_*` alias mode is used
+        - "sparse_preconditioner_drop_tol" : float; ILU only
+        - "sparse_preconditioner_fill_factor" : float; ILU only
+        - "sparse_preconditioner_block_size" : int; block Jacobi / additive Schwarz
+        - "sparse_preconditioner_schwarz_overlap" : int; additive Schwarz
+        - "sparse_preconditioner_ic_shift" : float; legacy Python IC(0) diagonal shift only
+        - "sparse_preconditioner_ichol_fill_in" : int; thresholded IC (`ic`, `ichol`, `incomplete_cholesky`) only
+        - "sparse_preconditioner_ichol_threshold" : float; thresholded IC (`ic`, `ichol`, `incomplete_cholesky`) only
+        - "sparse_preconditioner_amg_cycle" : str; AMG cycle, e.g. `V`
+        - "sparse_preconditioner_refresh_interval" : int; rebuild the cached preconditioner every k matrix updates
+        - "sparse_krylov_warm_start" : True/False; reuse the previous iterative solution as the next initial guess during training-time iterative solves
+        - "sparse_krylov_mode" : `single` or `block`; block mode currently applies to CG solves with multiple RHS
+        - "sparse_block_krylov" : True/False; legacy alias for `sparse_krylov_mode=\"block\"`
+        - "sparse_krylov_block_size" : int; number of RHS columns per block-CG group
+        - "sparse_krylov_maxiter" : int; generic Krylov iteration cap
+        - "sparse_cg_maxiter" : int; CG-specific iteration cap
+        - "sparse_minres_maxiter" : int; MINRES-specific iteration cap
+        - "random_logdet_lanczos_compute_device" : str; overrides the stochastic logdet device with "cpu" or "gpu"
         - "Chol_factor_compute_device" : str; default = "cpu"/"gpu"
         - "update_Chol_factor_compute_device": str; default = "cpu"/"gpu"
         - "Chol_solve_compute_device" : str; default = "cpu"/"gpu"
         - "Chol_logdet_compute_device" : str; default = "cpu"/"gpu"
         - "GPU_engine" : str; default = "torch"/"cupy"
+        - "GPU_device" : optional torch device string, e.g. "cuda:0" or "mps"
+
+        Practical sparse-solver guidance:
+
+        - Keep compact-support covariance matrices genuinely sparse before using global
+          factor-based preconditioners. If the kernel support is too broad, ILU/IC
+          failures are usually memory/fill failures, not proof that Krylov solvers are bad.
+        - Prefer `sparseCGpre_*` as the primary path for covariance systems, which are
+          symmetric positive definite in the usual case. `MINRES` can be useful as a
+          comparison, but it may need a stricter `sparse_minres_tol` to satisfy a raw
+          relative residual check.
+        - Sweep preconditioner parameters at the target scale. For ILU, `drop_tol` and
+          `fill_factor` control a memory/solve-time tradeoff; a slightly more expressive
+          factor can cost only marginally more to build but reduce solve time substantially.
+        - For repeated nearby K+V updates, enable `sparse_krylov_warm_start` and reuse
+          preconditioners with `sparse_preconditioner_refresh_interval`. The best refresh
+          interval is problem-dependent because preconditioner build cost can be comparable
+          to an unconditioned solve.
 
         All other keys will be stored and are available as part of the object instance.
 

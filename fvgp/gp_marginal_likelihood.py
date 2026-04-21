@@ -121,7 +121,7 @@ class GPMarginalLikelihood:
         y_mean = self.y_data - m[:, None]
         KV = self.addKV(K, V)
         self.KVlinalg.update_KV(KV)
-        KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY).reshape(y_mean.shape)
+        KVinvY = self.KVlinalg.solve(y_mean, x0=self.KVinvY, training=False).reshape(y_mean.shape)
         return KVinvY
 
     def _set_state_KVinvY(self, K, V, m, mode):
@@ -133,18 +133,48 @@ class GPMarginalLikelihood:
         self.KVlinalg.set_KV(KV, mode)
         logger.debug("KVlinalg obj set")
         logger.debug("Solve in progress")
-        KVinvY = self.KVlinalg.solve(y_mean).reshape(y_mean.shape)
+        KVinvY = self.KVlinalg.solve(y_mean, training=False).reshape(y_mean.shape)
         return KVinvY
+
+    def _build_sparse_preconditioner_or_none(self, KV):
+        try:
+            _, operator = calculate_sparse_preconditioner(KV, args=self.args)
+            return operator
+        except Exception as exc:
+            logger.warning(
+                "Sparse preconditioner construction failed; "
+                "falling back to the unpreconditioned iterative solve: {}. {}",
+                exc,
+                sparse_preconditioner_failure_guidance(self.args),
+            )
+            return None
+
+    def _iterative_initial_guess(self, target_shape):
+        if not bool(self.args.get("sparse_krylov_warm_start", False)):
+            return None
+        if self.KVinvY is None:
+            return None
+        guess = np.asarray(self.KVinvY)
+        if guess.ndim == 1:
+            guess = guess.reshape(-1, 1)
+        if guess.shape[0] != target_shape[0]:
+            return None
+        if guess.shape[1] == target_shape[1]:
+            return guess
+        if guess.shape[1] == 1 and target_shape[1] > 1:
+            return np.repeat(guess, target_shape[1], axis=1)
+        return None
     ##################################################################
     ##################################################################
     ##################################################################
-    def compute_new_KVinvY(self, KV, m):
+    def compute_new_KVinvY(self, KV, m, training=False):
         """
         Recompute KVinvY for new hyperparameters (e.g. during training, for instance)
         This is only used by some posterior functions and in the gradient of the log likelihood function.
         This does not change the KV obj
         """
         y_mean = self.y_data - m[:, None]
+        x0 = self._iterative_initial_guess(y_mean.shape) if training else None
         if self.gp2Scale:   # pragma: no cover
             mode: Any = self._set_gp2Scale_mode(KV)
             if mode == "sparseLU":
@@ -155,15 +185,15 @@ class GPMarginalLikelihood:
                 Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
                 KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
             elif mode == "sparseCG":
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, args=self.args)
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean, x0=x0, args=self.args)
             elif mode == "sparseMINRES":
-                KVinvY = calculate_sparse_minres(KV, y_mean, args=self.args)
+                KVinvY = calculate_sparse_minres(KV, y_mean, x0=x0, args=self.args)
             elif mode == "sparseMINRESpre":
-                B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_minres(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+                M = self._build_sparse_preconditioner_or_none(KV)
+                KVinvY = calculate_sparse_minres(KV, y_mean, M=M, x0=x0, args=self.args)
             elif mode == "sparseCGpre":
-                B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+                M = self._build_sparse_preconditioner_or_none(KV)
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, x0=x0, args=self.args)
             elif mode == "sparseSolve":
                 KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
             elif callable(mode[0]) and callable(mode[1]) and callable(mode[2]):
@@ -184,6 +214,7 @@ class GPMarginalLikelihood:
         """
         KV = self.addKV(K, V)
         y_mean = self.y_data - m[:, None]
+        x0 = self._iterative_initial_guess(y_mean.shape)
         if self.gp2Scale:
             mode: Any = self._set_gp2Scale_mode(KV)
             if mode == "sparseLU":
@@ -196,18 +227,18 @@ class GPMarginalLikelihood:
                 KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
                 KVlogdet = calculate_Chol_logdet(Chol_factor, compute_device=self.compute_device, args=self.args)
             elif mode == "sparseCG":
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, args=self.args)
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean, x0=x0, args=self.args)
                 KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
             elif mode == "sparseMINRES":
-                KVinvY = calculate_sparse_minres(KV, y_mean, args=self.args)
+                KVinvY = calculate_sparse_minres(KV, y_mean, x0=x0, args=self.args)
                 KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
             elif mode == "sparseMINRESpre":
-                B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_minres(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+                M = self._build_sparse_preconditioner_or_none(KV)
+                KVinvY = calculate_sparse_minres(KV, y_mean, M=M, x0=x0, args=self.args)
                 KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
             elif mode == "sparseCGpre":
-                B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+                M = self._build_sparse_preconditioner_or_none(KV)
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, x0=x0, args=self.args)
                 KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
             elif mode == "sparseSolve":
                 KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
@@ -263,12 +294,16 @@ class GPMarginalLikelihood:
     def _set_gp2Scale_mode(self, KV):
         Ksparsity = float(KV.nnz) / float(len(self.x_data) ** 2)
         if self.gp2Scale_linalg_mode is not None:
-            return self.gp2Scale_linalg_mode
+            mode, resolved_args = resolve_gp2scale_linalg_mode(self.gp2Scale_linalg_mode, self.args)
+            self.data.args = resolved_args
+            return mode
         elif len(self.x_data) < 50001 and Ksparsity < 0.0001:
             mode = "sparseLU"
         elif len(self.x_data) < 2001 and Ksparsity >= 0.0001:
             mode = "Chol"
         else:
+            # Preserve the published gp2Scale automatic behavior unless the
+            # caller explicitly asks for a different solver mode.
             mode = "sparseMINRES"
         return mode
 
@@ -472,5 +507,3 @@ class GPMarginalLikelihood:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-
-

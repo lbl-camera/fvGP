@@ -496,10 +496,11 @@ class GGMP:  # pragma: no cover
         """
         Compute scalar log-likelihood for a configured GP object.
 
-        Prefers marginal_density.neg_log_likelihood (most consistent with gradients),
-        and falls back to marginal_density.log_likelihood / gp.log_likelihood.
+        Prefers marginal_likelihood.neg_log_likelihood (most consistent with
+        gradients), and falls back to marginal_likelihood.log_likelihood /
+        gp.log_likelihood.
         """
-        md = getattr(gp, "marginal_density", None)
+        md = getattr(gp, "marginal_likelihood", None)
         if md is not None:
             if hasattr(md, "neg_log_likelihood"):
                 return -self._as_float(md.neg_log_likelihood(hyperparameters=None), reduce="sum")
@@ -517,9 +518,9 @@ class GGMP:  # pragma: no cover
         Uses fvGP's analytical gradient (fixed in v4.7.8), falling back to numerical
         gradient for gp2Scale/GPU mode where analytical is not supported.
         """
-        md = getattr(gp, "marginal_density", None)
+        md = getattr(gp, "marginal_likelihood", None)
         if md is None:
-            raise AttributeError("GP has no marginal_density object")
+            raise AttributeError("GP has no marginal_likelihood object")
 
         hps = np.asarray(gp.hyperparameters, dtype=float)
 
