@@ -5,7 +5,7 @@ import time
 from collections import deque
 from loguru import logger
 from scipy.sparse.linalg import splu
-from scipy.sparse.linalg import minres, cg, spsolve
+from scipy.sparse.linalg import minres, cg, spsolve, spsolve_triangular
 from scipy.sparse import identity
 from scipy.sparse.linalg import onenormest
 from scipy.linalg import cho_factor, cho_solve, solve_triangular
@@ -21,9 +21,16 @@ def normalize_sparse_preconditioner_type(preconditioner_type):
     preconditioner_type = str(preconditioner_type).lower()
     aliases = {
         "ilu": "ilu",
-        "ic": "incomplete_cholesky",
-        "ichol": "incomplete_cholesky",
-        "incomplete_cholesky": "incomplete_cholesky",
+        "ic": "ic",
+        "ichol": "ic",
+        "incomplete_cholesky": "ic",
+        "ichol0": "ichol0",
+        "ilupp_ichol0": "ichol0",
+        "ilupp_icholt": "ic",
+        "native_ic": "native_incomplete_cholesky",
+        "legacy_ic": "native_incomplete_cholesky",
+        "native_incomplete_cholesky": "native_incomplete_cholesky",
+        "legacy_incomplete_cholesky": "native_incomplete_cholesky",
         "block_jacobi": "block_jacobi",
         "blockjacobi": "block_jacobi",
         "schwarz": "additive_schwarz",
@@ -34,10 +41,55 @@ def normalize_sparse_preconditioner_type(preconditioner_type):
         raise ValueError(
             "Unknown sparse preconditioner type "
             f"{preconditioner_type!r}. Expected one of "
-            "{'ilu', 'ic', 'incomplete_cholesky', 'block_jacobi', 'blockjacobi', "
+            "{'ilu', 'ic', 'ichol', 'ichol0', 'incomplete_cholesky', "
+            "'native_ic', 'legacy_ic', 'block_jacobi', 'blockjacobi', "
             "'schwarz', 'additive_schwarz', 'amg'}."
         )
     return aliases[preconditioner_type]
+
+
+def _raise_missing_ilupp(preconditioner_type, exc):
+    raise ImportError(
+        "The sparse incomplete-Cholesky preconditioners (`ic`, `ichol`, "
+        "`incomplete_cholesky`, and `ichol0`) require the optional `ilupp` "
+        "package. Install it in the Python environment running fvGP with:\n\n"
+        "    pip install ilupp\n\n"
+        f"Requested sparse preconditioner resolved to backend={preconditioner_type!r}."
+    ) from exc
+
+
+def sparse_preconditioner_failure_guidance(args=None):
+    args = _normalize_args(args)
+    preconditioner_type = args.get("sparse_preconditioner_type")
+    try:
+        preconditioner_type = normalize_sparse_preconditioner_type(preconditioner_type)
+    except Exception:
+        preconditioner_type = str(preconditioner_type)
+
+    guidance = [
+        "Practical guidance: preconditioner failures often mean the covariance graph is too dense or the factor is too expressive for available memory.",
+        "First check the compact-support kernel length scale/support radius and keep matrix density low before tuning solver parameters.",
+        "Run a small preconditioner build sweep before a full solve run; a buildable preconditioner can still be slow to apply.",
+    ]
+    if preconditioner_type == "ilu":
+        guidance.append(
+            "For ILU, sweep `sparse_preconditioner_drop_tol` and `sparse_preconditioner_fill_factor`; looser drop tolerances and smaller fill factors are more likely to fit, while stronger factors may reduce solve time."
+        )
+    elif preconditioner_type in {"ic", "ichol0"}:
+        guidance.append(
+            "For IC/IChol, install the optional backend with `pip install ilupp`; if thresholded IC does not fit, try softer fill/threshold settings or `ichol0`, then verify actual solve time."
+        )
+    elif preconditioner_type in {"block_jacobi", "additive_schwarz"}:
+        guidance.append(
+            "For block/local preconditioners, sweep block size and overlap; these may fit easily but can be weaker than ILU on large covariance systems."
+        )
+    guidance.append(
+        "For repeated nearby K+V updates, `sparse_krylov_warm_start=True` and a nontrivial `sparse_preconditioner_refresh_interval` can avoid rebuilding every solve."
+    )
+    guidance.append(
+        "If MINRES returns with a poor raw residual, try a stricter `sparse_minres_tol` before judging the method."
+    )
+    return " ".join(guidance)
 
 
 def resolve_gp2scale_linalg_mode(mode, args=None):
@@ -500,44 +552,71 @@ def _build_ic0_factor(KV, args=None):
                 diag[i] = np.sqrt(diag_sq)
                 rows.append(computed_entries)
 
-            columns = [[] for _ in range(n)]
+            indptr = [0]
+            indices = []
+            data = []
             for i, row in enumerate(rows):
                 for j, value in row.items():
-                    columns[j].append((i, value))
+                    indices.append(int(j))
+                    data.append(float(value))
+                indices.append(i)
+                data.append(float(diag[i]))
+                indptr.append(len(indices))
+
+            L = sparse.csr_matrix(
+                (
+                    np.asarray(data, dtype=np.float64),
+                    np.asarray(indices, dtype=np.int32),
+                    np.asarray(indptr, dtype=np.int32),
+                ),
+                shape=A.shape,
+            )
+            LT = L.transpose().tocsr()
 
             def solve(vector):
                 vector = np.asarray(vector, dtype=np.float64)
-                y = np.zeros_like(vector)
-                for i, row in enumerate(rows):
-                    total = vector[i]
-                    for j, value in row.items():
-                        total -= value * y[j]
-                    y[i] = total / diag[i]
-
-                z = np.zeros_like(y)
-                for i in range(n - 1, -1, -1):
-                    total = y[i]
-                    for row_index, value in columns[i]:
-                        if row_index > i:
-                            total -= value * z[row_index]
-                    z[i] = total / diag[i]
-                return z
+                y = spsolve_triangular(L, vector, lower=True)
+                return spsolve_triangular(LT, y, lower=False)
 
             factor = {
                 "type": "incomplete_cholesky",
                 "diag": diag,
                 "rows": rows,
-                "columns": columns,
-                "solve": solve,
+                "L": L,
+                "LT": LT,
                 "shift": shift,
             }
-            operator = sparse.linalg.LinearOperator(A.shape, matvec=solve, rmatvec=solve, dtype=A.dtype)
+            operator = _build_dtype_adapted_operator(A.shape, solve, factor_dtype=np.float64)
             return factor, operator
         except Exception as exc:
             last_exc = exc
             shift = 1e-10 if shift == 0.0 else shift * growth
 
     raise np.linalg.LinAlgError(f"IC(0) preconditioner construction failed after shifted retries: {last_exc}")
+
+
+def _build_dtype_adapted_operator(shape, solve, factor_dtype, operator_dtype=np.float64):
+    factor_dtype = np.dtype(factor_dtype)
+    operator_dtype = np.dtype(operator_dtype)
+
+    def _apply(vec):
+        arr = np.asarray(vec, dtype=operator_dtype)
+        if arr.ndim == 1:
+            solved = solve(np.asarray(arr, dtype=factor_dtype))
+            return np.asarray(solved, dtype=operator_dtype)
+        columns = [
+            np.asarray(solve(np.asarray(arr[:, i], dtype=factor_dtype)), dtype=operator_dtype)
+            for i in range(arr.shape[1])
+        ]
+        return np.column_stack(columns)
+
+    return sparse.linalg.LinearOperator(
+        shape,
+        matvec=_apply,
+        rmatvec=_apply,
+        matmat=_apply,
+        dtype=operator_dtype,
+    )
 
 
 def _build_ilu_preconditioner(KV, args=None):
@@ -555,12 +634,38 @@ def _build_ilu_preconditioner(KV, args=None):
         spilu_kwargs["diag_pivot_thresh"] = args["sparse_preconditioner_diag_pivot_thresh"]
 
     factor = sparse.linalg.spilu(A, **spilu_kwargs)
-    operator = sparse.linalg.LinearOperator(
-        A.shape,
-        matvec=factor.solve,
-        rmatvec=factor.solve,
-        dtype=A.dtype,
-    )
+    # SciPy Krylov paths in this module normalize RHS vectors to float64, while
+    # `spilu` factors on the matrix dtype (often float32 for gp2Scale artifacts).
+    # Adapt the operator boundary so the preconditioner can still be applied
+    # without forcing a full float64 refactorization of the sparse matrix.
+    operator = _build_dtype_adapted_operator(A.shape, factor.solve, factor_dtype=A.dtype)
+    return factor, operator
+
+
+def _build_ilupp_ichol0_preconditioner(KV, args=None):
+    try:
+        import ilupp
+    except ImportError as exc:
+        _raise_missing_ilupp("ichol0", exc)
+
+    A = _as_symmetric_csr(KV).astype(np.float64)
+    factor = ilupp.IChol0Preconditioner(A)
+    operator = _build_dtype_adapted_operator(A.shape, factor.dot, factor_dtype=np.float64)
+    return factor, operator
+
+
+def _build_ilupp_icholt_preconditioner(KV, args=None):
+    args = _normalize_args(args)
+    try:
+        import ilupp
+    except ImportError as exc:
+        _raise_missing_ilupp("ic", exc)
+
+    A = _as_symmetric_csr(KV).astype(np.float64)
+    add_fill_in = int(args.get("sparse_preconditioner_ichol_fill_in", 16))
+    threshold = float(args.get("sparse_preconditioner_ichol_threshold", 1e-4))
+    factor = ilupp.ICholTPreconditioner(A, add_fill_in=add_fill_in, threshold=threshold)
+    operator = _build_dtype_adapted_operator(A.shape, factor.dot, factor_dtype=np.float64)
     return factor, operator
 
 
@@ -601,7 +706,9 @@ def calculate_sparse_preconditioner(KV, args=None):
 
     builders = {
         "ilu": _build_ilu_preconditioner,
-        "incomplete_cholesky": _build_ic0_factor,
+        "native_incomplete_cholesky": _build_ic0_factor,
+        "ichol0": _build_ilupp_ichol0_preconditioner,
+        "ic": _build_ilupp_icholt_preconditioner,
         "block_jacobi": _build_block_jacobi_preconditioner,
         "additive_schwarz": _build_additive_schwarz_preconditioner,
         "amg": _build_amg_preconditioner,
@@ -649,6 +756,8 @@ def _resolve_krylov_maxiter(args=None, solver_key=None):
 
 
 def _normalize_rhs(vec):
+    if sparse.issparse(vec):
+        vec = vec.toarray()
     vec = np.asarray(vec, dtype=np.float64)
     if np.ndim(vec) == 1:
         vec = vec.reshape(len(vec), 1)
@@ -700,14 +809,75 @@ def _apply_preconditioner(M, residual):
     return _apply_linear_operator(M, residual)
 
 
-def _block_conjugate_gradient(KV, vec, cg_tol, x0=None, M=None, maxiter=None):
+def _krylov_progress_interval(args=None):
+    args = _normalize_args(args)
+    value = args.get("sparse_progress_interval", 0)
+    return max(int(value or 0), 0)
+
+
+def _krylov_progress_label(args, solver_name, rhs_index=None):
+    args = _normalize_args(args)
+    base = str(args.get("sparse_progress_label", solver_name)).strip() or solver_name
+    if rhs_index is None:
+        return base
+    return f"{base} rhs={rhs_index}"
+
+
+def _emit_krylov_progress(label, iteration, progress_interval):
+    if progress_interval <= 0:
+        return
+    if iteration == 1 or iteration % progress_interval == 0:
+        print(f"{label}: iteration {iteration}", flush=True)
+
+
+def _emit_krylov_completion(label, solver_name, iteration_count, exit_code, elapsed_seconds, progress_interval):
+    if progress_interval <= 0:
+        return
+    print(
+        f"{label}: {solver_name} finished after {iteration_count} iterations "
+        f"(exit_code={exit_code}, seconds={elapsed_seconds:.3f})",
+        flush=True,
+    )
+
+
+def _build_krylov_callback(args, solver_name, rhs_index=None):
+    progress_interval = _krylov_progress_interval(args)
+    if progress_interval <= 0:
+        return None, None, progress_interval
+
+    label = _krylov_progress_label(args, solver_name, rhs_index=rhs_index)
+    counter = {"count": 0}
+
+    def callback(_xk):
+        counter["count"] += 1
+        _emit_krylov_progress(label, counter["count"], progress_interval)
+
+    return callback, counter, progress_interval
+
+
+def _block_conjugate_gradient(KV, vec, cg_tol, x0=None, M=None, maxiter=None, args=None, rhs_offset=0):
     vec = _normalize_rhs(vec)
     x0 = _normalize_initial_guess(x0, vec.shape)
     n, rhs_count = vec.shape
+    progress_interval = _krylov_progress_interval(args)
+    progress_label = _krylov_progress_label(args, "BlockCG", rhs_index=rhs_offset if rhs_count == 1 else None)
+    iteration_count = 0
+    block_start = time.time()
     if rhs_count == 1:
         rhs = vec[:, 0]
         initial_guess = None if x0 is None else x0[:, 0]
-        solution, exit_code = cg(KV, rhs, M=M, rtol=cg_tol, x0=initial_guess, maxiter=maxiter)
+        callback, counter, progress_interval = _build_krylov_callback(args, "BlockCG", rhs_index=rhs_offset)
+        start = time.time()
+        solution, exit_code = cg(KV, rhs, M=M, rtol=cg_tol, x0=initial_guess, maxiter=maxiter, callback=callback)
+        iteration_count = 0 if counter is None else counter["count"]
+        _emit_krylov_completion(
+            _krylov_progress_label(args, "BlockCG", rhs_index=rhs_offset),
+            "BlockCG",
+            iteration_count,
+            exit_code,
+            time.time() - start,
+            progress_interval,
+        )
         return solution.reshape(n, 1), exit_code
 
     X = np.zeros((n, rhs_count), dtype=np.float64) if x0 is None else x0.copy()
@@ -726,6 +896,8 @@ def _block_conjugate_gradient(KV, vec, cg_tol, x0=None, M=None, maxiter=None):
     last_exit_code = 1
 
     for _ in range(max(maxiter, 1)):
+        iteration_count += 1
+        _emit_krylov_progress(progress_label, iteration_count, progress_interval)
         AP = _apply_linear_operator(KV, P)
         H = P.T @ AP
         try:
@@ -750,6 +922,14 @@ def _block_conjugate_gradient(KV, vec, cg_tol, x0=None, M=None, maxiter=None):
         P = Z + P @ beta
         G = G_new
 
+    _emit_krylov_completion(
+        progress_label,
+        "BlockCG",
+        iteration_count,
+        last_exit_code,
+        time.time() - block_start,
+        progress_interval,
+    )
     return X, last_exit_code
 
 
@@ -797,7 +977,30 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
         initial_guess = _column_initial_guess(x0, i)
-        res[:, i], exit_code = minres(KV, vec[:, i], M=M, rtol=minres_tol, x0=initial_guess, maxiter=maxiter)
+        callback, counter, progress_interval = _build_krylov_callback(
+            args,
+            "MINRES",
+            rhs_index=i if vec.shape[1] > 1 else None,
+        )
+        column_start = time.time()
+        res[:, i], exit_code = minres(
+            KV,
+            vec[:, i],
+            M=M,
+            rtol=minres_tol,
+            x0=initial_guess,
+            maxiter=maxiter,
+            callback=callback,
+        )
+        iteration_count = 0 if counter is None else counter["count"]
+        _emit_krylov_completion(
+            _krylov_progress_label(args, "MINRES", rhs_index=i if vec.shape[1] > 1 else None),
+            "MINRES",
+            iteration_count,
+            exit_code,
+            time.time() - column_start,
+            progress_interval,
+        )
         if exit_code != 0: warnings.warn(f"MINRES not successful (exit_code={exit_code})")
     logger.debug("MINRES compute time: {} seconds.", time.time() - st)
     assert np.ndim(res) == 2
@@ -841,6 +1044,8 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
                     x0=block_x0,
                     M=M,
                     maxiter=maxiter,
+                    args=args,
+                    rhs_offset=start,
                 )
             except Exception as exc:
                 warnings.warn(
@@ -851,6 +1056,12 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
                 exit_code = 4
                 for block_index, rhs_index in enumerate(range(start, stop)):
                     initial_guess = _column_initial_guess(x0, rhs_index)
+                    callback, counter, progress_interval = _build_krylov_callback(
+                        args,
+                        "CG",
+                        rhs_index=rhs_index if vec.shape[1] > 1 else None,
+                    )
+                    column_start = time.time()
                     block_solution[:, block_index], _ = cg(
                         KV,
                         vec[:, rhs_index],
@@ -858,6 +1069,16 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
                         rtol=cg_tol,
                         x0=initial_guess,
                         maxiter=maxiter,
+                        callback=callback,
+                    )
+                    iteration_count = 0 if counter is None else counter["count"]
+                    _emit_krylov_completion(
+                        _krylov_progress_label(args, "CG", rhs_index=rhs_index if vec.shape[1] > 1 else None),
+                        "CG",
+                        iteration_count,
+                        0,
+                        time.time() - column_start,
+                        progress_interval,
                     )
             res[:, start:stop] = block_solution
             exit_codes.append(exit_code)
@@ -870,7 +1091,30 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
         initial_guess = _column_initial_guess(x0, i)
-        res[:, i], exit_code = cg(KV, vec[:, i], M=M, rtol=cg_tol, x0=initial_guess, maxiter=maxiter)
+        callback, counter, progress_interval = _build_krylov_callback(
+            args,
+            "CG",
+            rhs_index=i if vec.shape[1] > 1 else None,
+        )
+        column_start = time.time()
+        res[:, i], exit_code = cg(
+            KV,
+            vec[:, i],
+            M=M,
+            rtol=cg_tol,
+            x0=initial_guess,
+            maxiter=maxiter,
+            callback=callback,
+        )
+        iteration_count = 0 if counter is None else counter["count"]
+        _emit_krylov_completion(
+            _krylov_progress_label(args, "CG", rhs_index=i if vec.shape[1] > 1 else None),
+            "CG",
+            iteration_count,
+            exit_code,
+            time.time() - column_start,
+            progress_interval,
+        )
         if exit_code != 0: warnings.warn(f"CG not successful (exit_code={exit_code})")
     logger.debug("CG compute time: {} seconds.", time.time() - st)
     assert np.ndim(res) == 2

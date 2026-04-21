@@ -143,8 +143,9 @@ class GPMarginalLikelihood:
         except Exception as exc:
             logger.warning(
                 "Sparse preconditioner construction failed; "
-                "falling back to the unpreconditioned iterative solve: {}",
+                "falling back to the unpreconditioned iterative solve: {}. {}",
                 exc,
+                sparse_preconditioner_failure_guidance(self.args),
             )
             return None
 

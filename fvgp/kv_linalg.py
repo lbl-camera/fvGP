@@ -19,6 +19,7 @@ class KVlinalg:
         self.Preconditioner_operator = None
         self.Preconditioner_signature = None
         self.Preconditioner_reuse_counter = 0
+        self.Last_preconditioner_error = None
         self.Last_iterative_solution = None
         self.custom_obj = None
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
@@ -49,6 +50,7 @@ class KVlinalg:
         self.Preconditioner_operator = None
         self.Preconditioner_signature = None
         self.Preconditioner_reuse_counter = 0
+        self.Last_preconditioner_error = None
 
     def _can_reuse_sparse_preconditioner(self, KV, mode):
         if mode not in {"sparseMINRESpre", "sparseCGpre"}:
@@ -74,9 +76,12 @@ class KVlinalg:
         try:
             factor, operator = calculate_sparse_preconditioner(self.KV, args=self.args)
         except Exception as exc:
+            self.Last_preconditioner_error = f"{type(exc).__name__}: {exc}"
             warnings.warn(
                 f"Failed to build sparse preconditioner for mode {self.mode}; "
-                "falling back to the unpreconditioned iterative solve."
+                f"falling back to the unpreconditioned iterative solve. "
+                f"Reason: {self.Last_preconditioner_error}. "
+                f"{sparse_preconditioner_failure_guidance(self.args)}"
             )
             logger.warning("Sparse preconditioner construction failed for {}: {}", self.mode, exc)
             self._reset_sparse_preconditioner()
@@ -85,6 +90,7 @@ class KVlinalg:
         self.Preconditioner_operator = operator
         self.Preconditioner_signature = self._preconditioner_signature()
         self.Preconditioner_reuse_counter = 0
+        self.Last_preconditioner_error = None
 
     def _get_sparse_preconditioner(self):
         if self.mode in {"sparseMINRESpre", "sparseCGpre"} and self.Preconditioner_operator is None:
@@ -320,6 +326,7 @@ class KVlinalg:
             Preconditioner_operator=None,
             Preconditioner_signature=self.Preconditioner_signature,
             Preconditioner_reuse_counter=self.Preconditioner_reuse_counter,
+            Last_preconditioner_error=self.Last_preconditioner_error,
             Last_iterative_solution=self.Last_iterative_solution,
             custom_obj=self.custom_obj,
             allowed_modes=self.allowed_modes
@@ -336,5 +343,7 @@ class KVlinalg:
             self.Preconditioner_signature = None
         if "Preconditioner_reuse_counter" not in self.__dict__:
             self.Preconditioner_reuse_counter = 0
+        if "Last_preconditioner_error" not in self.__dict__:
+            self.Last_preconditioner_error = None
         if "Last_iterative_solution" not in self.__dict__:
             self.Last_iterative_solution = None

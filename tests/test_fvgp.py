@@ -106,7 +106,15 @@ def test_gp2scale_linalg_mode_alias_resolution():
         {"sparse_preconditioner_ic_shift": 1e-8},
     )
     assert mode == "sparseMINRESpre"
-    assert args["sparse_preconditioner_type"] == "incomplete_cholesky"
+    assert args["sparse_preconditioner_type"] == "ic"
+    assert args["sparse_preconditioner_ic_shift"] == 1e-8
+
+    mode, args = resolve_gp2scale_linalg_mode(
+        "sparseMINRESpre_native_ic",
+        {"sparse_preconditioner_ic_shift": 1e-8},
+    )
+    assert mode == "sparseMINRESpre"
+    assert args["sparse_preconditioner_type"] == "native_incomplete_cholesky"
     assert args["sparse_preconditioner_ic_shift"] == 1e-8
 
     with pytest.raises(ValueError):
@@ -114,6 +122,26 @@ def test_gp2scale_linalg_mode_alias_resolution():
             "sparseCGpre_ilu",
             {"sparse_preconditioner_type": "amg"},
         )
+
+
+def test_missing_ilupp_message_for_ic_aliases(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "ilupp":
+            raise ImportError("simulated missing ilupp")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    KV = sparse.eye(4, format="csr")
+
+    with pytest.raises(ImportError, match="pip install ilupp"):
+        calculate_sparse_preconditioner(KV, args={"sparse_preconditioner_type": "ic"})
+
+    with pytest.raises(ImportError, match="pip install ilupp"):
+        calculate_sparse_preconditioner(KV, args={"sparse_preconditioner_type": "ichol0"})
 
 
 def test_random_logdet_compute_device_override(monkeypatch):
