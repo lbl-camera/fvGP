@@ -24,8 +24,7 @@ class GPMarginalLikelihood:
 
         self.KVlinalg = KVlinalg(self.compute_device, data)
         K, V, m = self._get_KVm()
-        if self.gp2Scale:
-            mode = self._set_gp2Scale_mode(K)
+        if self.gp2Scale: mode = self._set_gp2Scale_mode(K)
         elif self.calc_inv: mode = "CholInv"
         else: mode = "Chol"
 

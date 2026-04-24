@@ -17,6 +17,13 @@ warnings.simplefilter("once", UserWarning)
 #   (publish state), this is basically accomplished)
 
 
+# RECENT UNTESTED CHANGES
+#   - NON PD error for cholesky and rank-1 updates
+#   - added a sparse CG tolerance to the args
+#   - added a check for the presence of pytorch or cupy when gpu compute device is specified
+#   - dtypes for lin alg
+#   - scatter only at init and when data changes. scatter future released. 
+
 class GP:
     """
     This class provides all the tools for a single-task Gaussian Process (GP).
@@ -182,13 +189,14 @@ class GP:
         - "random_logdet_verbose" : True/False; default = False
         - "random_logdet_print_info" : True/False; default = False
         - "sparse_minres_tol" : float
-        - "cg_minres_tol" : float
+        - "sparse_cg_tol" : float
         - "random_logdet_lanczos_compute_device" : str; default = "cpu"/"gpu"
         - "Chol_factor_compute_device" : str; default = "cpu"/"gpu"
         - "update_Chol_factor_compute_device": str; default = "cpu"/"gpu"
         - "Chol_solve_compute_device" : str; default = "cpu"/"gpu"
         - "Chol_logdet_compute_device" : str; default = "cpu"/"gpu"
         - "GPU_engine" : str; default = "torch"/"cupy"
+        - "random_logdet_lanczos_degree" : int; default = 20
 
         All other keys will be stored and are available as part of the object instance and
         in kernel, mean, and noise functions.

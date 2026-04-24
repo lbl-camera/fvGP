@@ -12,7 +12,42 @@ from scipy import sparse
 import importlib
 
 
+class NonPositiveDefiniteError(np.linalg.LinAlgError):
+    """Covariance matrix is not positive definite."""
+    pass
+
+
+def _non_pd_message(M, original_error):
+    n = M.shape[0]
+    diag_min = float(np.min(np.diag(M)))
+    sym_err = float(np.max(np.abs(M - M.T)))
+    return (
+        f"Cholesky factorization failed: the {n}x{n} prior covariance matrix "
+        f"is not positive definite.\n"
+        f"Most common causes in fvGP:\n"
+        f"  1. A user-defined kernel that is not positive definite for all inputs.\n"
+        f"     (The kernel must produce a symmetric PD matrix for every set of points.)\n"
+        f"  2. Duplicate or near-duplicate rows in x_data causing a rank-deficient K.\n"
+        f"  3. Noise/jitter on the diagonal is too small for the conditioning of K.\n"
+        f"Diagnostics: min(diag(M)) = {diag_min:.3e}, "
+        f"max|M - M.T| = {sym_err:.3e} (should be ~0).\n"
+        f"Try: (a) verify the kernel is PD, (b) add jitter to the diagonal, "
+        f"(c) deduplicate x_data.\n"
+        f"Original linear-algebra error: {original_error}"
+    )
+
+
+def _rank1_update_non_pd_message(disc):
+    return (
+        f"Cholesky rank-1 update failed: Schur complement {float(disc):.3e} <= 0, "
+        f"the augmented matrix is not positive definite. "
+        f"This usually indicates the new data row is linearly dependent on old rows "
+        f"or the kernel is not PD on the augmented set."
+    )
+
+
 def get_gpu_engine(args):
+    args = args or {}
     if "GPU_engine" in args: return args["GPU_engine"]
     if importlib.util.find_spec("torch"): return "torch"
     elif importlib.util.find_spec("cupy"): return "cupy"
@@ -29,6 +64,8 @@ def calculate_sparse_LU_factor(M, args=None):
 def calculate_LU_solve(LU, vec, args=None):
     assert isinstance(vec, np.ndarray)
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
+    if vec.dtype != LU.L.dtype:
+        vec = vec.astype(LU.L.dtype, copy=False)
     logger.debug("calculate_LU_solve")
     res = LU.solve(vec)
     if np.ndim(res) == 1: res = res.reshape(len(res), 1)
@@ -46,26 +83,29 @@ def calculate_LU_logdet(LU, args=None):
 
 def calculate_Chol_factor(M, compute_device="cpu", args=None):
     assert isinstance(M, np.ndarray)
+    args = args or {}
     if "Chol_factor_compute_device" in args: compute_device = args["Chol_factor_compute_device"]
     logger.debug(f"calculate_Chol_factor on {compute_device}")
-    if compute_device == "cpu":
-        c, l = cho_factor(M, lower=True)
-        c = np.tril(c)
-    elif compute_device == "gpu":
-        engine = get_gpu_engine(args)
-        if engine == "torch":  # pragma: no cover
-            import torch
-            A = torch.tensor(M, device="cuda:0", dtype=torch.float32)
-            L = torch.linalg.cholesky(A)
-            c = L.cpu().numpy()
-        elif engine == "cupy":  # pragma: no cover
-            import cupy as cp
-            A = cp.array(M, dtype=cp.float32)
-            L = cp.linalg.cholesky(A)
-            c = cp.asnumpy(L)
-        else: c = None
-    else:
-        raise Exception("No valid compute device found. ")
+    try:
+        if compute_device == "cpu":
+            c, l = cho_factor(M, lower=True)
+        elif compute_device == "gpu":
+            engine = get_gpu_engine(args)
+            if engine == "torch":  # pragma: no cover
+                import torch
+                A = torch.tensor(M, device="cuda:0")
+                L = torch.linalg.cholesky(A)
+                c = L.cpu().numpy()
+            elif engine == "cupy":  # pragma: no cover
+                import cupy as cp
+                A = cp.array(M)
+                L = cp.linalg.cholesky(A)
+                c = cp.asnumpy(L)
+            else: c = None
+        else:
+            raise Exception("No valid compute device found. ")
+    except (np.linalg.LinAlgError, RuntimeError) as e:
+        raise NonPositiveDefiniteError(_non_pd_message(M, e)) from e
     return c
 
 
@@ -84,6 +124,9 @@ def update_Chol_factor(old_chol_factor, new_matrix, compute_device="cpu", args=N
 def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
     assert isinstance(vec, np.ndarray)
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
+    if vec.dtype != factor.dtype:
+        vec = vec.astype(factor.dtype, copy=False)
+    args = args or {}
     if "Chol_solve_compute_device" in args: compute_device = args["Chol_solve_compute_device"]
     logger.debug(f"calculate_Chol_solve on {compute_device}")
     if compute_device == "cpu":
@@ -93,15 +136,15 @@ def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
         if engine == "torch":  # pragma: no cover
             import torch
             # Move to GPU
-            L = torch.tensor(factor, device="cuda", dtype=torch.float32)
-            b = torch.tensor(vec, device="cuda", dtype=torch.float32)
+            L = torch.tensor(factor, device="cuda")
+            b = torch.tensor(vec, device="cuda")
             y = torch.linalg.solve_triangular(L, b, upper=False)
             x = torch.linalg.solve_triangular(L.T, y, upper=True)
             res = x.cpu().numpy()
         elif engine == "cupy":  # pragma: no cover
             import cupy as cp
-            L = cp.array(factor, dtype=cp.float32)
-            b = cp.array(vec, dtype=cp.float32)
+            L = cp.array(factor)
+            b = cp.array(vec)
             y = cp.linalg.solve_triangular(L, b, lower=True)
             x = cp.linalg.solve_triangular(L.T, y, lower=False)
             res = cp.asnumpy(x)
@@ -114,6 +157,7 @@ def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
 
 
 def calculate_Chol_logdet(factor, compute_device="cpu", args=None):
+    args = args or {}
     if "Chol_logdet_compute_device" in args: compute_device = args["Chol_logdet_compute_device"]
     logger.debug(f"calculate_Chol_logdet on {compute_device}")
     if compute_device == "cpu":
@@ -123,11 +167,11 @@ def calculate_Chol_logdet(factor, compute_device="cpu", args=None):
         engine = get_gpu_engine(args)
         if engine == "torch":  # pragma: no cover
             import torch
-            L = torch.tensor(factor, device="cuda", dtype=torch.float32)
+            L = torch.tensor(factor, device="cuda")
             logdet = 2.0 * torch.sum(torch.log(torch.diag(L))).cpu().item()
         elif engine == "cupy":  # pragma: no cover
             import cupy as cp
-            L = cp.array(factor, dtype=cp.float32)
+            L = cp.array(factor)
             logdet = 2.0 * cp.sum(cp.log(cp.diag(L))).get()
         else: logdet = None
     else:
@@ -163,6 +207,7 @@ def calculate_random_logdet(KV, compute_device, args=None):
     assert sparse.issparse(KV)
     logger.debug("calculate_random_logdet")
     from imate import logdet as imate_logdet
+    args = args or {}
     st = time.time()
     if compute_device == "gpu": gpu = True
     else: gpu = False
@@ -176,7 +221,6 @@ def calculate_random_logdet(KV, compute_device, args=None):
     if "random_logdet_error_rtol" in args: error_rtol = args["random_logdet_error_rtol"]
     if "random_logdet_verbose" in args: verbose = args["random_logdet_verbose"]
     if "random_logdet_print_info" in args: print_info = args["random_logdet_print_info"]
-    if "random_logdet_lanczos_compute_device" in args: lanczos_degree = args["random_logdet_lanczos_compute_device"]
 
     logdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=10, max_num_samples=5000,
                                     lanczos_degree=lanczos_degree, error_rtol=error_rtol, gpu=gpu,
@@ -189,6 +233,7 @@ def calculate_random_logdet(KV, compute_device, args=None):
 
 def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
     assert sparse.issparse(KV)
+    args = args or {}
     st = time.time()
     logger.debug("MINRES solve in progress ...")
     minres_tol = 1e-5
@@ -209,10 +254,11 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
 
 def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
     assert sparse.issparse(KV)
+    args = args or {}
     st = time.time()
     logger.debug("CG solve in progress ...")
     cg_tol = 1e-5
-    if "sparse_cg_tol" in args: cg_tol = args["sparse_minres_tol"]
+    if "sparse_cg_tol" in args: cg_tol = args["sparse_cg_tol"]
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     if isinstance(x0, np.ndarray) and len(x0) < KV.shape[0]: x0 = np.append(x0, np.zeros(KV.shape[0] - len(x0)))
     res = np.zeros(vec.shape)
@@ -279,11 +325,14 @@ def cholesky_update_rank_1_numpy(L, b, c, args=None):
     v = solve_triangular(L, b, lower=True, check_finite=False)
 
     # Compute d
-    d = np.sqrt(c - np.dot(v, v))
+    disc = c - np.dot(v, v)
+    if disc <= 0:
+        raise NonPositiveDefiniteError(_rank1_update_non_pd_message(disc))
+    d = np.sqrt(disc)
 
     # Form the new L'
     L_prime = np.block([
-        [L, np.zeros((len(L), 1))],
+        [L, np.zeros((len(L), 1), dtype=L.dtype)],
         [v.T, d]
     ])
     return L_prime
@@ -304,14 +353,19 @@ def cholesky_update_rank_1_torch(L, b, c):   # pragma: no cover
     L_prime : (n+1, n+1) updated lower-triangular Cholesky factor on GPU
     """
     import torch
-    # Solve L v = b (forward solve)
-    L = torch.tensor(L, device="cuda", dtype=torch.float32)
-    b = torch.tensor(b, device="cuda", dtype=torch.float32)
+    # Solve L v = b (forward solve). Match b/c to L's dtype.
+    target = L.dtype
+    L = torch.tensor(L, device="cuda")
+    b = torch.tensor(np.asarray(b, dtype=target), device="cuda")
+    c = np.asarray(c, dtype=target).item() if np.ndim(c) == 0 else np.asarray(c, dtype=target)
 
     v = torch.linalg.solve_triangular(L, b.unsqueeze(1), upper=False).squeeze(1)
 
     # Compute d = sqrt(c - v^T v)
-    d = torch.sqrt(c - torch.dot(v, v))
+    disc = c - torch.dot(v, v)
+    if float(disc) <= 0:
+        raise NonPositiveDefiniteError(_rank1_update_non_pd_message(disc))
+    d = torch.sqrt(disc)
 
     # Form new L'
     n = L.shape[0]
@@ -339,13 +393,18 @@ def cholesky_update_rank_1_cupy(L, b, c):   # pragma: no cover
     L_prime : (n+1, n+1) updated lower-triangular Cholesky factor
     """
     import cupy as cp
+    target = L.dtype
     L = cp.array(L)
-    b = cp.array(b)
+    b = cp.array(np.asarray(b, dtype=target))
+    c = np.asarray(c, dtype=target).item() if np.ndim(c) == 0 else np.asarray(c, dtype=target)
     # Solve L v = b
     v = cp.linalg.solve_triangular(L, b[:, None], lower=True).squeeze(1)
 
     # Compute d
-    d = cp.sqrt(c - cp.dot(v, v))
+    disc = c - cp.dot(v, v)
+    if float(disc) <= 0:
+        raise NonPositiveDefiniteError(_rank1_update_non_pd_message(disc))
+    d = cp.sqrt(disc)
 
     # Form new L'
     n = L.shape[0]
@@ -412,9 +471,9 @@ def calculate_inv(A, compute_device='cpu', args=None):
         return np.linalg.inv(A)
     elif compute_device == "gpu":
         import torch
-        A = torch.from_numpy(A)
+        A = torch.from_numpy(A).cuda()
         B = torch.inverse(A)
-        return B.numpy()
+        return B.cpu().numpy()
     else:
         return np.linalg.inv(A)
 
@@ -444,10 +503,12 @@ def solve(A, b, compute_device='cpu', args=None):
     assert isinstance(A, np.ndarray)
     logger.debug("solve")
     if np.ndim(b) == 1: b = b.reshape(len(b), 1)
+    if b.dtype != A.dtype:
+        b = b.astype(A.dtype, copy=False)
     if compute_device == "cpu":
         try:
             x = np.linalg.solve(A, b)
-        except:
+        except np.linalg.LinAlgError:
             x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
         if np.ndim(x) == 1: x = x.reshape(len(x), 1)
         assert np.ndim(x) == np.ndim(b)
@@ -465,8 +526,8 @@ def solve(A, b, compute_device='cpu', args=None):
             return x
         elif engine == "cupy":  # pragma: no cover
             import cupy as cp
-            Lt = cp.array(A, dtype=cp.float32)
-            bt = cp.array(b, dtype=cp.float32)
+            Lt = cp.array(A)
+            bt = cp.array(b)
             x = cp.linalg.solve(Lt, bt)
             x = cp.asnumpy(x)
             if np.ndim(x) == 1: x = x.reshape(len(x), 1)
@@ -475,7 +536,7 @@ def solve(A, b, compute_device='cpu', args=None):
         else:
             try:
                 x = np.linalg.solve(A, b)
-            except:
+            except np.linalg.LinAlgError:
                 x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
             if np.ndim(x) == 1: x = x.reshape(len(x), 1)
             assert np.ndim(x) == np.ndim(b)
@@ -491,16 +552,17 @@ def matmul(A, B, compute_device="cpu", args=None):
         res = A @ B
     elif compute_device == "gpu":
         engine = get_gpu_engine(args)
+        target = np.result_type(A, B)
         if engine == "torch":  # pragma: no cover
             import torch
-            A = torch.tensor(A, device="cuda", dtype=torch.float32)
-            B = torch.tensor(B, device="cuda", dtype=torch.float32)
+            A = torch.tensor(A.astype(target, copy=False), device="cuda")
+            B = torch.tensor(B.astype(target, copy=False), device="cuda")
             res = A@B
             res = res.cpu().numpy()
         elif engine == "cupy":  # pragma: no cover
             import cupy as cp
-            A = cp.array(A)
-            B = cp.array(B)
+            A = cp.array(A, dtype=target)
+            B = cp.array(B, dtype=target)
             res = A @ B
             res = cp.asnumpy(res)
         else: res = None
@@ -520,18 +582,19 @@ def matmul3(A, B, C, compute_device="cpu", args=None):
         res = A @ B @ C
     elif compute_device == "gpu":
         engine = get_gpu_engine(args)
+        target = np.result_type(A, B, C)
         if engine == "torch":  # pragma: no cover
             import torch
-            A = torch.tensor(A, device="cuda", dtype=torch.float32)
-            B = torch.tensor(B, device="cuda", dtype=torch.float32)
-            C = torch.tensor(C, device="cuda", dtype=torch.float32)
+            A = torch.tensor(A.astype(target, copy=False), device="cuda")
+            B = torch.tensor(B.astype(target, copy=False), device="cuda")
+            C = torch.tensor(C.astype(target, copy=False), device="cuda")
             res = A @ B @ C
             res = res.cpu().numpy()
         elif engine == "cupy":  # pragma: no cover
             import cupy as cp
-            A = cp.array(A)
-            B = cp.array(B)
-            C = cp.array(C)
+            A = cp.array(A, dtype=target)
+            B = cp.array(B, dtype=target)
+            C = cp.array(C, dtype=target)
             res = A @ B @ C
             res = cp.asnumpy(res)
         else: res = None
@@ -543,7 +606,7 @@ def matmul3(A, B, C, compute_device="cpu", args=None):
 ##################################################################################
 def is_sparse(A):
     logger.debug("is_sparse")
-    if float(np.count_nonzero(A)) / float(len(A) ** 2) < 0.01:
+    if float(np.count_nonzero(A)) / float(A.shape[0] * A.shape[1]) < 0.01:
         return True
     else:
         return False
@@ -551,4 +614,4 @@ def is_sparse(A):
 
 def how_sparse_is(A):
     logger.debug("how_sparse_is")
-    return float(np.count_nonzero(A)) / float(len(A) ** 2)
+    return float(np.count_nonzero(A)) / float(A.shape[0] * A.shape[1])

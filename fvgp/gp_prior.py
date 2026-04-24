@@ -23,7 +23,6 @@ class GPprior:
                  prior_mean_function_grad=None,
                  gp2Scale_dask_client=None,
                  gp2Scale_batch_size=10000,
-                 gplvm=False
                  ):
 
         self.kernel_function = kernel
@@ -32,7 +31,6 @@ class GPprior:
         self.batch_size = gp2Scale_batch_size
         self.data = data
         self.trainer = trainer
-        self.gplvm = gplvm
 
         assert callable(kernel) or kernel is None
         assert callable(prior_mean_function) or prior_mean_function is None
@@ -59,6 +57,10 @@ class GPprior:
             else:
                 worker_info = False
             if not worker_info: logger.debug("No workers available")
+            
+            self.x_data_scatter_future = self.client.scatter(
+            self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
+
 
         # kernel
         self.k_n_params = 3
@@ -96,7 +98,7 @@ class GPprior:
         else:
             self._dm_dh = self._default_dm_dh
 
-        self.m, self.K = self._compute_prior(data.x_data, self.hyperparameters)
+        self.m, self.K = self._compute_prior(self.x_data, self.hyperparameters)
         logger.debug("Prior successfully initialized.")
 
     ##############################################################
@@ -110,7 +112,6 @@ class GPprior:
 
     @property
     def x_data(self):
-        if self.gplvm: return self.data.y_data
         return self.data.x_data
 
     @property
@@ -145,6 +146,13 @@ class GPprior:
         logger.debug("Prior mean and covariance updated after data augmentation.")
 
     def update_state_data(self):
+        """
+        This is for the case that the data has changed, but not just been augmented. For example, in an online learning setting where old data points are replaced by new ones.
+        """
+        if self.gp2Scale:
+            self.x_data_scatter_future.release()
+            self.x_data_scatter_future = self.client.scatter(
+            self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
         self.m, self.K = self._compute_prior(self.x_data, self.hyperparameters)
         logger.debug("Prior mean and covariance updated after data change.")
 
@@ -154,10 +162,8 @@ class GPprior:
 
     def compute_prior_covariance_matrix(self, x, hyperparameters):
         """computes the prior covariance matrix from the kernel"""
-        if self.gp2Scale:
-            K = self._compute_prior_covariance_gp2Scale(x, hyperparameters)
-        else:
-            K = self.compute_covariances(x, x, hyperparameters)
+        if self.gp2Scale: K = self._compute_prior_covariance_gp2Scale(x, hyperparameters)
+        else: K = self.compute_covariances(x, x, hyperparameters)
         return K
 
     def compute_covariances(self, x1, x2, hps):
@@ -245,8 +251,6 @@ class GPprior:
         NUM_RANGES = num_batches
         logger.debug("client id: {}", client.id)
 
-        self.x_data_scatter_future = client.scatter(
-            x_data, workers=self.compute_workers, broadcast=True, direct=True)
         ranges = self._ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
             itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
@@ -301,9 +305,9 @@ class GPprior:
         client = self.client
         """computes the covariance matrix from the kernel on HPC in sparse format"""
 
-        self.x_new_scatter_future = client.scatter(
+        x_new_scatter_future = client.scatter(
             x_new, workers=self.compute_workers, broadcast=True, direct=True)
-        self.x_old_scatter_future = client.scatter(
+        x_old_scatter_future = client.scatter(
             x_old, workers=self.compute_workers, broadcast=True, direct=True)
 
         point_number = len(x_old)
@@ -324,8 +328,8 @@ class GPprior:
                                        hyperparameters=hyperparameters,
                                        kernel=self.kernel),
                                ranges_ij,
-                               [self.x_old_scatter_future] * len(ranges_ij),
-                               [self.x_new_scatter_future] * len(ranges_ij)),
+                               [x_old_scatter_future] * len(ranges_ij),
+                               [x_new_scatter_future] * len(ranges_ij)),
                                with_results=True)))
 
         data, i_s, j_s = map(np.hstack, zip(*results))
@@ -342,8 +346,8 @@ class GPprior:
                                        hyperparameters=hyperparameters,
                                        kernel=self.kernel),
                                ranges_ij2,
-                               [self.x_new_scatter_future] * len(ranges_ij2),
-                               [self.x_new_scatter_future] * len(ranges_ij2)),
+                               [x_new_scatter_future] * len(ranges_ij2),
+                               [x_new_scatter_future] * len(ranges_ij2)),
                                with_results=True)))
         data, i_s, j_s = map(np.hstack, zip(*results))
         diagonal_mask = i_s != j_s
@@ -477,7 +481,6 @@ class GPprior:
             k_n_params=self.k_n_params,
             batch_size=self.batch_size,
             data=self.data,
-            gplvm=self.gplvm,
             trainer=self.trainer,
             kernel=self.kernel,
             d_kernel_dx=self.d_kernel_dx,
