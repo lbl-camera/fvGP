@@ -48,7 +48,7 @@ class GPlikelihood:
                 self.noise_function_grad = self._default_dnoise_dh_econ
             else:
                 self.noise_function_grad = self._default_dnoise_dh
-        self.V = self.noise_function(self.x_data, self.hyperparameters)
+        self.V = self.calculate_V(self.x_data, self.hyperparameters)
 
     ##################################################################################
     @property
@@ -126,8 +126,8 @@ class GPlikelihood:
             temp_hps1[i] = temp_hps1[i] + 1e-6
             temp_hps2 = np.array(hps)
             temp_hps2[i] = temp_hps2[i] - 1e-6
-            a = self.noise_function(x, temp_hps1)
-            b = self.noise_function(x, temp_hps2)
+            a = self.calculate_V(x, temp_hps1)
+            b = self.calculate_V(x, temp_hps2)
             gr[i] = (a - b) / 2e-6
         return gr
 
@@ -137,8 +137,8 @@ class GPlikelihood:
         temp_hps1[i] = temp_hps1[i] + 1e-6
         temp_hps2 = np.array(hps)
         temp_hps2[i] = temp_hps2[i] - 1e-6
-        a = self.noise_function(x, temp_hps1)
-        b = self.noise_function(x, temp_hps2)
+        a = self.calculate_V(x, temp_hps1)
+        b = self.calculate_V(x, temp_hps2)
         gr = (a - b) / 2e-6
         return gr
 

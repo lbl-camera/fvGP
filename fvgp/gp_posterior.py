@@ -1,4 +1,5 @@
 import numpy as np
+import warnings
 from loguru import logger
 from .gp_lin_alg import *
 
@@ -40,7 +41,7 @@ class GPposterior:
         return self.likelihood.calculate_V(x_data, hyperparameters)
 
     def noise_function(self, x_pred, hyperparameters):
-        return self.likelihood.noise_function(x_pred, hyperparameters)
+        return self.likelihood.calculate_V(x_pred, hyperparameters)
 
     def addKV(self, K, V):
         return self.marginal_likelihood.addKV(K, V)
@@ -285,7 +286,7 @@ class GPposterior:
         joint_gp_prior_cov = np.block([[K, k], [k.T, kk]])
 
         return {"x": x_pred,
-                "K": K + np.identity(len(K)) * 1e-9,
+                "K": K,
                 "k": k,
                 "kappa": kk,
                 "prior mean": joint_gp_prior_mean,
@@ -503,7 +504,7 @@ class GPposterior:
                     if S is not None: S = S + noise
                 else:
                     raise Exception("Wrong noise format")
-            except:
+            except Exception:
                 warnings.warn("Noise could not be added, you did not provide a noise callable at initialization")
         return v, S
 

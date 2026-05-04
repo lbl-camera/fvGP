@@ -54,6 +54,11 @@ class fvGP(GP):
         kernel with automatic relevance determination (ARD). The task direction is
         simply considered a separate dimension. If gp2Scale is
         enabled, the default kernel changes to the anisotropic Wendland kernel.
+        The full hyperparameter vector is passed to the kernel, mean, and noise callables,
+        but the index ranges used by each callable are **disjoint and user-defined**.
+        Each callable must only read the indices reserved for it. The gradient
+        computation relies on this: when a hyperparameter index belongs to the mean
+        function its kernel derivative is assumed zero, and vice versa.
     noise_variances : np.ndarray, optional
         An numpy array defining the uncertainties/noise in the
         `y_data` in form of a point-wise variance. Shape (V, No).
@@ -76,7 +81,7 @@ class fvGP(GP):
         that calculates the covariance between
         data points. It is a function of the form k(x1,x2,hyperparameters, [args]).
         `args` is optional and is used to make `fvgp.gp.args` available.
-        The input `x1` a N1 x Di+1 array of positions, `x2` is a N2 x Di+1
+        The input `x1` is a N1 x Di+1 array of positions, `x2` is a N2 x Di+1
         array of positions, the hyperparameters argument
         is a 1d array of length N depending on how many hyperparameters are initialized.
         The default is a stationary anisotropic kernel
@@ -84,6 +89,8 @@ class fvGP(GP):
         direction is simply considered an additional dimension. This kernel should only be used for tests and in the
         simplest of cases.
         The output is a matrix, an N1 x N2 numpy array.
+        This callable receives the full hyperparameter vector but must only use
+        the indices reserved for the kernel (disjoint from mean and noise indices).
     kernel_function_grad : Callable, optional
         A function that calculates the derivative of the `gp_kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
@@ -103,6 +110,8 @@ class fvGP(GP):
         Optionally, the third argument `args` can be defined.
         The return value is a 1d array of length N1. If None is provided,
         `fvgp.GP._default_mean_function` is used, which is the average of the `y_data`.
+        This callable receives the full hyperparameter vector but must only use
+        the indices reserved for the mean function (disjoint from kernel and noise indices).
     prior_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the `prior_mean_function` at
         a set of input positions with respect to the hyperparameters.
@@ -121,16 +130,18 @@ class fvGP(GP):
         The input `x` is a numpy array of shape (N x Di+1). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
+        This callable receives the full hyperparameter vector but must only use
+        the indices reserved for the noise function (disjoint from kernel and mean indices).
     noise_function_grad : Callable, optional
         A function that evaluates the gradient of the `noise_function`
         at an input position with respect to the hyperparameters.
         It accepts as input an array of positions (of size N x Di+1) and
-        hyperparameters (a 1d array of length D+1 for the default kernel).
+        hyperparameters (a 1d array of length Di+1 for the default kernel).
         The return value is a 2d np.ndarray of
         shape (len(hyperparameters) x N) or a 3d np.ndarray of shape (len(hyperparameters) x N x N).
         If None is provided, either
         zeros are returned since the default noise function does not depend on
-        hyperparameters, or, if `noise_function` is provided but no noise function,
+        hyperparameters, or, if `noise_function` is provided but no noise function gradient,
         a finite-difference approximation will be used.
         The same rules regarding `ram_economy` as for the kernel definition apply here.
         That means the function will have an additional `direction` parameter.
@@ -188,7 +199,7 @@ class fvGP(GP):
         - "random_logdet_verbose" : True/False; default = False
         - "random_logdet_print_info" : True/False; default = False
         - "sparse_minres_tol" : float
-        - "cg_minres_tol" : float
+        - "sparse_cg_tol" : float
         - "random_logdet_lanczos_compute_device" : str; default = "cpu"/"gpu"
         - "Chol_factor_compute_device" : str; default = "cpu"/"gpu"
         - "update_Chol_factor_compute_device": str; default = "cpu"/"gpu"
@@ -229,11 +240,9 @@ class fvGP(GP):
 
     :py:meth:`fvgp.GP.train`
 
-    :py:meth:`fvgp.GP.train_async`
-
     :py:meth:`fvgp.GP.stop_training`
 
-    :py:meth:`fvgp.GP.kill_training`
+    :py:meth:`fvgp.GP.kill_client`
 
     :py:meth:`fvgp.GP.update_hyperparameters`
 
@@ -260,8 +269,6 @@ class fvGP(GP):
     :py:meth:`fvgp.GP.gp_entropy_grad`
 
     :py:meth:`fvgp.GP.gp_kl_div`
-
-    :py:meth:`fvgp.GP.gp_kl_div_grad`
 
     :py:meth:`fvgp.GP.gp_mutual_information`
 
@@ -309,10 +316,10 @@ class fvGP(GP):
         ram_economy=False,
         args=None
     ):
-        self.output_num = y_data.shape[1]
         if isinstance(y_data, np.ndarray):
             if np.ndim(y_data) == 1:
                 raise ValueError("The output number is 1, you can use the GP class for single-task GPs")
+        self.output_num = y_data.shape[1]
 
         assert len(x_data) == len(y_data)
         ####transform the space
@@ -402,7 +409,7 @@ class fvGP(GP):
         """
         assert isinstance(x_new, np.ndarray) or isinstance(x_new, list), "Wrong format in x_new."
         assert isinstance(y_new, np.ndarray), "Wrong format in y_new."
-        assert len(x_new) == len(y_new), "updated x and y do now have the same lengths."
+        assert len(x_new) == len(y_new), "updated x and y do not have the same lengths."
         if append:
             if noise_variances_new is not None:
                 assert isinstance(noise_variances_new, np.ndarray) or isinstance(noise_variances_new, list)

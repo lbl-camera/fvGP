@@ -54,7 +54,7 @@ class KVlinalg:
         elif callable(self.mode[0]):
             self.custom_obj = self.mode[0](KV)
         else:
-            raise Exception("No Mode. Choose from: ", self.allowed_modes)
+            raise Exception(f"No Mode. Choose from: {self.allowed_modes}")
 
     def update_KV(self, KV):
         if self.mode == "Chol":
@@ -93,7 +93,7 @@ class KVlinalg:
         elif callable(self.mode[0]):
             self.custom_obj = self.mode[0](KV)
         else:
-            raise Exception("No Mode. Choose from: ", self.allowed_modes)
+            raise Exception(f"No Mode. Choose from: {self.allowed_modes}")
 
     def solve(self, b, x0=None):
         if self.mode == "Chol":
@@ -111,16 +111,18 @@ class KVlinalg:
             return calculate_LU_solve(self.LU_factor, b, args=self.args)
         elif self.mode == "sparseMINRESpre":
             B = sparse.linalg.spilu(self.KV, drop_tol=1e-8)
-            return calculate_sparse_minres(self.KV, b, M=B.L.T @ B.L, x0=x0, args=self.args)
+            M = sparse.linalg.LinearOperator(self.KV.shape, matvec=B.solve)
+            return calculate_sparse_minres(self.KV, b, M=M, x0=x0, args=self.args)
         elif self.mode == "sparseCGpre":
             B = sparse.linalg.spilu(self.KV, drop_tol=1e-8)
-            return calculate_sparse_conj_grad(self.KV, b, M=B.L.T @ B.L, x0=x0, args=self.args)
+            M = sparse.linalg.LinearOperator(self.KV.shape, matvec=B.solve)
+            return calculate_sparse_conj_grad(self.KV, b, M=M, x0=x0, args=self.args)
         elif self.mode == "sparseSolve":
             return calculate_sparse_solve(self.KV, b, args=self.args)
         elif callable(self.mode[1]):
             return self.mode[1](self.custom_obj, b)
         else:
-            raise Exception("No Mode. Choose from: ", self.allowed_modes)
+            raise Exception(f"No Mode. Choose from: {self.allowed_modes}")
 
     def logdet(self):
         if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
@@ -133,7 +135,7 @@ class KVlinalg:
         elif self.mode == "sparseCGpre": return calculate_random_logdet(self.KV, self.compute_device, args=self.args)
         elif self.mode == "sparseSolve": return calculate_random_logdet(self.KV, self.compute_device, args=self.args)
         elif callable(self.mode[2]): return self.mode[2](self.custom_obj)
-        else: raise Exception("No Mode. Choose from: ", self.allowed_modes)
+        else: raise Exception(f"No Mode. Choose from: {self.allowed_modes}")
 
     def __getstate__(self):
         state = dict(

@@ -302,8 +302,8 @@ class GPprior:
         return vstack(chunks, format='csr')
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
-        client = self.client
         """computes the covariance matrix from the kernel on HPC in sparse format"""
+        client = self.client
 
         x_new_scatter_future = client.scatter(
             x_new, workers=self.compute_workers, broadcast=True, direct=True)
@@ -450,7 +450,6 @@ class GPprior:
             raise Exception("y_data wrong format")
         elif np.ndim(self.y_data) == 2:
             mean = np.zeros((len(x)))
-            #for i in range(mean.shape[1]): mean[:, i] = np.mean(self.y_data[:, i])
             mean[:] = np.mean(self.y_data)
         else:
             raise Exception("Wrong dim in default mean function")

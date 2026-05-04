@@ -56,6 +56,11 @@ class GP:
         The default is an array of ones with the right length for the anisotropic Matern
         kernel with automatic relevance determination (ARD). If `gp2Scale` is
         enabled, the default kernel changes to the anisotropic Wendland kernel.
+        The full hyperparameter vector is passed to the kernel, mean, and noise callables,
+        but the index ranges used by each callable are **disjoint and user-defined**.
+        Each callable must only read the indices reserved for it. The gradient
+        computation relies on this: when a hyperparameter index belongs to the mean
+        function its kernel derivative is assumed zero, and vice versa.
     noise_variances : np.ndarray, optional
         An numpy array defining the uncertainties/noise in the
         `y_data` in form of a point-wise variance. Shape (V).
@@ -85,6 +90,8 @@ class GP:
         The default is a stationary anisotropic kernel
         (`fvgp.GP.default_kernel`) which performs automatic relevance determination (ARD).
         The output is a matrix, an N1 x N2 numpy array.
+        This callable receives the full hyperparameter vector but must only use
+        the indices reserved for the kernel (disjoint from mean and noise indices).
     kernel_function_grad : Callable, optional
         A function that calculates the derivative of the `kernel_function` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
@@ -102,8 +109,10 @@ class GP:
         an array of positions (of shape N1 x D) and hyperparameters (a 1d array of length D+1 for the default kernel).
         Optionally, the third argument `args` can be defined.
         The return value is a 1d array of length N1.
-        If prior_mean_function is provided, `fvgp.GP._default_mean_function` is used,
+        If prior_mean_function is not provided, `fvgp.GP._default_mean_function` is used,
         which is the average of the `y_data`.
+        This callable receives the full hyperparameter vector but must only use
+        the indices reserved for the mean function (disjoint from kernel and noise indices).
     prior_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the `prior_mean_function` at
         a set of input positions with respect to the hyperparameters.
@@ -122,6 +131,8 @@ class GP:
         The input `x` is a numpy array of shape (N x D). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
         Only provide a noise function OR a noise variance vector, not both.
+        This callable receives the full hyperparameter vector but must only use
+        the indices reserved for the noise function (disjoint from kernel and mean indices).
     noise_function_grad : Callable, optional
         A function that evaluates the gradient of the `noise_function`
         at an input position with respect to the hyperparameters.
@@ -196,7 +207,6 @@ class GP:
         - "Chol_solve_compute_device" : str; default = "cpu"/"gpu"
         - "Chol_logdet_compute_device" : str; default = "cpu"/"gpu"
         - "GPU_engine" : str; default = "torch"/"cupy"
-        - "random_logdet_lanczos_degree" : int; default = 20
 
         All other keys will be stored and are available as part of the object instance and
         in kernel, mean, and noise functions.
@@ -247,7 +257,7 @@ class GP:
                                                           np.ndarray), "wrong init_hyperparameters"
         assert isinstance(compute_device, str), "wrong format in compute_device"
         assert callable(kernel_function) or kernel_function is None, "wrong format in kernel_function"
-        assert callable(kernel_function_grad) or kernel_function_grad is None, "wrong format in kernel_function"
+        assert callable(kernel_function_grad) or kernel_function_grad is None, "wrong format in kernel_function_grad"
         assert callable(noise_function) or noise_function is None, "wrong format in noise_function"
         assert callable(noise_function_grad) or noise_function_grad is None, "wrong format in noise_function"
         assert callable(prior_mean_function) or prior_mean_function is None, "wrong format in prior_mean_function"
@@ -561,10 +571,10 @@ class GP:
             The default is a random draw from a uniform distribution within the `hyperparameter_bounds`.
         method : str or Callable, optional
             The method used to train the hyperparameters.
-            The options are `global`, `local`, `hgdl`, `mcmc`, and a callable.
+            The options are `global`, `local`, `hgdl`, `mcmc`, `adam`, and a callable.
             The callable gets a `gp.GP` instance and has to return a 1d np.ndarray of hyperparameters.
-            The default is `mcmc` (scipy's differential evolution).
-            If method = `mcmc`,
+            The default is `mcmc`.
+            If method = `mcmc` or default,
             the attribute `fvgp.GP.mcmc_info` is updated and contains convergence and distribution information.
             For `hgdl`, please provide a `distributed.Client()`.
         pop_size : int, optional
@@ -635,7 +645,7 @@ class GP:
 
         if objective_function is not None and method == 'mcmc':
             warnings.warn("MCMC will ignore the user-defined objective function")
-        if objective_function is not None and objective_function_gradient is None and (method == 'local' or 'hgdl'):
+        if objective_function is not None and objective_function_gradient is None and (method == 'local' or method == 'hgdl'):
             raise Exception("For user-defined objective functions and local or hybrid optimization, a gradient and \
                              Hessian function of the objective function have to be defined.")
         if method == 'mcmc': objective_function = self.marginal_likelihood.log_likelihood
@@ -684,7 +694,7 @@ class GP:
                 )
                 return opt_obj
             else:  # pragma: no cover
-                raise Exception("Asynchronous training only available for `hgdl` and `mcmc`")
+                raise Exception("Asynchronous training only available for `hgdl` method")
 
     ##################################################################################
     def stop_training(self, opt_obj):
@@ -1177,7 +1187,7 @@ class GP:
             GPs on non-Euclidean input spaces.
         comp_mean: np.ndarray
             A vector of mean values, same length as x_pred.
-        comp_cov: np.nparray
+        comp_cov: np.ndarray
             Covariance matrix, in R^{len(x_pred) x len(x_pred)}
         x_out : np.ndarray, optional
             Output coordinates in case of multi-task GP use; a numpy array of size (N),
@@ -1265,10 +1275,7 @@ class GP:
         NRMSE : float
         """
 
-        v1 = y_test
-        v2 = self.posterior_mean(x_test)["m(x)"]
-        assert v1.shape == v2.shape, (v1.shape, v2.shape)
-        return np.sum((v1 - v2) ** 2) / np.sum(v1 ** 2)
+        return self.rmse(x_test, y_test) / (np.max(y_test) - np.min(y_test))
 
     def nlpd(self, x_test, y_test):  # correct, tested
         """
@@ -1351,6 +1358,166 @@ class GP:
 
         return picp
 
+    def coverage_curve(self, x_test, y_test, intervals=None):
+        """
+        This function computes the coverage curve (calibration curve) of the GP posterior
+        by evaluating :py:meth:`picp` across a range of target coverage levels.
+        Plotting `target_coverage` against `measured_coverage` reveals whether the
+        posterior is well-calibrated (diagonal), overconfident (below diagonal),
+        or underconfident (above diagonal).
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape V or (V x No) in the multi-output case. These are the y data to compare against.
+        intervals : np.ndarray, optional
+            A 1d array of target coverage levels in (0, 1). Default is np.linspace(0.05, 0.95, 19).
+
+        Return
+        ------
+        dict with keys `target_coverage` and `measured_coverage`, each a list of floats.
+        """
+        if intervals is None:
+            intervals = np.linspace(0.05, 0.95, 19)
+        target_coverage = list(intervals)
+        measured_coverage = [self.picp(x_test, y_test, interval=q) for q in intervals]
+        return {"target_coverage": target_coverage, "measured_coverage": measured_coverage}
+
+    def mpiw(self, x_test, interval=0.95):
+        """
+        This function calculates the Mean Prediction Interval Width (MPIW).
+        It measures the average width of the posterior credible intervals and
+        is best interpreted alongside :py:meth:`picp`: a narrow interval with
+        high coverage indicates a well-calibrated, sharp model.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as an array of input point positions.
+        interval : float, optional
+            Credible interval level. Default = 0.95.
+
+        Return
+        ------
+        MPIW : float
+        """
+        sigma = np.sqrt(self.posterior_covariance(x_test, add_noise=True)["v(x)"])
+        z = norm.ppf(1 - (1 - interval) / 2)
+        return np.mean(2 * z * sigma)
+
+    def interval_score(self, x_test, y_test, interval=0.95):
+        """
+        This function calculates the Interval Score (also known as the Winkler Score).
+        It penalises both missed coverage and unnecessarily wide prediction intervals,
+        combining the concerns of :py:meth:`picp` and :py:meth:`mpiw` into a single
+        scalar. Lower is better.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape V or (V x No) in the multi-output case. These are the y data to compare against.
+        interval : float, optional
+            Credible interval level. Default = 0.95.
+
+        Return
+        ------
+        Interval Score : float
+        """
+        mean = self.posterior_mean(x_test)["m(x)"]
+        sigma = np.sqrt(self.posterior_covariance(x_test, add_noise=True)["v(x)"])
+        assert mean.shape == sigma.shape == y_test.shape, (mean.shape, sigma.shape, y_test.shape)
+
+        alpha = 1 - interval
+        z = norm.ppf(1 - alpha / 2)
+        lower = mean - z * sigma
+        upper = mean + z * sigma
+        width = upper - lower
+        penalty_low = (2 / alpha) * np.maximum(lower - y_test, 0)
+        penalty_high = (2 / alpha) * np.maximum(y_test - upper, 0)
+        return np.mean(width + penalty_low + penalty_high)
+
+    def mae(self, x_test, y_test):
+        """
+        This function calculates the Mean Absolute Error (MAE).
+        Note that in the multi-task setting the user should perform their
+        input point transformation beforehand.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape V or (V x No) in the multi-output case. These are the y data to compare against.
+
+        Return
+        ------
+        MAE : float
+        """
+        v1 = y_test
+        v2 = self.posterior_mean(x_test)["m(x)"]
+        assert v1.shape == v2.shape, (v1.shape, v2.shape)
+        return np.mean(np.abs(v1 - v2))
+
+    def mape(self, x_test, y_test):
+        """
+        This function calculates the Mean Absolute Percentage Error (MAPE).
+        Note that in the multi-task setting the user should perform their
+        input point transformation beforehand.
+        Avoid using this metric when `y_test` contains values close to zero,
+        as the percentage error becomes unstable.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape V or (V x No) in the multi-output case. These are the y data to compare against.
+
+        Return
+        ------
+        MAPE : float
+        """
+        v1 = y_test
+        v2 = self.posterior_mean(x_test)["m(x)"]
+        assert v1.shape == v2.shape, (v1.shape, v2.shape)
+        return np.mean(np.abs((v1 - v2) / v1))
+
+    def msll(self, x_test, y_test):
+        """
+        This function calculates the Mean Standardized Log Loss (MSLL).
+        It is the :py:meth:`nlpd` of the GP posterior minus the NLPD of a
+        trivial baseline model (a Gaussian with the empirical mean and variance
+        of the training targets). Negative values indicate that the GP predicts
+        better than the baseline; zero means it matches it.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            A numpy array of shape (V x D), interpreted as an array of input point positions.
+        y_test : np.ndarray
+            A numpy array of shape V or (V x No) in the multi-output case. These are the y data to compare against.
+
+        Return
+        ------
+        MSLL : float
+        """
+        mean = self.posterior_mean(x_test)["m(x)"]
+        v = self.posterior_covariance(x_test)["v(x)"]
+        assert mean.shape == v.shape == y_test.shape, (mean.shape, v.shape, y_test.shape)
+
+        nlpd_gp = np.mean(0.5 * np.log(2 * np.pi * v) + 0.5 * ((y_test - mean) ** 2) / v)
+
+        baseline_mean = np.mean(self.y_data)
+        baseline_var = np.var(self.y_data)
+        nlpd_baseline = np.mean(0.5 * np.log(2 * np.pi * baseline_var)
+                                + 0.5 * ((y_test - baseline_mean) ** 2) / baseline_var)
+
+        return nlpd_gp - nlpd_baseline
+
     @staticmethod
     def gaussian_1d(x, mu, sigma):
         """
@@ -1375,15 +1542,15 @@ class GP:
         return coefficient * np.exp(exponent)
 
     @staticmethod
-    def make_2d_x_pred(bx, by, resx=100, resy=100):  # pragma: no cover
+    def make_2d_x_pred(bx, by, resx=100, resy=100):
         """
         This is a purely convenience-driven function calculating prediction points
         on a grid.
         Parameters
         ----------
-        bx : np.ndarray
-            A numpy array of shape (2) defining lower and upper bounds in x direction.
-        by : np.ndarray
+        bx : iterable
+            A numpy array or list of shape (2) defining lower and upper bounds in x direction.
+        by : iterable
             A numpy array of shape (2) defining lower and upper bounds in y direction.
         resx : int, optional
             Resolution in x direction. Default = 100.
@@ -1401,15 +1568,15 @@ class GP:
         return x_pred
 
     @staticmethod
-    def make_1d_x_pred(b, res=100):  # pragma: no cover
+    def make_1d_x_pred(b, res=100):
         """
         This is a purely convenience-driven function calculating prediction points
         on a 1d grid.
 
         Parameters
         ----------
-        b : np.ndarray
-            A numpy array of shape (2) defineing lower and upper bounds
+        b : iterable
+            A numpy array or list of shape (2) defining lower and upper bounds
         res : int, optional
             Resolution. Default = 100
 
@@ -1444,7 +1611,7 @@ class GP:
         return (D ** 2 * tb) / (2. * n * b ** 2)
 
     def initialize_gp2Scale_dask_client(self, gp2Scale, gp2Scale_dask_client):
-        if gp2Scale:  # pragma: no cover
+        if gp2Scale:
             try:
                 from imate import logdet as imate_logdet
             except:

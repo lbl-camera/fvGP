@@ -41,6 +41,147 @@ x_pred = np.random.rand(10, input_dim)
 """Tests for `fvgp` package."""
 
 
+def test_gpu_lin_algebra():
+    """
+    Tests all GPU-accelerated linear algebra functions in gp_lin_alg.py.
+
+    The function first detects which GPU engines are available (torch with a CUDA device,
+    and/or cupy). If neither is available the function returns immediately and is a no-op.
+    For every available engine the GPU code paths are executed and their numerical results
+    are compared against the CPU reference to verify correctness.
+
+    Covered functions
+    -----------------
+    Both engines  : calculate_Chol_factor, calculate_Chol_logdet, calculate_Chol_solve,
+                    cholesky_update_rank_1, cholesky_update_rank_n, solve, matmul, matmul3
+    torch only    : calculate_logdet, calculate_inv  (these hardcode torch internally)
+    """
+    import importlib
+
+    # Detect available GPU engines
+    engines = []
+    if importlib.util.find_spec("torch") is not None:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                engines.append("torch")
+        except Exception as e:
+            print(f"Error occurred while checking torch GPU availability: {e}")
+    else:
+        print("torch not installed; skipping torch tests")
+    if importlib.util.find_spec("cupy") is not None:
+        try:
+            import cupy as cp
+            cp.zeros(1)  # trigger device initialization; raises if no GPU
+            engines.append("cupy")
+        except Exception as e:
+            print(f"Error occurred while checking cupy GPU availability: {e}")
+    else:
+        print("cupy not installed; skipping cupy tests")
+
+    if not engines:
+        return  # no GPU present – skip silently
+    print(engines, "GPU engines detected; running GPU linear algebra tests")
+
+    # ------------------------------------------------------------------ #
+    # Build deterministic, well-conditioned PD test matrices              #
+    # ------------------------------------------------------------------ #
+    np.random.seed(0)
+    B = np.random.rand(20, 20)
+    A = (B @ B.T + np.eye(20) * 5.).astype(np.float64)
+    b = np.random.rand(20)
+
+    # Smaller matrix for rank-update tests: we have a 9x9 factor and extend to 10x10
+    B_s = np.random.rand(10, 10)
+    A_s = (B_s @ B_s.T + np.eye(10) * 3.).astype(np.float64)
+    A9 = A_s[:9, :9]
+    k = A_s[:9, 9:]   # (9, 1) cross-covariance vector
+    kk = A_s[9:, 9:]  # (1, 1) new-point variance
+
+    C = np.random.rand(20, 15)
+
+    # ------------------------------------------------------------------ #
+    # CPU reference values                                                #
+    # ------------------------------------------------------------------ #
+    c_cpu = calculate_Chol_factor(A, compute_device="cpu")
+    logdet_chol_cpu = calculate_Chol_logdet(c_cpu, compute_device="cpu")
+    solve_chol_cpu = calculate_Chol_solve(c_cpu, b.copy(), compute_device="cpu")
+
+    c9_cpu = calculate_Chol_factor(A9, compute_device="cpu")
+    rank1_cpu = cholesky_update_rank_1(c9_cpu, k[:, 0], float(kk[0, 0]), compute_device="cpu")
+    rankn_cpu = cholesky_update_rank_n(c9_cpu, k, kk, compute_device="cpu")
+
+    solve_cpu = solve(A, b, compute_device="cpu")
+    mm_cpu = matmul(A, C, compute_device="cpu")
+    mm3_cpu = matmul3(A, A, b.reshape(-1, 1), compute_device="cpu")
+
+    # ------------------------------------------------------------------ #
+    # Per-engine GPU tests                                                #
+    # ------------------------------------------------------------------ #
+    for engine in engines:
+        args = {"GPU_engine": engine}
+        print("testing GPU engine:", engine)
+
+        # calculate_Chol_factor
+        c_gpu = calculate_Chol_factor(A, compute_device="gpu", args=args)
+        assert isinstance(c_gpu, np.ndarray), f"{engine}: Chol factor wrong type"
+        assert c_gpu.shape == A.shape, f"{engine}: Chol factor wrong shape"
+
+        # calculate_Chol_logdet
+        logdet_gpu = calculate_Chol_logdet(c_gpu, compute_device="gpu", args=args)
+        assert np.isscalar(logdet_gpu), f"{engine}: Chol logdet is not scalar"
+        assert np.isclose(logdet_gpu, logdet_chol_cpu, rtol=1e-5), \
+            f"{engine}: Chol logdet mismatch  gpu={logdet_gpu:.6f}  cpu={logdet_chol_cpu:.6f}"
+
+        # calculate_Chol_solve
+        solve_chol_gpu = calculate_Chol_solve(c_gpu, b.copy(), compute_device="gpu", args=args)
+        assert solve_chol_gpu.shape == solve_chol_cpu.shape, \
+            f"{engine}: Chol solve shape mismatch"
+        assert np.allclose(solve_chol_gpu, solve_chol_cpu, rtol=1e-5), \
+            f"{engine}: Chol solve mismatch"
+
+        # cholesky_update_rank_1
+        c9_gpu = calculate_Chol_factor(A9, compute_device="gpu", args=args)
+        rank1_gpu = cholesky_update_rank_1(
+            c9_gpu, k[:, 0], float(kk[0, 0]), compute_device="gpu", args=args)
+        assert rank1_gpu.shape == rank1_cpu.shape, \
+            f"{engine}: rank-1 update shape mismatch"
+        assert np.allclose(np.abs(np.diag(rank1_gpu)), np.abs(np.diag(rank1_cpu)), rtol=1e-5), \
+            f"{engine}: rank-1 update diagonal mismatch"
+
+        # cholesky_update_rank_n
+        rankn_gpu = cholesky_update_rank_n(c9_gpu, k, kk, compute_device="gpu", args=args)
+        assert rankn_gpu.shape == rankn_cpu.shape, \
+            f"{engine}: rank-n update shape mismatch"
+        assert np.allclose(np.abs(np.diag(rankn_gpu)), np.abs(np.diag(rankn_cpu)), rtol=1e-5), \
+            f"{engine}: rank-n update diagonal mismatch"
+
+        # solve
+        solve_gpu = solve(A, b, compute_device="gpu", args=args)
+        assert np.allclose(solve_gpu, solve_cpu, rtol=1e-5), f"{engine}: solve mismatch"
+
+        # matmul
+        mm_gpu = matmul(A, C, compute_device="gpu", args=args)
+        assert np.allclose(mm_gpu, mm_cpu, rtol=1e-5), f"{engine}: matmul mismatch"
+
+        # matmul3
+        mm3_gpu = matmul3(A, A, b.reshape(-1, 1), compute_device="gpu", args=args)
+        assert np.allclose(mm3_gpu, mm3_cpu, rtol=1e-5), f"{engine}: matmul3 mismatch"
+
+    # ------------------------------------------------------------------ #
+    # torch-only functions (hardcode torch; no get_gpu_engine dispatch)  #
+    # ------------------------------------------------------------------ #
+    if "torch" in engines:
+        logdet_torch = calculate_logdet(A, compute_device="gpu")
+        logdet_ref = calculate_logdet(A, compute_device="cpu")
+        assert np.isclose(logdet_torch, logdet_ref, rtol=1e-5), \
+            f"torch: calculate_logdet mismatch  gpu={logdet_torch:.6f}  cpu={logdet_ref:.6f}"
+
+        inv_torch = calculate_inv(A, compute_device="gpu")
+        inv_cpu = calculate_inv(A, compute_device="cpu")
+        assert np.allclose(inv_torch, inv_cpu, rtol=1e-5), "torch: calculate_inv mismatch"
+
+
 def test_lin_alg():
     B = np.random.rand(100,100)
     A = B @ B.T + np.identity(100)
@@ -107,6 +248,7 @@ def test_single_task_init_basic():
     my_gp1.train(method = "adam", max_iter = 3)
     my_gp1.update_gp_data(x_data, y_data, append = True)
     my_gp1.update_gp_data(x_data, y_data, append = False)
+    my_gp1.make_2d_x_pred([0,1], [0,1], resx=100, resy=100)
     
     my_gp1 = GP(x_data, y_data, noise_variances = np.zeros(y_data.shape) + 0.01,init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), args = {"xyz":3.})
     my_gp1.update_gp_data(x_data, y_data, noise_variances_new = np.zeros(y_data.shape) + 0.01, append = True)
@@ -160,12 +302,46 @@ def test_single_task_init_basic():
     wasserstein_1d_outer_vec(b,b.copy())
 
     res = my_gp1.prior._default_kernel(x_data,x_data,np.array([1.,1.,1.,1.,1.,1.]))
-    my_gp1.crps(x_data[0:2] + 1., np.array([1.,2.]))
-    my_gp1.rmse(x_data[0:2] + 1., np.array([1.,2.]))
-    my_gp1.nrmse(x_data[0:2] + 1., np.array([1.,2.]))
-    my_gp1.nlpd(x_data[0:2] + 1., np.array([1.,2.]))
-    my_gp1.r2(x_data[0:2] + 1., np.array([1.,2.]))
-    my_gp1.picp(x_data[0:2] + 1., np.array([1.,2.]), interval=0.95)
+    x_m = x_data[0:2] + 1.
+    y_m = np.array([1., 2.])
+
+    my_gp1.crps(x_m, y_m)
+    my_gp1.rmse(x_m, y_m)
+    my_gp1.nrmse(x_m, y_m)
+    my_gp1.nlpd(x_m, y_m)
+    my_gp1.r2(x_m, y_m)
+    my_gp1.picp(x_m, y_m, interval=0.95)
+
+    # mae
+    mae_val = my_gp1.mae(x_m, y_m)
+    assert np.isscalar(mae_val) and mae_val >= 0.
+
+    # mape
+    mape_val = my_gp1.mape(x_m, y_m)
+    assert np.isscalar(mape_val) and mape_val >= 0.
+
+    # msll
+    msll_val = my_gp1.msll(x_m, y_m)
+    assert np.isscalar(msll_val)
+
+    # mpiw
+    mpiw_val = my_gp1.mpiw(x_m, interval=0.95)
+    assert np.isscalar(mpiw_val) and mpiw_val > 0.
+
+    # interval_score
+    is_val = my_gp1.interval_score(x_m, y_m, interval=0.95)
+    assert np.isscalar(is_val) and is_val > 0.
+
+    # coverage_curve: default intervals
+    cc = my_gp1.coverage_curve(x_m, y_m)
+    assert "target_coverage" in cc and "measured_coverage" in cc
+    assert len(cc["target_coverage"]) == len(cc["measured_coverage"]) == 19
+    assert all(0. <= v <= 1. for v in cc["measured_coverage"])
+
+    # coverage_curve: custom intervals
+    custom = np.array([0.5, 0.9])
+    cc2 = my_gp1.coverage_curve(x_m, y_m, intervals=custom)
+    assert len(cc2["target_coverage"]) == len(cc2["measured_coverage"]) == 2
     my_gp1.make_2d_x_pred(np.array([1.,2.]),np.array([3.,4]))
     my_gp1.make_1d_x_pred(np.array([1.,2.]))
     my_gp1._get_default_hyperparameter_bounds()

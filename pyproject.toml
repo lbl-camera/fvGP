@@ -15,7 +15,7 @@ dependencies = [
 ]
 # imate
 # pytorch
-requires-python = ">=3.1"
+requires-python = ">=3.11"
 authors = [
     { name = "Marcus Michael Noack", email = "MarcusNoack@lbl.gov" },
     { name = "Ronald J. Pandolfi", email = "ronpandolfi@lbl.gov" },
@@ -41,7 +41,7 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 docs = ['sphinx', 'sphinx-rtd-theme', 'myst-parser', 'myst-nb', 'sphinx-panels', 'autodocs', 'jupytext']
-tests = ['pytest', 'codecov', 'pytest-cov', 'torch', 'imate']
+tests = ['pytest', 'codecov', 'pytest-cov', 'torch', 'imate', 'cupy']
 plotting = ['matplotlib', 'plotly', 'notebook']
 
 [project.urls]

@@ -1,4 +1,5 @@
 import warnings
+import numpy as np
 from loguru import logger
 from scipy.optimize import differential_evolution
 from hgdl.hgdl import HGDL
@@ -40,7 +41,7 @@ class GPtraining:
         """
         This function finds the maximum of the log marginal likelihood and therefore trains the GP (synchronously).
         This can be done on a remote cluster/computer by specifying the method to be 'hgdl' and
-        providing a dask client. However, in that case fvgp.GP.train_async() is preferred.
+        providing a dask client. However, in that case fvgp.GP.hgdl_async() is preferred.
         The GP prior will automatically be updated with the new hyperparameters after the training.
         """
         hyperparameters = self._optimize_log_likelihood(
@@ -105,12 +106,12 @@ class GPtraining:
         Parameters
         ----------
         opt_obj : HGDL object instance
-            HGDL object instance returned by `fvgp.GP.train_async()`
+            HGDL object instance returned by `fvgp.GP.hgdl_async()`
         """
         try:
             opt_obj.cancel_tasks()
             logger.debug("fvGP successfully cancelled the current training.")
-        except:
+        except Exception:
             warnings.warn("No asynchronous training to be cancelled in fvGP, \
             no training is running.", UserWarning, stacklevel=2)
 
@@ -123,13 +124,13 @@ class GPtraining:
         Parameters
         ----------
         opt_obj : HGDL object instance
-            HGDL object instance returned by `fvgp.GP.train_async()`
+            HGDL object instance returned by `fvgp.GP.hgdl_async()`
         """
 
         try:
             opt_obj.kill_client()
             logger.debug("fvGP successfully killed the training.")
-        except:
+        except Exception:
             warnings.warn("No asynchronous training to be killed, no training is running.", UserWarning, stacklevel=2)
 
     def update_hyperparameters(self, opt_obj):
@@ -143,7 +144,7 @@ class GPtraining:
         Parameters
         ----------
         opt_obj : HGDL object instance
-            HGDL object instance returned by `fvgp.GP.train_async()`
+            HGDL object instance returned by `fvgp.GP.hgdl_async()`
 
         Return
         ------
@@ -278,7 +279,7 @@ class GPtraining:
         elif method == "hgdl":
             logger.debug("fvGP submitted HGDL optimization")
             logger.debug("starting hyperparameters: {}", starting_hps)
-            logger.debug('bounds are', hp_bounds)
+            logger.debug('bounds are {}', hp_bounds)
 
             opt_obj = HGDL(objective_function,
                            objective_function_gradient,

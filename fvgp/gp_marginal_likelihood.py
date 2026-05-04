@@ -1,6 +1,7 @@
 from typing import Any
 
 import numpy as np
+import time
 from .gp_lin_alg import *
 from scipy.sparse import issparse
 import scipy.sparse as sparse
@@ -110,7 +111,7 @@ class GPMarginalLikelihood:
         """
         Update the marginal likelihood when hyperparameters have changed
         """
-        logger.debug("Updating marginal density after new hyperparameters were appended.")
+        logger.debug("Updating marginal density after hyperparameters were updated.")
         K, V, m = self._get_KVm()
         self.KVinvY = self._set_state_KVinvY(K, V, m, self.KVlinalg.mode)
 
@@ -159,17 +160,19 @@ class GPMarginalLikelihood:
                 KVinvY = calculate_sparse_minres(KV, y_mean, args=self.args)
             elif mode == "sparseMINRESpre":
                 B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_minres(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+                M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
+                KVinvY = calculate_sparse_minres(KV, y_mean, M=M, args=self.args)
             elif mode == "sparseCGpre":
                 B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+                M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, args=self.args)
             elif mode == "sparseSolve":
                 KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
             elif callable(mode[0]) and callable(mode[1]) and callable(mode[2]):
                 factor = mode[0](KV)
                 KVinvY = mode[1](factor, y_mean)
             else:
-                raise Exception("No mode in gp2Scale", mode)
+                raise Exception(f"No mode in gp2Scale: {mode}")
         else:
             Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
             KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
@@ -202,11 +205,13 @@ class GPMarginalLikelihood:
                 KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
             elif mode == "sparseMINRESpre":
                 B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_minres(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+                M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
+                KVinvY = calculate_sparse_minres(KV, y_mean, M=M, args=self.args)
                 KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
             elif mode == "sparseCGpre":
                 B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-                KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=B.L.T @ B.L, args=self.args)
+                M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
+                KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, args=self.args)
                 KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
             elif mode == "sparseSolve":
                 KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
@@ -216,7 +221,7 @@ class GPMarginalLikelihood:
                 KVinvY = mode[1](factor, y_mean)
                 KVlogdet = mode[2](factor)
             else:
-                raise Exception("No mode in gp2Scale", mode)
+                raise Exception(f"No mode in gp2Scale: {mode}")
         else:
             Chol_factor = calculate_Chol_factor(KV, compute_device=self.compute_device, args=self.args)
             KVinvY = calculate_Chol_solve(Chol_factor, y_mean, compute_device=self.compute_device, args=self.args)
@@ -376,8 +381,7 @@ class GPMarginalLikelihood:
                 raise Exception(
                     "The gradient evaluation dK/dh + dNoise/dh was not successful. "
                     "That normally means the combination of ram_economy and definition "
-                    "of the gradient function is wrong. ",
-                    str(e))
+                    "of the gradient function is wrong.") from e
             KV = np.array([KV, ] * len(hyperparameters))
             a = solve(KV, dK_dH, compute_device=self.compute_device)
         bbT = np.outer(b, b.T)
@@ -403,7 +407,7 @@ class GPMarginalLikelihood:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "
                         "That normally means the combination of ram_economy and definition of "
-                        "the gradient function is wrong.",e)
+                        "the gradient function is wrong.") from e
                 matr = solve(KV, dK_dH, compute_device=self.compute_device)
             if dL_dHm[i] == 0.0:
                 if self.ram_economy is False:
