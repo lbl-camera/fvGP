@@ -1,8 +1,3 @@
----
-banner: _static/landing.png
-banner_height: "40vh"
-banner_brightness: .5
----
 
 ```{toctree}
 ---

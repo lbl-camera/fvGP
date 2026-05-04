@@ -18,7 +18,7 @@ class fvGP(GP):
     N ... arbitrary integers (N1, N2,...)
 
 
-    The main logic of :doc:`fvgp <fvgp:index>` is that any multi-task GP is just a single-task GP
+    The main logic of fvGP is that any multi-task GP is just a single-task GP
     over a Cartesian product space of input and output space, as long as the kernel
     is flexible enough, so prepare to work on your kernel. This is the best
     way to give the user optimal control and power. At various instances, for example
@@ -33,7 +33,7 @@ class fvGP(GP):
 
     [0.2, 0.3,1],[0.9,0.6,1]]
 
-    This has to be understood and taken into account when customizing :doc:`fvgp <fvgp:index>` for multi-task
+    This has to be understood and taken into account when customizing fvGP for multi-task
     use. The examples will provide deeper insights.
 
     Parameters
@@ -217,12 +217,6 @@ class fvGP(GP):
         Datapoint values
     noise_variances : np.ndarray
         Datapoint observation variances.
-    fvgp_x_data : np.ndarray | list
-        Data points from the fvgp point of view.
-    fvgp_y_data : np.ndarray
-        The data values from the fvgp point of view.
-    fvgp_noise_variances : np.ndarray
-        Observation variances from the fvgp point of view.
     hyperparameters : np.ndarray
         Current hyperparameters in use.
     K : np.ndarray
@@ -353,14 +347,17 @@ class fvGP(GP):
 
     @property
     def fvgp_x_data(self):
+        """Multi-task input data including the output-index column, shape (N, D+1)."""
         return self.data.fvgp_x_data
 
     @property
     def fvgp_y_data(self):
+        """Observed values in the multi-task (output-index-augmented) space, shape (N,)."""
         return self.data.fvgp_y_data
 
     @property
     def fvgp_noise_variances(self):
+        """Point-wise noise variances in the multi-task space, shape (N,), or None."""
         return self.data.fvgp_noise_variances
 
     def update_gp_data(

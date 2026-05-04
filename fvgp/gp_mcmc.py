@@ -304,6 +304,23 @@ class ProposalDistribution:
 
     #########################################################
     def normal_proposal_dist(self, x, hps, obj):
+        """
+        Default multivariate-normal proposal: draw from N(x, Σ) where Σ is ``obj.prop_args["prop_Sigma"]``.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Current position in hyperparameter space, shape (N,).
+        hps : np.ndarray
+            Current hyperparameters (unused here; present for interface compatibility).
+        obj : ProposalDistribution
+            The enclosing proposal-distribution object, which carries ``prop_args``.
+
+        Returns
+        -------
+        proposal : np.ndarray
+            Proposed hyperparameter vector, shape (N,).
+        """
         cov = obj.prop_args["prop_Sigma"]
         proposal_hps = np.random.multivariate_normal(
             mean=x, cov=cov, size=1).reshape(len(x))

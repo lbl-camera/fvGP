@@ -40,7 +40,7 @@ classifiers = [
 dynamic = ["version"]
 
 [project.optional-dependencies]
-docs = ['sphinx', 'sphinx-rtd-theme', 'myst-parser', 'myst-nb', 'sphinx-panels', 'autodocs', 'jupytext']
+docs = ['sphinx', 'pydata-sphinx-theme', 'myst-parser', 'myst-nb', 'sphinx-design', 'sphinx-copybutton', 'jupytext']
 tests = ['pytest', 'codecov', 'pytest-cov', 'torch', 'imate']
 plotting = ['matplotlib', 'plotly', 'notebook']
 

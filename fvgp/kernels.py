@@ -87,8 +87,7 @@ def exponential_kernel_robust(distance, phi):
 def matern_kernel_diff1(distance, length):
     """
     Function for the Matern kernel, order of differentiability = 1.
-    kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
-        -(np.sqrt(3.0) * distance) / length
+    kernel = (1 + sqrt(3)*d/l) * exp(-sqrt(3)*d/l)
 
     Parameters
     ----------
@@ -110,9 +109,8 @@ def matern_kernel_diff1(distance, length):
 
 def matern_kernel_diff1_grad(distance, dist_der):
     """
-    Function for the Matern kernel derivative, order of differentiability = 1.
-    kernel = (1.0 + ((np.sqrt(3.0) * distance) / (length))) * np.exp(
-        -(np.sqrt(3.0) * distance) / length
+    Derivative of the Matern-1 kernel with respect to the hyperparameters.
+    kernel_der = -sqrt(3)*d * dist_der * exp(-sqrt(3)*d)
 
     Parameters
     ----------
@@ -135,8 +133,7 @@ def matern_kernel_diff1_grad(distance, dist_der):
 def matern_kernel_diff1_robust(distance, phi):
     """
     Function for the Matern kernel, order of differentiability = 1, robust version.
-    kernel = (1.0 + ((np.sqrt(3.0) * distance) * (phi**2))) * np.exp(
-        -(np.sqrt(3.0) * distance) * (phi**2))
+    kernel = (1 + sqrt(3)*d*phi**2) * exp(-sqrt(3)*d*phi**2)
 
     Parameters
     ----------
@@ -158,11 +155,7 @@ def matern_kernel_diff1_robust(distance, phi):
 def matern_kernel_diff2(distance, length):
     """
     Function for the Matern kernel, order of differentiability = 2.
-    kernel = (
-        1.0
-        + ((np.sqrt(5.0) * distance) / (length))
-        + ((5.0 * distance ** 2) / (3.0 * length ** 2))
-    ) * np.exp(-(np.sqrt(5.0) * distance) / length)
+    kernel = (1 + sqrt(5)*d/l + 5*d**2/(3*l**2)) * exp(-sqrt(5)*d/l)
 
     Parameters
     ----------
@@ -187,11 +180,7 @@ def matern_kernel_diff2(distance, length):
 def matern_kernel_diff2_robust(distance, phi):
     """
     Function for the Matern kernel, order of differentiability = 2, robust version.
-    kernel = (
-        1.0
-        + ((np.sqrt(5.0) * distance) * (phi**2))
-        + ((5.0 * distance ** 2) * (3.0 * phi ** 4))
-    ) * np.exp(-(np.sqrt(5.0) * distance) * (phi**2))
+    kernel = (1 + sqrt(5)*d*phi**2 + 15*d**2*phi**4) * exp(-sqrt(5)*d*phi**2)
 
     Parameters
     ----------
@@ -313,24 +302,24 @@ def dot_product_kernel(x1, x2, hp, matrix):
 
 def polynomial_kernel(x1, x2, p):
     """
-    Function for a polynomial kernel.
-    kernel = (1.0+x1.T @ x2)**p
+    Polynomial kernel: ``(1 + x1ᵀ x2) ** p``.
 
     Parameters
     ----------
     x1 : np.ndarray
-        Point 1.
+        Point 1, shape (D,).
     x2 : np.ndarray
-        Point 2.
+        Point 2, shape (D,).
     p : float
-        Power hyperparameter.
+        Degree hyperparameter.
 
-    Return
-    ------
-    Kernel output : same as distance parameter.
+    Returns
+    -------
+    kernel : float
+        Kernel value.
     """
     kernel = (1.0 + x1.T @ x2) ** p
-    return p
+    return kernel
 
 
 def wendland_kernel(d):
@@ -585,6 +574,21 @@ def wasserstein_1d(a, b):
 
 
 def wasserstein_1d_outer_vec(a, b):
+    """
+    Vectorized pairwise 1-D Wasserstein distance between all rows of ``a`` and ``b``.
+
+    Parameters
+    ----------
+    a : np.ndarray
+        Array of shape (M, K); each row is an unnormalized 1-D measure.
+    b : np.ndarray
+        Array of shape (N, K); each row is an unnormalized 1-D measure.
+
+    Returns
+    -------
+    W : np.ndarray
+        Distance matrix of shape (M, N).
+    """
     a = a / a.sum(axis=1, keepdims=True)
     b = b / b.sum(axis=1, keepdims=True)
 
@@ -596,10 +600,23 @@ def wasserstein_1d_outer_vec(a, b):
 
 def bump(d, r, beta=1., ampl=1.):
     """
-    evaluates the bump function
-    x ... a point (1d numpy array)
-    x0 ... 1d numpy array of location of bump function
-    returns the bump function b(x,x0) with radius r
+    Smooth compactly-supported bump function evaluated over a distance array.
+
+    Parameters
+    ----------
+    d : np.ndarray
+        Distance values (non-negative).
+    r : float
+        Support radius; the function is zero for ``d >= r``.
+    beta : float, optional
+        Sharpness parameter (default 1).
+    ampl : float, optional
+        Amplitude scale (default 1).
+
+    Returns
+    -------
+    bump : np.ndarray
+        Bump values, same shape as ``d``.
     """
     #x_new = x - x0
     #d = np.linalg.norm(x_new, axis = 1)
@@ -613,6 +630,29 @@ def bump(d, r, beta=1., ampl=1.):
 
 
 def sle_kernel(x1, x2, hps, args):
+    """
+    Sparse-Landmark-Embedding (SLE) kernel.
+
+    Embeds points via a bump-function basis centered on the training set, then
+    applies a squared-exponential kernel on the embedded space.
+    Requires ``args["x_data"]`` (the training locations) to construct the basis.
+
+    Parameters
+    ----------
+    x1 : np.ndarray
+        Query points, shape (N1, D).
+    x2 : np.ndarray
+        Query points, shape (N2, D).
+    hps : np.ndarray
+        Hyperparameters ``[amplitude, radius, beta, length_scale]``.
+    args : dict
+        Must contain key ``"x_data"`` with the training point locations.
+
+    Returns
+    -------
+    K : np.ndarray
+        Covariance matrix of shape (N1, N2).
+    """
     # Distance to each training point (using all dimensions)
     x_data = args["x_data"]
     d1 = get_distance_matrix(x1, x_data)  # (n1, m) - can be geodesic/non-cnd!

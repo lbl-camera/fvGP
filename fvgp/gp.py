@@ -732,9 +732,10 @@ class GP:
         opt_obj : object instance
             Object created by :py:meth:`train(asynchronous=True)`.
 
-        Return
-        ------
+        Returns
+        -------
         hyperparameters : np.ndarray
+            The latest hyperparameter vector pulled from the running optimizer.
         """
 
         hps = self.trainer.update_hyperparameters(opt_obj)
@@ -744,15 +745,13 @@ class GP:
     ##################################################################################
     def get_hyperparameters(self):
         """
-        Function to get the current hyperparameters.
+        Get the current hyperparameters.
 
+        .. deprecated::
+            Use the :py:attr:`hyperparameters` property instead.
 
-        Parameters
-        ----------
-
-
-        Return
-        ------
+        Returns
+        -------
         hyperparameters : np.ndarray
         """
         warnings.warn('`get_hyperparameters()` is deprecated. Please use `hyperparameters`',
@@ -762,16 +761,12 @@ class GP:
     ##################################################################################
     def get_prior_pdf(self):
         """
-        Function to get the current prior covariance matrix.
+        Return the current GP prior covariance matrix and mean vector.
 
-
-        Parameters
-        ----------
-
-
-        Return
-        ------
-        A dictionary containing information about the GP prior distribution : dict
+        Returns
+        -------
+        prior : dict
+            Keys: ``"prior covariance (K)"`` (ndarray) and ``"prior mean"`` (ndarray).
         """
 
         return {"prior covariance (K)": self.prior.K,
@@ -789,9 +784,10 @@ class GP:
             If not provided, the covariance will not be recomputed.
 
 
-        Return
-        ------
-        log marginal likelihood of the data : float
+        Returns
+        -------
+        log_likelihood : float
+            Log marginal likelihood of the data.
         """
         if hyperparameters is not None:
             assert isinstance(hyperparameters, np.ndarray), "wrong format in hyperparameters"
@@ -810,9 +806,10 @@ class GP:
         component : int, optional
             In case many GPs are computed in parallel, this specifies which one is considered.
 
-        Return
-        ------
-        Gradient of the negative log marginal likelihood : np.ndarray
+        Returns
+        -------
+        gradient : np.ndarray
+            Gradient of the negative log marginal likelihood, shape (N,).
         """
         return self.marginal_likelihood.neg_log_likelihood_gradient(hyperparameters=hyperparameters, component=component)
 
@@ -825,9 +822,12 @@ class GP:
         hyperparameters : np.ndarray, optional
             Vector of hyperparameters of shape (N).
 
-        Return
-        ------
-        analytical and finite difference gradients to compare
+        Returns
+        -------
+        fd_gradient : np.ndarray
+            Finite-difference gradient of the log-likelihood, shape (N,).
+        analytical_gradient : np.ndarray
+            Analytical gradient of the log-likelihood, shape (N,).
         """
         assert isinstance(hyperparameters, np.ndarray), "wrong format in hyperparameters"
         assert np.ndim(hyperparameters) == 1, "wrong format in hyperparameters"
@@ -1070,6 +1070,7 @@ class GP:
         The mutual information is always positive, as it is a KL divergence, and is bounded
         from below by 0. The maxima are expected at the data points. Zero is expected far from the
         data support.
+
         Parameters
         ----------
         x_pred : np.ndarray  or list
@@ -1611,6 +1612,21 @@ class GP:
         return (D ** 2 * tb) / (2. * n * b ** 2)
 
     def initialize_gp2Scale_dask_client(self, gp2Scale, gp2Scale_dask_client):
+        """
+        Ensure a Dask client exists when ``gp2Scale=True``, creating a local one if needed.
+
+        Parameters
+        ----------
+        gp2Scale : bool
+            Whether the sparse gp2Scale mode is active.
+        gp2Scale_dask_client : distributed.Client or None
+            An existing Dask client, or None to auto-create a local one.
+
+        Returns
+        -------
+        client : distributed.Client or None
+            A valid Dask client, or None when ``gp2Scale=False``.
+        """
         if gp2Scale:
             try:
                 from imate import logdet as imate_logdet

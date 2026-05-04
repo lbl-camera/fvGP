@@ -19,7 +19,7 @@ class GPdata:
         if isinstance(noise_variances, np.ndarray): assert len(noise_variances) == len(y_data)
         if np.ndim(y_data) == 1: y_data = y_data.reshape(len(y_data), 1)
 
-        # analyse data
+        # analyze data
         if isinstance(x_data, np.ndarray):
             assert np.ndim(x_data) == 2
             self.index_set_dim = len(x_data[0])

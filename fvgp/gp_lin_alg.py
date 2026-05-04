@@ -1,3 +1,10 @@
+"""CPU/GPU linear algebra backend for fvGP.
+
+Provides Cholesky, LU, and sparse solvers with optional dispatch to PyTorch
+(CUDA) or CuPy GPU backends.  All public functions accept a ``compute_device``
+argument (``"cpu"`` or ``"gpu"``) and an ``args`` dict for fine-grained
+options such as ``"GPU_engine"``.
+"""
 import numpy as np
 import warnings
 warnings.simplefilter("once", UserWarning)
@@ -47,6 +54,7 @@ def _rank1_update_non_pd_message(disc):
 
 
 def get_gpu_engine(args):
+    """Return the active GPU engine name (``"torch"``, ``"cupy"``, or ``None``)."""
     args = args or {}
     if "GPU_engine" in args: return args["GPU_engine"]
     if importlib.util.find_spec("torch"): return "torch"
@@ -55,6 +63,7 @@ def get_gpu_engine(args):
 
 
 def calculate_sparse_LU_factor(M, args=None):
+    """Compute the sparse LU factorization of ``M`` via SuperLU."""
     assert sparse.issparse(M)
     logger.debug("calculate_sparse_LU_factor")
     LU = splu(M.tocsc())
@@ -62,6 +71,7 @@ def calculate_sparse_LU_factor(M, args=None):
 
 
 def calculate_LU_solve(LU, vec, args=None):
+    """Solve ``M x = vec`` given a pre-computed SuperLU factorization."""
     assert isinstance(vec, np.ndarray)
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     if vec.dtype != LU.L.dtype:
@@ -74,6 +84,7 @@ def calculate_LU_solve(LU, vec, args=None):
 
 
 def calculate_LU_logdet(LU, args=None):
+    """Return log|det M| from a SuperLU factorization via the U diagonal."""
     logger.debug("calculate_LU_logdet")
     upper_diag = abs(LU.U.diagonal())
     logdet = np.sum(np.log(upper_diag))
@@ -82,6 +93,7 @@ def calculate_LU_logdet(LU, args=None):
 
 
 def calculate_Chol_factor(M, compute_device="cpu", args=None):
+    """Return the lower-triangular Cholesky factor of the symmetric PD matrix ``M``."""
     assert isinstance(M, np.ndarray)
     args = args or {}
     if "Chol_factor_compute_device" in args: compute_device = args["Chol_factor_compute_device"]
@@ -110,6 +122,11 @@ def calculate_Chol_factor(M, compute_device="cpu", args=None):
 
 
 def update_Chol_factor(old_chol_factor, new_matrix, compute_device="cpu", args=None):
+    """Extend an existing Cholesky factor to cover ``new_matrix`` via rank-n update.
+
+    Note: ``compute_device`` is currently fixed to ``"cpu"`` regardless of the
+    argument; GPU support is not yet wired up for this wrapper.
+    """
     assert isinstance(new_matrix, np.ndarray)
     compute_device = "cpu"
     #if "update_Chol_factor_compute_device" in args: compute_device = args["update_Chol_factor_compute_device"]
@@ -122,6 +139,7 @@ def update_Chol_factor(old_chol_factor, new_matrix, compute_device="cpu", args=N
 
 
 def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
+    """Solve ``A x = vec`` given the lower-triangular Cholesky factor of ``A``."""
     assert isinstance(vec, np.ndarray)
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     if vec.dtype != factor.dtype:
@@ -158,6 +176,7 @@ def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
 
 
 def calculate_Chol_logdet(factor, compute_device="cpu", args=None):
+    """Return log|det A| = 2 * sum(log(diag(L))) from the Cholesky factor ``L``."""
     args = args or {}
     if "Chol_logdet_compute_device" in args: compute_device = args["Chol_logdet_compute_device"]
     logger.debug(f"calculate_Chol_logdet on {compute_device}")
@@ -182,10 +201,10 @@ def calculate_Chol_logdet(factor, compute_device="cpu", args=None):
 
 
 def spai(A, m, args=None):
+    """Sparse Approximate Inverse preconditioner via m-step SPAI iteration."""
     assert sparse.issparse(A)
     assert isinstance(m, int)
     logger.debug("spai preconditioning")
-    """Perform m step of the SPAI iteration."""
     n = A.shape[0]
 
     ident = identity(n, format='csr')
@@ -205,6 +224,7 @@ def spai(A, m, args=None):
 
 
 def calculate_random_logdet(KV, compute_device, args=None):
+    """Estimate log|det KV| for a sparse matrix via stochastic Lanczos quadrature (imate)."""
     assert sparse.issparse(KV)
     logger.debug("calculate_random_logdet")
     from imate import logdet as imate_logdet
@@ -233,6 +253,7 @@ def calculate_random_logdet(KV, compute_device, args=None):
 
 
 def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
+    """Solve the sparse symmetric system ``KV x = vec`` with MINRES."""
     assert sparse.issparse(KV)
     args = args or {}
     st = time.time()
@@ -254,6 +275,7 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
 
 
 def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
+    """Solve the sparse SPD system ``KV x = vec`` with conjugate gradients."""
     assert sparse.issparse(KV)
     args = args or {}
     st = time.time()
@@ -272,6 +294,7 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
 
 
 def calculate_sparse_solve(KV, vec, args=None):
+    """Solve the sparse system ``KV x = vec`` with a direct sparse solver."""
     assert sparse.issparse(KV)
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     st = time.time()
@@ -284,17 +307,32 @@ def calculate_sparse_solve(KV, vec, args=None):
 
 def cholesky_update_rank_1(L, b, c, compute_device="cpu", args=None):
     """
+    Extend a Cholesky factor by one row/column in O(n²).
+
+    Given the lower-triangular Cholesky factor ``L`` of ``A``, returns the
+    Cholesky factor of ``[[A, b], [b.T, c]]``.
 
     Parameters
     ----------
-    L matrix
-    b vector
-    c scalar
+    L : (n, n) ndarray
+        Lower-triangular Cholesky factor.
+    b : (n,) ndarray
+        Cross-covariance vector between existing and new point.
+    c : float
+        Variance of the new point.
+    compute_device : {"cpu", "gpu"}, optional
+    args : dict, optional
+        Extra options; ``"GPU_engine"`` selects ``"torch"`` or ``"cupy"``.
 
     Returns
     -------
-    updated Cholesky
+    L_prime : (n+1, n+1) ndarray
+        Updated lower-triangular Cholesky factor.
 
+    Raises
+    ------
+    NonPositiveDefiniteError
+        If the augmented matrix is not positive definite.
     """
     if compute_device == "cpu": L_prime = cholesky_update_rank_1_numpy(L, b, c)
     elif compute_device == "gpu":
@@ -310,17 +348,20 @@ def cholesky_update_rank_1(L, b, c, compute_device="cpu", args=None):
 
 def cholesky_update_rank_1_numpy(L, b, c, args=None):
     """
+    CPU (NumPy) implementation of :func:`cholesky_update_rank_1`.
 
     Parameters
     ----------
-    L matrix
-    b vector
-    c scalar
+    L : (n, n) ndarray
+        Lower-triangular Cholesky factor.
+    b : (n,) ndarray
+        Cross-covariance vector.
+    c : float
+        New-point variance.
 
     Returns
     -------
-    updated Cholesky
-
+    L_prime : (n+1, n+1) ndarray
     """
     # Solve Lv = b for v
     v = solve_triangular(L, b, lower=True, check_finite=False)
@@ -420,7 +461,7 @@ def cholesky_update_rank_1_cupy(L, b, c):   # pragma: no cover
 
 
 def cholesky_update_rank_n(L, b, c, compute_device="cpu", args=None):
-    # Solve Lv = b for v
+    """Extend ``L`` by ``b.shape[1]`` columns via sequential rank-1 Cholesky updates."""
     L_prime = L.copy()
     for i in range(b.shape[1]):
         L_prime = cholesky_update_rank_1(L_prime, np.append(b[:, i], c[0:i, i]), c[i, i], compute_device=compute_device)
@@ -428,6 +469,7 @@ def cholesky_update_rank_n(L, b, c, compute_device="cpu", args=None):
 
 
 def calculate_logdet(A, compute_device='cpu', args=None):
+    """Return log|det A| via ``numpy.linalg.slogdet`` (cpu) or ``torch.slogdet`` (gpu)."""
     logger.debug("calculate_logdet")
     if compute_device == "cpu":
         s, logdet = np.linalg.slogdet(A)
@@ -455,6 +497,7 @@ def calculate_logdet(A, compute_device='cpu', args=None):
 
 
 def update_logdet(old_logdet, old_inv, new_matrix, compute_device="cpu", args=None):
+    """Update log|det| after augmenting the matrix via the Schur complement identity."""
     logger.debug("update_logdet")
     size = len(old_inv)
     KV = new_matrix
@@ -466,6 +509,7 @@ def update_logdet(old_logdet, old_inv, new_matrix, compute_device="cpu", args=No
 
 
 def calculate_inv(A, compute_device='cpu', args=None):
+    """Return the inverse of square matrix ``A``."""
     assert isinstance(A, np.ndarray)
     assert np.ndim(A) == 2
     logger.debug("calculate_inv")
@@ -481,6 +525,7 @@ def calculate_inv(A, compute_device='cpu', args=None):
 
 
 def calculate_inv_from_chol(L, compute_device="cpu", args=None):
+    """Return A⁻¹ by solving A x = I using the pre-computed Cholesky factor ``L``."""
     logger.debug("calculate_inv_from_chol")
     if compute_device == "cpu": A_inv = cho_solve((L, True), np.eye(L.shape[0]))
     elif compute_device == "gpu": A_inv = calculate_Chol_solve(L, np.eye(L.shape[0]), compute_device="gpu")
@@ -489,6 +534,7 @@ def calculate_inv_from_chol(L, compute_device="cpu", args=None):
 
 
 def update_inv(old_inv, new_matrix, compute_device="cpu", args=None):
+    """Update A⁻¹ after augmenting the matrix via the block-matrix inversion lemma."""
     logger.debug("update_inv")
     size = len(old_inv)
     KV = new_matrix
@@ -502,6 +548,7 @@ def update_inv(old_inv, new_matrix, compute_device="cpu", args=None):
 
 
 def solve(A, b, compute_device='cpu', args=None):
+    """Solve ``A x = b``; falls back to least-squares if ``A`` is singular (cpu path)."""
     assert isinstance(A, np.ndarray)
     logger.debug("solve")
     if np.ndim(b) == 1: b = b.reshape(len(b), 1)
@@ -548,6 +595,7 @@ def solve(A, b, compute_device='cpu', args=None):
 
 
 def matmul(A, B, compute_device="cpu", args=None):
+    """Return ``A @ B``; sparse inputs are always computed on CPU."""
     if sparse.issparse(A) or sparse.issparse(B): compute_device = "cpu"
     logger.debug("matrix multiplication")
     if compute_device == "cpu":
@@ -574,6 +622,7 @@ def matmul(A, B, compute_device="cpu", args=None):
 
 
 def matmul3(A, B, C, compute_device="cpu", args=None):
+    """Return ``A @ B @ C``; sparse inputs are always computed on CPU."""
     if sparse.issparse(A) or sparse.issparse(B) or sparse.issparse(C): compute_device = "cpu"
     assert isinstance(A, np.ndarray)
     assert isinstance(B, np.ndarray)
@@ -607,6 +656,7 @@ def matmul3(A, B, C, compute_device="cpu", args=None):
 
 ##################################################################################
 def is_sparse(A):
+    """Return ``True`` if fewer than 1 % of elements in ``A`` are non-zero."""
     logger.debug("is_sparse")
     if float(np.count_nonzero(A)) / float(A.shape[0] * A.shape[1]) < 0.01:
         return True
@@ -615,5 +665,6 @@ def is_sparse(A):
 
 
 def how_sparse_is(A):
+    """Return the non-zero fraction of elements in ``A`` (0 = fully sparse, 1 = dense)."""
     logger.debug("how_sparse_is")
     return float(np.count_nonzero(A)) / float(A.shape[0] * A.shape[1])
