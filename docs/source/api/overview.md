@@ -1,4 +1,15 @@
-# Overview
+# API Reference
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+GP.md
+fvGP.md
+kernels.md
+gpMCMC.md
+logging.md
+```
 
 fvGP is an API for flexible HPC single and multi-task Gaussian processes over Euclidean and non-Euclidean (strings, molecules, materials) spaces.
 

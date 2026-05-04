@@ -34,6 +34,8 @@ html_theme = 'pydata_sphinx_theme'
 html_theme_options = {
     'logo': {'text': 'fvGP'},
     'github_url': 'https://github.com/lbl-camera/fvgp',
+    'navbar_start': ['navbar-logo'],
+    'navbar_center': ['navbar-nav'],
     'navbar_end': ['navbar-icon-links'],
     'secondary_sidebar_items': ['page-toc'],
     'footer_start': ['copyright'],
