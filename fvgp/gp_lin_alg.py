@@ -143,10 +143,11 @@ def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
             res = x.cpu().numpy()
         elif engine == "cupy":  # pragma: no cover
             import cupy as cp
+            from cupyx.scipy.linalg import solve_triangular as cp_solve_triangular
             L = cp.array(factor)
             b = cp.array(vec)
-            y = cp.linalg.solve_triangular(L, b, lower=True)
-            x = cp.linalg.solve_triangular(L.T, y, lower=False)
+            y = cp_solve_triangular(L, b, lower=True)
+            x = cp_solve_triangular(L.T, y, lower=False)
             res = cp.asnumpy(x)
         else: res = None
     else:
@@ -393,12 +394,13 @@ def cholesky_update_rank_1_cupy(L, b, c):   # pragma: no cover
     L_prime : (n+1, n+1) updated lower-triangular Cholesky factor
     """
     import cupy as cp
+    from cupyx.scipy.linalg import solve_triangular as cp_solve_triangular
     target = L.dtype
     L = cp.array(L)
     b = cp.array(np.asarray(b, dtype=target))
     c = np.asarray(c, dtype=target).item() if np.ndim(c) == 0 else np.asarray(c, dtype=target)
     # Solve L v = b
-    v = cp.linalg.solve_triangular(L, b[:, None], lower=True).squeeze(1)
+    v = cp_solve_triangular(L, b[:, None], lower=True).squeeze(1)
 
     # Compute d
     disc = c - cp.dot(v, v)
