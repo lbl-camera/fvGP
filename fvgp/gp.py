@@ -530,6 +530,9 @@ class GP:
               pop_size=20,
               tolerance=0.0001,
               max_iter=10000,
+              mcmc_prior=None,
+              mcmc_prop_distrs="normal",
+              mcmc_args={},
               local_optimizer="L-BFGS-B",
               global_optimizer="genetic",
               constraints=(),
@@ -583,6 +586,16 @@ class GP:
             Used as termination criterion for local optimizers. Default = 0.0001.
         max_iter : int, optional
             Maximum number of iterations for global and local optimizers. Default = 10000.
+        mcmc_prior : callable, optional
+            A function that defines the prior probability distribution for the MCMC sampler.
+            The form of the function is f(x, bounds, args) and returns a scalar.
+            The default is a uniform distribution within the `hyperparameter_bounds`. The `args` are the same as the `args` of the GP instance.
+        mcmc_prop_distrs : list of callables, optional
+            A list of functions that define the proposal distributions for the MCMC sampler. 
+            Each function should have the form f(x, para, obj) and return a vector of the same shape as x.
+            See `fvgp.ProposalDistributions` in the documentation for more information.
+        mcmc_args : dict, optional
+            A dictionary of additional arguments for the MCMC sampler. The default is an empty dictionary.
         local_optimizer : str, optional
             Defining the local optimizer. Default = `L-BFGS-B`, most `scipy.optimize.minimize`
             functions are permissible.
@@ -599,36 +612,38 @@ class GP:
             If other information is needed please utilize `logger` as described in the online
             documentation (separately for HGDL and fvgp if needed).
         asynchronous : bool, optional
-            Method `hgdl` allows for asynchronous execution. In that case, an object will
-            be returned that can be queried for an intermediate or final solution.
+            When True, submit the training job and return immediately with an optimizer
+            proxy object. Supported for ``method='hgdl'``, ``'mcmc'``, and ``'adam'``.
+            Call ``get_latest()`` on the returned object to poll intermediate results,
+            and pass it to :py:meth:`update_hyperparameters` to apply them.
 
-
-        Return
-        ------
+        Returns
+        -------
         optimized hyperparameters (only fyi, gp is already updated) : np.ndarray
         """
+        #gp2Scale checks
         if self.gp2Scale and asynchronous:  # pragma: no cover
             asynchronous = False
             warnings.warn("gp2Scale does not allow asynchronous training! `asynchronous` set to False")
-        if asynchronous and method != "hgdl":  # pragma: no cover
-            warnings.warn("Asynchronous execution is currently only supported for method=`hgdl`. Method switched!")
-            #asynchronous = False
-            method = "hgdl"
-
-        if self.gp2Scale:
+        if self.gp2Scale and method != 'mcmc':  # pragma: no cover
             warnings.warn("gp2Scale enabled. Method switched to MCMC!")
             method = 'mcmc'
-        if method == "hgdl" and dask_client is None: raise Exception("Please provide a dask_client for method =`hgdl`")
-        if (method == "hgdl" or method == "mcmc") and asynchronous and dask_client is None:
+
+        #async checks
+        _async_methods = {"hgdl", "mcmc", "adam"}
+        if asynchronous and method not in _async_methods:  # pragma: no cover
+            warnings.warn(f"Asynchronous execution is not supported for method=`{method}`. "
+                          f"Supported async methods: {sorted(_async_methods)}. `asynchronous` set to False.")
+            asynchronous = False
+        if method in _async_methods and asynchronous and dask_client is None:
             raise Exception("Please provide a dask_client for asynchronous training")   # pragma: no cover
-        if method != "hgdl" and method != "mcmc" and asynchronous:
-            warnings.warn("Method not `hgdl` or `mcmc`. Asynchronous=True ignored")   # pragma: no cover
+        
+        #hyperparameter bounds and init checks
         if hyperparameter_bounds is None:
             hyperparameter_bounds = self._get_default_hyperparameter_bounds()
             warnings.warn("Default hyperparameter_bounds initialized because none were provided. "
                           "This will fail for custom kernel,"
                           " mean, or noise functions")
-
         if init_hyperparameters is None:
             if out_of_bounds(self.hyperparameters, hyperparameter_bounds):
                 init_hyperparameters = np.random.uniform(low=hyperparameter_bounds[:, 0],
@@ -643,13 +658,18 @@ class GP:
                                                          high=hyperparameter_bounds[:, 1],
                                                          size=len(hyperparameter_bounds))
 
-        if objective_function is not None and method == 'mcmc':
-            warnings.warn("MCMC will ignore the user-defined objective function")
-        if objective_function is not None and objective_function_gradient is None and (method == 'local' or method == 'hgdl'):
-            raise Exception("For user-defined objective functions and local or hybrid optimization, a gradient and \
-                             Hessian function of the objective function have to be defined.")
-        if method == 'mcmc': objective_function = self.marginal_likelihood.log_likelihood
-        if objective_function is None: objective_function = self.marginal_likelihood.neg_log_likelihood
+        #objective function checks
+        user_provided_obj = objective_function is not None
+        if method == 'mcmc':
+            if user_provided_obj:
+                warnings.warn("MCMC always optimizes the log marginal likelihood; "
+                              "the user-defined objective_function is ignored.")
+            objective_function = self.marginal_likelihood.log_likelihood
+        elif objective_function is None:
+            objective_function = self.marginal_likelihood.neg_log_likelihood
+        if user_provided_obj and objective_function_gradient is None and method in ('local', 'hgdl'):
+            raise Exception("A gradient (and Hessian) of the objective function must be provided "
+                            "for method='local' or method='hgdl'.")
         if objective_function_gradient is None:
             objective_function_gradient = self.marginal_likelihood.neg_log_likelihood_gradient
         if objective_function_hessian is None:
@@ -669,6 +689,9 @@ class GP:
                 pop_size=pop_size,
                 tolerance=tolerance,
                 max_iter=max_iter,
+                mcmc_prior=mcmc_prior,
+                mcmc_prop_distrs=mcmc_prop_distrs,
+                mcmc_args=mcmc_args,
                 local_optimizer=local_optimizer,
                 global_optimizer=global_optimizer,
                 constraints=constraints,
@@ -677,24 +700,26 @@ class GP:
             self.set_hyperparameters(hyperparameters)
             return hyperparameters
         else:
-            if method == "mcmc":  # pragma: no cover
-                raise Exception("Asynchronous MCMC not yet implemented. Use method=`hgdl`")
-            elif method == 'hgdl':
-                opt_obj = self.trainer.hgdl_async(
-                    objective_function=objective_function,
-                    objective_function_gradient=objective_function_gradient,
-                    objective_function_hessian=objective_function_hessian,
-                    hyperparameter_bounds=hyperparameter_bounds,
-                    init_hyperparameters=init_hyperparameters,
-                    max_iter=max_iter,
-                    local_optimizer=local_optimizer,
-                    global_optimizer=global_optimizer,
-                    constraints=constraints,
-                    dask_client=dask_client
-                )
-                return opt_obj
-            else:  # pragma: no cover
-                raise Exception("Asynchronous training only available for `hgdl` method")
+            opt_obj = self.trainer.train_async(
+                dask_client,
+                objective_function=objective_function,
+                objective_function_gradient=objective_function_gradient,
+                objective_function_hessian=objective_function_hessian,
+                hyperparameter_bounds=hyperparameter_bounds,
+                init_hyperparameters=init_hyperparameters,
+                method=method,
+                pop_size=pop_size,
+                tolerance=tolerance,
+                max_iter=max_iter,
+                mcmc_prior=mcmc_prior,
+                mcmc_prop_distrs=mcmc_prop_distrs,
+                mcmc_args=mcmc_args,
+                local_optimizer=local_optimizer,
+                global_optimizer=global_optimizer,
+                constraints=constraints,
+                info=info,
+            )
+            return opt_obj
 
     ##################################################################################
     def stop_training(self, opt_obj):
@@ -705,7 +730,7 @@ class GP:
         Parameters
         ----------
         opt_obj : object instance
-            Object created by :py:meth:`train(asynchronous=True)`.
+            Object created by `train(asynchronous=True)`.
         """
         self.trainer.stop_training(opt_obj)
 
@@ -718,7 +743,7 @@ class GP:
         Parameters
         ----------
         opt_obj : object instance
-            Object created by :py:meth:`train(asynchronous=True)`.
+            Object created by `train(asynchronous=True)`.
         """
         self.trainer.kill_client(opt_obj)
 

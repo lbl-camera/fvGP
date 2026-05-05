@@ -595,24 +595,20 @@ def test_gp2Scale(client):
     def in_bounds(v,bounds):
         if any(v<bounds[:,0]) or any(v>bounds[:,1]): return False
         return True
-    def prior_function(theta,args):
-        bounds = args["bounds"]
-        if in_bounds(theta, bounds): 
+    def prior_function(theta, bounds, args):
+        if in_bounds(theta, bounds):
             return 0. + np.sum(np.log(theta)/2.)
-        else: 
+        else:
             return -np.inf
-    pd = ProposalDistribution([0,1] ,proposal_dist=proposal_distribution,
-                            init_prop_Sigma = init_s, adapt_callable="normal")
+    pd = ProposalDistribution([0,1], proposal_dist=proposal_distribution,
+                              init_prop_Sigma=init_s, adapt_callable="normal")
 
-
-
-
-    my_mcmc = gpMCMC(obj_func, prior_function, [pd],
-                    args={"bounds":hps_bounds})
+    my_mcmc = gpMCMC(obj_func, bounds=hps_bounds, prior_function=prior_function,
+                     proposal_distributions=[pd])
 
     hps = np.random.uniform(
-                            low = hps_bounds[:,0], 
-                            high = hps_bounds[:,1], 
+                            low = hps_bounds[:,0],
+                            high = hps_bounds[:,1],
                             size = len(hps_bounds))
     mcmc_result = my_mcmc.run_mcmc(x0=hps, n_updates=10, break_condition="default")
     my_gp2S.set_hyperparameters(mcmc_result["x"][-1])
@@ -620,17 +616,15 @@ def test_gp2Scale(client):
     x_pred = np.linspace(0,1,100)
     mean1 = my_gp2S.posterior_mean(x_pred.reshape(-1,1))["m(x)"]
     var1 =  my_gp2S.posterior_covariance(x_pred.reshape(-1,1))["v(x)"]
-    
-    pd = ProposalDistribution([0,1], init_prop_Sigma = init_s, adapt_callable = "normal")
-    my_mcmc = gpMCMC(obj_func, prior_function, [pd],
-                    args={"bounds":hps_bounds})
 
+    pd = ProposalDistribution([0,1], init_prop_Sigma=init_s, adapt_callable="normal")
+    my_mcmc = gpMCMC(obj_func, bounds=hps_bounds, prior_function=prior_function,
+                     proposal_distributions=[pd])
     mcmc_result = my_mcmc.run_mcmc(x0=hps, n_updates=20, break_condition="default")
-    
-    pd = ProposalDistribution([0,1], init_prop_Sigma = init_s, adapt_callable = "normal")
-    my_mcmc = gpMCMC(obj_func, prior_function, [pd],
-                    args={"bounds":hps_bounds})
 
+    pd = ProposalDistribution([0,1], init_prop_Sigma=init_s, adapt_callable="normal")
+    my_mcmc = gpMCMC(obj_func, bounds=hps_bounds, prior_function=prior_function,
+                     proposal_distributions=[pd])
     mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
 
 
@@ -770,4 +764,77 @@ def test_pickle():
     assert is_pickle_equal(my_gpo.data)
     assert is_pickle_equal(my_gpo.marginal_likelihood.KVlinalg)
 
+
+def test_gpMCMC():
+    """Test the gpMCMC class directly with the new API (bounds explicit, not via args)."""
+    from fvgp import gpMCMC, ProposalDistribution
+
+    bounds = np.array([[0.01, 5.], [0.01, 5.]])
+    hps = np.array([1., 1.])
+
+    def log_likelihood(hps, args):
+        return -0.5 * np.sum(hps ** 2)
+
+    # Default uniform prior (only bounds, no prior_function)
+    my_mcmc = gpMCMC(log_likelihood, bounds=bounds)
+    res = my_mcmc.run_mcmc(x0=hps, n_updates=20, break_condition=None)
+    assert "median(x)" in res
+    assert res["median(x)"].shape == hps.shape
+
+    # Default break condition
+    my_mcmc = gpMCMC(log_likelihood, bounds=bounds)
+    res = my_mcmc.run_mcmc(x0=hps, n_updates=20, break_condition="default")
+    assert "median(x)" in res
+
+    # Custom prior_function with new signature (theta, bounds, args)
+    def custom_prior(theta, bounds, args):
+        if np.all((theta >= bounds[:, 0]) & (theta <= bounds[:, 1])):
+            return 0.
+        return -np.inf
+
+    my_mcmc = gpMCMC(log_likelihood, bounds=bounds, prior_function=custom_prior)
+    res = my_mcmc.run_mcmc(x0=hps, n_updates=20, break_condition=None)
+    assert "median(x)" in res
+
+    # Custom proposal distribution
+    init_s = np.diag((bounds[:, 1] - bounds[:, 0]) * 0.1) ** 2
+    pd = ProposalDistribution([0, 1], init_prop_Sigma=init_s, adapt_callable="normal")
+    my_mcmc = gpMCMC(log_likelihood, bounds=bounds, prior_function=custom_prior,
+                     proposal_distributions=[pd])
+    res = my_mcmc.run_mcmc(x0=hps, n_updates=30, break_condition=None)
+    assert "x" in res and len(res["x"]) > 1
+
+    # Callable break condition
+    def stop_early(obj):
+        return len(obj.trace["f(x)"]) >= 5
+
+    my_mcmc = gpMCMC(log_likelihood, bounds=bounds)
+    res = my_mcmc.run_mcmc(x0=hps, n_updates=100, break_condition=stop_early)
+    assert len(res["f(x)"]) <= 6   # stopped early
+
+
+def test_train_async_mcmc(client):
+    """Async MCMC training: submit, poll, stop."""
+    my_gp = GP(x_data, y_data, init_hyperparameters=np.array([1., 1., 1., 1., 1., 1.]),
+               noise_variances=np.zeros(y_data.shape) + 0.01)
+    bounds = np.array([[0.01, 10.]] * 6)
+    opt_obj = my_gp.train(hyperparameter_bounds=bounds, max_iter=200,
+                          dask_client=client, method="mcmc", asynchronous=True)
+    time.sleep(4)
+    my_gp.update_hyperparameters(opt_obj)
+    my_gp.stop_training(opt_obj)
+    assert my_gp.hyperparameters.shape == (6,)
+
+
+def test_train_async_adam(client):
+    """Async Adam training: submit, poll, stop."""
+    my_gp = GP(x_data, y_data, init_hyperparameters=np.array([1., 1., 1., 1., 1., 1.]),
+               noise_variances=np.zeros(y_data.shape) + 0.01)
+    bounds = np.array([[0.01, 10.]] * 6)
+    opt_obj = my_gp.train(hyperparameter_bounds=bounds, max_iter=50,
+                          dask_client=client, method="adam", asynchronous=True)
+    time.sleep(3)
+    my_gp.update_hyperparameters(opt_obj)
+    my_gp.stop_training(opt_obj)
+    assert my_gp.hyperparameters.shape == (6,)
 

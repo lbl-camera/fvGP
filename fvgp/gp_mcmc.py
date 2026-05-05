@@ -44,11 +44,15 @@ class gpMCMC:
     ----------
     log_likelihood_function : callable
         The log of the likelihood to be sampled. Function of the form def likelihood(x,args) that returns a scalar.
-    prior_function : callable
-        Function to query for the prior probability of form: func(x, obj), where
-        x is the current vector and obj is this gpMCMC object instance.
-    proposal_distributions : iterable
-        A list of object instances of ProposalDistribution.
+    bounds : np.ndarray, optional
+        The bounds of the domain. Only used if the default uniform prior is used.
+        The default is None, which means no bounds and thus a uniform prior over the whole space.
+    prior_function : callable, optional
+        Function to query for the prior probability of form: func(x, bounds, args), where
+        x is the current vector and bounds is the bounds array. The default is a uniform prior within `bounds`.
+        In that case, bounds have to be provided.
+    proposal_distributions : iterable, optional
+        A list of object instances of ProposalDistribution. The default is a single normal distribution with the default `init_prop_Sigma`.
     args : Any, optional
         Arguments that will be communicated to all Callables.
 
@@ -62,14 +66,22 @@ class gpMCMC:
 
     def __init__(self,
                  log_likelihood_function,
-                 prior_function,
-                 proposal_distributions=None,
+                 bounds=None,
+                 prior_function=None,
+                 proposal_distributions="normal",
                  args=None
                  ):
         self.log_likelihood_function = log_likelihood_function
-        self.prior_function = prior_function
-        if proposal_distributions is None:
-            bounds = args["bounds"]
+        assert bounds is not None or prior_function is not None, \
+            "Provide either bounds (for the default uniform prior) or a prior_function."
+        if prior_function is None:
+            self.prior_function = lambda theta, b, _: 0. if np.all(
+                (theta >= b[:, 0]) & (theta <= b[:, 1])) else -np.inf
+        else:
+            self.prior_function = prior_function
+        if proposal_distributions == "normal":
+            assert bounds is not None, \
+                "bounds must be provided to initialize the default normal proposal distribution."
             domain_size = bounds[:, 1] - bounds[:, 0]
             std_diag = domain_size * 0.2 / np.sqrt(12)
             proposal_distributions = [ProposalDistribution(np.arange(len(bounds)),
@@ -77,6 +89,7 @@ class gpMCMC:
         self.proposal_distributions = proposal_distributions
 
         self.args = args
+        self.bounds = bounds
         self.trace = None
         self.mcmc_info = {}
 
@@ -120,6 +133,7 @@ class gpMCMC:
         #break condition
         if break_condition is None: break_condition = lambda a: False
         elif break_condition == "default": break_condition = self._default_break_condition
+        elif callable(break_condition): pass
         else: raise Exception("No valid input for break condition provided!")
         if run_in_every_iteration is None: run_in_every_iteration = lambda a: False
 
@@ -132,7 +146,7 @@ class gpMCMC:
         likelihood = self.log_likelihood_function(x, self.args)
 
         if info: print("Starting likelihood. f(x)= ", likelihood)
-        prior = self.prior_function(x, self.args)
+        prior = self.prior_function(x, self.bounds, self.args)
 
         #########################################################
         # Begin main loop
@@ -186,7 +200,7 @@ class gpMCMC:
         # get proposed x (x_star)
         x_star[obj.indices] = obj.proposal_dist(x_old[obj.indices].copy(), x_old, obj)
         # evaluate prior(x_star)
-        prior_evaluation_x_star = self.prior_function(x_star, self.args)
+        prior_evaluation_x_star = self.prior_function(x_star, self.bounds, self.args)
         jump_trace = 0.
 
         # if prior(x_start) is not -inf, get likelihood
@@ -242,7 +256,7 @@ class ProposalDistribution:
             A callable to calculate the proposal distribution evaluation.
             It is defined as `def name(x, para, obj)`, where `obj` is a `proposal_distribution`
             object instance. The function should return a new proposal for `x`.
-            para are all other parameters. Default is a normal distribution with the default
+            `para` are all other parameters. Default is a normal distribution with the default
             `init_prop_sigma`.
         init_prop_Sigma : np.ndarray, optional
             If the proposal distribution is normal this is the covariance of the initial proposal distribution.
@@ -261,7 +275,7 @@ class ProposalDistribution:
         auto_accept : bool, optional
             Indicates whether to auto-accept the jump.
         prop_args : Any, optional
-            Arguments that will be available as obj attribute in `proposal_dist`and `adapt_callable`.
+            Arguments that will be available as obj attribute in `proposal_dist` and `adapt_callable`.
         """
 
         self.indices = indices

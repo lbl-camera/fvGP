@@ -5,6 +5,7 @@ from scipy.optimize import differential_evolution
 from hgdl.hgdl import HGDL
 from scipy.optimize import minimize
 from .gp_mcmc import *
+from .gp_actor import _MCMCActor, _AdamActor, AsyncOptimizer
 warnings.simplefilter("once", UserWarning)
 
 
@@ -35,6 +36,9 @@ class GPtraining:
               local_optimizer="L-BFGS-B",
               global_optimizer="genetic",
               constraints=(),
+              mcmc_prior=None,
+              mcmc_prop_distrs="normal",
+              mcmc_args={},
               dask_client=None,
               info=False):
 
@@ -44,25 +48,176 @@ class GPtraining:
         providing a dask client. However, in that case fvgp.GP.hgdl_async() is preferred.
         The GP prior will automatically be updated with the new hyperparameters after the training.
         """
-        hyperparameters = self._optimize_log_likelihood(
-            objective_function,
-            objective_function_gradient,
-            objective_function_hessian,
-            init_hyperparameters,
-            hyperparameter_bounds,
-            method,
-            max_iter,
-            pop_size,
-            tolerance,
-            constraints,
-            local_optimizer,
-            global_optimizer,
-            dask_client,
-            info
-        )
-        assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1, "hps="+str(hyperparameters)
-        self.hyperparameters = hyperparameters
+        if not self._in_bounds(init_hyperparameters, hyperparameter_bounds):
+            raise Exception("Starting positions outside of optimization bounds.", init_hyperparameters, hyperparameter_bounds)
+
+        ############################
+        ####global optimization:##
+        ############################
+        if method == "global":
+            logger.debug(
+                "fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
+            logger.debug("maximum number of iterations: {}", max_iter)
+            logger.debug("termination tolerance: {}", tolerance)
+            logger.debug("bounds: {}", hyperparameter_bounds)
+            res = differential_evolution(
+                objective_function,
+                hyperparameter_bounds,
+                maxiter=max_iter,
+                popsize=pop_size,
+                tol=tolerance,
+                disp=info,
+                polish=False,
+                x0=init_hyperparameters.reshape(1, -1),
+                constraints=constraints,
+                workers=1,
+            )
+            hyperparameters = np.array(res["x"])
+            logger.debug(f"fvGP found hyperparameters {hyperparameters} with objective function eval {res['fun']} \
+            via global optimization")
+        ############################
+        ####local optimization:#####
+        ############################
+        elif method == "local":
+            logger.debug("fvGP is performing a local update of the hyper parameters.")
+            logger.debug("starting hyperparameters: {}", init_hyperparameters)
+            logger.debug("Attempting a BFGS optimization.")
+            logger.debug("maximum number of iterations: {}", max_iter)
+            logger.debug("termination tolerance: {}", tolerance)
+            logger.debug("bounds: {}", hyperparameter_bounds)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                OptimumEvaluation = minimize(
+                    objective_function,
+                    init_hyperparameters,
+                    method=local_optimizer,
+                    jac=objective_function_gradient,
+                    hess=objective_function_hessian,
+                    bounds=hyperparameter_bounds,
+                    tol=tolerance,
+                    callback=None,
+                    constraints=constraints,
+                    options={"maxiter": max_iter})
+
+            if OptimumEvaluation["success"]:
+                logger.debug(f"fvGP local optimization successfully concluded with result: "
+                             f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
+            else:
+                logger.debug("fvGP local optimization not successful.")
+            hyperparameters = OptimumEvaluation["x"]
+        ############################
+        ####hybrid optimization:####
+        ############################
+        elif method == "hgdl":
+            logger.debug("fvGP submitted HGDL optimization")
+            logger.debug("starting hyperparameters: {}", init_hyperparameters)
+            logger.debug('bounds are {}', hyperparameter_bounds)
+
+            opt_obj = HGDL(objective_function,
+                           objective_function_gradient,
+                           hyperparameter_bounds,
+                           hess=objective_function_hessian,
+                           local_optimizer=local_optimizer,
+                           global_optimizer=global_optimizer,
+                           num_epochs=max_iter,
+                           constraints=constraints)
+
+            opt_obj.optimize(dask_client=dask_client, x0=init_hyperparameters.reshape(1, -1))
+            try:
+                hyperparameters = opt_obj.get_final()[0]["x"]
+            except Exception as ex:
+                raise Exception("Something has gone wrong with the objective function evaluation.") from ex
+
+        elif method == "mcmc":
+            logger.debug("MCMC started in fvGP")
+            logger.debug('bounds are {}', hyperparameter_bounds)
+
+            def prior_function(theta, bounds, args):
+                if self._in_bounds(theta, bounds): return 0.
+                else: return -np.inf
+
+            def likelihood_func(hps, args):
+                return objective_function(hps)
+    
+            if mcmc_prior is not None: prior_function = mcmc_prior
+
+            myMCMC = gpMCMC(likelihood_func, prior_function=prior_function, proposal_distributions=mcmc_prop_distrs , bounds=hyperparameter_bounds, args=mcmc_args)
+            res = myMCMC.run_mcmc(x0=init_hyperparameters, n_updates=max_iter, info=info, break_condition="default")
+            hyperparameters = res["median(x)"]
+            self.mcmc_info = res
+        elif method == "adam":
+            hyperparameters, history = self.adam_optimize(objective_function,
+                                                          objective_function_gradient,
+                                                          init_hyperparameters, max_iter=max_iter)
+        elif callable(method): hyperparameters = method(self)
+        else: raise ValueError("No optimization mode specified in fvGP")
+        assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1, \
+            "Optimizer returned invalid hyperparameters: " + str(hyperparameters)
         return hyperparameters
+    
+    def train_async(self,
+              dask_client,
+              objective_function=None,
+              objective_function_gradient=None,
+              objective_function_hessian=None,
+              hyperparameter_bounds=None,
+              init_hyperparameters=None,
+              method="global",
+              pop_size=20,
+              tolerance=0.0001,
+              max_iter=120,
+              local_optimizer="L-BFGS-B",
+              global_optimizer="genetic",
+              constraints=(),
+              mcmc_prior=None,
+              mcmc_prop_distrs="normal",
+              mcmc_args={},
+              info=False):
+
+        """
+        Submit an asynchronous training run and return an optimizer proxy.
+
+        Supports ``method='hgdl'``, ``'mcmc'``, and ``'adam'``. The returned object
+        can be polled with ``get_latest()`` and stopped with ``stop()``.
+        Pass the returned object to ``GP.update_hyperparameters()`` to pull the
+        latest result into the GP.
+        """
+        assert method == "hgdl" or method == "mcmc" or method == "adam", \
+            "Asynchronous training only supported for hgdl, mcmc, adam; got method=" + str(method)
+        if method == 'hgdl':
+            opt_obj = self.hgdl_async(
+                objective_function=objective_function,
+                objective_function_gradient=objective_function_gradient,
+                objective_function_hessian=objective_function_hessian,
+                hyperparameter_bounds=hyperparameter_bounds,
+                init_hyperparameters=init_hyperparameters,
+                max_iter=max_iter,
+                local_optimizer=local_optimizer,
+                global_optimizer=global_optimizer,
+                constraints=constraints,
+                dask_client=dask_client,
+            )
+        elif method == 'mcmc':
+            opt_obj = self.mcmc_async(
+                objective_function=objective_function,
+                hyperparameter_bounds=hyperparameter_bounds,
+                mcmc_prior=mcmc_prior,
+                mcmc_prop_distrs=mcmc_prop_distrs,
+                init_hyperparameters=init_hyperparameters,
+                max_iter=max_iter,
+                info=info,
+                mcmc_args=mcmc_args,
+                dask_client=dask_client,
+            )
+        elif method == 'adam':
+            opt_obj = self.adam_async(
+                objective_function=objective_function,
+                objective_function_gradient=objective_function_gradient,
+                init_hyperparameters=init_hyperparameters,
+                max_iter=max_iter,
+                dask_client=dask_client,
+            )
+        return opt_obj
 
     ##################################################################################
     def hgdl_async(self,
@@ -98,15 +253,128 @@ class GPtraining:
         return opt_obj
 
     ##################################################################################
-    @staticmethod
-    def stop_training(opt_obj):
+    def mcmc_async(self,
+                   objective_function,
+                   hyperparameter_bounds,
+                   mcmc_prior,
+                   mcmc_prop_distrs,
+                   init_hyperparameters,
+                   max_iter,
+                   info,
+                   mcmc_args,
+                   dask_client=None):
         """
-        This function stops the training if HGDL is used. It leaves the dask client alive.
+        Submit an asynchronous MCMC run to a Dask worker and return an :py:class:`AsyncOptimizer` proxy.
 
         Parameters
         ----------
-        opt_obj : HGDL object instance
-            HGDL object instance returned by `fvgp.GP.hgdl_async()`
+        objective_function : callable
+            Log-likelihood function ``f(hps) -> float``.
+        hyperparameter_bounds : np.ndarray
+            Bounds of shape (N, 2).
+        mcmc_prior : callable or None
+            Optional prior function ``p(hps) -> float``. If None, a uniform prior.
+        mcmc_prop_distrs : list of callables or str
+            A list of functions that define the proposal distributions for the MCMC sampler. 
+            Each function should have the form f(x, para, obj) and return a vector of the same shape as x.
+            See `fvgp.ProposalDistributions` in the documentation.
+        init_hyperparameters : np.ndarray
+            Starting hyperparameters of shape (N,).
+        max_iter : int
+            Maximum number of MCMC steps. Default is 10000.
+        info : bool
+            Print progress every 10 iterations. Default is False.
+        mcmc_args : dict
+            A dictionary of additional arguments for the MCMC sampler. The default is an empty dictionary.
+        dask_client : distributed.Client
+            Dask client used to host the actor on a worker.
+
+        Returns
+        -------
+        opt_obj : AsyncOptimizer
+            Proxy with ``get_latest()`` and ``stop()`` methods.
+        """
+
+        def prior_function(theta, bounds, args):
+            if self._in_bounds(theta, bounds): return 0.
+            else: return -np.inf
+
+        def likelihood_func(hps, args):
+            return objective_function(hps)
+
+        if mcmc_prior is not None: prior_function = mcmc_prior
+
+        actor_future = dask_client.submit(
+            _MCMCActor,
+            likelihood_func,
+            hyperparameter_bounds,
+            prior_function,
+            mcmc_prop_distrs,
+            mcmc_args,
+            init_hyperparameters,
+            max_iter,
+            info,
+            actor=True,
+        )
+        actor = actor_future.result()
+        actor.start()
+        return AsyncOptimizer(actor)
+
+    ##################################################################################
+    def adam_async(self,
+                   objective_function,
+                   objective_function_gradient,
+                   init_hyperparameters,
+                   max_iter=1000,
+                   dask_client=None):
+        """
+        Submit an asynchronous Adam run to a Dask worker and return an :py:class:`AsyncOptimizer` proxy.
+
+        Parameters
+        ----------
+        objective_function : callable
+            Negative log-likelihood ``f(hps) -> float``.
+        objective_function_gradient : callable
+            Gradient ``g(hps) -> np.ndarray`` of shape (N,).
+        init_hyperparameters : np.ndarray
+            Starting hyperparameters of shape (N,).
+        max_iter : int, optional
+            Maximum number of Adam steps. Default is 1000.
+        dask_client : distributed.Client
+            Dask client used to host the actor on a worker.
+
+        Returns
+        -------
+        opt_obj : AsyncOptimizer
+            Proxy with ``get_latest()`` and ``stop()`` methods.
+        """
+        actor_future = dask_client.submit(
+            _AdamActor,
+            objective_function,
+            objective_function_gradient,
+            init_hyperparameters,
+            1e-2,    # lr
+            0.9,     # beta1
+            0.999,   # beta2
+            1e-8,    # eps
+            max_iter,
+            1e-6,    # tol
+            actor=True,
+        )
+        actor = actor_future.result()
+        actor.start()
+        return AsyncOptimizer(actor)
+
+    ##################################################################################
+    @staticmethod
+    def stop_training(opt_obj):
+        """
+        Stop an asynchronous training run, leaving the Dask client alive.
+
+        Parameters
+        ----------
+        opt_obj : object
+            Object returned by :py:meth:`train_async`.
         """
         try:
             opt_obj.cancel_tasks()
@@ -119,12 +387,12 @@ class GPtraining:
     @staticmethod
     def kill_client(opt_obj):
         """
-        This function stops the training if HGDL is used, and kills the dask client.
+        Stop an asynchronous training run and shut down its Dask client.
 
         Parameters
         ----------
-        opt_obj : HGDL object instance
-            HGDL object instance returned by `fvgp.GP.hgdl_async()`
+        opt_obj : object
+            Object returned by :py:meth:`train_async`.
         """
 
         try:
@@ -135,20 +403,17 @@ class GPtraining:
 
     def update_hyperparameters(self, opt_obj):
         """
-        This function asynchronously finds the maximum of the marginal log_likelihood and therefore trains the GP.
-        This can be done on a remote cluster/computer by
-        providing a dask client. This function just submits the training and returns
-        an object which can be given to `fvgp.GP.update_hyperparameters()`, which will automatically
-        update the GP prior with the new hyperparameters.
+        Pull the latest hyperparameters from a running asynchronous optimizer.
 
         Parameters
         ----------
-        opt_obj : HGDL object instance
-            HGDL object instance returned by `fvgp.GP.hgdl_async()`
+        opt_obj : object
+            Object returned by :py:meth:`train_async` (HGDL, MCMC, or Adam).
 
-        Return
-        ------
-        The current hyperparameters : np.ndarray
+        Returns
+        -------
+        hyperparameters : np.ndarray
+            The latest hyperparameter vector from the running optimizer.
         """
         try:
             opt_list = opt_obj.get_latest()
@@ -162,8 +427,12 @@ class GPtraining:
             warnings.warn("Hyperparameter update not successful len(optima list) = 0", UserWarning, stacklevel=2)
             return self.hyperparameters
         else:   # pragma: no cover
-            if isinstance(opt_list, list): updated_hyperparameters = opt_obj.get_latest()[0]["x"]
-            elif isinstance(opt_list, dict): updated_hyperparameters = opt_obj.get_latest().result()["median(x)"]
+            if isinstance(opt_list, list):
+                updated_hyperparameters = opt_list[0]["x"]
+            elif isinstance(opt_list, dict):
+                if "median(x)" in opt_list: updated_hyperparameters = opt_list["median(x)"]
+                elif "x" in opt_list: updated_hyperparameters = opt_list["x"]
+                else: raise Exception("Reading the `updated_hyperparameters` was not successful", opt_list)
             else: raise Exception("Reading the `updated_hyperparameters` was not successful", opt_list)
             assert isinstance(updated_hyperparameters, np.ndarray) and np.ndim(updated_hyperparameters) == 1
             self.hyperparameters = updated_hyperparameters
@@ -199,127 +468,6 @@ class GPtraining:
         logger.debug("optimize() called")
         return opt_obj
 
-    ##################################################################################
-    def _optimize_log_likelihood(self,
-                                 objective_function,
-                                 objective_function_gradient,
-                                 objective_function_hessian,
-                                 starting_hps,
-                                 hp_bounds,
-                                 method,
-                                 max_iter,
-                                 pop_size,
-                                 tolerance,
-                                 constraints,
-                                 local_optimizer,
-                                 global_optimizer,
-                                 dask_client,
-                                 info):
-
-        if not self._in_bounds(starting_hps, hp_bounds):
-            raise Exception("Starting positions outside of optimization bounds.", starting_hps, hp_bounds)
-
-        ############################
-        ####global optimization:##
-        ############################
-        if method == "global":
-            logger.debug(
-                "fvGP is performing a global differential evolution algorithm to find the optimal hyperparameters.")
-            logger.debug("maximum number of iterations: {}", max_iter)
-            logger.debug("termination tolerance: {}", tolerance)
-            logger.debug("bounds: {}", hp_bounds)
-            res = differential_evolution(
-                objective_function,
-                hp_bounds,
-                maxiter=max_iter,
-                popsize=pop_size,
-                tol=tolerance,
-                disp=info,
-                polish=False,
-                x0=starting_hps.reshape(1, -1),
-                constraints=constraints,
-                workers=1,
-            )
-            hyperparameters = np.array(res["x"])
-            logger.debug(f"fvGP found hyperparameters {hyperparameters} with objective function eval {res['fun']} \
-            via global optimization")
-        ############################
-        ####local optimization:#####
-        ############################
-        elif method == "local":
-            logger.debug("fvGP is performing a local update of the hyper parameters.")
-            logger.debug("starting hyperparameters: {}", starting_hps)
-            logger.debug("Attempting a BFGS optimization.")
-            logger.debug("maximum number of iterations: {}", max_iter)
-            logger.debug("termination tolerance: {}", tolerance)
-            logger.debug("bounds: {}", hp_bounds)
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                OptimumEvaluation = minimize(
-                    objective_function,
-                    starting_hps,
-                    method=local_optimizer,
-                    jac=objective_function_gradient,
-                    hess=objective_function_hessian,
-                    bounds=hp_bounds,
-                    tol=tolerance,
-                    callback=None,
-                    constraints=constraints,
-                    options={"maxiter": max_iter})
-
-            if OptimumEvaluation["success"]:
-                logger.debug(f"fvGP local optimization successfully concluded with result: "
-                             f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
-            else:
-                logger.debug("fvGP local optimization not successful.")
-            hyperparameters = OptimumEvaluation["x"]
-        ############################
-        ####hybrid optimization:####
-        ############################
-        elif method == "hgdl":
-            logger.debug("fvGP submitted HGDL optimization")
-            logger.debug("starting hyperparameters: {}", starting_hps)
-            logger.debug('bounds are {}', hp_bounds)
-
-            opt_obj = HGDL(objective_function,
-                           objective_function_gradient,
-                           hp_bounds,
-                           hess=objective_function_hessian,
-                           local_optimizer=local_optimizer,
-                           global_optimizer=global_optimizer,
-                           num_epochs=max_iter,
-                           constraints=constraints)
-
-            opt_obj.optimize(dask_client=dask_client, x0=starting_hps.reshape(1, -1))
-            try:
-                hyperparameters = opt_obj.get_final()[0]["x"]
-            except Exception as ex:
-                raise Exception("Something has gone wrong with the objective function evaluation.") from ex
-
-        elif method == "mcmc":
-            logger.debug("MCMC started in fvGP")
-            logger.debug('bounds are {}', hp_bounds)
-
-            def prior_function(theta, args):
-                bounds = args["bounds"]
-                if self._in_bounds(theta, bounds): return 0.
-                else: return -np.inf
-
-            def likelihood_func(hps, args):
-                return objective_function(hps)
-
-            myMCMC = gpMCMC(likelihood_func, prior_function, args={"bounds": hp_bounds})
-            res = myMCMC.run_mcmc(x0=starting_hps, n_updates=max_iter, info=info, break_condition="default")
-            hyperparameters = res["median(x)"]
-            self.mcmc_info = res
-        elif method == "adam":
-            hyperparameters, history = self.adam_optimize(objective_function,
-                                                          objective_function_gradient,
-                                                          starting_hps, max_iter=max_iter)
-        elif callable(method): hyperparameters = method(self)
-        else: raise ValueError("No optimization mode specified in fvGP")
-        return hyperparameters
-
     @staticmethod
     def adam_optimize(
         nlml,
@@ -332,6 +480,7 @@ class GPtraining:
         max_iter=1000,
         tol=1e-6,
         callback=None,
+        early_stop=None,
     ):
         """
         Adam optimizer for GP hyperparameters.
@@ -403,8 +552,8 @@ class GPtraining:
             if callback is not None:
                 callback(theta, fval, g, t)
 
-            # Convergence check
-            if np.linalg.norm(theta_new - theta) < tol:
+            # Convergence check or external stop signal
+            if np.linalg.norm(theta_new - theta) < tol or (early_stop is not None and early_stop()):
                 theta = theta_new
                 break
 

@@ -286,8 +286,8 @@ class GPMarginalLikelihood:
             Vector of hyperparameters of shape (N).
             If not provided, the covariance will not be recomputed.
 
-        Return
-        ------
+        Returns
+        -------
         log marginal likelihood of the data : float
         """
         logger.debug("log marginal likelihood is being evaluated")
@@ -318,7 +318,7 @@ class GPMarginalLikelihood:
     ##################################################################################
     def neg_log_likelihood(self, hyperparameters=None):
         """
-        Function that computes the marginal log-likelihood
+        Function that computes the negative marginal log-likelihood
 
         Parameters
         ----------
@@ -326,8 +326,8 @@ class GPMarginalLikelihood:
             Vector of hyperparameters of shape (N)
             If not provided, the covariance will not be recomputed.
 
-        Return
-        ------
+        Returns
+        -------
         negative log marginal likelihood of the data : float
         """
         return -self.log_likelihood(hyperparameters=hyperparameters)
@@ -345,8 +345,8 @@ class GPMarginalLikelihood:
         component : int, optional
             In case many GPs are computed in parallel, this specifies which one is considered.
 
-        Return
-        ------
+        Returns
+        -------
         Gradient of the negative log marginal likelihood : np.ndarray
         """
         if self.gp2Scale: raise Exception("Can't compute neg_log_likelihood_gradient for gp2Scale")
@@ -366,7 +366,6 @@ class GPMarginalLikelihood:
             KVinvY = self.compute_new_KVinvY(KV, m)
 
         b = KVinvY[:, component]
-        #dK_dH = None
         a = None
         if self.ram_economy is False:
             try:
@@ -431,8 +430,8 @@ class GPMarginalLikelihood:
             Vector of hyperparameters of shape (N).
             If not provided, the covariance will not be recomputed.
 
-        Return
-        ------
+        Returns
+        -------
         Hessian of the negative log marginal likelihood : np.ndarray
         """
         ##implemented as first-order approximation
@@ -447,6 +446,23 @@ class GPMarginalLikelihood:
         return d2L_dmdh + d2L_dmdh.T - np.diag(np.diag(d2L_dmdh))
 
     def test_log_likelihood_gradient(self, hyperparameters, epsilon=1e-6):
+        """
+        Compare the finite-difference and analytical gradients of the log-likelihood.
+
+        Parameters
+        ----------
+        hyperparameters : np.ndarray
+            Vector of hyperparameters of shape (N).
+        epsilon : float, optional
+            Step size for the finite-difference approximation. Default is 1e-6.
+
+        Returns
+        -------
+        fd_gradient : np.ndarray
+            Finite-difference gradient of shape (N,).
+        analytical_gradient : np.ndarray
+            Analytical gradient of shape (N,).
+        """
         thps = np.array(hyperparameters)
         grad = np.empty((len(thps)))
         eps = epsilon
