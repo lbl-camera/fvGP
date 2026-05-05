@@ -49,10 +49,10 @@ class gpMCMC:
         The default is None, which means no bounds and thus a uniform prior over the whole space.
     prior_function : callable, optional
         Function to query for the prior probability of form: func(x, bounds, args), where
-        x is the current vector and bounds is the bounds array. The default is a uniform prior within `bounds`.
+        x is the current vector and bounds is the bounds array. The default is a uniform prior within ``bounds``.
         In that case, bounds have to be provided.
     proposal_distributions : iterable, optional
-        A list of object instances of ProposalDistribution. The default is a single normal distribution with the default `init_prop_Sigma`.
+        A list of object instances of ProposalDistribution. The default is a single normal distribution with the default ``init_prop_Sigma``.
     args : Any, optional
         Arguments that will be communicated to all Callables.
 
@@ -112,19 +112,19 @@ class gpMCMC:
             Whether to print information about the mcmc iterations.
         break_condition : callable or string or None
             A break condition that specified when the mcmc is terminated. If None,
-            mcmc will run until `n_updates` is reached. If a callable is provided,
+            mcmc will run until ``n_updates`` is reached. If a callable is provided,
             it will get the mcmc object instance as input: def break(obj).
-            The only allowed string is `default` and in that case the mcmc
+            The only allowed string is ``default`` and in that case the mcmc
             will be terminated if the mean of the position has not changed significantly in the last 200 iterations.
         run_in_every_iteration : callable, optional
             A callable that is executed in every iteration. Form: func(obj). Default no-op.
 
 
-        Return
-        ------
+        Returns
+        -------
         trace information : dict
             Mean, medians, and variances of the last 1% are presented. All other returns consider the whole trace.
-            The traces `x` are all the accepted positions in the MCMC.
+            The traces ``x`` are all the accepted positions in the MCMC.
         """
         start_time = time.time()
         n_updates = max(n_updates, 2)
@@ -254,28 +254,28 @@ class ProposalDistribution:
             The indices of the parameters that should be drawn from this proposal distribution.
         proposal_dist : callable, optional
             A callable to calculate the proposal distribution evaluation.
-            It is defined as `def name(x, para, obj)`, where `obj` is a `proposal_distribution`
-            object instance. The function should return a new proposal for `x`.
-            `para` are all other parameters. Default is a normal distribution with the default
-            `init_prop_sigma`.
+            It is defined as ``def name(x, para, obj)``, where ``obj`` is a :py:class:`ProposalDistribution`
+            instance. The function should return a new proposal for ``x``.
+            ``para`` are all other parameters. Default is a normal distribution with the default
+            ``init_prop_Sigma``.
         init_prop_Sigma : np.ndarray, optional
             If the proposal distribution is normal this is the covariance of the initial proposal distribution.
-            It will be updated if adapt_callable = `normal` or a callable.
+            It will be updated if adapt_callable = ``normal`` or a callable.
             While it is optional to provide it, it is highly recommended to do so.
             A warning will be printed in that case. A good rule of thumb
             is to orient yourself on the size of your domain. The default is the identity matrix.
         adapt_callable : Callable or None or string, optional
             A callable to adapt the distribution. The default is None which means
             the proposal distribution will not be adapted.
-            Use `normal` (default) for the default adaption procedure for normal distributions.
-            The callable should be defined as `def adapt(index, mcmc_obj)` and not return anything
-            but update the `ProposalDistribution.prop_args` attribute. Note, any
+            Use ``normal`` (default) for the default adaption procedure for normal distributions.
+            The callable should be defined as ``def adapt(index, mcmc_obj)`` and not return anything
+            but update the :py:attr:`ProposalDistribution.prop_args` attribute. Note, any
             adapt function will have to be well thought through.
             Most adapt functions will not lead to a stationary final distributions. Use with caution.
         auto_accept : bool, optional
             Indicates whether to auto-accept the jump.
         prop_args : Any, optional
-            Arguments that will be available as obj attribute in `proposal_dist` and `adapt_callable`.
+            Arguments that will be available as obj attribute in ``proposal_dist`` and ``adapt_callable``.
         """
 
         self.indices = indices

@@ -235,7 +235,7 @@ class GPtraining:
         This function asynchronously finds the maximum of the log marginal likelihood and therefore trains the GP.
         This can be done on a remote cluster/computer by
         providing a dask client. This function submits the training and returns
-        an object which can be given to `fvgp.GP.update_hyperparameters()`,
+        an object which can be given to :py:meth:`fvgp.GP.update_hyperparameters`,
         which will automatically update the GP prior with the new hyperparameters.
         """
 
@@ -277,7 +277,7 @@ class GPtraining:
         mcmc_prop_distrs : list of callables or str
             A list of functions that define the proposal distributions for the MCMC sampler. 
             Each function should have the form f(x, para, obj) and return a vector of the same shape as x.
-            See `fvgp.ProposalDistributions` in the documentation.
+            See :py:class:`fvgp.gp_mcmc.ProposalDistribution` in the documentation.
         init_hyperparameters : np.ndarray
             Starting hyperparameters of shape (N,).
         max_iter : int
