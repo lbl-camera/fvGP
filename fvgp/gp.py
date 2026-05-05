@@ -62,7 +62,7 @@ class GP:
         computation relies on this: when a hyperparameter index belongs to the mean
         function its kernel derivative is assumed zero, and vice versa.
     noise_variances : np.ndarray, optional
-        An numpy array defining the uncertainties/noise in the
+        A numpy array defining the uncertainties/noise in the
         ``y_data`` in form of a point-wise variance. Shape (V).
         Note: if no noise_variances are provided here, the noise_function
         callable will be used; if the callable is not provided, the noise variances
@@ -455,7 +455,7 @@ class GP:
         y_new : np.ndarray
             The values of the data points. Shape (V).
         noise_variances_new : np.ndarray, optional
-            An numpy array defining the uncertainties in the data ``y_data`` in form of a point-wise variance.
+            A numpy array defining the uncertainties in the data ``y_data`` in form of a point-wise variance.
             Shape(y_new)==Shape(noise_variances_new).
             Note: if no variances are provided here, the noise_covariance
             callable will be used; if the callable is not provided the noise variances

@@ -60,7 +60,7 @@ class fvGP(GP):
         computation relies on this: when a hyperparameter index belongs to the mean
         function its kernel derivative is assumed zero, and vice versa.
     noise_variances : np.ndarray, optional
-        An numpy array defining the uncertainties/noise in the
+        A numpy array defining the uncertainties/noise in the
         ``y_data`` in form of a point-wise variance. Shape (V, No).
         If ``y_data`` has np.nan entries, the corresponding
         ``noise_variances`` have to be np.nan.
@@ -388,7 +388,7 @@ class fvGP(GP):
             It is possible that not every entry in ``x_new``
             has all corresponding tasks available. In that case ``y_new`` may contain np.nan entries.
         noise_variances_new : np.ndarray, optional
-            An numpy array or list defining the uncertainties/noise in the
+            A numpy array or list defining the uncertainties/noise in the
             ``y_data`` in form of a point-wise variance. Shape (V, No).
             If ``y_data`` has np.nan entries, the corresponding
             ``noise_variances`` have to be np.nan.
