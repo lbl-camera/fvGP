@@ -9,12 +9,11 @@ from .gp_marginal_likelihood import GPMarginalLikelihood
 from .gp_likelihood import GPlikelihood
 from .gp_training import GPtraining
 from .gp_posterior import GPposterior
+from .gp_kv import GPkv
 import importlib
 warnings.simplefilter("once", UserWarning)
 
 # TODO: search below "TODO"
-#   - Make MCMC async train possible (since every object is serializable and the MCMC can get a function to execute
-#   (publish state), this is basically accomplished)
 
 
 # RECENT UNTESTED CHANGES
@@ -23,6 +22,8 @@ warnings.simplefilter("once", UserWarning)
 #   - added a check for the presence of pytorch or cupy when gpu compute device is specified
 #   - dtypes for lin alg
 #   - scatter only at init and when data changes. scatter future released. 
+#   - added a lot of checks for the formats of the inputs and outputs of the callables and the hyperparameters
+#   - added async MCMC and Adam training options for local and remote training. This is basically accomplished, but not fully tested yet.
 
 class GP:
     """
@@ -161,24 +162,37 @@ class GP:
         A local client is used as the default.
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
-    gp2Scale_linalg_mode : str, optional
-        One of ``Chol``, ``sparseLU``, ``sparseCG``, ``sparseMINRES``, ``sparseSolve``, ``sparseCGpre``
-        (incomplete LU preconditioner), or ``sparseMINRESpre``. The default is None which amounts to
-        an automatic determination of the mode. For advanced customization options
-        this can also be an iterable with three callables: the first f(K), where K is the covariance matrix
-        to compute a factorization object
-        which is available in the second and third callable. The second being the linear solve f(obj, vec),
-        and the third being the logdet=f(obj). If a factorization object is not required, the first callable
-        should return the matrix itself (K).
-    calc_inv : bool, optional
-        If True, the algorithm calculates and stores the inverse of the covariance
-        matrix after each training or update of the dataset or hyperparameters,
-        which makes computing the posterior covariance faster (3-10 times).
-        For larger problems (>5000 data points), the use of inversion should be avoided due
-        to computational instability and costs. The default is
-        False. Note, the training will not use the
-        inverse for stability reasons. Storing the inverse is
-        a good option when the dataset is not too large and the posterior covariance is heavily used.
+    linalg_mode : str, optional
+        Controls the linear-algebra backend used to solve (K+V)x=b and compute log|K+V|.
+        The default is ``None``, which selects ``"Chol"`` for standard GPs and automatically
+        picks the best sparse mode for gp2Scale GPs.
+
+        **Recommended for standard (non-gp2Scale) GPs:**
+
+        * ``"Chol"`` *(default)* — Cholesky factorization; numerically stable and memory-efficient.
+        * ``"CholInv"`` — Cholesky factorization, then explicitly stores the inverse; speeds up posterior
+          covariance evaluation 3–10×. Avoid for datasets larger than ~5 000 points due to memory
+          and numerical cost. Training always uses the Cholesky factor for stability.
+        * ``"Inv"`` — computes and stores the explicit inverse directly (no Cholesky). Only suitable for
+          very small datasets where posterior covariance is computed many times.
+
+        **Specialized for gp2Scale (sparse covariance matrices):**
+
+        * ``"sparseLU"`` — sparse LU factorization; good default for sparse systems up to ~50 000 points.
+        * ``"sparseCG"`` — sparse conjugate-gradient iterative solver.
+        * ``"sparseMINRES"`` — sparse MINRES iterative solver.
+        * ``"sparseSolve"`` — direct sparse solve via scipy.
+        * ``"sparseCGpre"`` — conjugate-gradient with an incomplete-LU preconditioner.
+        * ``"sparseMINRESpre"`` — MINRES with an incomplete-LU preconditioner.
+
+        **Custom solver (any GP):**
+
+        Pass an iterable of three callables ``[f_factor, f_solve, f_logdet]``:
+
+        * ``f_factor(K)`` — receives the covariance matrix and returns a factorization object
+          (or the matrix itself if no factorization is needed).
+        * ``f_solve(obj, b)`` — solves the linear system and returns the solution vector.
+        * ``f_logdet(obj)`` — returns the log-determinant as a scalar.
     ram_economy : bool, optional
         Only of interest if the gradient and/or Hessian of the log marginal likelihood is/are used for the training.
         If True, components of the derivative of the log marginal likelihood are
@@ -246,8 +260,7 @@ class GP:
         gp2Scale=False,
         gp2Scale_dask_client=None,
         gp2Scale_batch_size=10000,
-        gp2Scale_linalg_mode=None,
-        calc_inv=False,
+        linalg_mode=None,
         ram_economy=False,
         args=None
     ):
@@ -269,15 +282,14 @@ class GP:
         hyperparameters = init_hyperparameters
 
         ########################################
-        ###init data instance###################
+        ###init data instance [tier 1]##########
         ########################################
         self.data = GPdata(x_data, y_data,
                            args=args,
                            noise_variances=noise_variances,
                            ram_economy=ram_economy,
                            gp2Scale=gp2Scale,
-                           compute_device=compute_device,
-                           calc_inv=calc_inv)
+                           compute_device=compute_device)
         ########################################
         # prepare initial hyperparameters and bounds
         if self.data.Euclidean:
@@ -304,11 +316,11 @@ class GP:
         gp2Scale_dask_client = self.initialize_gp2Scale_dask_client(gp2Scale, gp2Scale_dask_client)
 
         ##########################################
-        #######prepare training###################
+        #######prepare training [tier 2]###########
         ##########################################
         self.trainer = GPtraining(self.data, hyperparameters)
         ########################################
-        ###init prior instance##################
+        ###init prior instance [tier 3]#########
         ########################################
         self.prior = GPprior(self.data,
                              self.trainer,
@@ -320,7 +332,7 @@ class GP:
                              gp2Scale_batch_size=gp2Scale_batch_size,
                              )
         ########################################
-        ###init likelihood instance#############
+        ###init likelihood instance [tier 3]####
         ########################################
         self.likelihood = GPlikelihood(self.data,
                                        self.trainer,
@@ -329,23 +341,31 @@ class GP:
                                        )
 
         ##########################################
-        #######prepare marginal likelihood###########
+        #######prepare KV object [tier 3]#########
+        ##########################################
+        self.kv = GPkv(
+            self.data,
+            self.prior,
+            self.likelihood,
+            linalg_mode=linalg_mode,
+        )
+        ##########################################
+        #######prepare marg. likelih. [tier 4]####
         ##########################################
         self.marginal_likelihood = GPMarginalLikelihood(
             self.data,
             self.prior,
             self.likelihood,
             self.trainer,
-            gp2Scale_linalg_mode=gp2Scale_linalg_mode,
-        )
+            self.kv)
 
         ##########################################
-        #######prepare posterior evaluations######
+        #######prepare posterior [tier 4]#########
         ##########################################
         self.posterior = GPposterior(self.data,
                                      self.prior,
                                      self.trainer,
-                                     self.marginal_likelihood,
+                                     self.kv,
                                      self.likelihood)
 
     #########PROPERTIES#########################################
@@ -429,7 +449,7 @@ class GP:
         self.trainer.hyperparameters = hps
         self.prior.update_state_hyperparameters()
         self.likelihood.update_state()
-        self.marginal_likelihood.update_state_hyperparameters()
+        self.kv.update_state_hyperparameters()
 
     def update_gp_data(
         self,
@@ -488,8 +508,8 @@ class GP:
         # update likelihood
         self.likelihood.update_state()
 
-        # update marginal likelihood
-        self.marginal_likelihood.update_state_data(gp_rank_n_update)
+        # update kv state
+        self.kv.update_state_data(gp_rank_n_update)
         ##########################################
 
     def _get_default_hyperparameter_bounds(self):
@@ -937,7 +957,7 @@ class GP:
         variance_only : bool, optional
             If True the computation of the posterior covariance matrix is avoided which can save compute time.
             In that case the return will only provide the variance at the input points.
-            Default = False. This is only relevant if ``calc_inv`` at initialization is True.
+            Default = False. This is only relevant if the inverse of the covariance matrix is stored (linalg_mode == 'CholInv' or linalg_mode == 'Inv').
         add_noise : bool, optional
             If True the noise variances will be added to the posterior variances. Default = False.
 
@@ -1673,6 +1693,7 @@ class GP:
             data=self.data,
             prior=self.prior,
             likelihood=self.likelihood,
+            kv=self.kv,
             marginal_likelihood=self.marginal_likelihood,
             trainer=self.trainer,
             posterior=self.posterior

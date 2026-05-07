@@ -9,10 +9,10 @@ class GPposterior:
                  data,
                  prior,
                  trainer,
-                 marginal_likelihood,
+                 kv,
                  likelihood):
 
-        self.marginal_likelihood = marginal_likelihood
+        self.kv = kv
         self.prior = prior
         self.likelihood = likelihood
         self.data = data
@@ -29,10 +29,10 @@ class GPposterior:
         return self.prior.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
 
     def KVsolve(self, v):
-        return self.marginal_likelihood.KVlinalg.solve(v)
+        return self.kv.solve(v)
 
     def compute_new_KVinvY(self, KV, m):
-        return self.marginal_likelihood.compute_new_KVinvY(KV, m)
+        return self.kv.compute_new_KVinvY(KV, m)
 
     def compute_prior_covariance_matrix(self, x_data, hyperparameters):
         return self.prior.compute_prior_covariance_matrix(x_data, hyperparameters)
@@ -44,7 +44,7 @@ class GPposterior:
         return self.likelihood.calculate_V(x_pred, hyperparameters)
 
     def addKV(self, K, V):
-        return self.marginal_likelihood.addKV(K, V)
+        return self.kv.addKV(K, V)
 
     #####################################################
     @property
@@ -69,11 +69,11 @@ class GPposterior:
 
     @property
     def KVinvY(self):
-        return self.marginal_likelihood.KVinvY
+        return self.kv.KVinvY
 
     @property
     def KVinv(self):
-        return self.marginal_likelihood.KVlinalg.KVinv
+        return self.kv.KVinv
 
     @property
     def input_set_dim(self):
@@ -547,12 +547,12 @@ class GPposterior:
 
     def __getstate__(self):
         state = dict(
-            marginal_likelihood=self.marginal_likelihood,
             prior=self.prior,
             likelihood=self.likelihood,
             data=self.data,
             trainer=self.trainer,
-            noise_function_available=self.noise_function_available
+            noise_function_available=self.noise_function_available,
+            kv=self.kv
         )
         return state
 

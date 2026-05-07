@@ -8,9 +8,9 @@ class GPdata:
                  noise_variances=None,
                  ram_economy=False,
                  gp2Scale=False,
-                 compute_device="cpu",
-                 calc_inv="False"):
-        # make sure the inputs are in the right format
+                 compute_device="cpu"):
+
+
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
         assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2)
         assert ((isinstance(noise_variances, np.ndarray) and np.ndim(noise_variances) == 1)
@@ -43,10 +43,6 @@ class GPdata:
         self.ram_economy = ram_economy
         self.gp2Scale = gp2Scale
         self.compute_device = compute_device
-        self.calc_inv = calc_inv
-        if self.gp2Scale and self.calc_inv:
-            self.calc_inv = False
-            warnings.warn("gp2Scale use forbids calc_inv=True; it has been set to False.")
 
     def set_fvgp_data(self, fvgp_x_data, fvgp_y_data, fvgp_noise_variances, x_out):
         self.fvgp_x_data = fvgp_x_data
@@ -111,8 +107,7 @@ class GPdata:
             args=self.args,
             ram_economy=self.ram_economy,
             gp2Scale=self.gp2Scale,
-            compute_device=self.compute_device,
-            calc_inv=self.calc_inv,
+            compute_device=self.compute_device
             )
         return state
 

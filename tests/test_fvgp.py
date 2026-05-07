@@ -238,9 +238,9 @@ def test_single_task_init_basic():
     my_gp1.marginal_likelihood.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
     my_gp1 = GP(x_data, y_data)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
-    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = False)
+    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     res = my_gp1.posterior_covariance(x_pred, variance_only = True)
-    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), calc_inv = True)
+    my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), linalg_mode = "CholInv")
     res = my_gp1.posterior_covariance(x_pred, variance_only = True)
 
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
@@ -261,7 +261,7 @@ def test_single_task_init_basic():
     assert my_gp1.args == my_gp1.marginal_likelihood.args
     assert my_gp1.args == my_gp1.trainer.args
     assert my_gp1.args == my_gp1.posterior.args
-    assert my_gp1.args == my_gp1.marginal_likelihood.KVlinalg.args
+    assert my_gp1.args == my_gp1.kv.args
 
     my_gp1 = GP(x_data, y_data, noise_variances = np.zeros(y_data.shape) + 0.01,init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1.set_args({"dcf":4.})
@@ -271,7 +271,7 @@ def test_single_task_init_basic():
     assert my_gp1.args == my_gp1.marginal_likelihood.args
     assert my_gp1.args == my_gp1.trainer.args
     assert my_gp1.args == my_gp1.posterior.args
-    assert my_gp1.args == my_gp1.marginal_likelihood.KVlinalg.args
+    assert my_gp1.args == my_gp1.kv.args
 
 
     res = my_gp1.posterior_mean(x_pred)
@@ -349,7 +349,45 @@ def test_single_task_init_basic():
 
 def test_single_task_init_advanced():
     my_gp2 = GP(x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
-        compute_device="cpu", calc_inv = True, ram_economy = True)
+        compute_device="cpu", linalg_mode = "CholInv", ram_economy = True)
+
+
+def test_linalg_modes():
+    from scipy.linalg import cho_factor, cho_solve
+
+    hps = np.ones(6)
+
+    # Modes where log_likelihood works without optional dependencies
+    modes_full = ["Chol", "CholInv", "Inv", "sparseLU"]
+    # Modes whose logdet requires the optional imate package; test everything except log_likelihood
+    modes_no_logdet = ["sparseCG", "sparseMINRES", "sparseCGpre", "sparseMINRESpre", "sparseSolve"]
+
+    for mode in modes_full:
+        gp = GP(x_data, y_data, init_hyperparameters=hps, linalg_mode=mode)
+        gp.log_likelihood()
+        gp.posterior_mean(x_pred)
+        gp.posterior_covariance(x_pred, variance_only=True)
+        gp.update_gp_data(x_data, y_data, append=True)
+        gp.update_gp_data(x_data, y_data, append=False)
+
+    for mode in modes_no_logdet:
+        gp = GP(x_data, y_data, init_hyperparameters=hps, linalg_mode=mode)
+        gp.posterior_mean(x_pred)
+        gp.posterior_covariance(x_pred, variance_only=True)
+        gp.update_gp_data(x_data, y_data, append=True)
+        gp.update_gp_data(x_data, y_data, append=False)
+
+    # Custom 3-callable interface
+    f_factor = lambda K: cho_factor(K)
+    f_solve = lambda obj, b: cho_solve(obj, b)
+    f_logdet = lambda obj: 2.0 * float(np.sum(np.log(np.diag(obj[0]))))
+    gp = GP(x_data, y_data, init_hyperparameters=hps, linalg_mode=[f_factor, f_solve, f_logdet])
+    gp.log_likelihood()
+    gp.posterior_mean(x_pred)
+    gp.posterior_covariance(x_pred, variance_only=True)
+    gp.update_gp_data(x_data, y_data, append=True)
+    gp.update_gp_data(x_data, y_data, append=False)
+
 
 def test_train_basic(client):
     def noiseC(x,hps):
@@ -425,7 +463,7 @@ def test_train_basic(client):
 
 def test_train_hgdl(client):
     my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]), noise_variances=np.zeros(y_data.shape) + 0.01,
-        compute_device="cpu", calc_inv = True, ram_economy = True)
+        compute_device="cpu", linalg_mode = "CholInv", ram_economy = True)
 
 
     my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
@@ -434,7 +472,7 @@ def test_train_hgdl(client):
 
 def test_train_hgdl_async(client):
     my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]),noise_variances=np.zeros(y_data.shape) + 0.01,
-        compute_device="cpu", calc_inv = True, ram_economy = True)
+        compute_device="cpu", linalg_mode = "CholInv", ram_economy = True)
 
     opt_obj = my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             max_iter = 50, dask_client=client, method = "hgdl", asynchronous=True)
@@ -537,37 +575,41 @@ def test_gp2Scale(client):
                             ])
 
     init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseLU")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, linalg_mode="sparseLU")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCG")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, linalg_mode="sparseCG")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRES")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, linalg_mode="sparseMINRES")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, linalg_mode="sparseCGpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseCGpre")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, linalg_mode="Chol")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
-    
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = False, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="Inv")
+
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, linalg_mode="CholInv")
+    my_gp2S.log_likelihood(hyperparameters = init_hps)
+    my_gp2S.update_gp_data(x_new,y_new, append = True)
+
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = False, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, linalg_mode="Inv")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
     my_gp2S.neg_log_likelihood_gradient()
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseMINRESpre")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, linalg_mode="sparseMINRESpre")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
     
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, gp2Scale_linalg_mode="sparseSolve")
+    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, gp2Scale_dask_client=client, linalg_mode="sparseSolve")
     my_gp2S.log_likelihood(hyperparameters = init_hps)
     my_gp2S.update_gp_data(x_new,y_new, append = True)
 
@@ -626,6 +668,348 @@ def test_gp2Scale(client):
     my_mcmc = gpMCMC(obj_func, bounds=hps_bounds, prior_function=prior_function,
                      proposal_distributions=[pd])
     mcmc_result = my_mcmc.run_mcmc(x0=hps, info=True, n_updates=10, break_condition="default")
+
+
+def test_ggmp():
+    from fvgp import ggmp
+    GGMP = ggmp.GGMP
+    hyperparameters = ggmp.hyperparameters
+    NormalLikelihood = ggmp.NormalLikelihood
+    constant_mean = ggmp.constant_mean
+    _get_key = ggmp._get_key
+    gaussian_pdf = ggmp.gaussian_pdf
+    _normalize_pdf = ggmp._normalize_pdf
+    empirical_pdf_from_samples = ggmp.empirical_pdf_from_samples
+    fit_gmm_fixed_weights = ggmp.fit_gmm_fixed_weights
+    _as_2d = ggmp._as_2d
+    _covariances_to_full = ggmp._covariances_to_full
+    _sym_psd = ggmp._sym_psd
+    _sqrtm_psd = ggmp._sqrtm_psd
+    gaussian_w2_squared = ggmp.gaussian_w2_squared
+    align_gmm_components_hungarian = ggmp.align_gmm_components_hungarian
+    align_local_gmms_sequence = ggmp.align_local_gmms_sequence
+    _log_mvn_density = ggmp._log_mvn_density
+    optimize_weights_em_multivariate_samples = ggmp.optimize_weights_em_multivariate_samples
+    loglik_multivariate_mixture_samples = ggmp.loglik_multivariate_mixture_samples
+    sample_gmm_multivariate = ggmp.sample_gmm_multivariate
+    energy_distance_multivariate = ggmp.energy_distance_multivariate
+    sliced_wasserstein_distance = ggmp.sliced_wasserstein_distance
+    mmd_rbf = ggmp.mmd_rbf
+    fit_gmm_free_weights_multivariate = ggmp.fit_gmm_free_weights_multivariate
+    fit_local_gmms_multivariate = ggmp.fit_local_gmms_multivariate
+
+    rng = np.random.default_rng(0)
+    N = 6   # stations
+    K = 2   # GMM components
+
+    # ------------------------------------------------------------------
+    # NormalLikelihood
+    # ------------------------------------------------------------------
+    nl_mean = rng.standard_normal(N)
+    nl_var  = np.abs(rng.standard_normal(N)) + 0.1
+    nl = NormalLikelihood(nl_mean, nl_var, 0.5)
+    assert nl.dim == N
+    nl.set_moments(nl_mean + 1, nl_var * 2)
+    nl.set_weight(0.3)
+    assert nl.weight == 0.3
+    vec = nl.unravel()
+    assert len(vec) == 2 * N
+    m2, v2 = nl.ravel(vec)
+    assert len(m2) == N and len(v2) == N
+
+    # ------------------------------------------------------------------
+    # hyperparameters: K=2 components, 1-D x_data → 3 hps each
+    # (signal_var, length_scale, prior_mean via constant_mean)
+    # ------------------------------------------------------------------
+    n_hps = 3
+    weights = np.ones(K) / K
+    weights_bounds = np.array([[0.01, 1.0]] * K)
+    hps_list = [np.array([1.0, 0.5, 0.0])] * K
+    hps_bounds = [np.array([[0.1, 10.], [0.01, 2.], [-5., 5.]])] * K
+    hps_obj = hyperparameters(weights, weights_bounds, hps_list, hps_bounds)
+
+    v = hps_obj.vectorized_hps
+    assert len(v) == K + K * n_hps
+    w2, h2 = hps_obj.devectorize_hps(v)
+    assert len(w2) == K and len(h2) == K
+
+    b = hps_obj.vectorized_bounds
+    wb2, hb2 = hps_obj.devectorize_bounds(b)
+    assert len(wb2) == K and len(hb2) == K
+
+    hps_obj.set(weights, hps_list)
+    assert np.allclose(hps_obj.vectorized_hps, v)
+
+    # ------------------------------------------------------------------
+    # Build small dataset: 1-D station locations, simple Gaussian PDFs
+    # ------------------------------------------------------------------
+    xs = np.sort(rng.random((N, 1)), axis=0)
+    domain = np.linspace(-3, 3, 50)
+    y_data = [
+        (domain, np.exp(-0.5 * (domain - rng.uniform(-1, 1)) ** 2))
+        for _ in range(N)
+    ]
+
+    # ------------------------------------------------------------------
+    # GGMP construction
+    # ------------------------------------------------------------------
+    g = GGMP(xs, y_data, hps_obj=hps_obj, likelihood_terms=K)
+
+    # __getattr__ fallback should not raise
+    g.nonexistent_method()
+
+    # ------------------------------------------------------------------
+    # initLikelihoods — default initialization
+    # ------------------------------------------------------------------
+    lks = g.initLikelihoods()
+    assert len(lks) == K
+    assert all(isinstance(lk, NormalLikelihood) for lk in lks)
+
+    # initLikelihoods — explicit mean / std / weights
+    g2 = GGMP(xs, y_data, hps_obj=hps_obj, likelihood_terms=K)
+    g2.initLikelihoods(
+        init_mean=[np.zeros(N)] * K,
+        init_std=[np.ones(N) * 0.5] * K,
+        weights=weights,
+    )
+    assert len(g2.likelihoods) == K
+
+    # ------------------------------------------------------------------
+    # initGPs
+    # ------------------------------------------------------------------
+    g.initGPs()
+    assert len(g.gps) == K
+    assert g.gps is g._component_GPs
+
+    # ------------------------------------------------------------------
+    # build_pairwise_data_generating_normals
+    # ------------------------------------------------------------------
+    joints = g.build_pairwise_data_generating_normals(0, 1)
+    assert len(joints) == K
+    assert "mean" in joints[0] and "cov" in joints[0] and "weight" in joints[0]
+    assert joints[0]["mean"].shape == (2,)
+    assert joints[0]["cov"].shape == (2, 2)
+
+    # ------------------------------------------------------------------
+    # _as_float
+    # ------------------------------------------------------------------
+    assert g._as_float(1.5) == 1.5
+    assert g._as_float(np.float64(2.0)) == 2.0
+    assert g._as_float(np.array(3.0)) == 3.0
+    assert g._as_float(np.array([4.0])) == 4.0
+    assert g._as_float(np.array([1.0, 2.0]), reduce="sum") == 3.0
+    assert g._as_float(np.array([1.0, 3.0]), reduce="mean") == 2.0
+
+    # ------------------------------------------------------------------
+    # _gp_log_likelihood
+    # ------------------------------------------------------------------
+    ll = g._gp_log_likelihood(g.gps[0])
+    assert np.isscalar(ll) and np.isfinite(ll)
+
+    # ------------------------------------------------------------------
+    # _gp_neg_log_likelihood_gradient
+    # ------------------------------------------------------------------
+    grad = g._gp_neg_log_likelihood_gradient(g.gps[0])
+    assert grad.shape == (n_hps,)
+    assert np.all(np.isfinite(grad))
+
+    # ------------------------------------------------------------------
+    # _safe_set_hyperparameters (update + no-op)
+    # ------------------------------------------------------------------
+    new_hps = np.array([1.2, 0.4, 0.1])
+    g._safe_set_hyperparameters(g.gps[0], new_hps)
+    g._safe_set_hyperparameters(g.gps[0], new_hps)  # same → no-op
+
+    # ------------------------------------------------------------------
+    # _set_expert_component (deprecated alias)
+    # ------------------------------------------------------------------
+    gp_back = g._set_expert_component(0, 0)
+    assert gp_back is g._component_GPs[0]
+
+    # ------------------------------------------------------------------
+    # _eval_ll_vector / _eval_ll_matrix
+    # ------------------------------------------------------------------
+    ll_vec, failures = g._eval_ll_vector(hps_list)
+    assert ll_vec.shape == (K,) and failures == 0
+
+    ll_mat, failures = g._eval_ll_matrix(hps_list)
+    assert ll_mat.shape == (K, K)
+    # diagonal should match the vector
+    assert np.allclose(np.diag(ll_mat), ll_vec)
+
+    # ------------------------------------------------------------------
+    # constant_mean
+    # ------------------------------------------------------------------
+    cm = constant_mean(xs, np.array([1.0, 0.5, 2.0]))
+    assert cm.shape == (N,) and np.allclose(cm, 2.0)
+
+    # ------------------------------------------------------------------
+    # _get_key
+    # ------------------------------------------------------------------
+    assert _get_key({"m(x)": 1, "other": 9}, ["m(x)", "mean"]) == 1
+    assert _get_key({"mean": 2}, ["m(x)", "mean"]) == 2
+    assert _get_key(5, ["m(x)"]) == 5   # non-dict passthrough
+
+    # ------------------------------------------------------------------
+    # gaussian_pdf
+    # ------------------------------------------------------------------
+    pdf_vals = gaussian_pdf(np.linspace(-2, 2, 20), 0.0, 1.0)
+    assert pdf_vals.shape == (20,) and np.all(pdf_vals > 0)
+
+    # ------------------------------------------------------------------
+    # _normalize_pdf
+    # ------------------------------------------------------------------
+    d_n, p_n, dx_n = _normalize_pdf(domain, np.exp(-0.5 * domain ** 2))
+    assert np.isclose(np.sum(p_n * dx_n), 1.0, atol=1e-3)
+    # zero-mass edge case: should not raise
+    d_z, p_z, dx_z = _normalize_pdf(domain, np.zeros_like(domain))
+    assert np.isfinite(p_z).all()
+
+    # ------------------------------------------------------------------
+    # empirical_pdf_from_samples
+    # ------------------------------------------------------------------
+    samples_1d = rng.standard_normal(200)
+    centers, dens = empirical_pdf_from_samples(samples_1d, bins=30)
+    assert len(centers) == 30 and np.all(dens > 0)
+
+    # ------------------------------------------------------------------
+    # fit_gmm_fixed_weights
+    # ------------------------------------------------------------------
+    y_samp = rng.standard_normal(60)
+    w_fixed = np.array([0.5, 0.5])
+    means_fit, vars_fit = fit_gmm_fixed_weights(y_samp, 2, w_fixed, max_iter=10)
+    assert len(means_fit) == 2 and len(vars_fit) == 2
+    assert means_fit[0] <= means_fit[1]  # sorted by mean
+
+    # ------------------------------------------------------------------
+    # _as_2d
+    # ------------------------------------------------------------------
+    assert _as_2d(np.ones(5)).shape == (5, 1)
+    assert _as_2d(np.ones((3, 2))).shape == (3, 2)
+
+    # ------------------------------------------------------------------
+    # _covariances_to_full — all four covariance types
+    # ------------------------------------------------------------------
+    assert _covariances_to_full(np.ones((2, 3)), covariance_type="diag",       K=2, d=3).shape == (2, 3, 3)
+    assert _covariances_to_full(np.array([1., 2.]), covariance_type="spherical", K=2, d=3).shape == (2, 3, 3)
+    assert _covariances_to_full(np.eye(3)[None].repeat(2, 0), covariance_type="full", K=2, d=3).shape == (2, 3, 3)
+    assert _covariances_to_full(np.eye(3), covariance_type="tied",             K=2, d=3).shape == (2, 3, 3)
+
+    # ------------------------------------------------------------------
+    # _sym_psd / _sqrtm_psd
+    # ------------------------------------------------------------------
+    A = rng.standard_normal((3, 3))
+    S = _sym_psd(A)
+    assert np.allclose(S, S.T)
+
+    B = A @ A.T + np.eye(3)
+    sqrtB = _sqrtm_psd(B)
+    assert np.allclose(sqrtB @ sqrtB, B, atol=1e-8)
+
+    # ------------------------------------------------------------------
+    # gaussian_w2_squared
+    # ------------------------------------------------------------------
+    assert np.isclose(gaussian_w2_squared(np.zeros(2), np.eye(2), np.zeros(2), np.eye(2)), 0.0, atol=1e-8)
+    assert gaussian_w2_squared(np.array([2., 0.]), np.eye(2), np.zeros(2), np.eye(2)) > 0.0
+
+    # ------------------------------------------------------------------
+    # align_gmm_components_hungarian
+    # ------------------------------------------------------------------
+    m_ref = np.array([[0.], [3.]])
+    c_ref = np.eye(1)[None].repeat(2, 0)
+    m_cur = np.array([[3.1], [0.1]])  # reversed order
+    perm = align_gmm_components_hungarian(m_ref, c_ref, m_cur, c_ref)
+    assert perm.shape == (2,)
+    assert perm[0] == 1 and perm[1] == 0  # should swap back
+
+    perm2, cost2 = align_gmm_components_hungarian(m_ref, c_ref, m_cur, c_ref, return_cost=True)
+    assert cost2.shape == (2, 2)
+
+    # ------------------------------------------------------------------
+    # align_local_gmms_sequence
+    # ------------------------------------------------------------------
+    wl = [np.array([0.5, 0.5])] * 4
+    ml = [np.array([[0.], [3.]])] * 4
+    cl = [np.eye(1)[None].repeat(2, 0)] * 4
+    res = align_local_gmms_sequence(wl, ml, cl, reference="previous")
+    assert len(res["means"]) == 4 and len(res["perms"]) == 4
+
+    res2 = align_local_gmms_sequence(wl, ml, cl, reference="first")
+    assert len(res2["means"]) == 4
+
+    # ------------------------------------------------------------------
+    # _log_mvn_density
+    # ------------------------------------------------------------------
+    y_mv = rng.standard_normal((10, 2))
+    ldens = _log_mvn_density(y_mv, np.zeros(2), np.eye(2))
+    assert ldens.shape == (10,) and np.all(np.isfinite(ldens))
+
+    # ------------------------------------------------------------------
+    # optimize_weights_em_multivariate_samples
+    # ------------------------------------------------------------------
+    y_list_mv  = [rng.standard_normal((20, 2)) for _ in range(4)]
+    means_em   = [np.array([[-1., 0.], [1., 0.]])] * 4   # (K, d) per station
+    covs_em    = [np.eye(2)[None].repeat(2, 0)] * 4        # (K, d, d) per station
+    w_opt, w_hist, obj_hist = optimize_weights_em_multivariate_samples(
+        y_list_mv, means_em, covs_em, K=2, max_iter=5, log_every=0)
+    assert w_opt.shape == (2,) and np.isclose(w_opt.sum(), 1.0, atol=1e-8)
+
+    # ------------------------------------------------------------------
+    # loglik_multivariate_mixture_samples
+    # ------------------------------------------------------------------
+    ll_ps = loglik_multivariate_mixture_samples(
+        y_mv,
+        np.array([0.5, 0.5]),
+        np.array([[0., 0.], [1., 1.]]),
+        np.eye(2)[None].repeat(2, 0),
+    )
+    assert ll_ps.shape == (10,) and np.all(np.isfinite(ll_ps))
+
+    # ------------------------------------------------------------------
+    # sample_gmm_multivariate
+    # ------------------------------------------------------------------
+    samp = sample_gmm_multivariate(
+        np.array([0.5, 0.5]),
+        np.array([[0., 0.], [2., 2.]]),
+        np.eye(2)[None].repeat(2, 0),
+        n_samples=30,
+        random_state=1,
+    )
+    assert samp.shape == (30, 2)
+
+    # ------------------------------------------------------------------
+    # energy_distance_multivariate
+    # ------------------------------------------------------------------
+    ed = energy_distance_multivariate(y_mv, rng.standard_normal((8, 2)))
+    assert np.isscalar(ed) and ed >= 0.0
+
+    # ------------------------------------------------------------------
+    # sliced_wasserstein_distance
+    # ------------------------------------------------------------------
+    swd = sliced_wasserstein_distance(y_mv, rng.standard_normal((8, 2)), n_projections=8)
+    assert np.isscalar(swd) and swd >= 0.0
+
+    # ------------------------------------------------------------------
+    # mmd_rbf
+    # ------------------------------------------------------------------
+    mmd = mmd_rbf(y_mv, rng.standard_normal((8, 2)))
+    assert np.isscalar(mmd) and np.isfinite(mmd)
+
+    # ------------------------------------------------------------------
+    # fit_gmm_free_weights_multivariate / fit_local_gmms_multivariate
+    # (require scikit-learn; skip gracefully if not installed)
+    # ------------------------------------------------------------------
+    try:
+        w_free, m_free, c_free, info = fit_gmm_free_weights_multivariate(
+            rng.standard_normal((60, 2)), K=2, n_init=2, max_iter=20)
+        assert w_free.shape == (2,) and np.isclose(w_free.sum(), 1.0, atol=1e-8)
+        assert "converged" in info and "bic" in info
+
+        local = fit_local_gmms_multivariate(
+            [rng.standard_normal((40, 1)) for _ in range(3)], K=2, n_init=2, max_iter=20)
+        assert "weights" in local and len(local["weights"]) == 3
+    except ImportError:
+        pass
 
 
 def test_pickle():
@@ -762,7 +1146,7 @@ def test_pickle():
     assert is_pickle_equal(my_gpo.trainer)
     assert is_pickle_equal(my_gpo.posterior)
     assert is_pickle_equal(my_gpo.data)
-    assert is_pickle_equal(my_gpo.marginal_likelihood.KVlinalg)
+    assert is_pickle_equal(my_gpo.kv)
 
 
 def test_gpMCMC():

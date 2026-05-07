@@ -36,36 +36,7 @@ def constant_mean(x, hyperparameters):  # pragma: no cover
     return np.ones(len(x)) * hyperparameters[-1]
 
 
-#def zero_mean(x, hyperparameters):  # pragma: no cover
-#    """Zero mean function."""
-#    return np.zeros(len(x))
-
-
-#def linear_mean(x, hyperparameters):  # pragma: no cover
-#    """Linear mean function: mean = hyperparameters[-1] (intercept only)."""
-#    return np.ones(len(x)) * hyperparameters[-1]
-
-
-#def integral(f, domain):  # pragma: no cover
-#    # Robust to decreasing/unsorted domains.
-#    dx = np.abs(np.gradient(domain))
-#    return float(np.sum(f * dx))
-
-
-#def gaussian(mean, std, x):  # pragma: no cover
-#    x = np.asarray(x, dtype=float)
-#    std = np.maximum(std, 1e-12)
-#    g = (1.0 / (np.sqrt(2.0 * np.pi) * std)) * np.exp(-np.power(x - mean, 2.0) / (2.0 * np.power(std, 2.0)))
-#    if np.all(g < 1e-6): g[:] = 1e-6
-#    inte = integral(g, x)
-#    if not np.isfinite(inte) or inte < 1e-300:
-#        inte = 1e-300
-#    gn = g / inte
-#    if np.any(np.isnan(gn)): print("NaN in Gaussian normalized")
-#    return gn
-
-
-class GGMP:  # pragma: no cover
+class GGMP:
     def __init__(
         self,
         x_data,
@@ -80,18 +51,50 @@ class GGMP:  # pragma: no cover
         gp_eval_parallel=False,
     ):
         """
-        The constructor for the GGMP class.
+        Gaussian GP for Gaussian Mixture data (GGMP).
 
-        GGMP uses K GMM components per station. Each component k gets its own GP
-        that is trained on the component's mean vector (across all stations) with
-        the component's variance as noise. Components are independent and equally
-        weighted (1/K).
+        GGMP models distributional data: each of the N input locations has an
+        associated probability density (given as a (domain, density) pair) instead
+        of a scalar observation.  Internally it represents each density as a K-component
+        Gaussian Mixture Model (GMM) and places one independent GP per component.
+        Component k's GP is trained on the vector of component-k means across all N
+        stations, using the corresponding component-k variances as noise.
 
-        Parameters:
-            x_data: (N, D) array of station locations
-            y_data: list of N (domain, density) tuples
-            hps_obj: hyperparameters object with K sets of hyperparameters
-            likelihood_terms: K, the number of GMM components (and GPs)
+        Typical workflow::
+
+            ggmp = GGMP(x_data, y_data, hps_obj=hps, likelihood_terms=K)
+            ggmp.initLikelihoods()
+            ggmp.initGPs()
+
+        Parameters
+        ----------
+        x_data : np.ndarray, shape (N, D)
+            Spatial or feature-space locations of the N stations.
+        y_data : list of (domain, density) tuples, length N
+            Each entry is a pair of 1-D arrays describing the empirical PDF at one
+            station: ``domain`` is the evaluation grid and ``density`` is the
+            (unnormalized) density values on that grid.
+        hps_obj : hyperparameters
+            A :class:`hyperparameters` instance holding K sets of GP hyperparameters
+            (one per component) together with their optimization bounds.
+        gp_kernel_functions : list of callables or None, optional
+            Per-component kernel functions passed to :class:`GP`.  Defaults to the
+            fvGP built-in anisotropic Matérn kernel for each component.
+        gp_mean_functions : list of callables or None, optional
+            Per-component prior mean functions.  Defaults to ``constant_mean`` (a
+            trainable constant) for each component.
+        likelihood_terms : int, optional
+            Number of GMM components K.  Must match ``len(hps_obj.hps)``.
+            Default is 5.
+        gp_init_kwargs : dict, optional
+            Extra keyword arguments forwarded to :class:`GP` at construction time
+            (e.g. ``ram_economy``, ``compute_device``).
+        gp_device_ids : list of int, str, or None, optional
+            GPU device IDs for multi-GPU evaluation.  Pass ``"auto"`` to use all
+            detected GPUs.  Ignored when no GPU backend is available.
+        gp_eval_parallel : bool, optional
+            If True, evaluate the K component GPs in parallel using a thread pool.
+            Default is False.
         """
         assert len(x_data) == len(y_data)
         self.likelihood_terms = likelihood_terms
@@ -135,6 +138,31 @@ class GGMP:  # pragma: no cover
         return joints
 
     def initLikelihoods(self, init_mean=None, init_std=None, weights=None):
+        """
+        Initialize the K :class:`NormalLikelihood` objects (one per GMM component).
+
+        Computes per-station empirical means and variances from ``self.y_data`` and
+        uses them to seed the component parameters.  Must be called before
+        :meth:`initGPs`.
+
+        Parameters
+        ----------
+        init_mean : list of np.ndarray or None, optional
+            Initial component mean vectors, each of length N (number of stations).
+            If None, component means are spread around the per-station empirical
+            mean with small offsets so components start distinguishable.
+        init_std : list of np.ndarray or None, optional
+            Initial component standard-deviation vectors, each of length N.
+            If None, defaults to the per-station empirical standard deviation for
+            every component.
+        weights : np.ndarray of shape (K,) or None, optional
+            Initial mixture weights.  If None, uniform weights (1/K) are used.
+
+        Returns
+        -------
+        list of NormalLikelihood
+            The initialized likelihood objects, also stored as ``self.likelihoods``.
+        """
         assert init_mean is None or isinstance(init_mean, list)
         assert init_std is None or isinstance(init_std, list)
         if isinstance(init_mean, list): assert len(init_mean) == self.likelihood_terms
@@ -166,12 +194,6 @@ class GGMP:  # pragma: no cover
         self.station_means = station_means
         self.station_vars = station_vars
 
-        # If not provided, initialize from per-station first/second moments of the empirical PDFs in self.y_data.
-        # This keeps `NormalLikelihood.mean` as a numeric vector (len = number of stations), which GGMP expects.
-        if init_mean is None or init_std is None:
-            # Already calculated station_means/vars above
-            pass
-
         if init_mean is None:
             # Spread initial component means slightly so components aren't identical
             base = self.station_means
@@ -180,7 +202,6 @@ class GGMP:  # pragma: no cover
         if init_std is None:
             init_std = [np.sqrt(station_vars) for _ in range(self.likelihood_terms)]
 
-        #var_bounds = std_bounds**2
         if weights is None:
             weights = np.ones((self.likelihood_terms))
             weights = weights / np.sum(weights)
@@ -192,6 +213,19 @@ class GGMP:  # pragma: no cover
         return self.likelihoods
 
     def initGPs(self):
+        """
+        Construct one :class:`GP` per GMM component and sync hyperparameters.
+
+        Each GP is trained on the vector of component-k means across all stations,
+        with the component-k variances used as noise.  The last hyperparameter is
+        initialized to the empirical mean of the training data so each component
+        starts with a sensible prior mean when using ``constant_mean``.
+
+        Requires :meth:`initLikelihoods` to have been called first.
+
+        After construction the internal ``hps_obj`` is updated to reflect any
+        corrections applied to the initial hyperparameters (e.g. mean re-centering).
+        """
         gp_kwargs = getattr(self, "gp_init_kwargs", {}) or {}
 
         def _normalize_gp_kwargs(kwargs):
@@ -494,57 +528,47 @@ class GGMP:  # pragma: no cover
 
     def _gp_log_likelihood(self, gp):
         """
-        Compute scalar log-likelihood for a configured GP object.
+        Return the scalar log marginal likelihood for a GP at its current hyperparameters.
 
-        Prefers marginal_density.neg_log_likelihood (most consistent with gradients),
-        and falls back to marginal_density.log_likelihood / gp.log_likelihood.
+        Uses the cached factorization (hyperparameters=None) so no recomputation occurs.
         """
-        md = getattr(gp, "marginal_density", None)
-        if md is not None:
-            if hasattr(md, "neg_log_likelihood"):
-                return -self._as_float(md.neg_log_likelihood(hyperparameters=None), reduce="sum")
-            if hasattr(md, "log_likelihood"):
-                return self._as_float(md.log_likelihood(hyperparameters=None), reduce="sum")
+        ml = getattr(gp, "marginal_likelihood", None)
+        if ml is not None:
+            return self._as_float(ml.log_likelihood(hyperparameters=None), reduce="sum")
         if hasattr(gp, "log_likelihood"):
-            hps = getattr(getattr(gp, "trainer", None), "hyperparameters", None)
-            return self._as_float(gp.log_likelihood(hps), reduce="sum")
-        raise AttributeError("GP object has no (neg_)log_likelihood method available.")
+            return self._as_float(gp.log_likelihood(hyperparameters=None), reduce="sum")
+        raise AttributeError("GP object has no log_likelihood method available.")
 
     def _gp_neg_log_likelihood_gradient(self, gp):
         """
-        Compute gradient of the negative log-likelihood for a configured GP object.
+        Return the gradient of the negative log marginal likelihood for a GP.
 
-        Uses fvGP's analytical gradient (fixed in v4.7.8), falling back to numerical
-        gradient for gp2Scale/GPU mode where analytical is not supported.
+        Tries the analytical gradient from ``gp.marginal_likelihood`` first; falls
+        back to a forward-difference numerical gradient for gp2Scale mode (where
+        the analytical gradient is not supported).
         """
-        md = getattr(gp, "marginal_density", None)
-        if md is None:
-            raise AttributeError("GP has no marginal_density object")
+        ml = getattr(gp, "marginal_likelihood", None)
+        if ml is None:
+            raise AttributeError("GP has no marginal_likelihood object.")
 
         hps = np.asarray(gp.hyperparameters, dtype=float)
-
-        # Check if gp2Scale is enabled (GPU mode) - analytical gradient not supported
         is_gp2scale = getattr(getattr(gp, "data", None), "gp2Scale", False)
 
-        if not is_gp2scale and hasattr(md, "neg_log_likelihood_gradient"):
-            # Use fvGP's analytical gradient (fixed in v4.7.8)
+        if not is_gp2scale and hasattr(ml, "neg_log_likelihood_gradient"):
             try:
-                return md.neg_log_likelihood_gradient(hyperparameters=hps, component=0)
+                return ml.neg_log_likelihood_gradient(hyperparameters=hps, component=0)
             except Exception:
-                pass  # Fall through to numerical
+                pass  # fall through to numerical
 
-        # Fallback to numerical gradient for gp2Scale/GPU mode
+        # Numerical fallback (forward differences)
         n_hps = len(hps)
         epsilon = 1e-6
-        nll_base = float(md.neg_log_likelihood(hyperparameters=hps))
-
+        nll_base = float(ml.neg_log_likelihood(hyperparameters=hps))
         grad = np.zeros(n_hps, dtype=float)
         for i in range(n_hps):
             hps_plus = hps.copy()
             hps_plus[i] += epsilon
-            nll_plus = float(md.neg_log_likelihood(hyperparameters=hps_plus))
-            grad[i] = (nll_plus - nll_base) / epsilon
-
+            grad[i] = (float(ml.neg_log_likelihood(hyperparameters=hps_plus)) - nll_base) / epsilon
         return grad
 
     def _set_expert_component(self, expert_idx, component_idx):
@@ -635,11 +659,22 @@ class GGMP:  # pragma: no cover
 
 class hyperparameters: # pragma: no cover
     """
-    Parameters:
-        * weights: 1d numpy array
-        * weights_bounds: 2d numpy array
-        * hps: list of 1d numpy arrays
-        * hps_bounds: list of 2d numpy arrays
+    Container for GGMP hyperparameters: mixture weights plus per-component GP parameters.
+
+    Stores K sets of GP hyperparameters (one per GMM component) together with K
+    mixture weights, and provides helpers to flatten/unflatten them into a single
+    vector suitable for optimizers.
+
+    Parameters
+    ----------
+    weights : np.ndarray, shape (K,)
+        Initial mixture weights.
+    weights_bounds : np.ndarray, shape (K, 2)
+        Lower and upper bounds for each weight.
+    hps : list of np.ndarray
+        List of K hyperparameter vectors, one per GMM component.
+    hps_bounds : list of np.ndarray
+        List of K bound arrays (shape (d_k, 2)) corresponding to each ``hps[k]``.
     """
 
     def __init__(self, weights, weights_bounds, hps, hps_bounds):
@@ -658,15 +693,16 @@ class hyperparameters: # pragma: no cover
         self.vectorized_bounds = self.vectorize_bounds(weights_bounds, hps_bounds)
 
     def set(self, weights, hps):
+        """Update weights and per-component hyperparameters and refresh the flat vector."""
         if len(hps) != len(self.hps_bounds): raise Exception("hps and hps_bounds have to be lists of equal length")
         if len(weights) != len(self.weights_bounds):
             raise Exception("weights (1d) and weights_bounds (2d) have to be numpy arrays of equal length")
-
         self.weights = weights
         self.hps = hps
         self.vectorized_hps = self.vectorize_hps(weights, hps)
 
     def vectorize_hps(self, weights, hps):
+        """Flatten weights and per-component hyperparameters into a single 1-D array."""
         v = [weights[i] for i in range(self.number_of_weights)]
         for i in range(self.number_of_hps_sets):
             for j in range(self.number_of_hps[i]):
@@ -674,6 +710,7 @@ class hyperparameters: # pragma: no cover
         return np.asarray(v)
 
     def devectorize_hps(self, v):
+        """Split a flat parameter vector back into (weights, list-of-hps-arrays)."""
         weights = v[0:self.number_of_weights]
         index = self.number_of_weights
         hps = []
@@ -683,6 +720,7 @@ class hyperparameters: # pragma: no cover
         return weights, hps
 
     def vectorize_bounds(self, weights_bounds, hps_bounds):
+        """Flatten weight bounds and per-component hyperparameter bounds into a single array."""
         b = [weights_bounds[i] for i in range(self.number_of_weights)]
         for i in range(self.number_of_hps_sets):
             for j in range(self.number_of_hps[i]):
@@ -690,6 +728,7 @@ class hyperparameters: # pragma: no cover
         return np.asarray(b)
 
     def devectorize_bounds(self, b):
+        """Split a flat bounds array back into (weights_bounds, list-of-hps-bounds)."""
         weights_bounds = b[0:self.number_of_weights]
         index = self.number_of_weights
         hps_bounds = []
@@ -700,6 +739,23 @@ class hyperparameters: # pragma: no cover
 
 
 class NormalLikelihood: # pragma: no cover
+    """
+    Diagonal Gaussian likelihood for one GMM component.
+
+    Stores the component mean vector and variance vector (both of length N, one
+    entry per station), along with the component's mixture weight.  Used as the
+    training signal for each per-component :class:`GP` inside :class:`GGMP`.
+
+    Parameters
+    ----------
+    mean : np.ndarray, shape (N,)
+        Component mean at each station.
+    variance : np.ndarray, shape (N,)
+        Component variance at each station (used as GP observation noise).
+    weight : float
+        Mixture weight for this component; should satisfy 0 < weight <= 1.
+    """
+
     def __init__(self, mean, variance, weight):
         self.mean = mean
         self.variance = variance
@@ -708,20 +764,22 @@ class NormalLikelihood: # pragma: no cover
         self.weight_bounds = np.array([0, 1])
 
     def set_moments(self, mean, variance):
+        """Update the component mean and variance vectors."""
         self.mean = mean
         self.variance = variance
 
     def set_weight(self, weight):
+        """Update the mixture weight for this component."""
         self.weight = weight
 
     def unravel(self):
+        """Return mean and variance concatenated into a single 1-D array."""
         return np.concatenate([self.mean, self.variance])
 
     def ravel(self, vec):
+        """Split a concatenated array back into (mean, variance) of length ``self.dim`` each."""
         return vec[0:self.dim], vec[self.dim:]
 
-#    def marginalize(self, domain, direction):
-#        return gaussian(self.mean[direction], np.sqrt(self.variance[direction]), domain)
 
 
 # ============================================================================
@@ -855,6 +913,7 @@ def fit_gmm_fixed_weights(
 
 
 def _as_2d(y: np.ndarray) -> np.ndarray: # pragma: no cover
+    """Ensure ``y`` is a 2-D float array of shape (n_samples, n_dims); raise on empty input."""
     y = np.asarray(y, dtype=float)
     if y.ndim == 1:
         y = y.reshape(-1, 1)
@@ -872,6 +931,19 @@ def _covariances_to_full(
     K: int,
     d: int,
 ) -> np.ndarray: # pragma: no cover
+    """Convert sklearn-style covariance storage to full (K, d, d) matrices.
+
+    Parameters
+    ----------
+    covariances : np.ndarray
+        Raw covariance array as returned by ``GaussianMixture.covariances_``.
+    covariance_type : str
+        One of ``"full"``, ``"diag"``, ``"spherical"``, or ``"tied"``.
+    K : int
+        Number of mixture components.
+    d : int
+        Dimensionality of each observation.
+    """
     cov_type = str(covariance_type).lower()
     cov = np.asarray(covariances, dtype=float)
     if cov_type == "full":
@@ -1015,11 +1087,13 @@ def fit_local_gmms_multivariate(
 
 
 def _sym_psd(a: np.ndarray) -> np.ndarray: # pragma: no cover
+    """Symmetrize a square matrix: return ``(a + a.T) / 2``."""
     a = np.asarray(a, dtype=float)
     return 0.5 * (a + a.T)
 
 
 def _sqrtm_psd(a: np.ndarray, *, eps: float = 1e-12) -> np.ndarray: # pragma: no cover
+    """Matrix square root of a symmetric PSD matrix via eigendecomposition."""
     a = _sym_psd(a)
     vals, vecs = np.linalg.eigh(a)
     vals = np.clip(vals, float(eps), None)
@@ -1163,6 +1237,19 @@ def _log_mvn_density(
     *,
     reg: float = 1e-9,
 ) -> np.ndarray: # pragma: no cover
+    """Log-density of a multivariate Gaussian evaluated at each row of ``y``.
+
+    Parameters
+    ----------
+    y : np.ndarray, shape (n, d)
+        Evaluation points.
+    mean : np.ndarray, shape (d,)
+        Mean vector.
+    cov : np.ndarray, shape (d, d)
+        Covariance matrix (symmetrized internally).
+    reg : float, optional
+        Ridge added to the diagonal for numerical stability.  Default is 1e-9.
+    """
     y = _as_2d(y)
     mean = np.asarray(mean, dtype=float).reshape(-1)
     cov = _sym_psd(np.asarray(cov, dtype=float))

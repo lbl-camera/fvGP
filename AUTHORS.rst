@@ -11,3 +11,4 @@ Contributors
 ------------
 
 * Ronald Pandolfi
+* Vardaan Tekriwal

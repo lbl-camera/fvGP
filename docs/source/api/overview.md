@@ -6,6 +6,7 @@
 
 GP.md
 fvGP.md
+ggmp.md
 kernels.md
 gpMCMC.md
 logging.md

@@ -14,9 +14,9 @@ import sys
 from .gp import GP
 from .fvgp import fvGP
 from .gp_mcmc import gpMCMC, ProposalDistribution
+from . import ggmp
 
 
-
-__all__ = ['GP', 'fvGP', 'gpMCMC', 'ProposalDistribution']
+__all__ = ['GP', 'fvGP', 'gpMCMC', 'ProposalDistribution', 'ggmp']
 
 logger.disable('fvgp')
