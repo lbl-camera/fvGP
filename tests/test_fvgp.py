@@ -807,35 +807,11 @@ def test_ggmp():
     assert np.isscalar(ll) and np.isfinite(ll)
 
     # ------------------------------------------------------------------
-    # _gp_neg_log_likelihood_gradient
-    # ------------------------------------------------------------------
-    grad = g._gp_neg_log_likelihood_gradient(g.gps[0])
-    assert grad.shape == (n_hps,)
-    assert np.all(np.isfinite(grad))
-
-    # ------------------------------------------------------------------
     # _safe_set_hyperparameters (update + no-op)
     # ------------------------------------------------------------------
     new_hps = np.array([1.2, 0.4, 0.1])
     g._safe_set_hyperparameters(g.gps[0], new_hps)
     g._safe_set_hyperparameters(g.gps[0], new_hps)  # same → no-op
-
-    # ------------------------------------------------------------------
-    # _set_expert_component (deprecated alias)
-    # ------------------------------------------------------------------
-    gp_back = g._set_expert_component(0, 0)
-    assert gp_back is g._component_GPs[0]
-
-    # ------------------------------------------------------------------
-    # _eval_ll_vector / _eval_ll_matrix
-    # ------------------------------------------------------------------
-    ll_vec, failures = g._eval_ll_vector(hps_list)
-    assert ll_vec.shape == (K,) and failures == 0
-
-    ll_mat, failures = g._eval_ll_matrix(hps_list)
-    assert ll_mat.shape == (K, K)
-    # diagonal should match the vector
-    assert np.allclose(np.diag(ll_mat), ll_vec)
 
     # ------------------------------------------------------------------
     # constant_mean
@@ -1010,6 +986,94 @@ def test_ggmp():
         assert "weights" in local and len(local["weights"]) == 3
     except ImportError:
         pass
+
+    # ------------------------------------------------------------------
+    # prepare_station_terms_density + optimize_weights_em_density
+    # ------------------------------------------------------------------
+    prepare_station_terms_density = ggmp.prepare_station_terms_density
+    optimize_weights_em_density = ggmp.optimize_weights_em_density
+
+    terms_d, ll_comp = prepare_station_terms_density(g, hps_list)
+    assert len(terms_d) == N
+    p0, dx0, lpdf0 = terms_d[0]
+    assert p0.shape == dx0.shape
+    assert lpdf0.shape == (len(domain), K)
+    assert ll_comp.shape == (K,) and np.all(np.isfinite(ll_comp))
+
+    w_d, w_hist_d, obj_hist_d = optimize_weights_em_density(
+        terms_d, K=K, weight_floor=1e-9, max_iter=10, tol_l1=1e-10, log_every=0)
+    assert w_d.shape == (K,) and np.isclose(w_d.sum(), 1.0, atol=1e-8)
+    assert len(w_hist_d) > 0 and len(obj_hist_d) > 0
+
+    # ------------------------------------------------------------------
+    # train — phase 1 only (train_weights=False)
+    # ------------------------------------------------------------------
+    synced = g.train(method="local", max_iter=5, train_weights=False)
+    assert len(synced) == K
+    assert all(len(h) == n_hps for h in synced)
+
+    # ------------------------------------------------------------------
+    # train — phase 2 density (default)
+    # ------------------------------------------------------------------
+    synced2 = g.train(method="local", max_iter=5, train_weights=True, weight_method="density",
+                      weight_max_iter=5)
+    assert len(synced2) == K
+    weights_after = np.array([g.likelihoods[k].weight for k in range(K)])
+    assert np.isclose(weights_after.sum(), 1.0, atol=1e-8)
+
+    # ------------------------------------------------------------------
+    # train — phase 2 samples
+    # ------------------------------------------------------------------
+    y_samples_train = [rng.standard_normal(30) for _ in range(N)]
+    synced3 = g.train(method="local", max_iter=5, train_weights=True,
+                      weight_method="samples", weight_max_iter=5,
+                      y_samples=y_samples_train)
+    assert len(synced3) == K
+
+    # train with unknown weight_method raises
+    try:
+        g.train(method="local", max_iter=2, train_weights=True, weight_method="bad")
+        assert False, "should have raised"
+    except ValueError:
+        pass
+
+    # train with weight_method='samples' but no y_samples raises
+    try:
+        g.train(method="local", max_iter=2, train_weights=True, weight_method="samples")
+        assert False, "should have raised"
+    except ValueError:
+        pass
+
+    # ------------------------------------------------------------------
+    # posterior_mean / posterior_variance
+    # ------------------------------------------------------------------
+    x_pred = np.linspace(0, 1, 4).reshape(-1, 1)
+    pm = g.posterior_mean(x_pred)
+    assert pm.shape == (4,) and np.all(np.isfinite(pm))
+
+    pv = g.posterior_variance(x_pred)
+    assert pv.shape == (4,) and np.all(pv >= 0)
+
+    # ------------------------------------------------------------------
+    # bhattacharyya_distance / kl_divergence / wasserstein_1d
+    # ------------------------------------------------------------------
+    bhattacharyya_distance = ggmp.bhattacharyya_distance
+    kl_divergence = ggmp.kl_divergence
+    wasserstein_1d = ggmp.wasserstein_1d
+
+    p_ref = np.exp(-0.5 * domain ** 2)
+    q_ref = np.exp(-0.5 * (domain - 1) ** 2)
+
+    bd = bhattacharyya_distance(domain, p_ref, q_ref)
+    assert np.isscalar(bd) and bd >= 0.0
+    assert np.isclose(bhattacharyya_distance(domain, p_ref, p_ref), 0.0, atol=1e-6)
+
+    kl = kl_divergence(domain, p_ref, q_ref)
+    assert np.isscalar(kl) and kl >= 0.0
+
+    w1 = wasserstein_1d(domain, p_ref, q_ref)
+    assert np.isscalar(w1) and w1 >= 0.0
+    assert np.isclose(wasserstein_1d(domain, p_ref, p_ref), 0.0, atol=1e-6)
 
 
 def test_pickle():
