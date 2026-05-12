@@ -5,18 +5,29 @@ from fvgp import __version__
 
 
 def _sync_example_notebooks(app):
-    """Copy every *.ipynb from the repo examples/ dir into docs/source/examples/.
+    """Copy every *.ipynb from the repo ``examples/`` dir into
+    ``docs/source/examples/`` so Sphinx can find them.
 
-    This keeps the docs in sync with the authoritative source notebooks without
-    requiring a manual copy step.  The ReadTheDocs pre_build step in
-    .readthedocs.yaml also does this, but running it here means local ``make
-    docs`` builds are always up to date as well.
+    ``docs/source/examples/*.ipynb`` is gitignored — the authoritative copies
+    live in ``examples/``.  Running this at every Sphinx build keeps the docs
+    in sync, both locally (``make docs``) and on ReadTheDocs (in addition to
+    the pre_build ``cp`` step in ``.readthedocs.yml``).
+
+    We use ``shutil.copy`` (not ``copy2``) so the destination mtime is updated
+    to ``now`` — this guarantees Sphinx's incremental build sees the file as
+    changed and re-renders it instead of using a cached ``.doctree``.
     """
     src = Path(app.srcdir).parent.parent / "examples"
     dst = Path(app.srcdir) / "examples"
-    dst.mkdir(exist_ok=True)
-    for nb in src.glob("*.ipynb"):
-        shutil.copy2(nb, dst / nb.name)
+    if not src.is_dir():
+        print(f"[conf.py] WARNING: examples source dir not found: {src}")
+        return
+    dst.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for nb in sorted(src.glob("*.ipynb")):
+        shutil.copy(nb, dst / nb.name)
+        copied.append(nb.name)
+    print(f"[conf.py] Synced {len(copied)} notebook(s) from {src} -> {dst}: {copied}")
 
 
 def setup(app):
