@@ -165,7 +165,7 @@ class GP:
         * ``"CholInv"`` — Cholesky factorization, then explicitly stores the inverse; speeds up posterior
           covariance evaluation 3–10×. Avoid for datasets larger than ~5 000 points due to memory
           and numerical cost. Training always uses the Cholesky factor for stability.
-        * ``"Inv"`` — computes and stores the explicit inverse directly (no Cholesky). Only suitable for
+        * ``"Inv"`` — computes and stores the explicit inverse directly (no Cholesky) even during training. Only suitable for
           very small datasets where posterior covariance is computed many times.
 
         **Specialized for gp2Scale (sparse covariance matrices):**

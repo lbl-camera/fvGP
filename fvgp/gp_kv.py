@@ -36,7 +36,7 @@ class GPkv:
         if self.gp2Scale: self.mode = self._set_gp2Scale_mode(K)
         elif linalg_mode is not None: self.mode = linalg_mode
         else: self.mode = "Chol"
-        self.KVinvY = self._set_state_KVinvY(K, V, m, self.mode)
+        self._refresh(rank_n_update=False)
 
     @property
     def args(self):
@@ -82,22 +82,36 @@ class GPkv:
     ##################################################################
     #####################UPDATE THE OBJ STATE#########################
     ##################################################################
-    def update_state_data(self, append):
-        """
-        Update the marginal PDF when the data has changed in data likelihood or prior objects
-        """
-        logger.debug("Updating marginal density after new data was appended.")
-        K, V, m = self._get_KVm()
-        if append: self.KVinvY = self._update_state_KVinvY(K, V, m)
-        else: self.KVinvY = self._set_state_KVinvY(K, V, m, self.mode)
-
     def update_state_hyperparameters(self):
-        """
-        Update the marginal likelihood when hyperparameters have changed
-        """
+        """Hyperparameters changed: full KV recompute, then KVinvY."""
         logger.debug("Updating marginal density after hyperparameters were updated.")
+        self._refresh(rank_n_update=False)
+
+    def update_state_data(self, append):
+        """Data changed: rank-n KV update if appending, full recompute otherwise, then KVinvY."""
+        logger.debug("Updating marginal density after new data was %s.",
+                     "appended" if append else "overwritten")
+        self._refresh(rank_n_update=append)
+
+    def _refresh(self, rank_n_update):
+        """Refresh both the KV factorization (Chol_factor / KVinv / LU_factor / ...) and KVinvY.
+
+        rank_n_update=True   reuse the current factorization (rank-n update via update_KV)
+                             and warm-start the solve from the previous KVinvY.  Used after
+                             appending data.
+        rank_n_update=False  full recompute via set_KV with no warm-start.  Used after
+                             hyperparameter changes or data overwrite.
+        """
         K, V, m = self._get_KVm()
-        self.KVinvY = self._set_state_KVinvY(K, V, m, self.mode)
+        KV = self.addKV(K, V)
+        logger.debug("K+V computed")
+        if rank_n_update: self.update_KV(KV)
+        else: self.set_KV(KV)
+        logger.debug("KV factorization set")
+        logger.debug("Solve in progress")
+        y_mean = self.y_data - m[:, None]
+        x0 = self.KVinvY if rank_n_update else None
+        self.KVinvY = self.solve(y_mean, x0=x0).reshape(y_mean.shape)
 
     def set_KV(self, KV):
         if self.mode == "Chol":
@@ -179,23 +193,6 @@ class GPkv:
             self.custom_obj = self.mode[0](KV)
         else:
             raise Exception(f"No Mode. Choose from: {self.allowed_modes}")
-        
-    def _update_state_KVinvY(self, K, V, m):
-        """Updates KVinvY after new data was appended using a rank-n update (faster than a full recompute)."""
-        y_mean = self.y_data - m[:, None]
-        KV = self.addKV(K, V)
-        self.update_KV(KV)
-        return self.solve(y_mean, x0=self.KVinvY).reshape(y_mean.shape)
-
-    def _set_state_KVinvY(self, K, V, m, mode):
-        """Set or reset KVinvY for new hyperparameters."""
-        y_mean = self.y_data - m[:, None]
-        KV = self.addKV(K, V)
-        logger.debug("K+V computed")
-        self.set_KV(KV)
-        logger.debug("KV factorization set")
-        logger.debug("Solve in progress")
-        return self.solve(y_mean).reshape(y_mean.shape)
 
     def compute_new_KVinvY(self, KV, m):
         """Recompute KVinvY for a given KV and m without updating state (used during training)."""
@@ -337,9 +334,11 @@ class GPkv:
         if self.mode == "Chol":
             return calculate_Chol_solve(self.Chol_factor, b, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv":
-            return calculate_Chol_solve(self.Chol_factor, b, compute_device=self.compute_device, args=self.args)
+            # CholInv mode pre-computes and caches the explicit inverse in set_KV/update_KV;
+            # using it here turns every downstream solve (posterior mean, covariance, gradients,
+            # state-update KVinvY) into a single GEMM/GEMV instead of two triangular solves.
+            return self.KVinv @ b
         elif self.mode == "Inv":
-            #return matmul(self.KVinv, b, compute_device=self.compute_device) #is this really faster?
             return self.KVinv @ b
         elif self.mode == "sparseCG":
             return calculate_sparse_conj_grad(self.KV, b, x0=x0, args=self.args)
