@@ -51,7 +51,7 @@ extensions = [
 
 nb_execution_mode = 'off'
 
-myst_enable_extensions = ['colon_fence']
+myst_enable_extensions = ['colon_fence', 'dollarmath', 'amsmath']
 
 intersphinx_mapping = {
     'python': ('https://docs.python.org/3/', None),

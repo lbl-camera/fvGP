@@ -16,14 +16,6 @@ warnings.simplefilter("once", UserWarning)
 # TODO: search below "TODO"
 
 
-# RECENT UNTESTED CHANGES
-#   - NON PD error for cholesky and rank-1 updates
-#   - added a sparse CG tolerance to the args
-#   - added a check for the presence of pytorch or cupy when gpu compute device is specified
-#   - dtypes for lin alg
-#   - scatter only at init and when data changes. scatter future released. 
-#   - added a lot of checks for the formats of the inputs and outputs of the callables and the hyperparameters
-#   - added async MCMC and Adam training options for local and remote training. This is basically accomplished, but not fully tested yet.
 
 class GP:
     """
