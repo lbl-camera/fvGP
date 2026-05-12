@@ -1,4 +1,26 @@
+import shutil
+from pathlib import Path
+
 from fvgp import __version__
+
+
+def _sync_example_notebooks(app):
+    """Copy every *.ipynb from the repo examples/ dir into docs/source/examples/.
+
+    This keeps the docs in sync with the authoritative source notebooks without
+    requiring a manual copy step.  The ReadTheDocs pre_build step in
+    .readthedocs.yaml also does this, but running it here means local ``make
+    docs`` builds are always up to date as well.
+    """
+    src = Path(app.srcdir).parent.parent / "examples"
+    dst = Path(app.srcdir) / "examples"
+    dst.mkdir(exist_ok=True)
+    for nb in src.glob("*.ipynb"):
+        shutil.copy2(nb, dst / nb.name)
+
+
+def setup(app):
+    app.connect("builder-inited", _sync_example_notebooks)
 
 project = 'fvGP'
 copyright = '2024, Marcus Michael Noack'
