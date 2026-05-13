@@ -14,11 +14,12 @@ class GPlikelihood:
 
         self.data = data
         self.trainer = trainer
-        assert self.noise_variances is None or isinstance(self.noise_variances, np.ndarray)
+        assert self.noise_variances is None or isinstance(self.noise_variances, np.ndarray), \
+            "noise_variances must be None or np.ndarray"
 
         if isinstance(self.noise_variances, np.ndarray):
-            assert np.ndim(self.noise_variances) == 1
-            assert np.all(self.noise_variances > 0.0)
+            assert np.ndim(self.noise_variances) == 1, "noise_variances must be 1-d"
+            assert np.all(self.noise_variances > 0.0), "all noise_variances must be positive"
 
         if self.noise_variances is not None and callable(noise_function):
             raise Exception("Noise function and measurement noise provided. Decide which one to use.")

@@ -125,7 +125,7 @@ class GPMarginalLikelihood:
 
         n = len(self.y_data)
         y_mean = self.y_data - m[:, None]
-        assert np.ndim(y_mean) == 2
+        assert np.ndim(y_mean) == 2, "y minus mean must be 2-d"
         assert y_mean.shape == KVinvY.shape, "(y-m).shape != KVinvY.shape in log_likelihood"+str(y_mean.shape)+" ,"+str(KVinvY.shape)
         if np.ndim(y_mean) == 2: l1 = np.sum(y_mean * KVinvY)/y_mean.shape[1]
         else: l1 = np.sum(y_mean * KVinvY)
@@ -187,7 +187,8 @@ class GPMarginalLikelihood:
         if self.ram_economy is False:
             try:
                 noise_der = self.calculate_V_grad(self.x_data, hyperparameters)
-                assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 3
+                assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 3, \
+                    "noise gradient must be 2-d (diagonal per hyperparameter) or 3-d (full matrix per hyperparameter)"
                 if np.ndim(noise_der) == 2:
                     noise_der_V = np.zeros((len(hyperparameters), len(self.x_data), len(self.x_data)))
                     for i in range(len(hyperparameters)): np.fill_diagonal(noise_der_V[i], noise_der[i])
@@ -212,7 +213,8 @@ class GPMarginalLikelihood:
             else:
                 try:
                     noise_der = self.calculate_V_grad(self.x_data, hyperparameters, direction=i)
-                    assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 1
+                    assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 1, \
+                        "noise gradient in ram_economy mode must be 1-d (diagonal) or 2-d (full matrix)"
                     if np.ndim(noise_der) == 1:
                         dK_dH = self.dk_dh(
                             self.x_data, self.x_data, hyperparameters, direction=i) + np.diag(noise_der)

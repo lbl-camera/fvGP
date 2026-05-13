@@ -128,7 +128,7 @@ class gpMCMC:
         """
         start_time = time.time()
         n_updates = max(n_updates, 2)
-        assert isinstance(x0, np.ndarray) and np.ndim(x0) == 1
+        assert isinstance(x0, np.ndarray) and np.ndim(x0) == 1, "x0 must be a 1-d np.ndarray"
 
         #break condition
         if break_condition is None: break_condition = lambda a: False
@@ -195,7 +195,7 @@ class gpMCMC:
     ###############################################################
     def _jump(self, x_old, obj, prior_eval, likelihood):
         x_star = x_old.copy()
-        assert callable(obj.proposal_dist)
+        assert callable(obj.proposal_dist), "proposal_dist must be callable"
 
         # get proposed x (x_star)
         x_star[obj.indices] = obj.proposal_dist(x_old[obj.indices].copy(), x_old, obj)

@@ -14,8 +14,8 @@ import importlib
 warnings.simplefilter("once", UserWarning)
 
 # TODO: search below "TODO"
-
-
+# is compute_device used for anything other than the default kernel? If not, it should be renamed to "default_kernel_compute_device" or something like that.
+# The same applies to the args related to compute devices. Is it overwritten by args?
 
 class GP:
     """
@@ -148,8 +148,8 @@ class GP:
         If no kernel is provided, the ``compute_device`` option should be revisited.
         The default kernel will use the specified device to compute covariances.
         The default is False.
-    gp2Scale_dask_client : dask.distributed.Client, optional
-        A dask client for gp2Scale.
+    dask_client : dask.distributed.Client, optional
+        A dask client for gp2Scale, asynchronous training,a nd certain linear algebra operations.
         On HPC architecture, this client is provided by the job script. Please have a look at the examples.
         A local client is used as the default.
     gp2Scale_batch_size : int, optional
@@ -250,7 +250,7 @@ class GP:
         prior_mean_function=None,
         prior_mean_function_grad=None,
         gp2Scale=False,
-        gp2Scale_dask_client=None,
+        dask_client=None,
         gp2Scale_batch_size=10000,
         linalg_mode=None,
         ram_economy=False,
@@ -305,10 +305,10 @@ class GP:
                 warnings.warn("You have specified the 'gpu' as your compute device. You need to install pytorch or cupy"
                               " manually for this to work.")
         # Check gp2Scale
-        gp2Scale_dask_client = self.initialize_gp2Scale_dask_client(gp2Scale, gp2Scale_dask_client)
-
+        dask_client = self.initialize_gp2Scale_dask_client(gp2Scale, dask_client)
+        self.dask_client = dask_client
         ##########################################
-        #######prepare training [tier 2]###########
+        #######prepare training [tier 2]##########
         ##########################################
         self.trainer = GPtraining(self.data, hyperparameters)
         ########################################
@@ -320,7 +320,7 @@ class GP:
                              prior_mean_function=prior_mean_function,
                              kernel_grad=kernel_function_grad,
                              prior_mean_function_grad=prior_mean_function_grad,
-                             gp2Scale_dask_client=gp2Scale_dask_client,
+                             gp2Scale_dask_client=dask_client,
                              gp2Scale_batch_size=gp2Scale_batch_size,
                              )
         ########################################
@@ -524,7 +524,8 @@ class GP:
         for i in range(self.index_set_dim):
             range_xi = np.max(self.x_data[:, i]) - np.min(self.x_data[:, i])
             hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
-        assert isinstance(hyperparameter_bounds, np.ndarray) and np.ndim(hyperparameter_bounds) == 2
+        assert isinstance(hyperparameter_bounds, np.ndarray) and np.ndim(hyperparameter_bounds) == 2, \
+            "hyperparameter_bounds must be a 2-d np.ndarray"
         return hyperparameter_bounds
 
     ###################################################################################
@@ -619,7 +620,8 @@ class GP:
             If the optimizer is ``hgdl``, see the hgdl documentation.
             If the optimizer is a ``scipy`` optimizer, see the scipy documentation.
         dask_client : distributed.client.Client, optional
-            A Dask Distributed Client instance for distributed training if ``hgdl`` is used.
+            A Dask Distributed Client instance for asynchronous training. This can also be provided at initialization, but
+            this will be used if not provided.
         info : bool, optional
             Provides a way how to access information reports during training of the GP. The default is False.
             If other information is needed please utilize ``logger`` as described in the online
@@ -648,8 +650,10 @@ class GP:
             warnings.warn(f"Asynchronous execution is not supported for method=`{method}`. "
                           f"Supported async methods: {sorted(_async_methods)}. `asynchronous` set to False.")
             asynchronous = False
+
         if method in _async_methods and asynchronous and dask_client is None:
-            raise Exception("Please provide a dask_client for asynchronous training")   # pragma: no cover
+            dask_client = self.dask_client
+            if dask_client is None: raise Exception("Please provide a dask_client for asynchronous training")   # pragma: no cover
         
         #hyperparameter bounds and init checks
         if hyperparameter_bounds is None:
@@ -1269,7 +1273,8 @@ class GP:
 
         mean = self.posterior_mean(x_test)["m(x)"]
         sigma = np.sqrt(self.posterior_covariance(x_test)["v(x)"])
-        assert mean.shape == sigma.shape == y_test.shape, (mean.shape, sigma.shape, y_test.shape)
+        assert mean.shape == sigma.shape == y_test.shape, \
+            f"crps: shape mismatch mean={mean.shape} sigma={sigma.shape} y_test={y_test.shape}"
         r = self._crps_s(y_test, mean, sigma)
         return r
 
@@ -1293,7 +1298,7 @@ class GP:
 
         v1 = y_test
         v2 = self.posterior_mean(x_test)["m(x)"]
-        assert v1.shape == v2.shape, (v1.shape, v2.shape)
+        assert v1.shape == v2.shape, f"rmse: y_test shape {v1.shape} != posterior mean shape {v2.shape}"
         return np.sqrt(np.sum((v1 - v2) ** 2) / v1.size)
 
     def nrmse(self, x_test, y_test):
@@ -1335,7 +1340,8 @@ class GP:
         mean = self.posterior_mean(x_test)["m(x)"]
         v = self.posterior_covariance(x_test)["v(x)"]
 
-        assert mean.shape == v.shape == y_test.shape, (mean.shape, v.shape, y_test.shape)
+        assert mean.shape == v.shape == y_test.shape, \
+            f"nlpd: shape mismatch mean={mean.shape} v={v.shape} y_test={y_test.shape}"
 
         term1 = 0.5 * np.log(2 * np.pi * v)
         term2 = 0.5 * ((y_test - mean) ** 2) / v
@@ -1358,7 +1364,8 @@ class GP:
         R2 : float
         """
         y_pred_mean = self.posterior_mean(x_test)["m(x)"]
-        assert y_pred_mean.shape == y_test.shape, (y_pred_mean.shape, y_test.shape)
+        assert y_pred_mean.shape == y_test.shape, \
+            f"r2: y_test shape {y_test.shape} != posterior mean shape {y_pred_mean.shape}"
         ss_res = np.sum((y_test - y_pred_mean) ** 2)
         ss_tot = np.sum((y_test - np.mean(y_test)) ** 2)
         return 1. - ss_res / ss_tot
@@ -1468,7 +1475,8 @@ class GP:
         """
         mean = self.posterior_mean(x_test)["m(x)"]
         sigma = np.sqrt(self.posterior_covariance(x_test, add_noise=True)["v(x)"])
-        assert mean.shape == sigma.shape == y_test.shape, (mean.shape, sigma.shape, y_test.shape)
+        assert mean.shape == sigma.shape == y_test.shape, \
+            f"interval_score: shape mismatch mean={mean.shape} sigma={sigma.shape} y_test={y_test.shape}"
 
         alpha = 1 - interval
         z = norm.ppf(1 - alpha / 2)
@@ -1498,7 +1506,7 @@ class GP:
         """
         v1 = y_test
         v2 = self.posterior_mean(x_test)["m(x)"]
-        assert v1.shape == v2.shape, (v1.shape, v2.shape)
+        assert v1.shape == v2.shape, f"mae: y_test shape {v1.shape} != posterior mean shape {v2.shape}"
         return np.mean(np.abs(v1 - v2))
 
     def mape(self, x_test, y_test):
@@ -1522,7 +1530,7 @@ class GP:
         """
         v1 = y_test
         v2 = self.posterior_mean(x_test)["m(x)"]
-        assert v1.shape == v2.shape, (v1.shape, v2.shape)
+        assert v1.shape == v2.shape, f"mape: y_test shape {v1.shape} != posterior mean shape {v2.shape}"
         return np.mean(np.abs((v1 - v2) / v1))
 
     def msll(self, x_test, y_test):
@@ -1546,7 +1554,8 @@ class GP:
         """
         mean = self.posterior_mean(x_test)["m(x)"]
         v = self.posterior_covariance(x_test)["v(x)"]
-        assert mean.shape == v.shape == y_test.shape, (mean.shape, v.shape, y_test.shape)
+        assert mean.shape == v.shape == y_test.shape, \
+            f"msll: shape mismatch mean={mean.shape} v={v.shape} y_test={y_test.shape}"
 
         nlpd_gp = np.mean(0.5 * np.log(2 * np.pi * v) + 0.5 * ((y_test - mean) ** 2) / v)
 
@@ -1688,7 +1697,8 @@ class GP:
             kv=self.kv,
             marginal_likelihood=self.marginal_likelihood,
             trainer=self.trainer,
-            posterior=self.posterior
+            posterior=self.posterior,
+            dask_client=None,
         )
         return state
 
@@ -1702,9 +1712,9 @@ class GP:
 ####################################################################################
 ####################################################################################
 def out_of_bounds(x, bounds):
-    assert isinstance(x, np.ndarray)
-    assert isinstance(bounds, np.ndarray)
-    assert np.ndim(bounds) == 2
+    assert isinstance(x, np.ndarray), "x must be np.ndarray for bounds check"
+    assert isinstance(bounds, np.ndarray), "bounds must be np.ndarray"
+    assert np.ndim(bounds) == 2, "bounds must be 2-d (n_params × 2)"
     for i in range(len(x)):
         if x[i] < bounds[i, 0] or x[i] > bounds[i, 1]:
             return True

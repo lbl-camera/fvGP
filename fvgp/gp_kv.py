@@ -300,16 +300,16 @@ class GPkv:
 
     @staticmethod
     def addKV(K, V):
-        assert np.ndim(K) == 2
-        assert K.shape[0] == K.shape[1]
+        assert np.ndim(K) == 2, "K must be a 2-d matrix"
+        assert K.shape[0] == K.shape[1], "K must be square"
 
         if issparse(K):
             if issparse(V):
                 KV = K + V
                 return KV
             else:
-                assert np.ndim(V) == 1, "K is sparse, but V is a dense matrix"
-                assert len(V) == K.shape[0]
+                assert np.ndim(V) == 1, "K is sparse but V is a dense matrix; expected 1-d diagonal"
+                assert len(V) == K.shape[0], "diagonal noise V length must match K dimension"
                 logger.debug("Evaluating K+V in gp2Scale")
                 KV = K.copy()
                 K_diag = K.diagonal()

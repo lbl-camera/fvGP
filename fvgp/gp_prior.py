@@ -32,10 +32,11 @@ class GPprior:
         self.data = data
         self.trainer = trainer
 
-        assert callable(kernel) or kernel is None
-        assert callable(prior_mean_function) or prior_mean_function is None
-        assert isinstance(self.hyperparameters, np.ndarray)
-        assert np.ndim(self.hyperparameters) == 1
+        assert callable(kernel) or kernel is None, "kernel must be callable or None"
+        assert callable(prior_mean_function) or prior_mean_function is None, \
+            "prior_mean_function must be callable or None"
+        assert isinstance(self.hyperparameters, np.ndarray), "hyperparameters must be np.ndarray"
+        assert np.ndim(self.hyperparameters) == 1, "hyperparameters must be 1-d"
 
         if not self.Euclidean and not callable(kernel):
             raise Exception(
@@ -200,16 +201,16 @@ class GPprior:
     def _compute_prior(self, x_data, hyperparameters):
         m = self.compute_mean(x_data, hyperparameters)
         K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
-        assert np.ndim(m) == 1, "mean: " + str(m)
-        assert np.ndim(K) == 2
+        assert np.ndim(m) == 1, "mean function returned non-1-d result: " + str(m)
+        assert np.ndim(K) == 2, "prior covariance K must be 2-d"
         logger.debug("Prior mean and covariance matrix successfully computed.")
         return m, K
 
     def _update_prior(self, x_old, x_new, hyperparameters):
         m = self._update_mean(x_new, hyperparameters)
         K = self._update_prior_covariance_matrix(x_old, x_new, hyperparameters)
-        assert np.ndim(m) == 1
-        assert np.ndim(K) == 2
+        assert np.ndim(m) == 1, "updated mean must be 1-d"
+        assert np.ndim(K) == 2, "updated covariance K must be 2-d"
         return m, K
 
     def _update_prior_covariance_matrix(self, x_old, x_new, hyperparameters):

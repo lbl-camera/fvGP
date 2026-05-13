@@ -154,8 +154,8 @@ class fvGP(GP):
         If no kernel is provided, the ``compute_device`` option should be revisited.
         The default kernel will use the specified device to compute covariances.
         The default is False.
-    gp2Scale_dask_client : dask.distributed.Client, optional
-        A dask client for gp2Scale.
+    dask_client : dask.distributed.Client, optional
+        A dask client for gp2Scale, asynchronous training,a nd certain linear algebra operations.
         On HPC architecture, this client is provided by the job script. Please have a look at the examples.
         A local client is used as the default.
     gp2Scale_batch_size : int, optional
@@ -317,7 +317,7 @@ class fvGP(GP):
         prior_mean_function=None,
         prior_mean_function_grad=None,
         gp2Scale=False,
-        gp2Scale_dask_client=None,
+        dask_client=None,
         gp2Scale_batch_size=10000,
         linalg_mode=None,
         ram_economy=False,
@@ -328,7 +328,7 @@ class fvGP(GP):
                 raise ValueError("The output number is 1, you can use the GP class for single-task GPs")
         self.output_num = y_data.shape[1]
 
-        assert len(x_data) == len(y_data)
+        assert len(x_data) == len(y_data), "x_data and y_data have different lengths"
         ####transform the space
         fvgp_x_data = x_data
         fvgp_y_data = y_data
@@ -349,7 +349,7 @@ class fvGP(GP):
             noise_function=noise_function,
             noise_function_grad=noise_function_grad,
             gp2Scale=gp2Scale,
-            gp2Scale_dask_client=gp2Scale_dask_client,
+            dask_client=dask_client,
             gp2Scale_batch_size=gp2Scale_batch_size,
             linalg_mode=linalg_mode,
             ram_economy=ram_economy,
@@ -421,7 +421,8 @@ class fvGP(GP):
         assert len(x_new) == len(y_new), "updated x and y do not have the same lengths."
         if append:
             if noise_variances_new is not None:
-                assert isinstance(noise_variances_new, np.ndarray) or isinstance(noise_variances_new, list)
+                assert isinstance(noise_variances_new, np.ndarray) or isinstance(noise_variances_new, list), \
+                    "noise_variances_new must be np.ndarray or list"
                 if isinstance(noise_variances_new, np.ndarray): fvgp_noise_variances = (
                     np.vstack([self.fvgp_noise_variances, noise_variances_new]))
                 elif isinstance(noise_variances_new, list): fvgp_noise_variances = (
@@ -448,10 +449,12 @@ class fvGP(GP):
 
     ################################################################################################
     def _transform_index_set2(self, x_data, y_data, noise_variances):
-        assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
-        assert isinstance(y_data, np.ndarray)
-        assert len(x_data) == len(y_data)
-        if noise_variances is not None: assert len(noise_variances) == len(y_data)
+        assert isinstance(x_data, np.ndarray) or isinstance(x_data, list), \
+            "x_data must be np.ndarray or list"
+        assert isinstance(y_data, np.ndarray), "y_data must be np.ndarray"
+        assert len(x_data) == len(y_data), "x_data and y_data have different lengths"
+        if noise_variances is not None: assert len(noise_variances) == len(y_data), \
+            "noise_variances and y_data have different lengths"
         new_x_data = []
         new_y_data = []
         output_indices = np.arange(0, self.output_num)
@@ -459,8 +462,10 @@ class fvGP(GP):
         else: new_variances = None
         for i in range(self.output_num):
             for j in range(len(x_data)):
-                if noise_variances is not None: assert len(noise_variances[j]) == self.output_num
-                assert len(y_data[j]) == self.output_num
+                if noise_variances is not None: assert len(noise_variances[j]) == self.output_num, \
+                    f"noise_variances row {j} length must equal output_num={self.output_num}"
+                assert len(y_data[j]) == self.output_num, \
+                    f"y_data row {j} length must equal output_num={self.output_num}"
                 if np.isnan(y_data[j, i]): continue
                 if isinstance(x_data, np.ndarray): new_x_data.append(np.append(x_data[j], output_indices[i]))
                 else: new_x_data.append([x_data[j], output_indices[i]])
@@ -471,9 +476,12 @@ class fvGP(GP):
         new_y_data = np.asarray(new_y_data)
         if new_variances is not None: new_variances = np.asarray(new_variances)
 
-        assert isinstance(new_x_data, list) or isinstance(new_x_data, np.ndarray)
-        assert isinstance(new_y_data, np.ndarray) and np.ndim(new_y_data) == 1
-        if new_variances is not None: assert isinstance(new_variances, np.ndarray) and np.ndim(new_variances) == 1
+        assert isinstance(new_x_data, list) or isinstance(new_x_data, np.ndarray), \
+            "transformed x_data must be list or np.ndarray"
+        assert isinstance(new_y_data, np.ndarray) and np.ndim(new_y_data) == 1, \
+            "transformed y_data must be a 1-d np.ndarray"
+        if new_variances is not None: assert isinstance(new_variances, np.ndarray) and np.ndim(new_variances) == 1, \
+            "transformed noise_variances must be a 1-d np.ndarray"
         return new_x_data, new_y_data, new_variances
 
     ################################################################################################

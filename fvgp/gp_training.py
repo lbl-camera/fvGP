@@ -434,7 +434,8 @@ class GPtraining:
                 elif "x" in opt_list: updated_hyperparameters = opt_list["x"]
                 else: raise Exception("Reading the `updated_hyperparameters` was not successful", opt_list)
             else: raise Exception("Reading the `updated_hyperparameters` was not successful", opt_list)
-            assert isinstance(updated_hyperparameters, np.ndarray) and np.ndim(updated_hyperparameters) == 1
+            assert isinstance(updated_hyperparameters, np.ndarray) and np.ndim(updated_hyperparameters) == 1, \
+                "async optimizer returned invalid hyperparameters: " + str(updated_hyperparameters)
             self.hyperparameters = updated_hyperparameters
             return updated_hyperparameters
 
@@ -563,7 +564,7 @@ class GPtraining:
 
     @staticmethod
     def _in_bounds(v, bounds):
-        assert isinstance(bounds, np.ndarray)
+        assert isinstance(bounds, np.ndarray), "bounds must be np.ndarray"
         if np.any(v < bounds[:, 0]) or np.any(v > bounds[:, 1]): return False
         return True
 

@@ -11,17 +11,20 @@ class GPdata:
                  compute_device="cpu"):
 
 
-        assert isinstance(x_data, np.ndarray) or isinstance(x_data, list)
-        assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2)
+        assert isinstance(x_data, np.ndarray) or isinstance(x_data, list), \
+            "x_data must be np.ndarray or list"
+        assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2), \
+            "y_data must be a 1-d or 2-d np.ndarray"
         assert ((isinstance(noise_variances, np.ndarray) and np.ndim(noise_variances) == 1)
-                or noise_variances is None)
+                or noise_variances is None), "noise_variances must be a 1-d np.ndarray or None"
         assert len(x_data) == len(y_data), "x_data and y_data have different lengths."
-        if isinstance(noise_variances, np.ndarray): assert len(noise_variances) == len(y_data)
+        if isinstance(noise_variances, np.ndarray): assert len(noise_variances) == len(y_data), \
+            "noise_variances and y_data have different lengths"
         if np.ndim(y_data) == 1: y_data = y_data.reshape(len(y_data), 1)
 
         # analyze data
         if isinstance(x_data, np.ndarray):
-            assert np.ndim(x_data) == 2
+            assert np.ndim(x_data) == 2, "Euclidean x_data must be 2-d (n_points × input_dim)"
             self.index_set_dim = len(x_data[0])
             self.input_set_dim = len(x_data[0])
             self.Euclidean = True
@@ -54,14 +57,18 @@ class GPdata:
         if self.Euclidean: self.input_set_dim = self.index_set_dim - 1
 
     def update(self, x_data_new, y_data_new, noise_variances_new=None, append=True):
-        assert isinstance(x_data_new, np.ndarray) or isinstance(x_data_new, list)
-        assert isinstance(y_data_new, np.ndarray), "y_data_new is of type"+type(y_data_new)
+        assert isinstance(x_data_new, np.ndarray) or isinstance(x_data_new, list), \
+            "x_data_new must be np.ndarray or list"
+        assert isinstance(y_data_new, np.ndarray), \
+            f"y_data_new must be np.ndarray, got {type(y_data_new)}"
         assert ((isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1)
-                or noise_variances_new is None)
-        if self.Euclidean: assert isinstance(x_data_new, np.ndarray) and np.ndim(x_data_new) == 2
+                or noise_variances_new is None), "noise_variances_new must be a 1-d np.ndarray or None"
+        if self.Euclidean: assert isinstance(x_data_new, np.ndarray) and np.ndim(x_data_new) == 2, \
+            "Euclidean x_data_new must be a 2-d np.ndarray"
         else: assert (isinstance(x_data_new, list) and
                       np.ndim(x_data_new) == 2 and
-                      self.index_set_dim == x_data_new.shape[1])
+                      self.index_set_dim == x_data_new.shape[1]), \
+            "non-Euclidean x_data_new must be a 2-d list matching index_set_dim"
 
         if self.noise_variances is not None and noise_variances_new is None:
             raise Exception("Please provide noise_variances in the data update because you did at initialization "
@@ -70,8 +77,6 @@ class GPdata:
             raise Exception("You did not initialize noise and but included noise in the update."
                             "Please reinitialize in this case.")
         if callable(noise_variances_new): raise Exception("The update noise_variances cannot be a callable.")
-        if noise_variances_new is not None:
-            assert isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1
         if np.ndim(y_data_new) == 1: y_data_new = y_data_new.reshape(len(y_data_new), 1)
 
         if append is False:

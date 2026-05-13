@@ -64,7 +64,7 @@ def get_gpu_engine(args):
 
 def calculate_sparse_LU_factor(M, args=None):
     """Compute the sparse LU factorization of ``M`` via SuperLU."""
-    assert sparse.issparse(M)
+    assert sparse.issparse(M), "M must be a sparse matrix for LU factorization"
     logger.debug("calculate_sparse_LU_factor")
     LU = splu(M.tocsc())
     return LU
@@ -72,14 +72,14 @@ def calculate_sparse_LU_factor(M, args=None):
 
 def calculate_LU_solve(LU, vec, args=None):
     """Solve ``M x = vec`` given a pre-computed SuperLU factorization."""
-    assert isinstance(vec, np.ndarray)
+    assert isinstance(vec, np.ndarray), "vec must be np.ndarray for LU solve"
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     if vec.dtype != LU.L.dtype:
         vec = vec.astype(LU.L.dtype, copy=False)
     logger.debug("calculate_LU_solve")
     res = LU.solve(vec)
     if np.ndim(res) == 1: res = res.reshape(len(res), 1)
-    assert np.ndim(res) == 2
+    assert np.ndim(res) == 2, "LU solve result must be 2-d"
     return res
 
 
@@ -88,13 +88,13 @@ def calculate_LU_logdet(LU, args=None):
     logger.debug("calculate_LU_logdet")
     upper_diag = abs(LU.U.diagonal())
     logdet = np.sum(np.log(upper_diag))
-    assert np.isscalar(logdet)
+    assert np.isscalar(logdet), "LU logdet result must be scalar"
     return logdet
 
 
 def calculate_Chol_factor(M, compute_device="cpu", args=None):
     """Return the lower-triangular Cholesky factor of the symmetric PD matrix ``M``."""
-    assert isinstance(M, np.ndarray)
+    assert isinstance(M, np.ndarray), "M must be np.ndarray for Cholesky factorization"
     args = args or {}
     if "Chol_factor_compute_device" in args: compute_device = args["Chol_factor_compute_device"]
     logger.debug(f"calculate_Chol_factor on {compute_device}")
@@ -127,7 +127,7 @@ def update_Chol_factor(old_chol_factor, new_matrix, compute_device="cpu", args=N
     Note: ``compute_device`` is currently fixed to ``"cpu"`` regardless of the
     argument; GPU support is not yet wired up for this wrapper.
     """
-    assert isinstance(new_matrix, np.ndarray)
+    assert isinstance(new_matrix, np.ndarray), "new_matrix must be np.ndarray for Cholesky update"
     compute_device = "cpu"
     #if "update_Chol_factor_compute_device" in args: compute_device = args["update_Chol_factor_compute_device"]
     logger.debug(f"update_Chol_factor on {compute_device}")
@@ -140,7 +140,7 @@ def update_Chol_factor(old_chol_factor, new_matrix, compute_device="cpu", args=N
 
 def calculate_Chol_solve(factor, vec, compute_device="cpu", args=None):
     """Solve ``A x = vec`` given the lower-triangular Cholesky factor of ``A``."""
-    assert isinstance(vec, np.ndarray)
+    assert isinstance(vec, np.ndarray), "vec must be np.ndarray for Cholesky solve"
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     if vec.dtype != factor.dtype:
         vec = vec.astype(factor.dtype, copy=False)
@@ -196,14 +196,14 @@ def calculate_Chol_logdet(factor, compute_device="cpu", args=None):
         else: logdet = None
     else:
         raise Exception("No valid compute device found. ")
-    assert np.isscalar(logdet)
+    assert np.isscalar(logdet), "Cholesky logdet result must be scalar"
     return logdet
 
 
 def spai(A, m, args=None):
     """Sparse Approximate Inverse preconditioner via m-step SPAI iteration."""
-    assert sparse.issparse(A)
-    assert isinstance(m, int)
+    assert sparse.issparse(A), "A must be sparse for SPAI"
+    assert isinstance(m, int), "m must be int (SPAI iteration count)"
     logger.debug("spai preconditioning")
     n = A.shape[0]
 
@@ -219,13 +219,13 @@ def spai(A, m, args=None):
         alpha = trace / np.linalg.norm(AG.data) ** 2
         M = M + alpha * G
 
-    assert sparse.issparse(M)
+    assert sparse.issparse(M), "SPAI result must remain sparse"
     return M
 
 
 def calculate_random_logdet(KV, compute_device, args=None):
     """Estimate log|det KV| for a sparse matrix via stochastic Lanczos quadrature (imate)."""
-    assert sparse.issparse(KV)
+    assert sparse.issparse(KV), "KV must be sparse for stochastic logdet"
     logger.debug("calculate_random_logdet")
     from imate import logdet as imate_logdet
     args = args or {}
@@ -248,13 +248,13 @@ def calculate_random_logdet(KV, compute_device, args=None):
                                     return_info=True, plot=False, verbose=verbose, orthogonalize=0)
     logger.debug("Stochastic Lanczos logdet() compute time: {} seconds", time.time() - st)
     if print_info: logger.debug(info_slq)
-    assert np.isscalar(logdet)
+    assert np.isscalar(logdet), "stochastic logdet result must be scalar"
     return logdet
 
 
 def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
     """Solve the sparse symmetric system ``KV x = vec`` with MINRES."""
-    assert sparse.issparse(KV)
+    assert sparse.issparse(KV), "KV must be sparse for MINRES"
     args = args or {}
     st = time.time()
     logger.debug("MINRES solve in progress ...")
@@ -270,13 +270,13 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
         res[:, i], exit_code = minres(KV, vec[:, i], M=M, rtol=minres_tol, x0=x0)
         if exit_code == 1: warnings.warn("MINRES not successful")
     logger.debug("MINRES compute time: {} seconds.", time.time() - st)
-    assert np.ndim(res) == 2
+    assert np.ndim(res) == 2, "MINRES result must be 2-d"
     return res
 
 
 def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
     """Solve the sparse SPD system ``KV x = vec`` with conjugate gradients."""
-    assert sparse.issparse(KV)
+    assert sparse.issparse(KV), "KV must be sparse for CG"
     args = args or {}
     st = time.time()
     logger.debug("CG solve in progress ...")
@@ -289,13 +289,13 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
         res[:, i], exit_code = cg(KV, vec[:, i], M=M, rtol=cg_tol, x0=x0)
         if exit_code == 1: warnings.warn("CG not successful")
     logger.debug("CG compute time: {} seconds.", time.time() - st)
-    assert np.ndim(res) == 2
+    assert np.ndim(res) == 2, "CG result must be 2-d"
     return res
 
 
 def calculate_sparse_solve(KV, vec, args=None):
     """Solve the sparse system ``KV x = vec`` with a direct sparse solver."""
-    assert sparse.issparse(KV)
+    assert sparse.issparse(KV), "KV must be sparse for sparse direct solve"
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     st = time.time()
     logger.debug("Sparse solve in progress ...")
@@ -473,7 +473,7 @@ def calculate_logdet(A, compute_device='cpu', args=None):
     logger.debug("calculate_logdet")
     if compute_device == "cpu":
         s, logdet = np.linalg.slogdet(A)
-        assert np.isscalar(logdet)
+        assert np.isscalar(logdet), "logdet must be scalar"
         return logdet
     elif compute_device == "gpu":
         try:
@@ -482,17 +482,17 @@ def calculate_logdet(A, compute_device='cpu', args=None):
             sign, logdet = torch.slogdet(A)
             logdet = logdet.cpu().numpy()
             logdet = np.nan_to_num(logdet)
-            assert np.isscalar(logdet)
+            assert np.isscalar(logdet), "logdet must be scalar"
             return logdet
         except Exception as e:
             warnings.warn(
                 "I encountered a problem using the GPU via pytorch. Falling back to Numpy and the CPU.")
             s, logdet = np.linalg.slogdet(A)
-            assert np.isscalar(logdet)
+            assert np.isscalar(logdet), "logdet must be scalar"
             return logdet
     else:
         sign, logdet = np.linalg.slogdet(A)
-        assert np.isscalar(logdet)
+        assert np.isscalar(logdet), "logdet must be scalar"
         return logdet
 
 
@@ -504,14 +504,14 @@ def update_logdet(old_logdet, old_inv, new_matrix, compute_device="cpu", args=No
     kk = KV[size:, size:]
     k = KV[size:, 0:size]
     res = old_logdet + calculate_logdet(kk - k @ old_inv @ k.T, compute_device=compute_device)
-    assert np.isscalar(res)
+    assert np.isscalar(res), "updated logdet must be scalar"
     return res
 
 
 def calculate_inv(A, compute_device='cpu', args=None):
     """Return the inverse of square matrix ``A``."""
-    assert isinstance(A, np.ndarray)
-    assert np.ndim(A) == 2
+    assert isinstance(A, np.ndarray), "A must be np.ndarray for matrix inversion"
+    assert np.ndim(A) == 2, "A must be 2-d for matrix inversion"
     logger.debug("calculate_inv")
     if compute_device == "cpu":
         return np.linalg.inv(A)
@@ -549,7 +549,7 @@ def update_inv(old_inv, new_matrix, compute_device="cpu", args=None):
 
 def solve(A, b, compute_device='cpu', args=None):
     """Solve ``A x = b``; falls back to least-squares if ``A`` is singular (cpu path)."""
-    assert isinstance(A, np.ndarray)
+    assert isinstance(A, np.ndarray), "A must be np.ndarray for solve"
     logger.debug("solve")
     if np.ndim(b) == 1: b = b.reshape(len(b), 1)
     if b.dtype != A.dtype:
@@ -560,7 +560,7 @@ def solve(A, b, compute_device='cpu', args=None):
         except np.linalg.LinAlgError:
             x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
         if np.ndim(x) == 1: x = x.reshape(len(x), 1)
-        assert np.ndim(x) == np.ndim(b)
+        assert np.ndim(x) == np.ndim(b), "solve result and rhs have mismatched dimensions"
         return x
     elif compute_device == "gpu":  # pragma: no cover
         engine = get_gpu_engine(args)
@@ -571,7 +571,7 @@ def solve(A, b, compute_device='cpu', args=None):
             x = torch.linalg.solve(At, bt)
             x = x.cpu().numpy()
             if np.ndim(x) == 1: x = x.reshape(len(x), 1)
-            assert np.ndim(x) == np.ndim(b)
+            assert np.ndim(x) == np.ndim(b), "solve result and rhs have mismatched dimensions"
             return x
         elif engine == "cupy":  # pragma: no cover
             import cupy as cp
@@ -580,7 +580,7 @@ def solve(A, b, compute_device='cpu', args=None):
             x = cp.linalg.solve(Lt, bt)
             x = cp.asnumpy(x)
             if np.ndim(x) == 1: x = x.reshape(len(x), 1)
-            assert np.ndim(x) == np.ndim(b)
+            assert np.ndim(x) == np.ndim(b), "solve result and rhs have mismatched dimensions"
             return x
         else:
             try:
@@ -588,7 +588,7 @@ def solve(A, b, compute_device='cpu', args=None):
             except np.linalg.LinAlgError:
                 x, res, rank, s = np.linalg.lstsq(A, b, rcond=None)
             if np.ndim(x) == 1: x = x.reshape(len(x), 1)
-            assert np.ndim(x) == np.ndim(b)
+            assert np.ndim(x) == np.ndim(b), "solve result and rhs have mismatched dimensions"
             return x
     else:
         raise Exception("No valid solve method specified")
@@ -624,9 +624,9 @@ def matmul(A, B, compute_device="cpu", args=None):
 def matmul3(A, B, C, compute_device="cpu", args=None):
     """Return ``A @ B @ C``; sparse inputs are always computed on CPU."""
     if sparse.issparse(A) or sparse.issparse(B) or sparse.issparse(C): compute_device = "cpu"
-    assert isinstance(A, np.ndarray)
-    assert isinstance(B, np.ndarray)
-    assert isinstance(C, np.ndarray)
+    assert isinstance(A, np.ndarray), "A must be np.ndarray for matmul3"
+    assert isinstance(B, np.ndarray), "B must be np.ndarray for matmul3"
+    assert isinstance(C, np.ndarray), "C must be np.ndarray for matmul3"
 
     logger.debug("matrix multiplication on", compute_device)
     if compute_device == "cpu":

@@ -102,7 +102,7 @@ class GGMP:
             If True, evaluate the K component GPs in parallel using a thread pool.
             Default is False.
         """
-        assert len(x_data) == len(y_data)
+        assert len(x_data) == len(y_data), "x_data and y_data have different lengths"
         self.likelihood_terms = likelihood_terms
         # One GP per component: number of GPs equals K
         self.number_of_GPs = likelihood_terms
@@ -169,10 +169,12 @@ class GGMP:
         list of NormalLikelihood
             The initialized likelihood objects, also stored as ``self.likelihoods``.
         """
-        assert init_mean is None or isinstance(init_mean, list)
-        assert init_std is None or isinstance(init_std, list)
-        if isinstance(init_mean, list): assert len(init_mean) == self.likelihood_terms
-        if isinstance(init_std, list): assert len(init_std) == self.likelihood_terms
+        assert init_mean is None or isinstance(init_mean, list), "init_mean must be a list or None"
+        assert init_std is None or isinstance(init_std, list), "init_std must be a list or None"
+        if isinstance(init_mean, list): assert len(init_mean) == self.likelihood_terms, \
+            f"init_mean length {len(init_mean)} must equal likelihood_terms={self.likelihood_terms}"
+        if isinstance(init_std, list): assert len(init_std) == self.likelihood_terms, \
+            f"init_std length {len(init_std)} must equal likelihood_terms={self.likelihood_terms}"
 
         # If not provided, initialize from per-station first/second moments of the empirical PDFs in self.y_data.
         # This keeps `NormalLikelihood.mean` as a numeric vector (len = number of stations), which GGMP expects.

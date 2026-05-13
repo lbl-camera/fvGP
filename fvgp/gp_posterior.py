@@ -139,7 +139,7 @@ class GPposterior:
             m = self.compute_mean(x_data, hyperparameters)
             if np.ndim(V) == 1: V = np.diag(V)
             KVinvY = self.compute_new_KVinvY(self.addKV(K, V), m)[:, component]
-            assert np.ndim(KVinvY) == 1
+            assert np.ndim(KVinvY) == 1, "KVinvY must be 1-d after column selection"
         else:
             hyperparameters = self.hyperparameters
 
@@ -494,7 +494,7 @@ class GPposterior:
     def add_noise(self, x_pred, v, S):
         if self.noise_function_available:
             noise = self.noise_function(x_pred, self.hyperparameters)
-            assert isinstance(noise, np.ndarray)
+            assert isinstance(noise, np.ndarray), "noise function must return np.ndarray"
             try:
                 if np.ndim(noise) == 1:
                     v = v + noise
@@ -528,8 +528,8 @@ class GPposterior:
         Input x,y have to be 2d numpy arrays
         The return is the cartesian product of the two sets
         """
-        assert isinstance(y, np.ndarray)
-        assert np.ndim(y) == 1
+        assert isinstance(y, np.ndarray), "x_out must be np.ndarray for cartesian product"
+        assert np.ndim(y) == 1, "x_out must be 1-d for cartesian product"
 
         res = []
         if isinstance(x, list):
