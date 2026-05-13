@@ -13,9 +13,7 @@ from .gp_kv import GPkv
 import importlib
 warnings.simplefilter("once", UserWarning)
 
-# TODO: search below "TODO"
-# is compute_device used for anything other than the default kernel? If not, it should be renamed to "default_kernel_compute_device" or something like that.
-# The same applies to the args related to compute devices. Is it overwritten by args?
+# TODO: also search below "TODO"
 
 class GP:
     """

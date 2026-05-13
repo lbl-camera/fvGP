@@ -120,7 +120,11 @@ class GPMarginalLikelihood:
             logger.debug("   V computed after {} seconds.", time.time() - st)
             m = self.compute_mean(self.x_data, hyperparameters)
             logger.debug("   Prior mean computed after {} seconds.", time.time() - st)
-            KVinvY, KVlogdet = self.compute_new_KVlogdet_KVinvY(K, V, m)
+            try:
+                KVinvY, KVlogdet = self.compute_new_KVlogdet_KVinvY(K, V, m)
+            except Exception as e:
+                raise Exception(
+                    f"Linear algebra failed for hyperparameters {hyperparameters}: {e}") from e
             logger.debug("   KVinvY and logdet computed after {} seconds.", time.time() - st)
 
         n = len(self.y_data)
