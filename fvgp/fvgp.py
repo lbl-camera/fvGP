@@ -378,7 +378,7 @@ class fvGP(GP):
         y_new,
         noise_variances_new=None,
         append=True,
-        gp_rank_n_update=None
+        rank_n_update=None
     ):
 
         """
@@ -411,9 +411,9 @@ class fvGP(GP):
         append : bool, optional
             Indication whether to append to or overwrite the existing dataset. Default = True.
             In the default case, data will be appended.
-        gp_rank_n_update : bool, optional
+        rank_n_update : bool, optional
             Indicates whether the GP marginal likelihood should be rank-n updated or recomputed. The default
-            is ``gp_rank_n_update=append``, meaning if data is only appended, the rank_n_update will
+            is ``rank_n_update=append``, meaning if data is only appended, the rank_n_update will
             be performed.
         """
         assert isinstance(x_new, np.ndarray) or isinstance(x_new, list), "Wrong format in x_new."
@@ -445,7 +445,7 @@ class fvGP(GP):
         #####transform to index set###########
         ######################################
         x_data, y_data, noise_variances = self._transform_index_set2(x_new, y_new, noise_variances_new)
-        super().update_gp_data(x_data, y_data, noise_variances, append=append, gp_rank_n_update=gp_rank_n_update)
+        super().update_gp_data(x_data, y_data, noise_variances, append=append, rank_n_update=rank_n_update)
 
     ################################################################################################
     def _transform_index_set2(self, x_data, y_data, noise_variances):

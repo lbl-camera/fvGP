@@ -8,7 +8,8 @@ class GPdata:
                  noise_variances=None,
                  ram_economy=False,
                  gp2Scale=False,
-                 compute_device="cpu"):
+                 compute_device="cpu",
+                 dask_client=None):
 
 
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list), \
@@ -46,6 +47,13 @@ class GPdata:
         self.ram_economy = ram_economy
         self.gp2Scale = gp2Scale
         self.compute_device = compute_device
+        self.dask_client = dask_client
+        self.x_data_scatter_future = None
+        self.compute_workers = []
+        if gp2Scale and dask_client is not None:
+            self.compute_workers = list(dask_client.scheduler_info()["workers"].keys())
+            self.x_data_scatter_future = dask_client.scatter(
+                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
 
     def set_fvgp_data(self, fvgp_x_data, fvgp_y_data, fvgp_noise_variances, x_out):
         self.fvgp_x_data = fvgp_x_data
@@ -91,6 +99,11 @@ class GPdata:
                 self.noise_variances = np.append(self.noise_variances, noise_variances_new)
         self.point_number = len(self.x_data)
         self._check_for_nan()
+        if not append and self.gp2Scale and self.dask_client is not None:
+            if self.x_data_scatter_future is not None:
+                self.x_data_scatter_future.release()
+            self.x_data_scatter_future = self.dask_client.scatter(
+                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
 
     def _check_for_nan(self):
         if self.Euclidean:
@@ -112,7 +125,10 @@ class GPdata:
             args=self.args,
             ram_economy=self.ram_economy,
             gp2Scale=self.gp2Scale,
-            compute_device=self.compute_device
+            compute_device=self.compute_device,
+            dask_client=None,
+            x_data_scatter_future=None,
+            compute_workers=self.compute_workers,
             )
         return state
 

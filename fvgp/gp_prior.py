@@ -21,13 +21,11 @@ class GPprior:
                  prior_mean_function=None,
                  kernel_grad=None,
                  prior_mean_function_grad=None,
-                 gp2Scale_dask_client=None,
                  gp2Scale_batch_size=10000,
                  ):
 
         self.kernel_function = kernel
         self.prior_mean_function = prior_mean_function
-        self.client = gp2Scale_dask_client
         self.batch_size = gp2Scale_batch_size
         self.data = data
         self.trainer = trainer
@@ -44,23 +42,16 @@ class GPprior:
 
         if self.gp2Scale:
             if not callable(kernel):
-                warnings.warn("You have chosen to activate gp2Scale. A powerful tool!"
-                              "But you have not supplied a kernel that is compactly supported."
+                warnings.warn("You have chosen to activate gp2Scale. A powerful tool! "
+                              "But you have not supplied a kernel that is compactly supported. "
                               "I will use an anisotropic Wendland kernel for now.",
                               stacklevel=2)
                 if self.compute_device == "cpu":
                     kernel = wendland_anisotropic_gp2Scale_cpu
                 elif self.compute_device == "gpu":
                     kernel = wendland_anisotropic_gp2Scale_gpu
-            if self.client is not None:
-                worker_info = list(self.client.scheduler_info()["workers"].keys())
-                self.compute_workers = list(worker_info)
-            else:
-                worker_info = False
-            if not worker_info: logger.debug("No workers available")
-            
-            self.x_data_scatter_future = self.client.scatter(
-            self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
+            if not self.compute_workers:
+                logger.debug("No workers available")
 
 
         # kernel
@@ -139,6 +130,18 @@ class GPprior:
     def compute_device(self):
         return self.data.compute_device
 
+    @property
+    def client(self):
+        return self.data.dask_client
+
+    @property
+    def compute_workers(self):
+        return self.data.compute_workers
+
+    @property
+    def x_data_scatter_future(self):
+        return self.data.x_data_scatter_future
+
     ################################################################
     #START: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS#########
     ################################################################
@@ -150,10 +153,6 @@ class GPprior:
         """
         This is for the case that the data has changed, but not just been augmented. For example, in an online learning setting where old data points are replaced by new ones.
         """
-        if self.gp2Scale:
-            self.x_data_scatter_future.release()
-            self.x_data_scatter_future = self.client.scatter(
-            self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
         self.m, self.K = self._compute_prior(self.x_data, self.hyperparameters)
         logger.debug("Prior mean and covariance updated after data change.")
 
@@ -246,11 +245,10 @@ class GPprior:
     def _compute_prior_covariance_gp2Scale(self, x_data, hyperparameters):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
         st = time.time()
-        client = self.client
         point_number = len(x_data)
         num_batches = point_number // self.batch_size
         NUM_RANGES = num_batches
-        logger.debug("client id: {}", client.id)
+        logger.debug("client id: {}", self.client.id)
 
         ranges = self._ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
         ranges_ij = list(
@@ -258,7 +256,7 @@ class GPprior:
         ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
         logger.debug("        gp2Scale covariance matrix init done after {} seconds.", time.time() - st)
 
-        results = list(map(self._harvest_result, distributed.as_completed(client.map(
+        results = list(map(self._harvest_result, distributed.as_completed(self.client.map(
             partial(kernel_function,
                     hyperparameters=hyperparameters,
                     kernel=self.kernel),
@@ -266,6 +264,7 @@ class GPprior:
             [self.x_data_scatter_future] * len(ranges_ij),
             [self.x_data_scatter_future] * len(ranges_ij)),
             with_results=True)))
+
 
         logger.debug("        gp2Scale covariance matrix result written after {} seconds.", time.time() - st)
 
@@ -304,11 +303,9 @@ class GPprior:
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
         """computes the covariance matrix from the kernel on HPC in sparse format"""
-        client = self.client
-
-        x_new_scatter_future = client.scatter(
+        x_new_scatter_future = self.client.scatter(
             x_new, workers=self.compute_workers, broadcast=True, direct=True)
-        x_old_scatter_future = client.scatter(
+        x_old_scatter_future = self.client.scatter(
             x_old, workers=self.compute_workers, broadcast=True, direct=True)
 
         point_number = len(x_old)
@@ -324,7 +321,7 @@ class GPprior:
         # Calculate B
 
         results = list(map(self._harvest_result,
-                           distributed.as_completed(client.map(
+                           distributed.as_completed(self.client.map(
                                partial(kernel_function_update,
                                        hyperparameters=hyperparameters,
                                        kernel=self.kernel),
@@ -342,7 +339,7 @@ class GPprior:
                       range_ij2[0][0] <= range_ij2[1][0]]  # filter lower diagonal
 
         results = list(map(self._harvest_result,
-                           distributed.as_completed(client.map(
+                           distributed.as_completed(self.client.map(
                                partial(kernel_function,
                                        hyperparameters=hyperparameters,
                                        kernel=self.kernel),
@@ -359,6 +356,9 @@ class GPprior:
 
         res = block_array([[self.K, B],
                            [B.transpose(), D]])
+        
+        x_new_scatter_future.release()
+        x_old_scatter_future.release()
 
         return res
 
@@ -489,7 +489,6 @@ class GPprior:
             _dm_dh=self._dm_dh,
             m=self.m,
             K=self.K,
-            client=None,
         )
         return state
 

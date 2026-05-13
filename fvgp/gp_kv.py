@@ -331,6 +331,15 @@ class GPkv:
             raise Exception("K+V not possible with the given formats")
 
     def solve(self, b, x0=None):
+        if x0 is not None and x0.shape != b.shape:
+            # x0 from a previous (smaller) solve is a valid warm-start for the
+            # leading rows; zero-pad the rest so iterative solvers accept it.
+            pad_n = b.shape[0] - x0.shape[0]
+            if pad_n > 0:
+                pad = np.zeros((pad_n,) + x0.shape[1:])
+                x0 = np.vstack([x0, pad]) if x0.ndim == 2 else np.concatenate([x0, pad])
+            else:
+                x0 = None
         if self.mode == "Chol":
             return calculate_Chol_solve(self.Chol_factor, b, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv":

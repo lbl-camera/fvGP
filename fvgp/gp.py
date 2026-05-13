@@ -14,6 +14,7 @@ import importlib
 warnings.simplefilter("once", UserWarning)
 
 # TODO: also search below "TODO"
+# Appends and rank_n_updates for gp2Scale are not yet fully tested. Have to check the compute graph and test (what does rank_n_update even mean for the different modes? ). 
 
 class GP:
     """
@@ -270,6 +271,8 @@ class GP:
 
         if args is None: args = {}
         hyperparameters = init_hyperparameters
+        # Check gp2Scale
+        dask_client = self.initialize_gp2Scale_dask_client(gp2Scale, dask_client)
 
         ########################################
         ###init data instance [tier 1]##########
@@ -279,7 +282,8 @@ class GP:
                            noise_variances=noise_variances,
                            ram_economy=ram_economy,
                            gp2Scale=gp2Scale,
-                           compute_device=compute_device)
+                           compute_device=compute_device,
+                           dask_client=dask_client)
         ########################################
         # prepare initial hyperparameters and bounds
         if self.data.Euclidean:
@@ -302,9 +306,7 @@ class GP:
             if not importlib.util.find_spec("torch") and not importlib.util.find_spec("cupy"):
                 warnings.warn("You have specified the 'gpu' as your compute device. You need to install pytorch or cupy"
                               " manually for this to work.")
-        # Check gp2Scale
-        dask_client = self.initialize_gp2Scale_dask_client(gp2Scale, dask_client)
-        self.dask_client = dask_client
+
         ##########################################
         #######prepare training [tier 2]##########
         ##########################################
@@ -318,7 +320,6 @@ class GP:
                              prior_mean_function=prior_mean_function,
                              kernel_grad=kernel_function_grad,
                              prior_mean_function_grad=prior_mean_function_grad,
-                             gp2Scale_dask_client=dask_client,
                              gp2Scale_batch_size=gp2Scale_batch_size,
                              )
         ########################################
@@ -410,11 +411,25 @@ class GP:
     @property
     def gp2Scale(self):
         return self.data.gp2Scale
+    
+    @property
+    def dask_client(self):
+        return self.data.dask_client
 
     ###############################################################
     def set_args(self, new_args):
         """
         Use this function to change the arguments for the GP.
+
+        Note
+        ----
+        New ``args`` do not invalidate cached state (``K``, ``m``, ``V``, factorizations,
+        ``KVinvY``). If your ``kernel``, ``prior_mean_function``, or ``noise_function``
+        consumes ``args``, the new values will only be picked up the next time those
+        callables are invoked: a call to :py:meth:`set_hyperparameters`,
+        :py:meth:`update_gp_data` with ``append=False``, a fresh :py:meth:`train`,
+        or a posterior call with an explicit ``hyperparameters`` argument.
+        For an explicit flush, call ``set_hyperparameters(self.hyperparameters)``.
 
         Parameters
         ----------
@@ -447,7 +462,7 @@ class GP:
         y_new,
         noise_variances_new=None,
         append=True,
-        gp_rank_n_update=None
+        rank_n_update=None
     ):
         """
         This function updates the data in the gp object instance.
@@ -474,9 +489,9 @@ class GP:
         append : bool, optional
             Indication whether to append to or overwrite the existing dataset. Default=True.
             In the default case, data will be appended.
-        gp_rank_n_update : bool, optional
+        rank_n_update : bool, optional
             Indicates whether the GP marginal likelihood should be rank-n updated or recomputed. The default
-            is ``gp_rank_n_update=append``, meaning if data is only appended, the rank_n_update will
+            is ``rank_n_update=append``, meaning if data is only appended, the rank_n_update will
             be performed.
         """
         assert isinstance(x_new, list) or isinstance(x_new, np.ndarray), "wrong format in x_new"
@@ -485,7 +500,12 @@ class GP:
             "wrong format in noise_variances_new"
         assert len(x_new) == len(y_new), "updated x and y do not have the same lengths."
         old_x_data = self.x_data.copy()
-        if gp_rank_n_update is None: gp_rank_n_update = append
+        if rank_n_update is None: rank_n_update = append
+        if not append and rank_n_update:
+            warnings.warn("`rank_n_update=True` is invalid when `append=False` "
+                          "(the previous factorization belongs to data that no longer "
+                          "exists). Forcing `rank_n_update=False`.")
+            rank_n_update = False
         # update data
         self.data.update(x_new, y_new, noise_variances_new, append=append)
 
@@ -499,7 +519,7 @@ class GP:
         self.likelihood.update_state()
 
         # update kv state
-        self.kv.update_state_data(gp_rank_n_update)
+        self.kv.update_state_data(rank_n_update)
         ##########################################
 
     def _get_default_hyperparameter_bounds(self):
@@ -1656,7 +1676,7 @@ class GP:
         n = number_of_workers
         return (D ** 2 * tb) / (2. * n * b ** 2)
 
-    def initialize_gp2Scale_dask_client(self, gp2Scale, gp2Scale_dask_client):
+    def initialize_gp2Scale_dask_client(self, gp2Scale, dask_client):
         """
         Ensure a Dask client exists when ``gp2Scale=True``, creating a local one if needed.
 
@@ -1664,7 +1684,7 @@ class GP:
         ----------
         gp2Scale : bool
             Whether the sparse gp2Scale mode is active.
-        gp2Scale_dask_client : distributed.Client or None
+        dask_client : distributed.Client or None
             An existing Dask client, or None to auto-create a local one.
 
         Returns
@@ -1679,13 +1699,13 @@ class GP:
                 raise Exception(
                     "You have activated `gp2Scale`. You need to install imate"
                     " manually for this to work.")
-            if gp2Scale_dask_client is None:
+            if dask_client is None:
                 logger.debug("Creating my own local client.")
                 try:
-                    gp2Scale_dask_client = Client()
+                    dask_client = Client()
                 except:
                     logger.debug("no client available")
-        return gp2Scale_dask_client
+        return dask_client
 
     def __getstate__(self):
         state = dict(
@@ -1696,7 +1716,6 @@ class GP:
             marginal_likelihood=self.marginal_likelihood,
             trainer=self.trainer,
             posterior=self.posterior,
-            dask_client=None,
         )
         return state
 

@@ -246,8 +246,10 @@ def test_single_task_init_basic():
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
     my_gp1.train(max_iter = 100)
     my_gp1.train(method = "adam", max_iter = 3)
-    my_gp1.update_gp_data(x_data, y_data, append = True)
-    my_gp1.update_gp_data(x_data, y_data, append = False)
+    my_gp1.update_gp_data(x_data, y_data, append = True, rank_n_update = True)
+    my_gp1.update_gp_data(x_data, y_data, append = True, rank_n_update = False)
+    my_gp1.update_gp_data(x_data, y_data, append = False, rank_n_update = True)
+    my_gp1.update_gp_data(x_data, y_data, append = False, rank_n_update = False)
     my_gp1.make_2d_x_pred([0,1], [0,1], resx=100, resy=100)
     
     my_gp1 = GP(x_data, y_data, noise_variances = np.zeros(y_data.shape) + 0.01,init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), args = {"xyz":3.})
