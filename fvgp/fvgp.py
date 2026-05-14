@@ -154,12 +154,12 @@ class fvGP(GP):
         If no kernel is provided, the ``compute_device`` option should be revisited.
         The default kernel will use the specified device to compute covariances.
         The default is False.
+    gp2Scale_batch_size : int, optional
+        Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     dask_client : dask.distributed.Client, optional
         A dask client for gp2Scale, asynchronous training,a nd certain linear algebra operations.
         On HPC architecture, this client is provided by the job script. Please have a look at the examples.
         A local client is used as the default.
-    gp2Scale_batch_size : int, optional
-        Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     linalg_mode : str, optional
         Controls the linear-algebra backend used to solve (K+V)x=b and compute log|K+V|.
         The default is ``None``, which selects ``"Chol"`` for standard GPs and automatically

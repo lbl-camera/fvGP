@@ -111,7 +111,7 @@ class GPMarginalLikelihood:
         if hyperparameters is None:
             K, V, m = self._get_KVm()
             KVinvY = self.kv.KVinvY
-            KVlogdet = self.kv.logdet()
+            KVlogdet = self.kv.logdet_KV
         else:
             st = time.time()
             K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)

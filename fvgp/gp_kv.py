@@ -26,6 +26,7 @@ class GPkv:
         self.KV = None
         self.Chol_factor = None
         self.LU_factor = None
+        self.logdet_KV = None
         self.custom_obj = None
         self.cached_solve = None
         self.cached_precond = None
@@ -112,6 +113,7 @@ class GPkv:
         y_mean = self.y_data - m[:, None]
         x0 = self.KVinvY if rank_n_update else None
         self.KVinvY = self.solve(y_mean, x0=x0).reshape(y_mean.shape)
+        self.logdet_KV = self.logdet()
 
     def set_KV(self, KV):
         if self.mode == "Chol":
@@ -239,7 +241,10 @@ class GPkv:
         return KVinvY.reshape(y_mean.shape)
 
     def compute_new_KVlogdet_KVinvY(self, K, V, m):
-        """Compute KVinvY and log|KV| jointly in one factorization pass (used during training)."""
+        """
+        Compute KVinvY and log|KV| jointly in one factorization pass (used during training).
+        No state is updated.
+        """
         KV = self.addKV(K, V)
         y_mean = self.y_data - m[:, None]
         if self.gp2Scale:   # pragma: no cover
@@ -270,13 +275,13 @@ class GPkv:
             KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
         elif mode == "sparseMINRESpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            B = sparse.linalg.spilu(KV, drop_tol=1e-8)
+            B = sparse.linalg.spilu(KV.tocsc(), drop_tol=1e-8)
             M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
             KVinvY = calculate_sparse_minres(KV, y_mean, M=M, args=self.args)
             KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
         elif mode == "sparseCGpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            B = sparse.linalg.spilu(KV, drop_tol=1e-8)
+            B = sparse.linalg.spilu(KV.tocsc(), drop_tol=1e-8)
             M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
             KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, args=self.args)
             KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
@@ -356,11 +361,11 @@ class GPkv:
         elif self.mode == "sparseLU":
             return calculate_LU_solve(self.LU_factor, b, args=self.args)
         elif self.mode == "sparseMINRESpre":
-            B = sparse.linalg.spilu(self.KV, drop_tol=1e-8)
+            B = sparse.linalg.spilu(self.KV.tocsc(), drop_tol=1e-8)
             M = sparse.linalg.LinearOperator(self.KV.shape, matvec=B.solve)
             return calculate_sparse_minres(self.KV, b, M=M, x0=x0, args=self.args)
         elif self.mode == "sparseCGpre":
-            B = sparse.linalg.spilu(self.KV, drop_tol=1e-8)
+            B = sparse.linalg.spilu(self.KV.tocsc(), drop_tol=1e-8)
             M = sparse.linalg.LinearOperator(self.KV.shape, matvec=B.solve)
             return calculate_sparse_conj_grad(self.KV, b, M=M, x0=x0, args=self.args)
         elif self.mode == "sparseSolve":
@@ -371,6 +376,9 @@ class GPkv:
             raise Exception(f"No Mode. Choose from: {self.allowed_modes}")
 
     def logdet(self):
+        """
+        Compute log|KV| in the current mode without updating state. Used during training for the log-likelihood.
+        """
         if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "sparseLU": return calculate_LU_logdet(self.LU_factor, args=self.args)
@@ -399,6 +407,7 @@ class GPkv:
             cached_precond=self.cached_precond,
             custom_obj=self.custom_obj,
             allowed_modes=self.allowed_modes,
+            logdet_KV=self.logdet_KV
         )
         return state
 

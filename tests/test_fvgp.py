@@ -577,43 +577,35 @@ def test_gp2Scale(client):
                             ])
 
     init_hps = np.random.uniform(size = len(hps_bounds), low = hps_bounds[:,0], high = hps_bounds[:,1])
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, dask_client=client, linalg_mode="sparseLU")
-    my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.update_gp_data(x_new,y_new, append = True)
-    
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, dask_client=client, linalg_mode="sparseCG")
-    my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.update_gp_data(x_new,y_new, append = True)
-    
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, dask_client=client, linalg_mode="sparseMINRES")
-    my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.update_gp_data(x_new,y_new, append = True)
-    
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, dask_client=client, linalg_mode="sparseCGpre")
-    my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.update_gp_data(x_new,y_new, append = True)
-    
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, dask_client=client, linalg_mode="Chol")
-    my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.update_gp_data(x_new,y_new, append = True)
 
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, dask_client=client, linalg_mode="CholInv")
-    my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.update_gp_data(x_new,y_new, append = True)
-
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = False, gp2Scale_batch_size= 100, dask_client=client, linalg_mode="Inv")
-    my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
-    my_gp2S.neg_log_likelihood_gradient()
-    my_gp2S.update_gp_data(x_new,y_new, append = True)
-    
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, dask_client=client, linalg_mode="sparseMINRESpre")
-    my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.update_gp_data(x_new,y_new, append = True)
-    
-    my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, dask_client=client, linalg_mode="sparseSolve")
-    my_gp2S.log_likelihood(hyperparameters = init_hps)
-    my_gp2S.update_gp_data(x_new,y_new, append = True)
+    # Each iteration exercises a different linalg_mode (which is fixed at __init__).
+    # Between iterations: drop the previous GP, force-collect, and round-trip the
+    # scheduler so any pending `_dec_ref` for its scatter future has fired before the
+    # next GP's init scatter starts.  Otherwise those dec_refs race against the new
+    # scatter's replicate inside the scheduler.
+    import gc
+    modes = [
+        ("sparseLU",        True),
+        ("sparseCG",        True),
+        ("sparseMINRES",    True),
+        ("sparseCGpre",     True),
+        ("Chol",            True),
+        ("CholInv",         True),
+        ("Inv",             False),
+        ("sparseMINRESpre", True),
+        ("sparseSolve",     True),
+    ]
+    for mode, gp2s in modes:
+        my_gp2S = GP(x_data, y_data, init_hps, gp2Scale=gp2s, gp2Scale_batch_size=100,
+                     dask_client=client, linalg_mode=mode)
+        my_gp2S.log_likelihood(hyperparameters=init_hps)
+        if mode == "Inv":
+            my_gp2S.neg_log_likelihood_gradient(hyperparameters=init_hps)
+            my_gp2S.neg_log_likelihood_gradient()
+        my_gp2S.update_gp_data(x_new, y_new, append=True)
+        del my_gp2S
+        gc.collect()
+        client.run(lambda: None)
 
     my_gp2S = GP(x_data,y_data,init_hps, gp2Scale = True, gp2Scale_batch_size= 100, dask_client=client)
 

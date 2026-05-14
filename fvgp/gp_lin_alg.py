@@ -299,7 +299,7 @@ def calculate_sparse_solve(KV, vec, args=None):
     if np.ndim(vec) == 1: vec = vec.reshape(len(vec), 1)
     st = time.time()
     logger.debug("Sparse solve in progress ...")
-    res = sparse.linalg.spsolve(KV, vec)
+    res = sparse.linalg.spsolve(KV.tocsc(), vec)
     logger.debug("Sparse solve compute time: {} seconds.", time.time() - st)
     if np.ndim(res) == 1: res = res.reshape(len(res), 1)
     return res

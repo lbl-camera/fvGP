@@ -436,7 +436,7 @@ class GPtraining:
             else: raise Exception("Reading the `updated_hyperparameters` was not successful", opt_list)
             assert isinstance(updated_hyperparameters, np.ndarray) and np.ndim(updated_hyperparameters) == 1, \
                 "async optimizer returned invalid hyperparameters: " + str(updated_hyperparameters)
-            self.hyperparameters = updated_hyperparameters
+            #self.hyperparameters = updated_hyperparameters #not needed I believe.
             return updated_hyperparameters
 
     def _optimize_log_likelihood_async(self,

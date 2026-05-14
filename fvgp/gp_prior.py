@@ -90,6 +90,11 @@ class GPprior:
         else:
             self._dm_dh = self._default_dm_dh
 
+        self.x_data_scatter_future = None
+        if self.gp2Scale and self.client is not None:
+            self.x_data_scatter_future = self.client.scatter(
+                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
+
         self.m, self.K = self._compute_prior(self.x_data, self.hyperparameters)
         logger.debug("Prior successfully initialized.")
 
@@ -105,6 +110,14 @@ class GPprior:
     @property
     def x_data(self):
         return self.data.x_data
+    
+    @property
+    def x_old(self):
+        return self.data.x_old
+    
+    @property
+    def x_new(self):
+        return self.data.x_new
 
     @property
     def y_data(self):
@@ -138,21 +151,30 @@ class GPprior:
     def compute_workers(self):
         return self.data.compute_workers
 
-    @property
-    def x_data_scatter_future(self):
-        return self.data.x_data_scatter_future
-
     ################################################################
     #START: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS#########
     ################################################################
-    def augment_state_data(self, x_old, x_new):
-        self.m, self.K = self._update_prior(x_old, x_new, self.hyperparameters)
+    def augment_state_data(self):
+        self.m, self.K = self._update_prior(self.x_old, self.x_new, self.hyperparameters)
+        if self.gp2Scale and self.client is not None:
+            # Refresh the persistent x_data scatter so it reflects the full post-append
+            # dataset.  Overwrite (no explicit release): the old future loses its only
+            # Python ref and is cleaned up via __del__.  This is race-free within a
+            # single GP's lifetime; do NOT churn many GP instances back-to-back without
+            # a `del gp; gc.collect(); client.run(lambda: None)` between them.
+            self.x_data_scatter_future = self.client.scatter(
+                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
         logger.debug("Prior mean and covariance updated after data augmentation.")
 
     def update_state_data(self):
         """
         This is for the case that the data has changed, but not just been augmented. For example, in an online learning setting where old data points are replaced by new ones.
         """
+        if self.gp2Scale and self.client is not None:
+            # Full data change: refresh the persistent scatter before rebuilding K.
+            # Overwrite (no explicit release); the old future is GC'd at a quiet moment.
+            self.x_data_scatter_future = self.client.scatter(
+                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
         self.m, self.K = self._compute_prior(self.x_data, self.hyperparameters)
         logger.debug("Prior mean and covariance updated after data change.")
 
@@ -302,11 +324,16 @@ class GPprior:
         return vstack(chunks, format='csr')
 
     def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
-        """computes the covariance matrix from the kernel on HPC in sparse format"""
+        """computes the covariance matrix from the kernel on HPC in sparse format.
+
+        Uses self.x_data_scatter_future for the x_old side (pre-augment scatter, still
+        valid at entry) and a fresh local scatter for x_new.  Only x_new's local future
+        is released here; the persistent self.x_data_scatter_future is refreshed by
+        augment_state_data after this call.
+        """
         x_new_scatter_future = self.client.scatter(
             x_new, workers=self.compute_workers, broadcast=True, direct=True)
-        x_old_scatter_future = self.client.scatter(
-            x_old, workers=self.compute_workers, broadcast=True, direct=True)
+        x_old_scatter_future = self.x_data_scatter_future
 
         point_number = len(x_old)
         num_batches = point_number // self.batch_size
@@ -356,9 +383,8 @@ class GPprior:
 
         res = block_array([[self.K, B],
                            [B.transpose(), D]])
-        
+
         x_new_scatter_future.release()
-        x_old_scatter_future.release()
 
         return res
 
@@ -489,6 +515,7 @@ class GPprior:
             _dm_dh=self._dm_dh,
             m=self.m,
             K=self.K,
+            x_data_scatter_future=None,
         )
         return state
 

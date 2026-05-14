@@ -37,6 +37,12 @@ class GPdata:
         self.x_data = x_data
         self.y_data = y_data
         self.noise_variances = noise_variances
+        self.x_new = None
+        self.y_new = None
+        self.noise_variances_new = None
+        self.x_old = None
+        self.y_old = None
+        self.noise_variances_old = None
         self.point_number = len(self.x_data)
         self._check_for_nan()
         self.fvgp_x_data = None
@@ -48,12 +54,9 @@ class GPdata:
         self.gp2Scale = gp2Scale
         self.compute_device = compute_device
         self.dask_client = dask_client
-        self.x_data_scatter_future = None
         self.compute_workers = []
         if gp2Scale and dask_client is not None:
             self.compute_workers = list(dask_client.scheduler_info()["workers"].keys())
-            self.x_data_scatter_future = dask_client.scatter(
-                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
 
     def set_fvgp_data(self, fvgp_x_data, fvgp_y_data, fvgp_noise_variances, x_out):
         self.fvgp_x_data = fvgp_x_data
@@ -91,7 +94,19 @@ class GPdata:
             self.x_data = x_data_new
             self.y_data = y_data_new
             self.noise_variances = noise_variances_new
+            self.x_old = None
+            self.y_old = None
+            self.noise_variances_old = None
+            self.x_new = None
+            self.y_new = None
+            self.noise_variances_new = None
         else:
+            self.x_old = self.x_data
+            self.y_old = self.y_data
+            self.noise_variances_old = self.noise_variances
+            self.x_new = x_data_new
+            self.y_new = y_data_new
+            self.noise_variances_new = noise_variances_new
             if self.Euclidean: self.x_data = np.vstack([self.x_data, x_data_new])
             else: self.x_data = self.x_data + x_data_new
             self.y_data = np.vstack([self.y_data, y_data_new])
@@ -99,11 +114,8 @@ class GPdata:
                 self.noise_variances = np.append(self.noise_variances, noise_variances_new)
         self.point_number = len(self.x_data)
         self._check_for_nan()
-        if not append and self.gp2Scale and self.dask_client is not None:
-            if self.x_data_scatter_future is not None:
-                self.x_data_scatter_future.release()
-            self.x_data_scatter_future = self.dask_client.scatter(
-                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
+
+
 
     def _check_for_nan(self):
         if self.Euclidean:
@@ -113,9 +125,15 @@ class GPdata:
         state = dict(
             x_data=self.x_data,
             y_data=self.y_data,
+            noise_variances=self.noise_variances,
             Euclidean=self.Euclidean,
             index_set_dim=self.index_set_dim,
-            noise_variances=self.noise_variances,
+            x_new=self.x_new,
+            y_new=self.y_new,
+            noise_variances_new=self.noise_variances_new,
+            x_old=self.x_old,
+            y_old=self.y_old,
+            noise_variances_old=self.noise_variances_old,
             point_number=self.point_number,
             fvgp_x_data=self.fvgp_x_data,
             fvgp_y_data=self.fvgp_y_data,
@@ -127,7 +145,6 @@ class GPdata:
             gp2Scale=self.gp2Scale,
             compute_device=self.compute_device,
             dask_client=None,
-            x_data_scatter_future=None,
             compute_workers=self.compute_workers,
             )
         return state

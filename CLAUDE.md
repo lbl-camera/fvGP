@@ -35,13 +35,31 @@ Both classes are composed of internal specialist objects created at `__init__` t
 
 | Class | File | Responsibility |
 |---|---|---|
-| `GPdata` | [gp_data.py](fvgp/gp_data.py) | Data validation, shape tracking, Euclidean vs. non-Euclidean |
-| `GPprior` | [gp_prior.py](fvgp/gp_prior.py) | Kernel and mean function; default is anisotropic Matérn with ARD |
+| `GPdata` | [gp_data.py](fvgp/gp_data.py) | Data validation, shape tracking, Euclidean vs. non-Euclidean. Sole source of truth for `x_data`, `y_data`, `noise_variances`, plus the pre-append snapshot (`x_old`, `y_old`, `noise_variances_old`) and last-appended chunk (`x_new`, `y_new`, `noise_variances_new`) |
+| `GPprior` | [gp_prior.py](fvgp/gp_prior.py) | Kernel and mean function (default: anisotropic Matérn with ARD). In gp2Scale mode also owns `x_data_scatter_future` (the persistent dask scatter of `x_data`) |
 | `GPlikelihood` | [gp_likelihood.py](fvgp/gp_likelihood.py) | Noise model (variances or callable) |
 | `GPkv` | [gp_kv.py](fvgp/gp_kv.py) | Owns K+V matrix state and all factorizations; dispatches solves/logdets across linalg modes |
 | `GPMarginalLikelihood` | [gp_marginal_likelihood.py](fvgp/gp_marginal_likelihood.py) | Log marginal likelihood and its gradient; delegates factorization to `GPkv` |
 | `GPposterior` | [gp_posterior.py](fvgp/gp_posterior.py) | Posterior mean/covariance; information-theoretic quantities |
 | `GPtraining` | [gp_training.py](fvgp/gp_training.py) | Hyperparameter optimization (scipy, hgdl async, MCMC, Adam) |
+
+### State propagation
+
+Sources of truth: `GPtraining.hyperparameters` and `GPdata.x_data` / `y_data` / `noise_variances`. Everywhere else reads these via `@property`. Cached state that must be invalidated on a change:
+
+| Mutator | What's refreshed |
+|---|---|
+| `GP.set_hyperparameters(hps)` | `trainer.hyperparameters` → `prior.update_state_hyperparameters()` (recomputes `m`, `K`) → `likelihood.update_state()` (`V`) → `kv.update_state_hyperparameters()` (factorization + `KVinvY`) |
+| `GP.update_gp_data(..., append=True)` | `data.update()` snapshots `x_old`/`y_old`/etc. → `prior.augment_state_data()` (rank-n update of `m`, `K`) → `likelihood.update_state()` → `kv.update_state_data(rank_n_update)` |
+| `GP.update_gp_data(..., append=False)` | `data.update()` clears `_old`/`_new` slots → `prior.update_state_data()` (full recompute) → `likelihood.update_state()` → `kv.update_state_data(rank_n_update)` |
+| `GP.train(...)` (sync) / `GP.update_hyperparameters(opt_obj)` (async) | both end with `set_hyperparameters(...)` |
+
+`GPposterior` and `GPMarginalLikelihood` hold **no cached state** — every read goes through properties, so they're automatically consistent.
+
+Gotchas:
+- **`GP.set_args(new_args)` does NOT invalidate `K`, `m`, `V`, or factorizations.** If `args` flows into a user kernel/mean/noise callable, new args take effect only on the next `set_hyperparameters`, `update_gp_data(append=False)`, fresh `train`, or posterior call with explicit `hyperparameters=`. To force a flush: `set_hyperparameters(self.hyperparameters)`.
+- **`update_gp_data(append=False, rank_n_update=True)`** is invalid (the previous factorization is for data that no longer exists); `GP.update_gp_data` emits a `UserWarning` and forces `rank_n_update=False`.
+- **`kv.solve(b, x0=...)`** zero-pads `x0` along axis 0 when shapes don't match, so a pre-append `KVinvY` can warm-start the post-append solve in iterative modes (sparseCG/MINRES/preconditioned variants). See [gp_kv.py:333-342](fvgp/gp_kv.py#L333-L342).
 
 ### Key supporting modules
 
@@ -54,6 +72,25 @@ Both classes are composed of internal specialist objects created at `__init__` t
 ### Scaling to large datasets (`gp2Scale`)
 
 When `gp2Scale=True`, `GP` switches to a Wendland (compactly supported) kernel producing sparse covariance matrices and uses Dask for distributed computation. This path requires a Dask client to be passed in and uses sparse linear solvers instead of dense Cholesky.
+
+**Scatter ownership and lifecycle:**
+
+- `GPprior.x_data_scatter_future` is the single persistent dask scatter of the current `x_data`. Scattered once at `GPprior.__init__` (see [gp_prior.py:93-96](fvgp/gp_prior.py#L93-L96)).
+- `GPdata` does NOT scatter — it's pure-Python data only.
+- `_compute_prior_covariance_gp2Scale` reads `self.x_data_scatter_future` directly; **no scatter per call**, so training stays dask-quiet.
+- On data changes, `augment_state_data` / `update_state_data` refresh the scatter by **overwriting** `self.x_data_scatter_future` (no explicit `release()`). The old future loses its only Python ref and is cleaned up via `__del__`. Calling `release()` explicitly schedules a `_dec_ref` that races against subsequent scatter `replicate` operations in the scheduler — don't do it.
+- `_update_prior_covariance_gp2Scale` (the augment path) uses `self.x_data_scatter_future` for the `x_old` side (no content-hash collision since it shares the existing key) and scatters only `x_new` locally, releasing that local future at the end.
+
+**Cross-instance race guard:** [gp.py:14-21](fvgp/gp.py#L14-L21) defines `_GP_INSTANCES_PER_CLIENT`, a `WeakValueDictionary` keyed by `dask_client.id`. `GP.__init__` ([gp.py:285-303](fvgp/gp.py#L285-L303)) raises with a descriptive remediation message if you try to construct a second gp2Scale `GP` on a client that already has a live one — that pattern reliably triggers `FutureCancelledError`/`KeyError` from the scheduler. To reuse a client for a sequence of GPs:
+
+```python
+import gc
+del previous_gp
+gc.collect()
+client.run(lambda: None)  # flush pending releases
+```
+
+The `test_gp2Scale` test uses exactly this pattern between linalg-mode iterations.
 
 ### Customization API
 

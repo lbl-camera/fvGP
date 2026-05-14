@@ -1,4 +1,5 @@
 import warnings
+import weakref
 import numpy as np
 from loguru import logger
 from distributed import Client
@@ -12,6 +13,12 @@ from .gp_posterior import GPposterior
 from .gp_kv import GPkv
 import importlib
 warnings.simplefilter("once", UserWarning)
+
+# Tracks live GP instances per dask client (gp2Scale mode only).  Used to detect
+# the case where a user creates a second GP on a client that still has a live GP,
+# which triggers race conditions between the new init scatter and the pending
+# `_dec_ref` callbacks from the previous GP's scatter activity.
+_GP_INSTANCES_PER_CLIENT = weakref.WeakValueDictionary()
 
 # TODO: also search below "TODO"
 # Appends and rank_n_updates for gp2Scale are not yet fully tested. Have to check the compute graph and test (what does rank_n_update even mean for the different modes? ). 
@@ -147,12 +154,12 @@ class GP:
         If no kernel is provided, the ``compute_device`` option should be revisited.
         The default kernel will use the specified device to compute covariances.
         The default is False.
+    gp2Scale_batch_size : int, optional
+        Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     dask_client : dask.distributed.Client, optional
         A dask client for gp2Scale, asynchronous training,a nd certain linear algebra operations.
         On HPC architecture, this client is provided by the job script. Please have a look at the examples.
         A local client is used as the default.
-    gp2Scale_batch_size : int, optional
-        Matrix batch size for distributed computing in gp2Scale. The default is 10000.
     linalg_mode : str, optional
         Controls the linear-algebra backend used to solve (K+V)x=b and compute log|K+V|.
         The default is ``None``, which selects ``"Chol"`` for standard GPs and automatically
@@ -274,6 +281,27 @@ class GP:
         # Check gp2Scale
         dask_client = self.initialize_gp2Scale_dask_client(gp2Scale, dask_client)
 
+        # Race-condition guard: in gp2Scale mode, only one GP can be alive per dask
+        # client.  Sharing a client between live GPs causes the new GP's init scatter
+        # to race against the previous GP's pending `_dec_ref` callbacks, surfacing as
+        # `FutureCancelledError` or `KeyError` from the scheduler.
+        if gp2Scale and dask_client is not None:
+            existing = _GP_INSTANCES_PER_CLIENT.get(dask_client.id)
+            if existing is not None and existing is not self:
+                raise Exception(
+                    f"Another GP instance is already active on this dask client "
+                    f"(client.id={dask_client.id!r}). Sharing a dask client between "
+                    f"multiple live GPs in gp2Scale mode triggers race conditions "
+                    f"in the scheduler's scatter reference counting.\n"
+                    f"To reuse the same client for a sequence of GPs, destroy the "
+                    f"previous one first:\n"
+                    f"    import gc\n"
+                    f"    del previous_gp\n"
+                    f"    gc.collect()\n"
+                    f"    client.run(lambda: None)  # flush pending releases\n"
+                    f"Or use a fresh dask client per GP."
+                )
+
         ########################################
         ###init data instance [tier 1]##########
         ########################################
@@ -358,6 +386,11 @@ class GP:
                                      self.trainer,
                                      self.kv,
                                      self.likelihood)
+
+        # Register this instance for the cross-instance race-condition guard above.
+        # Entry is removed automatically when self is garbage-collected.
+        if gp2Scale and dask_client is not None:
+            _GP_INSTANCES_PER_CLIENT[dask_client.id] = self
 
     #########PROPERTIES#########################################
     @property
@@ -499,7 +532,6 @@ class GP:
         assert isinstance(noise_variances_new, np.ndarray) or noise_variances_new is None, \
             "wrong format in noise_variances_new"
         assert len(x_new) == len(y_new), "updated x and y do not have the same lengths."
-        old_x_data = self.x_data.copy()
         if rank_n_update is None: rank_n_update = append
         if not append and rank_n_update:
             warnings.warn("`rank_n_update=True` is invalid when `append=False` "
@@ -510,10 +542,8 @@ class GP:
         self.data.update(x_new, y_new, noise_variances_new, append=append)
 
         # update prior
-        if append:
-            self.prior.augment_state_data(old_x_data, x_new)
-        else:
-            self.prior.update_state_data()
+        if append: self.prior.augment_state_data()
+        else:self.prior.update_state_data()
 
         # update likelihood
         self.likelihood.update_state()
