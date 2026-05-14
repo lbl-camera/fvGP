@@ -41,7 +41,7 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 docs = ['sphinx', 'pydata-sphinx-theme', 'myst-parser', 'myst-nb', 'sphinx-design', 'sphinx-copybutton', 'jupytext']
-tests = ['pytest', 'codecov', 'pytest-cov', 'torch', 'imate']
+tests = ['pytest', 'codecov', 'pytest-cov', 'torch', 'imate', 'pyamg']
 plotting = ['matplotlib', 'plotly', 'notebook']
 
 [project.urls]

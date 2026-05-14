@@ -356,6 +356,7 @@ def test_single_task_init_advanced():
 
 def test_linalg_modes():
     from scipy.linalg import cho_factor, cho_solve
+    import importlib as _il
 
     hps = np.ones(6)
 
@@ -378,6 +379,35 @@ def test_linalg_modes():
         gp.posterior_covariance(x_pred, variance_only=True)
         gp.update_gp_data(x_data, y_data, append=True)
         gp.update_gp_data(x_data, y_data, append=False)
+
+    # Preconditioner-type aliases on the *pre solvers.  Each alias must resolve
+    # to the canonical mode + matching args["sparse_preconditioner_type"], and
+    # the GP must function end-to-end (posterior + data updates) with that
+    # preconditioner backing the iterative solve.
+    canonical_to_aliases = {
+        "sparseCGpre":     ["ilu", "ic", "block_jacobi", "schwarz"],
+        "sparseMINRESpre": ["ilu", "ic", "block_jacobi", "schwarz"],
+    }
+    if _il.util.find_spec("pyamg") is not None:
+        canonical_to_aliases["sparseCGpre"].append("amg")
+        canonical_to_aliases["sparseMINRESpre"].append("amg")
+    canonical_to_type = {
+        "ilu": "ilu",
+        "ic": "incomplete_cholesky",
+        "block_jacobi": "block_jacobi",
+        "schwarz": "additive_schwarz",
+        "amg": "amg",
+    }
+    for canonical, alias_types in canonical_to_aliases.items():
+        for alias_type in alias_types:
+            mode = f"{canonical}_{alias_type}"
+            gp = GP(x_data, y_data, init_hyperparameters=hps, linalg_mode=mode)
+            assert gp.kv.mode == canonical
+            assert gp.data.args.get("sparse_preconditioner_type") == canonical_to_type[alias_type]
+            gp.posterior_mean(x_pred)
+            gp.posterior_covariance(x_pred, variance_only=True)
+            gp.update_gp_data(x_data, y_data, append=True)
+            gp.update_gp_data(x_data, y_data, append=False)
 
     # Custom 3-callable interface
     f_factor = lambda K: cho_factor(K)
@@ -1083,6 +1113,8 @@ def test_pickle():
     #tests empty gp pickling
     my_gpo = GP(x_data, y_data)
     pickle.loads(pickle.dumps(my_gpo))
+    my_gpo2 = pickle.loads(pickle.dumps(my_gpo))
+    assert my_gpo2.marginal_likelihood is my_gpo2.marginal_likelihood
 
     #TEST1
     #initialize the GPOptimizer
@@ -1279,4 +1311,558 @@ def test_train_async_adam(client):
     my_gp.update_hyperparameters(opt_obj)
     my_gp.stop_training(opt_obj)
     assert my_gp.hyperparameters.shape == (6,)
+
+
+# =========================================================================
+# Tests for the new linear-algebra capabilities (preconditioner framework,
+# block CG, multi-column x0 normalization, GPU detection helpers).
+# =========================================================================
+
+import importlib as _importlib_for_tests
+import pytest
+from fvgp import gp_lin_alg as _gp_lin_alg
+
+
+def _gpu_engines_available():
+    engines = []
+    if _importlib_for_tests.util.find_spec("torch") is not None:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                engines.append("torch")
+            else:
+                mps_backend = getattr(torch.backends, "mps", None)
+                if mps_backend is not None and torch.backends.mps.is_available():
+                    engines.append("torch")
+        except Exception:
+            pass
+    if _importlib_for_tests.util.find_spec("cupy") is not None:
+        try:
+            import cupy as cp
+            cp.zeros(1)
+            engines.append("cupy")
+        except Exception:
+            pass
+    return engines
+
+
+def _make_test_spd_sparse(n=40, seed=0):
+    rng = np.random.RandomState(seed)
+    A = sparse.random(n, n, density=0.15, random_state=rng, format="csr")
+    A = (A + A.T) * 0.5
+    A = A + (abs(A).sum(axis=1).A1.max() + 1.0) * sparse.eye(n, format="csr")
+    return A.tocsr()
+
+
+def test_normalize_sparse_preconditioner_type():
+    assert normalize_sparse_preconditioner_type("ILU") == "ilu"
+    assert normalize_sparse_preconditioner_type("ic") == "incomplete_cholesky"
+    assert normalize_sparse_preconditioner_type("ichol") == "incomplete_cholesky"
+    assert normalize_sparse_preconditioner_type("BlockJacobi") == "block_jacobi"
+    assert normalize_sparse_preconditioner_type("schwarz") == "additive_schwarz"
+    assert normalize_sparse_preconditioner_type("AMG") == "amg"
+    with pytest.raises(ValueError):
+        normalize_sparse_preconditioner_type("nope")
+
+
+def test_resolve_gp2scale_linalg_mode():
+    # Pass-through for unknown / non-prefixed strings
+    mode, args = resolve_gp2scale_linalg_mode("Chol")
+    assert mode == "Chol" and "sparse_preconditioner_type" not in args
+
+    # Alias resolution for CG / MINRES preconditioner suffixes
+    mode, args = resolve_gp2scale_linalg_mode("sparseCGpre_amg")
+    assert mode == "sparseCGpre" and args["sparse_preconditioner_type"] == "amg"
+
+    mode, args = resolve_gp2scale_linalg_mode("sparseMINRESpre_ic")
+    assert mode == "sparseMINRESpre" and args["sparse_preconditioner_type"] == "incomplete_cholesky"
+
+    # Consistent explicit type is allowed
+    mode, args = resolve_gp2scale_linalg_mode(
+        "sparseCGpre_ilu", args={"sparse_preconditioner_type": "ilu"}
+    )
+    assert mode == "sparseCGpre" and args["sparse_preconditioner_type"] == "ilu"
+
+    # Conflicting explicit type raises
+    with pytest.raises(ValueError):
+        resolve_gp2scale_linalg_mode(
+            "sparseCGpre_ilu", args={"sparse_preconditioner_type": "amg"}
+        )
+
+
+def test_calculate_sparse_preconditioner_ilu():
+    A = _make_test_spd_sparse(n=30)
+    factor, op = calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "ilu"})
+    # The ILU operator should approximately invert A; test by checking the
+    # residual when using it as a preconditioner on a CG solve
+    b = np.random.rand(A.shape[0])
+    x = calculate_sparse_conj_grad(A, b, M=op, args={"sparse_cg_tol": 1e-8})
+    res = np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b)
+    assert res < 1e-6
+
+
+def test_calculate_sparse_preconditioner_ic0():
+    A = _make_test_spd_sparse(n=30)
+    factor, op = calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "incomplete_cholesky"})
+    assert factor["type"] == "incomplete_cholesky"
+    b = np.random.rand(A.shape[0])
+    x = calculate_sparse_conj_grad(A, b, M=op, args={"sparse_cg_tol": 1e-8})
+    res = np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b)
+    assert res < 1e-6
+
+
+def test_calculate_sparse_preconditioner_block_jacobi():
+    A = _make_test_spd_sparse(n=30)
+    factor, op = calculate_sparse_preconditioner(
+        A, args={"sparse_preconditioner_type": "block_jacobi", "sparse_preconditioner_block_size": 5}
+    )
+    assert factor["type"] == "block_jacobi"
+    # Block partition covers all rows exactly once
+    covered = np.concatenate(factor["blocks"])
+    assert sorted(covered.tolist()) == list(range(A.shape[0]))
+    b = np.random.rand(A.shape[0])
+    x = calculate_sparse_conj_grad(A, b, M=op, args={"sparse_cg_tol": 1e-8, "sparse_cg_maxiter": 500})
+    res = np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b)
+    assert res < 1e-6
+
+
+def test_calculate_sparse_preconditioner_additive_schwarz():
+    A = _make_test_spd_sparse(n=30)
+    factor, op = calculate_sparse_preconditioner(
+        A,
+        args={
+            "sparse_preconditioner_type": "additive_schwarz",
+            "sparse_preconditioner_block_size": 5,
+            "sparse_preconditioner_schwarz_overlap": 1,
+        },
+    )
+    assert factor["type"] == "additive_schwarz"
+    assert factor["overlap"] == 1
+    b = np.random.rand(A.shape[0])
+    x = calculate_sparse_conj_grad(A, b, M=op, args={"sparse_cg_tol": 1e-8, "sparse_cg_maxiter": 500})
+    res = np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b)
+    assert res < 1e-6
+
+
+def test_calculate_sparse_preconditioner_amg():
+    if _importlib_for_tests.util.find_spec("pyamg") is None:
+        pytest.skip("pyamg not installed")
+    A = _make_test_spd_sparse(n=40)
+    factor, op = calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "amg"})
+    b = np.random.rand(A.shape[0])
+    x = calculate_sparse_conj_grad(A, b, M=op, args={"sparse_cg_tol": 1e-8})
+    res = np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b)
+    assert res < 1e-6
+
+
+def test_calculate_sparse_preconditioner_unknown_type():
+    A = _make_test_spd_sparse(n=10)
+    with pytest.raises(ValueError):
+        calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "nope"})
+
+
+def test_block_conjugate_gradient_multi_rhs():
+    A = _make_test_spd_sparse(n=30)
+    rng = np.random.RandomState(1)
+    B = rng.randn(A.shape[0], 4)
+    # Block-CG path
+    X_block = calculate_sparse_conj_grad(
+        A, B, args={"sparse_block_krylov": True, "sparse_cg_tol": 1e-8}
+    )
+    assert X_block.shape == B.shape
+    res = np.linalg.norm(A @ X_block - B) / np.linalg.norm(B)
+    assert res < 1e-6
+    # Single-column path should give consistent result
+    X_single = calculate_sparse_conj_grad(A, B, args={"sparse_cg_tol": 1e-8})
+    assert np.allclose(X_block, X_single, atol=1e-4)
+
+
+def test_sparse_solvers_multi_column_x0():
+    """The merged solvers must accept a 2-d x0 with mismatched leading dim."""
+    A = _make_test_spd_sparse(n=20)
+    rng = np.random.RandomState(2)
+    B = rng.randn(A.shape[0], 3)
+    # Short x0 (15 rows) should get zero-padded to 20 internally
+    x0_short = rng.randn(15, 3)
+    X = calculate_sparse_conj_grad(A, B, x0=x0_short, args={"sparse_cg_tol": 1e-8})
+    assert X.shape == B.shape
+    assert np.linalg.norm(A @ X - B) / np.linalg.norm(B) < 1e-6
+    # Single-column x0 should broadcast to all RHS columns
+    x0_one_col = rng.randn(A.shape[0], 1)
+    X2 = calculate_sparse_minres(A, B, x0=x0_one_col, args={"sparse_minres_tol": 1e-8})
+    assert X2.shape == B.shape
+
+
+def test_sparse_solvers_maxiter():
+    """maxiter caps iterations even when tolerance is unmet — should emit a warning."""
+    A = _make_test_spd_sparse(n=30)
+    b = np.random.rand(A.shape[0])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        calculate_sparse_conj_grad(A, b, args={"sparse_cg_tol": 1e-15, "sparse_cg_maxiter": 1})
+        assert any("CG not successful" in str(w.message) for w in caught)
+
+
+def test_sparse_conj_grad_legacy_tolerance_keys():
+    """Backward-compat: cg_minres_tol and sparse_minres_tol still work for CG."""
+    A = _make_test_spd_sparse(n=15)
+    b = np.random.rand(A.shape[0])
+    # Each should produce a usable solution
+    x1 = calculate_sparse_conj_grad(A, b, args={"cg_minres_tol": 1e-8})
+    x2 = calculate_sparse_conj_grad(A, b, args={"sparse_minres_tol": 1e-8})
+    assert np.linalg.norm(A @ x1[:, 0] - b) / np.linalg.norm(b) < 1e-6
+    assert np.linalg.norm(A @ x2[:, 0] - b) / np.linalg.norm(b) < 1e-6
+
+
+def test_gpu_engine_detection_no_args():
+    """get_gpu_engine returns None when no usable GPU backend is detected."""
+    engines = _gpu_engines_available()
+    detected = _gp_lin_alg.get_gpu_engine(None)
+    if engines:
+        assert detected in engines
+    else:
+        assert detected is None
+
+
+def test_gpu_engine_unknown_request():
+    """Explicit unsupported engine returns None rather than raising."""
+    assert _gp_lin_alg.get_gpu_engine({"GPU_engine": "tensorflow"}) is None
+
+
+def test_gpu_cpu_fallback_warning():
+    """When compute_device='gpu' is requested but no GPU backend is usable,
+    the dense GPU paths must fall back to CPU with a UserWarning, not crash."""
+    if _gpu_engines_available():
+        pytest.skip("GPU backend available; this test exercises CPU fallback")
+    A = np.eye(5) * 2.0 + np.ones((5, 5)) * 0.01
+    b = np.random.rand(5)
+    # Disable real backends explicitly by requesting an unknown engine
+    args = {"GPU_engine": "tensorflow"}
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        L = calculate_Chol_factor(A, compute_device="gpu", args=args)
+        calculate_Chol_solve(L, b, compute_device="gpu", args=args)
+        calculate_Chol_logdet(L, compute_device="gpu", args=args)
+        matmul(A, A, compute_device="gpu", args=args)
+        matmul3(A, A, A, compute_device="gpu", args=args)
+    fallback_msgs = [w.message.args[0] for w in caught if isinstance(w.category, type) and issubclass(w.category, UserWarning)]
+    # At least four fallback warnings should have fired (one per function above)
+    assert sum("Falling back to CPU" in m for m in fallback_msgs) >= 4
+
+
+# -------- GPU-only paths (run only when a real GPU backend is present) --------
+
+def test_calculate_logdet_cupy():
+    """cupy logdet path; previously this function was torch-only."""
+    if "cupy" not in _gpu_engines_available():
+        pytest.skip("cupy GPU not available")
+    np.random.seed(0)
+    B = np.random.rand(15, 15)
+    A = (B @ B.T + np.eye(15) * 5.0).astype(np.float64)
+    cpu_ld = calculate_logdet(A, compute_device="cpu")
+    gpu_ld = calculate_logdet(A, compute_device="gpu", args={"GPU_engine": "cupy"})
+    assert np.isclose(cpu_ld, gpu_ld, rtol=1e-5)
+
+
+def test_calculate_inv_cupy():
+    if "cupy" not in _gpu_engines_available():
+        pytest.skip("cupy GPU not available")
+    np.random.seed(0)
+    B = np.random.rand(15, 15)
+    A = (B @ B.T + np.eye(15) * 5.0).astype(np.float64)
+    cpu_inv = calculate_inv(A, compute_device="cpu")
+    gpu_inv = calculate_inv(A, compute_device="gpu", args={"GPU_engine": "cupy"})
+    assert np.allclose(cpu_inv, gpu_inv, rtol=1e-5)
+
+
+def test_solve_cupy():
+    if "cupy" not in _gpu_engines_available():
+        pytest.skip("cupy GPU not available")
+    np.random.seed(0)
+    B = np.random.rand(15, 15)
+    A = (B @ B.T + np.eye(15) * 5.0).astype(np.float64)
+    b = np.random.rand(15)
+    cpu_x = solve(A, b, compute_device="cpu")
+    gpu_x = solve(A, b, compute_device="gpu", args={"GPU_engine": "cupy"})
+    assert np.allclose(cpu_x, gpu_x, rtol=1e-5)
+
+
+def test_torch_device_selection_mps_or_cuda():
+    """_torch_gpu_device honors GPU_device requests when the device exists."""
+    if _importlib_for_tests.util.find_spec("torch") is None:
+        pytest.skip("torch not installed")
+    import torch
+    if not torch.cuda.is_available() and not (
+        getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
+    ):
+        pytest.skip("no torch GPU/MPS available")
+    device = _gp_lin_alg._torch_gpu_device(None)
+    assert device is not None
+    assert device.type in ("cuda", "mps")
+
+
+# =========================================================================
+# Tests for the new kernel capabilities (support-aware Wendland sparse
+# kernels, GPU detection helpers).
+# =========================================================================
+
+from fvgp import kernels as _kernels
+
+
+def test_wendland_support_aware_cpu_matches_dense():
+    """Output-sensitive sparse kernel must equal the dense reference exactly."""
+    rng = np.random.RandomState(0)
+    x1 = rng.rand(40, 3)
+    x2 = rng.rand(30, 3)
+    hps = np.array([1.7, 0.3, 0.4, 0.5])
+    K_dense = wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
+    K_sparse = wendland_anisotropic_gp2Scale_cpu_sparse(x1, x2, hps)
+    assert sparse.issparse(K_sparse)
+    assert K_sparse.shape == K_dense.shape
+    assert np.allclose(K_dense, K_sparse.toarray(), atol=1e-12)
+
+
+def test_wendland_support_aware_cpu_self_block():
+    """K(x, x) sparse vs dense agreement on a self-block (diagonal full of amplitude)."""
+    rng = np.random.RandomState(1)
+    x = rng.rand(25, 2)
+    hps = np.array([2.5, 0.6, 0.4])
+    K_dense = wendland_anisotropic_gp2Scale_cpu(x, x, hps)
+    K_sparse = wendland_anisotropic_gp2Scale_cpu_sparse(x, x, hps)
+    diff = K_dense - K_sparse.toarray()
+    assert np.max(np.abs(diff)) < 1e-12
+    # Diagonal equals amplitude for self-distance 0
+    assert np.allclose(np.diag(K_sparse.toarray()), hps[0])
+
+
+def test_wendland_support_aware_cpu_disjoint_blocks():
+    """Blocks separated beyond the support radius yield an all-zero sparse block."""
+    # Two clusters far apart in whitened coordinates: with length scale 0.1 along
+    # each axis, points at separation 10.0 are >> support radius 1.
+    x1 = np.array([[0.0, 0.0], [0.0, 0.05]])
+    x2 = np.array([[10.0, 10.0], [10.0, 10.05]])
+    hps = np.array([1.0, 0.1, 0.1])
+    K_sparse = wendland_anisotropic_gp2Scale_cpu_sparse(x1, x2, hps)
+    assert K_sparse.nnz == 0
+    assert K_sparse.shape == (2, 2)
+
+
+def test_wendland_support_aware_cpu_empty_input():
+    """Empty input arrays return an empty sparse block of correct shape."""
+    hps = np.array([1.0, 0.5, 0.5])
+    K = wendland_anisotropic_gp2Scale_cpu_sparse(np.zeros((0, 2)), np.zeros((0, 2)), hps)
+    assert K.shape == (0, 0)
+
+
+def test_kernels_gpu_engine_detection():
+    """The kernels module's GPU engine helper should agree with availability."""
+    engine = _kernels._get_default_gpu_engine()
+    if _gpu_engines_available():
+        assert engine in ("torch", "cupy")
+    else:
+        assert engine is None
+
+
+def test_wendland_anisotropic_gp2Scale_gpu_fallback():
+    """When no GPU backend is available, the GPU Wendland falls back to CPU
+    with a UserWarning and returns the same array."""
+    if _gpu_engines_available():
+        pytest.skip("GPU backend available; this test exercises CPU fallback")
+    rng = np.random.RandomState(3)
+    x1 = rng.rand(20, 2)
+    x2 = rng.rand(15, 2)
+    hps = np.array([1.0, 0.3, 0.3])
+    K_cpu = wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        K_gpu = wendland_anisotropic_gp2Scale_gpu(x1, x2, hps)
+        assert any("falling back to the CPU" in str(w.message) for w in caught)
+    assert np.allclose(K_cpu, K_gpu)
+
+
+def test_wendland_anisotropic_gp2Scale_gpu_matches_cpu():
+    """When a torch or cupy GPU is available, the GPU Wendland matches the CPU."""
+    if not _gpu_engines_available():
+        pytest.skip("no GPU backend available")
+    rng = np.random.RandomState(4)
+    x1 = rng.rand(20, 2)
+    x2 = rng.rand(15, 2)
+    hps = np.array([1.0, 0.3, 0.3])
+    K_cpu = wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
+    K_gpu = wendland_anisotropic_gp2Scale_gpu(x1, x2, hps)
+    # GPU path internally uses float32; allow modest tolerance
+    assert np.allclose(K_cpu, K_gpu, atol=1e-4)
+
+
+def test_wendland_support_aware_gpu_sparse_matches_cpu_sparse():
+    """GPU support-aware sparse Wendland matches the CPU sparse variant
+    (or falls back to it with a warning when no GPU is available)."""
+    rng = np.random.RandomState(5)
+    x1 = rng.rand(30, 3)
+    x2 = rng.rand(25, 3)
+    hps = np.array([1.4, 0.3, 0.4, 0.5])
+    K_cpu = wendland_anisotropic_gp2Scale_cpu_sparse(x1, x2, hps)
+    K_gpu = wendland_anisotropic_gp2Scale_gpu_sparse(x1, x2, hps)
+    # GPU path uses float32, so allow a slightly looser tolerance
+    assert np.allclose(K_cpu.toarray(), K_gpu.toarray(), atol=1e-4)
+
+
+# =========================================================================
+# Tests for the new preconditioner cache + warm-start integration in
+# GPkv / GPMarginalLikelihood (the training-path acceleration wiring).
+# =========================================================================
+
+def _make_test_gp(linalg_mode, args=None, n=60, noise=0.05, seed=11):
+    rng = np.random.RandomState(seed)
+    x = rng.rand(n, 2)
+    y = np.sin(np.linalg.norm(x, axis=1) * 4.0) + noise * rng.randn(n)
+    hps = np.array([1.0, 0.4, 0.4])
+    extra = {} if args is None else dict(args)
+    return GP(x, y, init_hyperparameters=hps, linalg_mode=linalg_mode,
+              args=extra, compute_device="cpu"), hps
+
+
+def test_kv_preconditioner_cache_reuse_counter():
+    """Refresh interval > 1 lets repeated update_KV calls reuse the cached
+    preconditioner rather than rebuilding from scratch.
+
+    Counting note: init runs set_KV (force-builds, counter=0) AND a follow-up
+    solve in _refresh (which reuses → counter=1).  So the counter starts at 1
+    after construction, not 0.  With refresh_interval=4, three more reuses are
+    available (counter 1→2→3) before the fourth call rebuilds.
+    """
+    gp, hps = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_refresh_interval": 4})
+    kv = gp.kv
+    assert kv.Preconditioner_operator is not None
+    op0 = kv.Preconditioner_operator
+    assert kv.Preconditioner_reuse_counter == 1
+
+    KV = kv.addKV(kv.K, kv.V)
+    kv.update_KV(KV)
+    assert kv.Preconditioner_operator is op0
+    assert kv.Preconditioner_reuse_counter == 2
+
+    kv.update_KV(KV)
+    assert kv.Preconditioner_operator is op0
+    assert kv.Preconditioner_reuse_counter == 3
+
+    # Now reuse_counter >= refresh_interval-1 (= 3): next call rebuilds
+    kv.update_KV(KV)
+    assert kv.Preconditioner_operator is not None
+    assert kv.Preconditioner_operator is not op0
+    assert kv.Preconditioner_reuse_counter == 0
+
+
+def test_kv_preconditioner_signature_invalidates_cache():
+    """Changing a sparse_preconditioner_* arg invalidates the cached operator."""
+    gp, hps = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_refresh_interval": 5})
+    kv = gp.kv
+    op0 = kv.Preconditioner_operator
+    assert op0 is not None
+
+    # Mutate args to flip the preconditioner type
+    gp.data.args["sparse_preconditioner_type"] = "ic"
+    KV = kv.addKV(kv.K, kv.V)
+    kv.update_KV(KV)
+    assert kv.Preconditioner_operator is not None
+    assert kv.Preconditioner_operator is not op0  # rebuilt
+    assert kv.Preconditioner_reuse_counter == 0
+
+
+def test_kv_set_KV_force_refreshes_preconditioner():
+    """set_KV models a real state change and must always rebuild the preconditioner."""
+    gp, hps = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_refresh_interval": 99})
+    kv = gp.kv
+    op0 = kv.Preconditioner_operator
+    KV = kv.addKV(kv.K, kv.V)
+    kv.set_KV(KV)
+    assert kv.Preconditioner_operator is not None
+    assert kv.Preconditioner_operator is not op0
+    assert kv.Preconditioner_reuse_counter == 0
+
+
+def test_kv_mode_alias_resolution_at_init():
+    """`sparseCGpre_amg` at GP construction → mode `sparseCGpre` + args injected."""
+    if _importlib_for_tests.util.find_spec("pyamg") is None:
+        pytest.skip("pyamg not installed")
+    gp, _ = _make_test_gp("sparseCGpre_amg")
+    assert gp.kv.mode == "sparseCGpre"
+    assert gp.data.args.get("sparse_preconditioner_type") == "amg"
+
+
+def test_compute_new_KVlogdet_matches_baseline():
+    """Cached + warm-started compute_new_KVlogdet_KVinvY must equal the
+    uncached, cold-start baseline numerically."""
+    # Baseline run — refresh every call, no warm-start
+    gp_base, hps = _make_test_gp("sparseCGpre")
+    # Configured run — interval=4, warm-start on
+    gp_opt, _ = _make_test_gp("sparseCGpre",
+                              args={"sparse_preconditioner_refresh_interval": 4,
+                                    "sparse_krylov_warm_start": True})
+
+    # Step through a sequence of nearby hyperparameter values
+    test_hps_list = [hps * (1.0 + 0.02 * i) for i in range(6)]
+    base_logdets = []
+    opt_logdets = []
+    for hps_i in test_hps_list:
+        K = gp_base.prior.compute_prior_covariance_matrix(gp_base.x_data, hps_i)
+        V = gp_base.likelihood.calculate_V(gp_base.x_data, hps_i)
+        m = gp_base.prior.compute_mean(gp_base.x_data, hps_i)
+        _, ld_base = gp_base.marginal_likelihood.compute_new_KVlogdet_KVinvY(K, V, m)
+        _, ld_opt = gp_opt.marginal_likelihood.compute_new_KVlogdet_KVinvY(K, V, m)
+        base_logdets.append(ld_base)
+        opt_logdets.append(ld_opt)
+
+    # Stochastic-Lanczos logdet is noisy; the iterative KVinvY solve is
+    # tolerance-controlled.  The values should agree to a few percent.
+    base_arr = np.array(base_logdets)
+    opt_arr = np.array(opt_logdets)
+    assert np.allclose(base_arr, opt_arr, rtol=0.1)
+
+
+def test_warm_start_updates_cached_KVinvY():
+    """When sparse_krylov_warm_start=True, the marginal likelihood caches the
+    most recent KVinvY for use as x0 on the next call."""
+    gp, hps = _make_test_gp("sparseCG",
+                            args={"sparse_krylov_warm_start": True})
+    ml = gp.marginal_likelihood
+    assert ml._warm_start_KVinvY is None  # not seeded by init
+    # Call compute_new_KVlogdet_KVinvY with the committed hps
+    K, V, m = gp.K, gp.V, gp.prior.m
+    ml.compute_new_KVlogdet_KVinvY(K, V, m)
+    assert ml._warm_start_KVinvY is not None
+    # A second call should keep updating the cache (overwrites)
+    cached1 = ml._warm_start_KVinvY.copy()
+    ml.compute_new_KVlogdet_KVinvY(K, V, m)
+    assert ml._warm_start_KVinvY is not None
+    # Shape matches the y_data shape
+    assert ml._warm_start_KVinvY.shape == gp.y_data.shape
+
+
+def test_warm_start_off_by_default():
+    """Without the flag, no warm-start state is built up."""
+    gp, hps = _make_test_gp("sparseCG")
+    ml = gp.marginal_likelihood
+    K, V, m = gp.K, gp.V, gp.prior.m
+    ml.compute_new_KVlogdet_KVinvY(K, V, m)
+    assert ml._warm_start_KVinvY is None
+
+
+def test_preconditioner_build_failure_falls_back():
+    """A broken preconditioner builder must trigger a UserWarning and the
+    iterative solve still runs unpreconditioned (returns a usable KVinvY)."""
+    # 'amg' will fail if pyamg is missing — exercise the fallback path
+    if _importlib_for_tests.util.find_spec("pyamg") is not None:
+        pytest.skip("pyamg installed; failure path not exercised")
+    gp, hps = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_type": "amg"})
+    K, V, m = gp.K, gp.V, gp.prior.m
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        KVinvY, _ = gp.marginal_likelihood.compute_new_KVlogdet_KVinvY(K, V, m)
+    # Solve still produces an array of the right shape
+    assert KVinvY.shape == gp.y_data.shape
+    # And the build-failure warning fired
+    msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+    assert any("Failed to build sparse preconditioner" in m for m in msgs)
+
 

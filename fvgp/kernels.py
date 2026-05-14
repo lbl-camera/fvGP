@@ -1,4 +1,9 @@
+import importlib
+import warnings
+
 import numpy as np
+import scipy.sparse as sparse
+from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 
 
@@ -510,8 +515,11 @@ def wendland_anisotropic_gp2Scale_cpu(x1, x2, hps):
     for i in range(len(x1[0])): distance_matrix += (np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
     d = np.sqrt(distance_matrix)
     d[d > 1.] = 1.
-    kernel = hps[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
-    return kernel
+    return _wendland_anisotropic_polynomial(d, hps[0])
+
+
+def _wendland_anisotropic_polynomial(d, amplitude):
+    return amplitude * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
 
 
 def _get_distance_matrix_gpu(x1, x2, device, hps):  # pragma: no cover
@@ -524,7 +532,9 @@ def _get_distance_matrix_gpu(x1, x2, device, hps):  # pragma: no cover
 
 def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps):  # pragma: no cover
     """
-    Function for the anisotropic Wendland kernel computed on the GPU. Needs pytorch.
+    Function for the anisotropic Wendland kernel computed on the GPU.
+    Picks the first usable GPU backend (torch CUDA or MPS, else cupy); falls back
+    to the CPU implementation with a UserWarning if no GPU backend is available.
     The Wendland kernel is compactly supported, leading to sparse covariance matrices.
 
     Parameters
@@ -540,15 +550,322 @@ def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps):  # pragma: no cover
     ------
     Covariance matrix : np.ndarray
     """
+    engine = _get_default_gpu_engine()
+    if engine == "torch":
+        import torch
+        device = _get_torch_gpu_device()
+        x1_dev = torch.as_tensor(x1, device=device, dtype=torch.float32)
+        x2_dev = torch.as_tensor(x2, device=device, dtype=torch.float32)
+        hps_dev = torch.as_tensor(hps, device=device, dtype=torch.float32)
+        d = _get_distance_matrix_gpu(x1_dev, x2_dev, device, hps_dev)
+        d = torch.clamp(d, max=1.0)
+        kernel = hps_dev[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
+        return kernel.detach().cpu().numpy()
+    if engine == "cupy":
+        import cupy as cp
+        x1_dev = cp.asarray(x1, dtype=cp.float32)
+        x2_dev = cp.asarray(x2, dtype=cp.float32)
+        hps_dev = cp.asarray(hps, dtype=cp.float32)
+        d = cp.zeros((len(x1), len(x2)), dtype=cp.float32)
+        for i in range(x1.shape[1]):
+            d += ((x1_dev[:, i].reshape(-1, 1) - x2_dev[:, i]) / hps_dev[1 + i]) ** 2
+        d = cp.sqrt(d)
+        d = cp.minimum(d, cp.float32(1.0))
+        kernel = hps_dev[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
+        return cp.asnumpy(kernel)
+
+    warnings.warn(
+        "No usable GPU backend was found for wendland_anisotropic_gp2Scale_gpu; "
+        "falling back to the CPU Wendland implementation.",
+        stacklevel=2,
+    )
+    return wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
+
+
+# --------------------------------------------------------------------------
+# GPU backend selection
+# --------------------------------------------------------------------------
+
+def _get_torch_gpu_device():  # pragma: no cover
+    if importlib.util.find_spec("torch") is None:
+        return None
     import torch
-    cuda_device = torch.device("cuda:0")
-    x1_dev = torch.from_numpy(x1).to(cuda_device, dtype=torch.float32)
-    x2_dev = torch.from_numpy(x2).to(cuda_device, dtype=torch.float32)
-    hps_dev = torch.from_numpy(hps).to(cuda_device, dtype=torch.float32)
-    d = _get_distance_matrix_gpu(x1_dev, x2_dev, cuda_device, hps_dev)
-    d[d > 1.] = 1.
-    kernel = hps[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
-    return kernel.cpu().numpy()
+
+    if torch.cuda.is_available():
+        device_index = torch.cuda.current_device() if torch.cuda.device_count() > 0 else 0
+        return torch.device(f"cuda:{device_index}")
+
+    mps_backend = getattr(torch.backends, "mps", None)
+    if mps_backend is not None and torch.backends.mps.is_available():
+        return torch.device("mps")
+
+    return None
+
+
+def _cupy_gpu_available():  # pragma: no cover
+    if importlib.util.find_spec("cupy") is None:
+        return False
+    try:
+        import cupy as cp
+        return cp.cuda.runtime.getDeviceCount() > 0
+    except Exception:
+        return False
+
+
+def _get_default_gpu_engine():  # pragma: no cover
+    if _get_torch_gpu_device() is not None:
+        return "torch"
+    if _cupy_gpu_available():
+        return "cupy"
+    return None
+
+
+# --------------------------------------------------------------------------
+# Support-aware (sparse-COO) anisotropic Wendland kernels for gp2Scale.
+#
+# These mirror wendland_anisotropic_gp2Scale_{cpu,gpu} but return a scipy.sparse
+# COO block directly, built from an output-sensitive cKDTree neighbor search in
+# the whitened (anisotropy-corrected) coordinates instead of a dense all-pairs
+# evaluation.  Intended for gp2Scale workflows where the data has spatial
+# locality and batches are sorted by a progression column.
+# --------------------------------------------------------------------------
+
+_GP2SCALE_SPARSE_SORT_WARNING_EMITTED = False
+
+
+def _warn_gp2scale_sparse_kernel_sorting():
+    global _GP2SCALE_SPARSE_SORT_WARNING_EMITTED
+    if _GP2SCALE_SPARSE_SORT_WARNING_EMITTED:
+        return
+    warnings.warn(
+        "The support-aware gp2Scale Wendland kernels work best when gp2Scale batches preserve locality. "
+        "If your data have a progression column, such as day in a climate dataset, sort by that column before batching.",
+        stacklevel=2,
+    )
+    _GP2SCALE_SPARSE_SORT_WARNING_EMITTED = True
+
+
+def _wendland_triplets_from_neighbor_lists(neighbor_lists):
+    row_parts = []
+    col_parts = []
+    for row_idx, neighbors in enumerate(neighbor_lists):
+        if not neighbors:
+            continue
+        cols = np.asarray(neighbors, dtype=np.int64)
+        row_parts.append(np.full(cols.size, row_idx, dtype=np.int64))
+        col_parts.append(cols)
+
+    if not row_parts:
+        return (
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int64),
+        )
+
+    return np.concatenate(row_parts), np.concatenate(col_parts)
+
+
+def _empty_gp2scale_sparse_block(x1, x2):
+    return sparse.coo_matrix((len(x1), len(x2)))
+
+
+def _whiten_gp2scale_points(x1, x2, hps):
+    scales = np.asarray(hps[1:], dtype=float)
+    z1 = np.asarray(x1, dtype=float) / scales
+    z2 = np.asarray(x2, dtype=float) / scales
+    return z1, z2
+
+
+def _gp2scale_whitened_block_distance(z1, z2):
+    mins_1 = np.min(z1, axis=0)
+    maxs_1 = np.max(z1, axis=0)
+    mins_2 = np.min(z2, axis=0)
+    maxs_2 = np.max(z2, axis=0)
+    gap = np.maximum(0.0, np.maximum(mins_1 - maxs_2, mins_2 - maxs_1))
+    return np.linalg.norm(gap)
+
+
+def _wendland_support_aware_cpu_triplets(x1, x2, hps):
+    """
+    Output-sensitive COO triplets for the anisotropic Wendland gp2Scale kernel.
+    The support condition is an ellipsoid in the original coordinates and a unit
+    ball in whitened coordinates, so block assembly can be written as a radius
+    search rather than dense all-pairs evaluation.
+    """
+    if len(x1) == 0 or len(x2) == 0:
+        return (
+            np.empty(0, dtype=float),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int64),
+        )
+
+    z1, z2 = _whiten_gp2scale_points(x1, x2, hps)
+    if _gp2scale_whitened_block_distance(z1, z2) > 1.0:
+        return (
+            np.empty(0, dtype=float),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int64),
+        )
+
+    tree1 = cKDTree(z1)
+    tree2 = cKDTree(z2)
+    neighbor_lists = tree1.query_ball_tree(tree2, r=1.0)
+
+    rows, cols = _wendland_triplets_from_neighbor_lists(neighbor_lists)
+    if rows.size == 0:
+        return (
+            np.empty(0, dtype=float),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int64),
+        )
+
+    diff = z2[cols] - z1[rows]
+    dist_sq = np.sum(diff * diff, axis=1)
+    inside_mask = dist_sq <= 1.0
+    if not np.all(inside_mask):
+        rows = rows[inside_mask]
+        cols = cols[inside_mask]
+        dist_sq = dist_sq[inside_mask]
+        if rows.size == 0:
+            return (
+                np.empty(0, dtype=float),
+                np.empty(0, dtype=np.int64),
+                np.empty(0, dtype=np.int64),
+            )
+
+    distances = np.sqrt(np.minimum(dist_sq, 1.0))
+    values = _wendland_anisotropic_polynomial(distances, hps[0])
+    nonzero_mask = values != 0.0
+    if not np.all(nonzero_mask):
+        rows = rows[nonzero_mask]
+        cols = cols[nonzero_mask]
+        values = values[nonzero_mask]
+        if rows.size == 0:
+            return (
+                np.empty(0, dtype=float),
+                np.empty(0, dtype=np.int64),
+                np.empty(0, dtype=np.int64),
+            )
+
+    return values, rows, cols
+
+
+def wendland_anisotropic_gp2Scale_cpu_sparse(x1, x2, hps):
+    """
+    Support-aware anisotropic Wendland kernel for gp2Scale.
+
+    Preserves the usual kernel interface but performs block-local support checks
+    and radius-search assembly internally, returning a sparse COO matrix
+    directly. Intended for gp2Scale workflows where the batchwise kernel is
+    assembled on sparse blocks. Sort batches by a locality-preserving column
+    (e.g. time) for best performance.
+    """
+    _warn_gp2scale_sparse_kernel_sorting()
+    values, rows, cols = _wendland_support_aware_cpu_triplets(x1, x2, hps)
+    if values.size == 0:
+        return _empty_gp2scale_sparse_block(x1, x2)
+    return sparse.coo_matrix((values, (rows, cols)), shape=(len(x1), len(x2)))
+
+
+def _wendland_support_aware_gpu_triplets(x1, x2, hps):  # pragma: no cover
+    """
+    Output-sensitive COO triplets for the anisotropic Wendland gp2Scale kernel
+    with GPU-backed distance/polynomial evaluation when a usable GPU backend is
+    available. Neighbor search remains host-side.
+    """
+    if len(x1) == 0 or len(x2) == 0:
+        return (
+            np.empty(0, dtype=float),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int64),
+        )
+
+    z1, z2 = _whiten_gp2scale_points(x1, x2, hps)
+    if _gp2scale_whitened_block_distance(z1, z2) > 1.0:
+        return (
+            np.empty(0, dtype=float),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int64),
+        )
+
+    tree1 = cKDTree(z1)
+    tree2 = cKDTree(z2)
+    neighbor_lists = tree1.query_ball_tree(tree2, r=1.0)
+    rows, cols = _wendland_triplets_from_neighbor_lists(neighbor_lists)
+    if rows.size == 0:
+        return (
+            np.empty(0, dtype=float),
+            np.empty(0, dtype=np.int64),
+            np.empty(0, dtype=np.int64),
+        )
+
+    diff = z2[cols] - z1[rows]
+    engine = _get_default_gpu_engine()
+    if engine == "torch":
+        import torch
+        device = _get_torch_gpu_device()
+        diff_dev = torch.as_tensor(diff, device=device, dtype=torch.float32)
+        dist_sq_dev = torch.sum(diff_dev * diff_dev, dim=1)
+        inside_mask = (dist_sq_dev <= 1.0).detach().cpu().numpy()
+        if not np.all(inside_mask):
+            rows = rows[inside_mask]
+            cols = cols[inside_mask]
+            dist_sq_dev = dist_sq_dev[inside_mask]
+            if rows.size == 0:
+                return (
+                    np.empty(0, dtype=float),
+                    np.empty(0, dtype=np.int64),
+                    np.empty(0, dtype=np.int64),
+                )
+        distances = torch.sqrt(torch.clamp(dist_sq_dev, max=1.0))
+        values = (_wendland_anisotropic_polynomial(distances, float(hps[0]))).detach().cpu().numpy()
+    elif engine == "cupy":
+        import cupy as cp
+        diff_dev = cp.asarray(diff, dtype=cp.float32)
+        dist_sq_dev = cp.sum(diff_dev * diff_dev, axis=1)
+        inside_mask = cp.asnumpy(dist_sq_dev <= cp.float32(1.0))
+        if not np.all(inside_mask):
+            rows = rows[inside_mask]
+            cols = cols[inside_mask]
+            dist_sq_dev = dist_sq_dev[inside_mask]
+            if rows.size == 0:
+                return (
+                    np.empty(0, dtype=float),
+                    np.empty(0, dtype=np.int64),
+                    np.empty(0, dtype=np.int64),
+                )
+        distances = cp.sqrt(cp.minimum(dist_sq_dev, cp.float32(1.0)))
+        values = cp.asnumpy(_wendland_anisotropic_polynomial(distances, float(hps[0])))
+    else:
+        warnings.warn(
+            "No usable GPU backend was found for the support-aware GPU Wendland kernel; "
+            "falling back to the CPU sparse Wendland kernel.",
+            stacklevel=2,
+        )
+        return _wendland_support_aware_cpu_triplets(x1, x2, hps)
+
+    nonzero_mask = values != 0.0
+    if not np.all(nonzero_mask):
+        rows = rows[nonzero_mask]
+        cols = cols[nonzero_mask]
+        values = values[nonzero_mask]
+
+    return values, rows, cols
+
+
+def wendland_anisotropic_gp2Scale_gpu_sparse(x1, x2, hps):  # pragma: no cover
+    """
+    GPU-backed support-aware anisotropic Wendland kernel for gp2Scale.
+
+    Neighbor discovery remains host-side; only the distance/polynomial
+    evaluation on the discovered support graph is GPU-backed when a usable
+    backend (torch CUDA/MPS or cupy) is available. Falls back to the CPU
+    sparse variant with a UserWarning otherwise.
+    """
+    _warn_gp2scale_sparse_kernel_sorting()
+    values, rows, cols = _wendland_support_aware_gpu_triplets(x1, x2, hps)
+    if values.size == 0:
+        return _empty_gp2scale_sparse_block(x1, x2)
+    return sparse.coo_matrix((values, (rows, cols)), shape=(len(x1), len(x2)))
 
 
 def wasserstein_1d(a, b):

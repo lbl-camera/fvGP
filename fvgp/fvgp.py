@@ -180,8 +180,13 @@ class fvGP(GP):
         * ``"sparseCG"`` — sparse conjugate-gradient iterative solver.
         * ``"sparseMINRES"`` — sparse MINRES iterative solver.
         * ``"sparseSolve"`` — direct sparse solve via scipy.
-        * ``"sparseCGpre"`` — conjugate-gradient with an incomplete-LU preconditioner.
-        * ``"sparseMINRESpre"`` — MINRES with an incomplete-LU preconditioner.
+        * ``"sparseCGpre"`` — preconditioned conjugate-gradient. The preconditioner type
+          is selected by ``args["sparse_preconditioner_type"]`` (default ``"ilu"``;
+          also ``"ic"``/``"incomplete_cholesky"``, ``"block_jacobi"``,
+          ``"schwarz"``/``"additive_schwarz"``, or ``"amg"`` (requires pyamg)).
+        * ``"sparseMINRESpre"`` — preconditioned MINRES; same preconditioner choices.
+        * ``"sparseCGpre_<type>"`` / ``"sparseMINRESpre_<type>"`` — shortcut that sets
+          ``args["sparse_preconditioner_type"]`` to ``<type>`` (e.g. ``"sparseCGpre_amg"``).
 
         **Custom solver (any GP):**
 
@@ -207,18 +212,62 @@ class fvGP(GP):
     args: dict, optional
         Advanced options. Recognized keys are:
 
+        Stochastic-Lanczos logdet (sparse modes):
+
         - "random_logdet_lanczos_degree" : int; default = 20
         - "random_logdet_error_rtol" : float; default = 0.01
         - "random_logdet_verbose" : True/False; default = False
         - "random_logdet_print_info" : True/False; default = False
-        - "sparse_minres_tol" : float
-        - "sparse_cg_tol" : float
         - "random_logdet_lanczos_compute_device" : str; default = "cpu"/"gpu"
+
+        Sparse iterative solver tolerances and iteration limits:
+
+        - "sparse_cg_tol" : float; default = 1e-5
+        - "sparse_minres_tol" : float; default = 1e-5
+        - "sparse_cg_maxiter" : int; default = None (use scipy default)
+        - "sparse_minres_maxiter" : int; default = None (use scipy default)
+        - "sparse_krylov_maxiter" : int; default = None (applies to both if the
+          solver-specific key is not set)
+        - "sparse_block_krylov" : True/False; default = False — use a block CG
+          variant when there are multiple RHS columns
+        - "sparse_krylov_mode" : "single"/"block"; equivalent toggle
+        - "sparse_krylov_block_size" : int — RHS block size for block CG
+
+        Iterative-solver acceleration (``sparseCG``/``sparseMINRES`` and the
+        ``*pre`` variants):
+
+        - "sparse_krylov_warm_start" : True/False; default = False — feed the
+          previous training iteration's ``KVinvY`` as ``x0`` to the next solve
+        - "sparse_preconditioner_type" : str; default = "ilu". One of "ilu",
+          "ic"/"ichol"/"incomplete_cholesky", "block_jacobi", "schwarz"/
+          "additive_schwarz", "amg" (requires pyamg)
+        - "sparse_preconditioner_refresh_interval" : int; default = 1 —
+          reuse the cached preconditioner for up to N consecutive solves
+          before rebuilding. ``set_KV`` always force-refreshes.
+        - "sparse_preconditioner_block_size" : int — block size for block_jacobi
+          and additive_schwarz partitions
+        - "sparse_preconditioner_schwarz_overlap" : int — overlap layers for
+          additive Schwarz
+        - "sparse_preconditioner_drop_tol" / "sparse_preconditioner_fill_factor"
+          — forwarded to scipy ``spilu`` for "ilu"
+        - "sparse_preconditioner_amg_*" — forwarded to pyamg
+          (``max_levels``, ``max_coarse``, ``strength``, ``cycle``, etc.)
+        - "sparse_preconditioner_shift" / "_growth" / "_attempts" — diagonal
+          shift retry knobs for "ic" / "block_jacobi" / "additive_schwarz" when
+          a local Cholesky encounters a non-PD block
+
+        Cholesky compute-device routing:
+
         - "Chol_factor_compute_device" : str; default = "cpu"/"gpu"
         - "update_Chol_factor_compute_device": str; default = "cpu"/"gpu"
         - "Chol_solve_compute_device" : str; default = "cpu"/"gpu"
         - "Chol_logdet_compute_device" : str; default = "cpu"/"gpu"
-        - "GPU_engine" : str; default = "torch"/"cupy"
+
+        GPU backend:
+
+        - "GPU_engine" : "torch"/"cupy"; default = first available
+        - "GPU_device" : str; e.g. "cuda:1" or "mps"
+        - "GPU_device_index" : int — explicit CUDA device index
 
         All other keys will be stored and are available as part of the object instance and
         in kernel, mean, and noise functions.

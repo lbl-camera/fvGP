@@ -1,8 +1,11 @@
+import warnings
+
 import numpy as np
-from .gp_lin_alg import *
-from scipy.sparse import issparse
 import scipy.sparse as sparse
 from loguru import logger
+from scipy.sparse import issparse
+
+from .gp_lin_alg import *
 
 
 class GPkv:
@@ -21,7 +24,15 @@ class GPkv:
         self.data = data
         self.prior = prior
         self.likelihood = likelihood
-        self.linalg_mode = linalg_mode ###there should only be one mode
+
+        # Resolve aliases like "sparseCGpre_amg" → mode "sparseCGpre" with
+        # args["sparse_preconditioner_type"]="amg".  Writes resolved args back
+        # to data.args so downstream calls see the canonical key.
+        if isinstance(linalg_mode, str):
+            linalg_mode, resolved_args = resolve_gp2scale_linalg_mode(linalg_mode, self.data.args)
+            self.data.args = resolved_args
+
+        self.linalg_mode = linalg_mode  ###there should only be one mode
         self.KVinv = None
         self.KV = None
         self.Chol_factor = None
@@ -30,8 +41,18 @@ class GPkv:
         self.custom_obj = None
         self.cached_solve = None
         self.cached_precond = None
+        # Sparse preconditioner cache (used by sparseMINRESpre / sparseCGpre).
+        # `Preconditioner_KV_shape` validates that the cached operator is
+        # dimensionally compatible with whichever KV the next caller submits.
+        self.Preconditioner_factor = None
+        self.Preconditioner_operator = None
+        self.Preconditioner_signature = None
+        self.Preconditioner_KV_shape = None
+        self.Preconditioner_reuse_counter = 0
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
-                              "sparseLU", "sparseMINRESpre", "sparseCGpre", "sparseSolve", "a set of callables"]
+                              "sparseLU", "sparseMINRESpre", "sparseCGpre",
+                              "sparseMINRESpre_<type>", "sparseCGpre_<type>",
+                              "sparseSolve", "a set of callables"]
         K, V, m = self._get_KVm()
 
         if self.gp2Scale: self.mode = self._set_gp2Scale_mode(K)
@@ -79,7 +100,80 @@ class GPkv:
         elif len(self.x_data) < 2001 and Ksparsity >= 0.0001: mode = "Chol"
         else: mode = "sparseMINRES"
         return mode
-    
+
+    ##################################################################
+    ##############Sparse-preconditioner cache##########################
+    ##################################################################
+    _PRECONDITIONED_MODES = {"sparseMINRESpre", "sparseCGpre"}
+
+    def _preconditioner_refresh_interval(self):
+        return max(1, int(self.args.get("sparse_preconditioner_refresh_interval", 1)))
+
+    def _preconditioner_signature(self):
+        """Args fingerprint: any key beginning with ``sparse_preconditioner_``."""
+        relevant = {key: value for key, value in self.args.items()
+                    if key.startswith("sparse_preconditioner_")}
+        return tuple(sorted(relevant.items()))
+
+    def _reset_sparse_preconditioner(self):
+        self.Preconditioner_factor = None
+        self.Preconditioner_operator = None
+        self.Preconditioner_signature = None
+        self.Preconditioner_KV_shape = None
+        self.Preconditioner_reuse_counter = 0
+
+    def _can_reuse_sparse_preconditioner(self, KV):
+        if self.mode not in self._PRECONDITIONED_MODES:
+            return False
+        if self.Preconditioner_operator is None:
+            return False
+        if self.Preconditioner_KV_shape != KV.shape:
+            return False
+        if self.Preconditioner_signature != self._preconditioner_signature():
+            return False
+        if self.Preconditioner_reuse_counter >= self._preconditioner_refresh_interval() - 1:
+            return False
+        return True
+
+    def _build_sparse_preconditioner_or_none(self, KV):
+        """Construct a fresh preconditioner for ``KV``; ``None`` on failure (with warning)."""
+        try:
+            factor, operator = calculate_sparse_preconditioner(KV, args=self.args)
+        except Exception as exc:
+            warnings.warn(
+                f"Failed to build sparse preconditioner for mode {self.mode}; "
+                "falling back to the unpreconditioned iterative solve."
+            )
+            logger.warning("Sparse preconditioner construction failed for {}: {}", self.mode, exc)
+            return None, None
+        return factor, operator
+
+    def _get_or_refresh_preconditioner(self, KV, force_refresh=False):
+        """Return a cached or freshly-built ``LinearOperator`` for ``KV``.
+
+        Caching honors ``args["sparse_preconditioner_refresh_interval"]`` (default 1
+        = always refresh) and validates shape + relevant args fingerprint.
+        ``force_refresh=True`` bypasses reuse — used by ``set_KV`` after a state
+        change so the new factorization isn't based on the old KV's preconditioner.
+        Returns ``None`` if construction fails; the caller falls back to an
+        unpreconditioned iterative solve.
+        """
+        if self.mode not in self._PRECONDITIONED_MODES:
+            return None
+        if not force_refresh and self._can_reuse_sparse_preconditioner(KV):
+            self.Preconditioner_reuse_counter += 1
+            return self.Preconditioner_operator
+        factor, operator = self._build_sparse_preconditioner_or_none(KV)
+        if operator is None:
+            self._reset_sparse_preconditioner()
+            return None
+        self.Preconditioner_factor = factor
+        self.Preconditioner_operator = operator
+        self.Preconditioner_signature = self._preconditioner_signature()
+        self.Preconditioner_KV_shape = KV.shape
+        self.Preconditioner_reuse_counter = 0
+        return operator
+
     ##################################################################
     #####################UPDATE THE OBJ STATE#########################
     ##################################################################
@@ -139,9 +233,11 @@ class GPkv:
         elif self.mode == "sparseMINRESpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             self.KV = KV
+            self._get_or_refresh_preconditioner(KV, force_refresh=True)
         elif self.mode == "sparseCGpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             self.KV = KV
+            self._get_or_refresh_preconditioner(KV, force_refresh=True)
         elif self.mode == "sparseSolve":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             self.KV = KV
@@ -185,9 +281,11 @@ class GPkv:
         elif self.mode == "sparseMINRESpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             self.KV = KV
+            self._get_or_refresh_preconditioner(KV)
         elif self.mode == "sparseCGpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             self.KV = KV
+            self._get_or_refresh_preconditioner(KV)
         elif self.mode == "sparseSolve":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             self.KV = KV
@@ -196,10 +294,15 @@ class GPkv:
         else:
             raise Exception(f"No Mode. Choose from: {self.allowed_modes}")
 
-    def compute_new_KVinvY(self, KV, m):
-        """Recompute KVinvY for a given KV and m without updating state (used during training)."""
+    def compute_new_KVinvY(self, KV, m, x0=None):
+        """Recompute KVinvY for a given KV and m without updating state (used during training).
+
+        ``x0`` (optional) is forwarded to iterative solvers as a warm-start; passing
+        the previous iteration's KVinvY can substantially cut iteration counts when
+        successive hyperparameters are close.
+        """
         y_mean = self.y_data - m[:, None]
-        if self.gp2Scale:   # pragma: no cover
+        if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
         else:
             mode = self.mode
@@ -216,20 +319,18 @@ class GPkv:
             KVinvY = calculate_LU_solve(LU_factor, y_mean, args=self.args)
         elif mode == "sparseCG":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            KVinvY = calculate_sparse_conj_grad(KV, y_mean, args=self.args)
+            KVinvY = calculate_sparse_conj_grad(KV, y_mean, x0=x0, args=self.args)
         elif mode == "sparseMINRES":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            KVinvY = calculate_sparse_minres(KV, y_mean, args=self.args)
+            KVinvY = calculate_sparse_minres(KV, y_mean, x0=x0, args=self.args)
         elif mode == "sparseMINRESpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-            M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
-            KVinvY = calculate_sparse_minres(KV, y_mean, M=M, args=self.args)
+            M = self._get_or_refresh_preconditioner(KV)
+            KVinvY = calculate_sparse_minres(KV, y_mean, M=M, x0=x0, args=self.args)
         elif mode == "sparseCGpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            B = sparse.linalg.spilu(KV, drop_tol=1e-8)
-            M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
-            KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, args=self.args)
+            M = self._get_or_refresh_preconditioner(KV)
+            KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, x0=x0, args=self.args)
         elif mode == "sparseSolve":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
@@ -240,14 +341,16 @@ class GPkv:
             raise Exception(f"No mode: {mode}")
         return KVinvY.reshape(y_mean.shape)
 
-    def compute_new_KVlogdet_KVinvY(self, K, V, m):
+    def compute_new_KVlogdet_KVinvY(self, K, V, m, x0=None):
         """
         Compute KVinvY and log|KV| jointly in one factorization pass (used during training).
         No state is updated.
+
+        ``x0`` (optional) is forwarded to iterative solvers as a warm-start.
         """
         KV = self.addKV(K, V)
         y_mean = self.y_data - m[:, None]
-        if self.gp2Scale:   # pragma: no cover
+        if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
         else:
             mode = self.mode
@@ -267,23 +370,21 @@ class GPkv:
             KVlogdet = calculate_LU_logdet(LU_factor, args=self.args)
         elif mode == "sparseCG":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            KVinvY = calculate_sparse_conj_grad(KV, y_mean, args=self.args)
+            KVinvY = calculate_sparse_conj_grad(KV, y_mean, x0=x0, args=self.args)
             KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
         elif mode == "sparseMINRES":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            KVinvY = calculate_sparse_minres(KV, y_mean, args=self.args)
+            KVinvY = calculate_sparse_minres(KV, y_mean, x0=x0, args=self.args)
             KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
         elif mode == "sparseMINRESpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            B = sparse.linalg.spilu(KV.tocsc(), drop_tol=1e-8)
-            M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
-            KVinvY = calculate_sparse_minres(KV, y_mean, M=M, args=self.args)
+            M = self._get_or_refresh_preconditioner(KV)
+            KVinvY = calculate_sparse_minres(KV, y_mean, M=M, x0=x0, args=self.args)
             KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
         elif mode == "sparseCGpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            B = sparse.linalg.spilu(KV.tocsc(), drop_tol=1e-8)
-            M = sparse.linalg.LinearOperator(KV.shape, matvec=B.solve)
-            KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, args=self.args)
+            M = self._get_or_refresh_preconditioner(KV)
+            KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, x0=x0, args=self.args)
             KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
         elif mode == "sparseSolve":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
@@ -336,15 +437,8 @@ class GPkv:
             raise Exception("K+V not possible with the given formats")
 
     def solve(self, b, x0=None):
-        if x0 is not None and x0.shape != b.shape:
-            # x0 from a previous (smaller) solve is a valid warm-start for the
-            # leading rows; zero-pad the rest so iterative solvers accept it.
-            pad_n = b.shape[0] - x0.shape[0]
-            if pad_n > 0:
-                pad = np.zeros((pad_n,) + x0.shape[1:])
-                x0 = np.vstack([x0, pad]) if x0.ndim == 2 else np.concatenate([x0, pad])
-            else:
-                x0 = None
+        # x0 shape normalization (zero-pad / column-broadcast) is handled inside
+        # the sparse iterative solvers in gp_lin_alg, so no shaping is needed here.
         if self.mode == "Chol":
             return calculate_Chol_solve(self.Chol_factor, b, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv":
@@ -361,12 +455,10 @@ class GPkv:
         elif self.mode == "sparseLU":
             return calculate_LU_solve(self.LU_factor, b, args=self.args)
         elif self.mode == "sparseMINRESpre":
-            B = sparse.linalg.spilu(self.KV.tocsc(), drop_tol=1e-8)
-            M = sparse.linalg.LinearOperator(self.KV.shape, matvec=B.solve)
+            M = self._get_or_refresh_preconditioner(self.KV)
             return calculate_sparse_minres(self.KV, b, M=M, x0=x0, args=self.args)
         elif self.mode == "sparseCGpre":
-            B = sparse.linalg.spilu(self.KV.tocsc(), drop_tol=1e-8)
-            M = sparse.linalg.LinearOperator(self.KV.shape, matvec=B.solve)
+            M = self._get_or_refresh_preconditioner(self.KV)
             return calculate_sparse_conj_grad(self.KV, b, M=M, x0=x0, args=self.args)
         elif self.mode == "sparseSolve":
             return calculate_sparse_solve(self.KV, b, args=self.args)
@@ -405,6 +497,14 @@ class GPkv:
             KVinvY=self.KVinvY,
             cached_solve=self.cached_solve,
             cached_precond=self.cached_precond,
+            # Preconditioner factor/operator are not picklable in the general
+            # case (LinearOperator closures, spilu factors); the next call will
+            # rebuild from KV via the cache helpers.
+            Preconditioner_factor=None,
+            Preconditioner_operator=None,
+            Preconditioner_signature=self.Preconditioner_signature,
+            Preconditioner_KV_shape=self.Preconditioner_KV_shape,
+            Preconditioner_reuse_counter=self.Preconditioner_reuse_counter,
             custom_obj=self.custom_obj,
             allowed_modes=self.allowed_modes,
             logdet_KV=self.logdet_KV
@@ -413,3 +513,13 @@ class GPkv:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        # Defensive defaults for unpickling older saved states.
+        for attr, default in (
+            ("Preconditioner_factor", None),
+            ("Preconditioner_operator", None),
+            ("Preconditioner_signature", None),
+            ("Preconditioner_KV_shape", None),
+            ("Preconditioner_reuse_counter", 0),
+        ):
+            if attr not in self.__dict__:
+                setattr(self, attr, default)

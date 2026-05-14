@@ -17,6 +17,10 @@ class GPMarginalLikelihood:
         self.likelihood = likelihood
         self.trainer = trainer
         self.kv = kv
+        # Warm-start cache for iterative training solves; written by
+        # compute_new_KVinvY / compute_new_KVlogdet_KVinvY when
+        # args["sparse_krylov_warm_start"] is True.
+        self._warm_start_KVinvY = None
 
 
     ##################################################################
@@ -85,12 +89,49 @@ class GPMarginalLikelihood:
     def addKV(self, K, V):
         return self.kv.addKV(K, V)
 
-    def compute_new_KVinvY(self, KV, m):
-        return self.kv.compute_new_KVinvY(KV, m)
+    def _warm_start_enabled(self):
+        return bool(self.args.get("sparse_krylov_warm_start", False))
 
+    def _iterative_initial_guess(self, target_shape):
+        """Return a warm-start ``x0`` from the cached training KVinvY if shapes match.
+
+        Source priority: ``self._warm_start_KVinvY`` (previous training iteration's
+        solution) when available, else ``self.kv.KVinvY`` (the committed solution).
+        Returns ``None`` when warm-start is disabled or no compatible cache exists.
+        """
+        if not self._warm_start_enabled():
+            return None
+        for candidate in (self._warm_start_KVinvY, self.kv.KVinvY):
+            if candidate is None:
+                continue
+            guess = np.asarray(candidate)
+            if guess.ndim == 1:
+                guess = guess.reshape(-1, 1)
+            if guess.shape[0] != target_shape[0]:
+                continue
+            if guess.shape[1] == target_shape[1]:
+                return guess
+            if guess.shape[1] == 1 and target_shape[1] > 1:
+                return np.repeat(guess, target_shape[1], axis=1)
+        return None
+
+    def _update_warm_start(self, KVinvY):
+        if self._warm_start_enabled():
+            self._warm_start_KVinvY = np.asarray(KVinvY, copy=True)
+
+    def compute_new_KVinvY(self, KV, m):
+        y_mean_shape = (self.y_data.shape[0], self.y_data.shape[1])
+        x0 = self._iterative_initial_guess(y_mean_shape)
+        KVinvY = self.kv.compute_new_KVinvY(KV, m, x0=x0)
+        self._update_warm_start(KVinvY)
+        return KVinvY
 
     def compute_new_KVlogdet_KVinvY(self, K, V, m):
-        return self.kv.compute_new_KVlogdet_KVinvY(K, V, m)
+        y_mean_shape = (self.y_data.shape[0], self.y_data.shape[1])
+        x0 = self._iterative_initial_guess(y_mean_shape)
+        KVinvY, KVlogdet = self.kv.compute_new_KVlogdet_KVinvY(K, V, m, x0=x0)
+        self._update_warm_start(KVinvY)
+        return KVinvY, KVlogdet
 
     ##################################################################################
     def log_likelihood(self, hyperparameters=None):
@@ -307,10 +348,13 @@ class GPMarginalLikelihood:
             likelihood=self.likelihood,
             trainer=self.trainer,
             kv=self.kv,
+            _warm_start_KVinvY=self._warm_start_KVinvY,
         )
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        if "_warm_start_KVinvY" not in self.__dict__:
+            self._warm_start_KVinvY = None
 
 

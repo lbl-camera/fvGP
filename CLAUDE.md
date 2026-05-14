@@ -39,7 +39,7 @@ Both classes are composed of internal specialist objects created at `__init__` t
 | `GPprior` | [gp_prior.py](fvgp/gp_prior.py) | Kernel and mean function (default: anisotropic Matérn with ARD). In gp2Scale mode also owns `x_data_scatter_future` (the persistent dask scatter of `x_data`) |
 | `GPlikelihood` | [gp_likelihood.py](fvgp/gp_likelihood.py) | Noise model (variances or callable) |
 | `GPkv` | [gp_kv.py](fvgp/gp_kv.py) | Owns K+V matrix state and all factorizations; dispatches solves/logdets across linalg modes |
-| `GPMarginalLikelihood` | [gp_marginal_likelihood.py](fvgp/gp_marginal_likelihood.py) | Log marginal likelihood and its gradient; delegates factorization to `GPkv` |
+| `GPMarginalLikelihood` | [gp_marginal_likelihood.py](fvgp/gp_marginal_likelihood.py) | Log marginal likelihood and its gradient; delegates factorization to `GPkv`. Maintains `_warm_start_KVinvY` for iterative training solves when `args["sparse_krylov_warm_start"]=True`. |
 | `GPposterior` | [gp_posterior.py](fvgp/gp_posterior.py) | Posterior mean/covariance; information-theoretic quantities |
 | `GPtraining` | [gp_training.py](fvgp/gp_training.py) | Hyperparameter optimization (scipy, hgdl async, MCMC, Adam) |
 
@@ -64,7 +64,7 @@ Gotchas:
 ### Key supporting modules
 
 - **[gp_lin_alg.py](fvgp/gp_lin_alg.py)** — CPU/GPU linear algebra primitives; Cholesky, LU, sparse solvers; defines `NonPositiveDefiniteError`
-- **[gp_kv.py](fvgp/gp_kv.py)** — `GPkv` manages all K+V state across linalg modes: `"Chol"`, `"CholInv"`, `"Inv"`, `"sparseLU"`, `"sparseCG"`, `"sparseMINRES"`, and preconditioned variants. The mode is set at init and determines which factorization is updated when data or hyperparameters change. Custom solvers can be injected as a 3-tuple of callables.
+- **[gp_kv.py](fvgp/gp_kv.py)** — `GPkv` manages all K+V state across linalg modes: `"Chol"`, `"CholInv"`, `"Inv"`, `"sparseLU"`, `"sparseCG"`, `"sparseMINRES"`, and preconditioned variants. The mode is set at init and determines which factorization is updated when data or hyperparameters change. Custom solvers can be injected as a 3-tuple of callables. For `sparseMINRESpre`/`sparseCGpre`, `GPkv` caches the preconditioner across `update_KV` / `compute_new_*` calls and rebuilds when `Preconditioner_reuse_counter` ≥ `args["sparse_preconditioner_refresh_interval"] - 1` or when the shape/`sparse_preconditioner_*` args fingerprint changes. `set_KV` always force-refreshes. Aliases like `"sparseCGpre_amg"` are resolved at `__init__` into the canonical mode plus `args["sparse_preconditioner_type"]`.
 - **[kernels.py](fvgp/kernels.py)** — 15+ built-in kernels including Matérn, squared exponential, Wendland (compactly supported)
 - **[gp_mcmc.py](fvgp/gp_mcmc.py)** — Adaptive Metropolis–Hastings sampler used for Bayesian hyperparameter inference
 - **[gp_actor.py](fvgp/gp_actor.py)** — `AsyncOptimizer` wraps `_MCMCActor` and `_AdamActor` for non-blocking background training; used by `GPtraining` for async MCMC and Adam modes
@@ -91,6 +91,15 @@ client.run(lambda: None)  # flush pending releases
 ```
 
 The `test_gp2Scale` test uses exactly this pattern between linalg-mode iterations.
+
+### Iterative-solver acceleration (sparseCG / sparseMINRES / *pre modes)
+
+For `sparseCG`, `sparseMINRES`, `sparseCGpre`, and `sparseMINRESpre`, the user can opt into two orthogonal accelerators via `args` on the `GP` constructor:
+
+- **Preconditioner caching** (`sparseCGpre`/`sparseMINRESpre` only): `args["sparse_preconditioner_refresh_interval"] = N` reuses a single preconditioner for up to N consecutive `update_KV` / `compute_new_*` calls before rebuilding. Default `N=1` rebuilds on every call (same as no caching). `args["sparse_preconditioner_type"]` selects the kernel — `"ilu"` (default), `"ic"`/`"incomplete_cholesky"`, `"block_jacobi"`, `"schwarz"`/`"additive_schwarz"`, `"amg"` (requires pyamg). Mode aliases `"sparseCGpre_<type>"` / `"sparseMINRESpre_<type>"` set the type as a shortcut. Cache is invalidated automatically when `KV.shape` or any `sparse_preconditioner_*` arg changes.
+- **Warm-start** (all iterative modes): `args["sparse_krylov_warm_start"] = True` makes `GPMarginalLikelihood` pass the previous training iteration's `KVinvY` as `x0` to the next iterative solve. Cuts iteration counts substantially when successive hyperparameter trials are close. Stored in `marginal_likelihood._warm_start_KVinvY`; reset to `None` on pickling.
+
+Both default off so existing behavior is preserved.
 
 ### Customization API
 
