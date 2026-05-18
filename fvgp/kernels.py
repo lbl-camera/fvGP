@@ -342,7 +342,7 @@ def wendland_kernel(d):
     Covariance matrix : np.ndarray
     """
     d[d > 1.] = 1.
-    kernel = (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
+    kernel = (1. - d) ** 8 * (32. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
     return kernel
 
 
@@ -369,7 +369,7 @@ def wendland_anisotropic(x1, x2, hyperparameters):
     for i in range(len(x1[0])): distance_matrix += abs(np.subtract.outer(x1[:, i], x2[:, i]) / hps[1 + i]) ** 2
     d = np.sqrt(distance_matrix)
     d[d > 1.] = 1.
-    kernel = (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
+    kernel = (1. - d) ** 8 * (32. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
     return hps[0] * kernel
 
 
@@ -519,7 +519,7 @@ def wendland_anisotropic_gp2Scale_cpu(x1, x2, hps):
 
 
 def _wendland_anisotropic_polynomial(d, amplitude):
-    return amplitude * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
+    return amplitude * (1. - d) ** 8 * (32. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
 
 
 def _get_distance_matrix_gpu(x1, x2, device, hps):  # pragma: no cover
@@ -559,7 +559,7 @@ def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps):  # pragma: no cover
         hps_dev = torch.as_tensor(hps, device=device, dtype=torch.float32)
         d = _get_distance_matrix_gpu(x1_dev, x2_dev, device, hps_dev)
         d = torch.clamp(d, max=1.0)
-        kernel = hps_dev[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
+        kernel = hps_dev[0] * (1. - d) ** 8 * (32. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
         return kernel.detach().cpu().numpy()
     if engine == "cupy":
         import cupy as cp
@@ -571,7 +571,7 @@ def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps):  # pragma: no cover
             d += ((x1_dev[:, i].reshape(-1, 1) - x2_dev[:, i]) / hps_dev[1 + i]) ** 2
         d = cp.sqrt(d)
         d = cp.minimum(d, cp.float32(1.0))
-        kernel = hps_dev[0] * (1. - d) ** 8 * (35. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
+        kernel = hps_dev[0] * (1. - d) ** 8 * (32. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
         return cp.asnumpy(kernel)
 
     warnings.warn(
