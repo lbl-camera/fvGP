@@ -204,6 +204,9 @@ class GPposterior:
                 "or double check the hyperparameter optimization bounds. This will not "
                 "terminate the algorithm, but expect anomalies.")
             logger.debug("Negative variances encountered.")
+        # Always clip tiny negatives (numerical roundoff in iterative solvers
+        # leaves the diagonal slightly below zero); downstream sqrt would NaN.
+        if np.any(v < 0.0):
             v[v < 0.0] = 0.0
             if not variance_only: np.fill_diagonal(S, v)
 

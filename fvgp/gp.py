@@ -1546,14 +1546,15 @@ class GP:
         -------
         MPIW : float
         """
-        sigma = np.sqrt(self.posterior_covariance(x_test, add_noise=True)["v(x)"])
+        v = self.posterior_covariance(x_test, add_noise=True)["v(x)"]
+        sigma = np.sqrt(np.clip(v, 0.0, None))
         z = norm.ppf(1 - (1 - interval) / 2)
         return np.mean(2 * z * sigma)
 
     def interval_score(self, x_test, y_test, interval=0.95):
         """
         This function calculates the Interval Score (also known as the Winkler Score).
-        It penalises both missed coverage and unnecessarily wide prediction intervals,
+        It penalizes both missed coverage and unnecessarily wide prediction intervals,
         combining the concerns of :py:meth:`picp` and :py:meth:`mpiw` into a single
         scalar. Lower is better.
 
@@ -1662,6 +1663,62 @@ class GP:
                                 + 0.5 * ((y_test - baseline_mean) ** 2) / baseline_var)
 
         return nlpd_gp - nlpd_baseline
+
+    def plot_observed_vs_predicted(self, x_test, y_test, title=None, ax=None):
+        """
+        Scatter plot of observed vs. predicted values with a reference diagonal
+        and 1-sigma predictive error bars (noise-inflated posterior variance).
+        Useful for a quick visual check of model fit on a held-out test set.
+
+        Parameters
+        ----------
+        x_test : np.ndarray
+            Test input positions, shape (V, D).
+        y_test : np.ndarray
+            Observed test values, shape (V,) or (V, No) for multi-output.
+        title : str, optional
+            Plot title.
+        ax : matplotlib.axes.Axes, optional
+            Existing axes to draw on; if ``None``, a fresh figure + axes is created.
+
+        Returns
+        -------
+        None
+            If matplotlib is not installed a ``UserWarning`` is emitted; otherwise
+            the plot is drawn on the supplied or freshly-created axes.
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            warnings.warn(
+                "matplotlib is not installed; cannot create observed-vs-predicted plot. "
+                "Install with `pip install matplotlib` (or `pip install -e .[plotting]`) "
+                "to enable plotting."
+            )
+            return
+
+        y_pred = self.posterior_mean(x_test)["m(x)"]
+        y_var  = self.posterior_covariance(x_test, add_noise=True)["v(x)"]
+        y_obs_flat  = np.asarray(y_test).reshape(-1)
+        y_pred_flat = np.asarray(y_pred).reshape(-1)
+        y_sigma_flat = np.sqrt(np.clip(np.asarray(y_var).reshape(-1), 0.0, None))
+
+        if ax is None:
+            _, ax = plt.subplots(figsize=(6, 6))
+        ax.errorbar(y_obs_flat, y_pred_flat, yerr=y_sigma_flat,
+                    fmt="o", alpha=0.6, markersize=4, capsize=2,
+                    elinewidth=0.8, label="prediction ± 1σ")
+
+        lo = float(min(y_obs_flat.min(), (y_pred_flat - y_sigma_flat).min()))
+        hi = float(max(y_obs_flat.max(), (y_pred_flat + y_sigma_flat).max()))
+        ax.plot([lo, hi], [lo, hi], "k--", linewidth=1, label="y = x")
+
+        ax.set_xlabel("Observed")
+        ax.set_ylabel("Predicted")
+        if title is not None:
+            ax.set_title(title)
+        ax.set_aspect("equal", adjustable="box")
+        ax.legend(loc="best")
 
     @staticmethod
     def gaussian_1d(x, mu, sigma):
