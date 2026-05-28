@@ -22,6 +22,7 @@ _GP_INSTANCES_PER_CLIENT = weakref.WeakValueDictionary()
 
 # TODO: also search below "TODO"
 # Appends and rank_n_updates for gp2Scale are not yet fully tested. Have to check the compute graph and test (what does rank_n_update even mean for the different modes? ). 
+# Caching a preconditioner should depend on how much the hps changed
 
 class GP:
     """
