@@ -64,6 +64,11 @@ exclude_patterns = []
 
 html_theme = 'pydata_sphinx_theme'
 
+# Force light mode regardless of the visitor's OS preference. pydata-sphinx-theme
+# sets data-theme="light" on <html> when default_mode == "light", and the navbar
+# theme-switcher is excluded via navbar_end so visitors can't toggle to dark.
+html_context = {'default_mode': 'light'}
+
 html_theme_options = {
     'logo': {'text': 'fvGP'},
     'github_url': 'https://github.com/lbl-camera/fvgp',
@@ -73,7 +78,6 @@ html_theme_options = {
     'secondary_sidebar_items': ['page-toc'],
     'footer_start': ['copyright'],
     'footer_end': [],
-    'color_mode': 'light',
 }
 
 html_static_path = ['_static']
