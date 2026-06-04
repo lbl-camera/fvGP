@@ -73,6 +73,7 @@ html_theme_options = {
     'secondary_sidebar_items': ['page-toc'],
     'footer_start': ['copyright'],
     'footer_end': [],
+    'color_mode': 'light',
 }
 
 html_static_path = ['_static']
