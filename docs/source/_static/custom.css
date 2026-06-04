@@ -1,4 +1,27 @@
 /* ------------------------------------------------------------------ */
+/* Force light colour scheme regardless of OS/browser preference.     */
+/*                                                                     */
+/* pydata-sphinx-theme respects color_mode:'light' in conf.py by      */
+/* setting data-theme="light" on <html>, but still ships a            */
+/* prefers-color-scheme:dark media block.  The rules below override   */
+/* that block so the docs always render in light mode.                */
+/* ------------------------------------------------------------------ */
+
+/* Prevent native browser controls (inputs, scrollbars, etc.)         */
+/* from switching to dark variants.                                   */
+:root {
+    color-scheme: light !important;
+}
+
+/* Re-assert light variables if the theme's dark media query fires.   */
+@media (prefers-color-scheme: dark) {
+    html[data-theme="light"],
+    html:not([data-theme="dark"]) {
+        color-scheme: light;
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Headshot grid used on contributor/team pages                        */
 /* ------------------------------------------------------------------ */
 .headshot-main {
