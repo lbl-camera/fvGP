@@ -385,15 +385,20 @@ def test_linalg_modes():
     # the GP must function end-to-end (posterior + data updates) with that
     # preconditioner backing the iterative solve.
     canonical_to_aliases = {
-        "sparseCGpre":     ["ilu", "ic", "block_jacobi", "schwarz"],
-        "sparseMINRESpre": ["ilu", "ic", "block_jacobi", "schwarz"],
+        "sparseCGpre":     ["ilu", "native_ic", "block_jacobi", "schwarz"],
+        "sparseMINRESpre": ["ilu", "native_ic", "block_jacobi", "schwarz"],
     }
+    if _il.util.find_spec("ilupp") is not None:
+        canonical_to_aliases["sparseCGpre"].extend(["ichol", "ichol0"])
+        canonical_to_aliases["sparseMINRESpre"].extend(["ichol", "ichol0"])
     if _il.util.find_spec("pyamg") is not None:
         canonical_to_aliases["sparseCGpre"].append("amg")
         canonical_to_aliases["sparseMINRESpre"].append("amg")
     canonical_to_type = {
         "ilu": "ilu",
-        "ic": "incomplete_cholesky",
+        "ichol": "ichol",
+        "ichol0": "ichol0",
+        "native_ic": "native_incomplete_cholesky",
         "block_jacobi": "block_jacobi",
         "schwarz": "additive_schwarz",
         "amg": "amg",
@@ -1356,8 +1361,11 @@ def _make_test_spd_sparse(n=40, seed=0):
 
 def test_normalize_sparse_preconditioner_type():
     assert normalize_sparse_preconditioner_type("ILU") == "ilu"
-    assert normalize_sparse_preconditioner_type("ic") == "incomplete_cholesky"
-    assert normalize_sparse_preconditioner_type("ichol") == "incomplete_cholesky"
+    assert normalize_sparse_preconditioner_type("ic") == "ichol"
+    assert normalize_sparse_preconditioner_type("ichol") == "ichol"
+    assert normalize_sparse_preconditioner_type("ichol0") == "ichol0"
+    assert normalize_sparse_preconditioner_type("native_ic") == "native_incomplete_cholesky"
+    assert normalize_sparse_preconditioner_type("native_ichol") == "native_incomplete_cholesky"
     assert normalize_sparse_preconditioner_type("BlockJacobi") == "block_jacobi"
     assert normalize_sparse_preconditioner_type("schwarz") == "additive_schwarz"
     assert normalize_sparse_preconditioner_type("AMG") == "amg"
@@ -1374,8 +1382,17 @@ def test_resolve_gp2scale_linalg_mode():
     mode, args = resolve_gp2scale_linalg_mode("sparseCGpre_amg")
     assert mode == "sparseCGpre" and args["sparse_preconditioner_type"] == "amg"
 
+    mode, args = resolve_gp2scale_linalg_mode("sparseMINRESpre_ichol")
+    assert mode == "sparseMINRESpre" and args["sparse_preconditioner_type"] == "ichol"
+
     mode, args = resolve_gp2scale_linalg_mode("sparseMINRESpre_ic")
-    assert mode == "sparseMINRESpre" and args["sparse_preconditioner_type"] == "incomplete_cholesky"
+    assert mode == "sparseMINRESpre" and args["sparse_preconditioner_type"] == "ichol"
+
+    mode, args = resolve_gp2scale_linalg_mode("sparseMINRESpre_native_ic")
+    assert mode == "sparseMINRESpre" and args["sparse_preconditioner_type"] == "native_incomplete_cholesky"
+
+    mode, args = resolve_gp2scale_linalg_mode("sparseCGpre_native_ichol")
+    assert mode == "sparseCGpre" and args["sparse_preconditioner_type"] == "native_incomplete_cholesky"
 
     # Consistent explicit type is allowed
     mode, args = resolve_gp2scale_linalg_mode(
@@ -1401,14 +1418,34 @@ def test_calculate_sparse_preconditioner_ilu():
     assert res < 1e-6
 
 
-def test_calculate_sparse_preconditioner_ic0():
+def test_calculate_sparse_preconditioner_native_ic0():
     A = _make_test_spd_sparse(n=30)
-    factor, op = calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "incomplete_cholesky"})
-    assert factor["type"] == "incomplete_cholesky"
+    factor, op = calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "native_ic"})
+    assert factor["type"] == "native_incomplete_cholesky"
     b = np.random.rand(A.shape[0])
     x = calculate_sparse_conj_grad(A, b, M=op, args={"sparse_cg_tol": 1e-8})
     res = np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b)
     assert res < 1e-6
+
+
+def test_missing_ilupp_message_for_ic_aliases(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "ilupp":
+            raise ImportError("simulated missing ilupp")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    A = _make_test_spd_sparse(n=10)
+
+    with pytest.raises(ImportError, match="pip install ilupp"):
+        calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "ic"})
+
+    with pytest.raises(ImportError, match="pip install ilupp"):
+        calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "ichol0"})
 
 
 def test_calculate_sparse_preconditioner_block_jacobi():
@@ -1761,7 +1798,7 @@ def test_kv_preconditioner_signature_invalidates_cache():
     assert op0 is not None
 
     # Mutate args to flip the preconditioner type
-    gp.data.args["sparse_preconditioner_type"] = "ic"
+    gp.data.args["sparse_preconditioner_type"] = "native_ic"
     KV = kv.addKV(kv.K, kv.V)
     kv.update_KV(KV)
     assert kv.Preconditioner_operator is not None
@@ -1864,5 +1901,3 @@ def test_preconditioner_build_failure_falls_back():
     # And the build-failure warning fired
     msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
     assert any("Failed to build sparse preconditioner" in m for m in msgs)
-
-

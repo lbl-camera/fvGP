@@ -182,8 +182,10 @@ class fvGP(GP):
         * ``"sparseSolve"`` — direct sparse solve via scipy.
         * ``"sparseCGpre"`` — preconditioned conjugate-gradient. The preconditioner type
           is selected by ``args["sparse_preconditioner_type"]`` (default ``"ilu"``;
-          also ``"ic"``/``"incomplete_cholesky"``, ``"block_jacobi"``,
-          ``"schwarz"``/``"additive_schwarz"``, or ``"amg"`` (requires pyamg)).
+          also compiled incomplete Cholesky ``"ichol"``/``"ic"``/``"incomplete_cholesky"``,
+          zero-fill ``"ichol0"``, legacy Python IC(0) ``"native_ic"``/``"native_ichol"``,
+          ``"block_jacobi"``, ``"schwarz"``/``"additive_schwarz"``, or ``"amg"``
+          (requires pyamg). The compiled IC options require the optional ``ilupp`` package.
         * ``"sparseMINRESpre"`` — preconditioned MINRES; same preconditioner choices.
         * ``"sparseCGpre_<type>"`` / ``"sparseMINRESpre_<type>"`` — shortcut that sets
           ``args["sparse_preconditioner_type"]`` to ``<type>`` (e.g. ``"sparseCGpre_amg"``).
@@ -239,8 +241,8 @@ class fvGP(GP):
         - "sparse_krylov_warm_start" : True/False; default = False — feed the
           previous training iteration's ``KVinvY`` as ``x0`` to the next solve
         - "sparse_preconditioner_type" : str; default = "ilu". One of "ilu",
-          "ic"/"ichol"/"incomplete_cholesky", "block_jacobi", "schwarz"/
-          "additive_schwarz", "amg" (requires pyamg)
+          "ichol"/"ic"/"incomplete_cholesky", "ichol0", "native_ic"/"native_ichol",
+          "block_jacobi", "schwarz"/"additive_schwarz", "amg" (requires pyamg)
         - "sparse_preconditioner_refresh_interval" : int; default = 1 —
           reuse the cached preconditioner for up to N consecutive solves
           before rebuilding. ``set_KV`` always force-refreshes.
@@ -250,11 +252,30 @@ class fvGP(GP):
           additive Schwarz
         - "sparse_preconditioner_drop_tol" / "sparse_preconditioner_fill_factor"
           — forwarded to scipy ``spilu`` for "ilu"
+        - "sparse_preconditioner_ichol_fill_in" / "sparse_preconditioner_ichol_threshold"
+          — forwarded to ``ilupp`` thresholded IC for "ichol"
         - "sparse_preconditioner_amg_*" — forwarded to pyamg
           (``max_levels``, ``max_coarse``, ``strength``, ``cycle``, etc.)
         - "sparse_preconditioner_shift" / "_growth" / "_attempts" — diagonal
-          shift retry knobs for "ic" / "block_jacobi" / "additive_schwarz" when
+          shift retry knobs for legacy "native_ic"/"native_ichol" / "block_jacobi" / "additive_schwarz" when
           a local Cholesky encounters a non-PD block
+
+        Practical sparse-solver guidance:
+
+        - Keep compact-support covariance matrices genuinely sparse before using global
+          factor-based preconditioners. If the kernel support is too broad, ILU/IC
+          failures are usually memory/fill failures, not proof that Krylov solvers are bad.
+        - Prefer ``sparseCGpre_*`` as the primary path for covariance systems, which are
+          symmetric positive definite in the usual case. ``MINRES`` can be useful as a
+          comparison, but it may need a stricter ``sparse_minres_tol`` to satisfy a raw
+          relative residual check.
+        - Sweep preconditioner parameters at the target scale. For ILU, ``drop_tol`` and
+          ``fill_factor`` control a memory/solve-time tradeoff; a slightly more expressive
+          factor can cost only marginally more to build but reduce solve time substantially.
+        - For repeated nearby K+V updates, enable ``sparse_krylov_warm_start`` and reuse
+          preconditioners with ``sparse_preconditioner_refresh_interval``. The best refresh
+          interval is problem-dependent because preconditioner build cost can be comparable
+          to an unconditioned solve.
 
         Cholesky compute-device routing:
 

@@ -49,6 +49,7 @@ class GPkv:
         self.Preconditioner_signature = None
         self.Preconditioner_KV_shape = None
         self.Preconditioner_reuse_counter = 0
+        self.Last_preconditioner_error = None
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
                               "sparseLU", "sparseMINRESpre", "sparseCGpre",
                               "sparseMINRESpre_<type>", "sparseCGpre_<type>",
@@ -121,6 +122,7 @@ class GPkv:
         self.Preconditioner_signature = None
         self.Preconditioner_KV_shape = None
         self.Preconditioner_reuse_counter = 0
+        self.Last_preconditioner_error = None
 
     def _can_reuse_sparse_preconditioner(self, KV):
         if self.mode not in self._PRECONDITIONED_MODES:
@@ -140,9 +142,12 @@ class GPkv:
         try:
             factor, operator = calculate_sparse_preconditioner(KV, args=self.args)
         except Exception as exc:
+            self.Last_preconditioner_error = f"{type(exc).__name__}: {exc}"
             warnings.warn(
                 f"Failed to build sparse preconditioner for mode {self.mode}; "
-                "falling back to the unpreconditioned iterative solve."
+                f"falling back to the unpreconditioned iterative solve. "
+                f"Reason: {self.Last_preconditioner_error}. "
+                f"{sparse_preconditioner_failure_guidance(self.args)}"
             )
             logger.warning("Sparse preconditioner construction failed for {}: {}", self.mode, exc)
             return None, None
@@ -172,6 +177,7 @@ class GPkv:
         self.Preconditioner_signature = self._preconditioner_signature()
         self.Preconditioner_KV_shape = KV.shape
         self.Preconditioner_reuse_counter = 0
+        self.Last_preconditioner_error = None
         return operator
 
     ##################################################################
@@ -505,6 +511,7 @@ class GPkv:
             Preconditioner_signature=self.Preconditioner_signature,
             Preconditioner_KV_shape=self.Preconditioner_KV_shape,
             Preconditioner_reuse_counter=self.Preconditioner_reuse_counter,
+            Last_preconditioner_error=self.Last_preconditioner_error,
             custom_obj=self.custom_obj,
             allowed_modes=self.allowed_modes,
             logdet_KV=self.logdet_KV
@@ -520,6 +527,7 @@ class GPkv:
             ("Preconditioner_signature", None),
             ("Preconditioner_KV_shape", None),
             ("Preconditioner_reuse_counter", 0),
+            ("Last_preconditioner_error", None),
         ):
             if attr not in self.__dict__:
                 setattr(self, attr, default)
