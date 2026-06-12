@@ -1448,6 +1448,68 @@ def test_missing_ilupp_message_for_ic_aliases(monkeypatch):
         calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "ichol0"})
 
 
+def test_calculate_sparse_preconditioner_ichol0():
+    pytest.importorskip("ilupp")
+    A = _make_test_spd_sparse(n=30)
+    factor, op = calculate_sparse_preconditioner(
+        A, args={"sparse_preconditioner_type": "ichol0"}
+    )
+    b = np.random.rand(A.shape[0])
+    x = calculate_sparse_conj_grad(A, b, M=op, args={"sparse_cg_tol": 1e-8})
+    res = np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b)
+    assert res < 1e-6
+
+
+def test_calculate_sparse_preconditioner_ichol():
+    pytest.importorskip("ilupp")
+    A = _make_test_spd_sparse(n=30)
+    factor, op = calculate_sparse_preconditioner(
+        A,
+        args={
+            "sparse_preconditioner_type": "ichol",
+            "sparse_preconditioner_ichol_fill_in": 8,
+            "sparse_preconditioner_ichol_threshold": 1e-3,
+        },
+    )
+    b = np.random.rand(A.shape[0])
+    x = calculate_sparse_conj_grad(A, b, M=op, args={"sparse_cg_tol": 1e-8})
+    res = np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b)
+    assert res < 1e-6
+
+
+def test_ichol0_shift_retry_on_factor_failure(monkeypatch):
+    """First attempt fails -> shift-retry helper bumps the diagonal and succeeds."""
+    pytest.importorskip("ilupp")
+    import ilupp
+
+    real_factor_cls = ilupp.IChol0Preconditioner
+    call_count = {"n": 0}
+
+    def fake_factor(A):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError("simulated non-PD pivot")
+        return real_factor_cls(A)
+
+    monkeypatch.setattr(ilupp, "IChol0Preconditioner", fake_factor)
+
+    A = _make_test_spd_sparse(n=20)
+    factor, op = calculate_sparse_preconditioner(
+        A,
+        args={
+            "sparse_preconditioner_type": "ichol0",
+            "sparse_preconditioner_shift": 1e-6,
+            "sparse_preconditioner_shift_attempts": 4,
+        },
+    )
+    # First attempt failed, retry succeeded -> at least 2 calls.
+    assert call_count["n"] >= 2
+    b = np.random.rand(A.shape[0])
+    x = calculate_sparse_conj_grad(A, b, M=op, args={"sparse_cg_tol": 1e-8})
+    res = np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b)
+    assert res < 1e-6
+
+
 def test_calculate_sparse_preconditioner_block_jacobi():
     A = _make_test_spd_sparse(n=30)
     factor, op = calculate_sparse_preconditioner(

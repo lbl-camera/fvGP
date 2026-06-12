@@ -743,6 +743,34 @@ def _build_ilu_preconditioner(KV, args=None):
     return factor, operator
 
 
+def _shift_retry_ilupp_factor(A, build_fn, label, args):
+    """Try ``build_fn(A)`` with progressively larger diagonal shifts.
+
+    Mirrors the shift-retry policy of the native IC(0) path
+    (:func:`_build_ic0_factor`) using the shared ``sparse_preconditioner_shift``
+    / ``sparse_preconditioner_shift_growth`` / ``sparse_preconditioner_shift_attempts``
+    args (defaults: 0.0 / 10.0 / 5). Useful when an ``ilupp`` factorization
+    fails because of a non-PD or near-singular pivot in K+V.
+    """
+    args = _normalize_args(args)
+    shift = float(args.get("sparse_preconditioner_shift", 0.0))
+    growth = float(args.get("sparse_preconditioner_shift_growth", 10.0))
+    attempts = int(args.get("sparse_preconditioner_shift_attempts", 5))
+    n = A.shape[0]
+    last_exc = None
+    for _ in range(max(attempts, 1)):
+        A_try = A if shift == 0.0 else (A + shift * sparse.eye(n, format="csr"))
+        try:
+            return build_fn(A_try)
+        except Exception as exc:
+            last_exc = exc
+            shift = max(shift * growth, 1e-12)
+    raise np.linalg.LinAlgError(
+        f"{label} preconditioner construction failed after "
+        f"{attempts} shifted retries: {last_exc}"
+    )
+
+
 def _build_ichol0_preconditioner(KV, args=None):
     try:
         import ilupp
@@ -750,7 +778,7 @@ def _build_ichol0_preconditioner(KV, args=None):
         _raise_missing_ilupp("ichol0", exc)
 
     A = _as_symmetric_csr(KV).astype(np.float64)
-    factor = ilupp.IChol0Preconditioner(A)
+    factor = _shift_retry_ilupp_factor(A, ilupp.IChol0Preconditioner, "IChol0", args)
     operator = _build_dtype_adapted_operator(A.shape, factor.dot, factor_dtype=np.float64)
     return factor, operator
 
@@ -765,7 +793,13 @@ def _build_ichol_preconditioner(KV, args=None):
     A = _as_symmetric_csr(KV).astype(np.float64)
     add_fill_in = int(args.get("sparse_preconditioner_ichol_fill_in", 16))
     threshold = float(args.get("sparse_preconditioner_ichol_threshold", 1e-4))
-    factor = ilupp.ICholTPreconditioner(A, add_fill_in=add_fill_in, threshold=threshold)
+
+    def _build(A_try):
+        return ilupp.ICholTPreconditioner(
+            A_try, add_fill_in=add_fill_in, threshold=threshold
+        )
+
+    factor = _shift_retry_ilupp_factor(A, _build, "ICholT", args)
     operator = _build_dtype_adapted_operator(A.shape, factor.dot, factor_dtype=np.float64)
     return factor, operator
 
