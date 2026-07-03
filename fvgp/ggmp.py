@@ -5,6 +5,7 @@ from scipy.special import softmax, logsumexp
 from scipy.stats import norm, multivariate_normal, wasserstein_distance
 from scipy.optimize import minimize, linear_sum_assignment
 from scipy.linalg import LinAlgError
+from scipy.sparse.csgraph import minimum_spanning_tree
 from contextlib import contextmanager, nullcontext
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
@@ -1348,6 +1349,208 @@ def align_local_gmms_sequence(
         "metric": str(metric),
         "reference": ref_mode,
     }
+
+
+def _choose_mst_root(x_data: np.ndarray) -> int:
+    x_data = np.asarray(x_data, dtype=float)
+    if x_data.ndim == 1:
+        x_data = x_data.reshape(-1, 1)
+    centroid = np.mean(x_data, axis=0, keepdims=True)
+    distances = np.linalg.norm(x_data - centroid, axis=1)
+    return int(np.argmin(distances))
+
+
+def build_input_mst(
+    x_data: np.ndarray,
+    *,
+    root: int | None = None,
+) -> dict:
+    """
+    Build a Euclidean MST over the inputs and return a deterministic BFS traversal.
+
+    The paper describes label propagation along MST edges. This helper exposes the
+    tree explicitly so experiments can log the chosen traversal and verify that the
+    alignment matches the manuscript.
+    """
+    x_data = np.asarray(x_data, dtype=float)
+    if x_data.ndim == 1:
+        x_data = x_data.reshape(-1, 1)
+    if x_data.ndim != 2:
+        raise ValueError("x_data must be a 2-D array")
+
+    n = int(x_data.shape[0])
+    if n == 0:
+        raise ValueError("x_data is empty")
+
+    if root is None:
+        root = _choose_mst_root(x_data)
+    root = int(root)
+    if root < 0 or root >= n:
+        raise ValueError("root index out of range")
+
+    if n == 1:
+        return {
+            "root": root,
+            "order": [root],
+            "parents": np.array([-1], dtype=int),
+            "adjacency": np.zeros((1, 1), dtype=float),
+            "edges": [],
+        }
+
+    diffs = x_data[:, None, :] - x_data[None, :, :]
+    dist = np.linalg.norm(diffs, axis=-1)
+    mst = minimum_spanning_tree(dist).toarray().astype(float)
+    adjacency = mst + mst.T
+
+    parents = np.full(n, -2, dtype=int)
+    parents[root] = -1
+    order = []
+    queue = [root]
+    while queue:
+        u = queue.pop(0)
+        order.append(int(u))
+        nbrs = np.flatnonzero(adjacency[u] > 0)
+        nbrs = sorted(
+            (int(v) for v in nbrs if parents[int(v)] == -2),
+            key=lambda v: (float(adjacency[u, v]), int(v)),
+        )
+        for v in nbrs:
+            parents[v] = int(u)
+            queue.append(int(v))
+
+    edges = []
+    for child in order[1:]:
+        parent = int(parents[child])
+        weight = float(adjacency[parent, child])
+        edges.append((parent, int(child), weight))
+
+    return {
+        "root": root,
+        "order": order,
+        "parents": parents,
+        "adjacency": adjacency,
+        "edges": edges,
+    }
+
+
+def align_local_gmms_mst(
+    x_data: np.ndarray,
+    weights_list: Sequence[np.ndarray],
+    means_list: Sequence[np.ndarray],
+    covs_list: Sequence[np.ndarray],
+    *,
+    metric: str = "w2",
+    root: int | None = None,
+) -> dict:
+    """
+    Align local GMM components by propagating labels along the input MST.
+
+    This implements the geometry-aware matching procedure described in the paper:
+    build a Euclidean MST on the inputs, then solve one Hungarian assignment per
+    tree edge using squared Gaussian W2 cost.
+    """
+    if not (len(weights_list) == len(means_list) == len(covs_list)):
+        raise ValueError("weights_list, means_list, covs_list must have equal length")
+
+    n = int(len(means_list))
+    if n == 0:
+        raise ValueError("Empty sequence")
+
+    x_data = np.asarray(x_data, dtype=float)
+    if x_data.ndim == 1:
+        x_data = x_data.reshape(-1, 1)
+    if x_data.shape[0] != n:
+        raise ValueError("x_data length must match number of local GMMs")
+
+    mst = build_input_mst(x_data, root=root)
+    order = [int(v) for v in mst["order"]]
+    parents = np.asarray(mst["parents"], dtype=int)
+
+    aligned_w = [None] * n
+    aligned_m = [None] * n
+    aligned_c = [None] * n
+    perms = [None] * n
+    costs = [None] * n
+
+    root_idx = int(mst["root"])
+    aligned_w[root_idx] = np.asarray(weights_list[root_idx], dtype=float).reshape(-1).copy()
+    aligned_m[root_idx] = np.asarray(means_list[root_idx], dtype=float).copy()
+    aligned_c[root_idx] = np.asarray(covs_list[root_idx], dtype=float).copy()
+    perms[root_idx] = np.arange(aligned_m[root_idx].shape[0], dtype=int)
+
+    for child in order[1:]:
+        parent = int(parents[child])
+        m_ref = np.asarray(aligned_m[parent], dtype=float)
+        c_ref = np.asarray(aligned_c[parent], dtype=float)
+        m_cur = np.asarray(means_list[child], dtype=float)
+        c_cur = np.asarray(covs_list[child], dtype=float)
+        w_cur = np.asarray(weights_list[child], dtype=float).reshape(-1)
+
+        perm, cost = align_gmm_components_hungarian(
+            m_ref,
+            c_ref,
+            m_cur,
+            c_cur,
+            metric=str(metric),
+            return_cost=True,
+        )
+        aligned_w[child] = w_cur[perm].copy()
+        aligned_m[child] = m_cur[perm].copy()
+        aligned_c[child] = c_cur[perm].copy()
+        perms[child] = perm.copy()
+        costs[child] = cost.copy()
+
+    return {
+        "weights": aligned_w,
+        "means": aligned_m,
+        "covs": aligned_c,
+        "perms": perms,
+        "costs": costs,
+        "metric": str(metric),
+        "method": "mst",
+        "root": root_idx,
+        "mst_order": order,
+        "mst_parents": parents,
+        "mst_edges": mst["edges"],
+        "mst_adjacency": mst["adjacency"],
+    }
+
+
+def align_local_gmms(
+    weights_list: Sequence[np.ndarray],
+    means_list: Sequence[np.ndarray],
+    covs_list: Sequence[np.ndarray],
+    *,
+    x_data: np.ndarray | None = None,
+    metric: str = "w2",
+    method: str = "sequence",
+    reference: str = "previous",
+    root: int | None = None,
+) -> dict:
+    """
+    Dispatch between the legacy sequence aligner and the manuscript MST aligner.
+    """
+    method_key = str(method).lower()
+    if method_key == "sequence":
+        return align_local_gmms_sequence(
+            weights_list,
+            means_list,
+            covs_list,
+            metric=str(metric),
+            reference=str(reference),
+        )
+    if method_key == "mst":
+        if x_data is None:
+            raise ValueError("x_data is required for method='mst'")
+        return align_local_gmms_mst(
+            x_data,
+            weights_list,
+            means_list,
+            covs_list,
+            metric=str(metric),
+            root=root,
+        )
+    raise ValueError("method must be 'sequence' or 'mst'")
 
 
 def _log_mvn_density(
