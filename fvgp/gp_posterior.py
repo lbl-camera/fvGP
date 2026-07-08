@@ -107,7 +107,6 @@ class GPposterior:
         k = self.compute_covariances(x_data, x_pred, hyperparameters)
         A = k.T @ KVinvY
         prior_mean = self.compute_mean(x_pred, hyperparameters)
-        #assert A.shape == prior_mean.shape, str(KVinvY.shape)+ ", " + str(A.shape) + ", " + str(x_pred.shape)
         posterior_mean = prior_mean[:, None] + A
         if isinstance(x_out, np.ndarray): posterior_mean_re = posterior_mean.reshape(len(x_orig), len(x_out), order='F')
         else: posterior_mean_re = posterior_mean

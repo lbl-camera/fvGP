@@ -78,10 +78,12 @@ class GPprior:
         # prior-mean
         self.m_n_params = 2
         if callable(prior_mean_function):
+            self._default_mean = False
             self.mean_function = prior_mean_function
             self.m_n_params = len(inspect.signature(prior_mean_function).parameters)
         else:
             self.mean_function = self._default_mean_function
+            self._default_mean = True
 
         if callable(prior_mean_function_grad):
             self._dm_dh = prior_mean_function_grad
@@ -228,7 +230,8 @@ class GPprior:
         return m, K
 
     def _update_prior(self, x_old, x_new, hyperparameters):
-        m = self._update_mean(x_new, hyperparameters)
+        if self._default_mean: m = self.compute_mean(np.vstack([x_old, x_new]), hyperparameters)
+        else: m = self._update_mean(x_new, hyperparameters)
         K = self._update_prior_covariance_matrix(x_old, x_new, hyperparameters)
         assert np.ndim(m) == 1, "updated mean must be 1-d"
         assert np.ndim(K) == 2, "updated covariance K must be 2-d"
@@ -251,8 +254,7 @@ class GPprior:
         if np.ndim(self.m) == 1:
             m = np.append(self.m, self.compute_mean(x_new, hyperparameters))
         elif np.ndim(self.m) == 2:
-            raise Exception(
-                "prior mean has to be a vector")  #m = np.vstack([self.m, self.compute_mean(x_new, hyperparameters)])
+            raise Exception("prior mean has to be a vector")
         else:
             raise Exception("Prior mean in wrong format")
         return m
@@ -516,6 +518,7 @@ class GPprior:
             m=self.m,
             K=self.K,
             x_data_scatter_future=None,
+            _default_mean=self._default_mean
         )
         return state
 
