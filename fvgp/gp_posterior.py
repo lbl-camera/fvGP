@@ -213,7 +213,16 @@ class GPposterior:
 
         if isinstance(x_out, np.ndarray):
             v_re = v.reshape(len(x_orig), len(x_out), order='F')
-            if S is not None: S_re = S.reshape(len(x_orig), len(x_orig), len(x_out), len(x_out), order='F')
+            if S is not None:
+                # The flat product-space index is task-major (k = point + Npts*task),
+                # matching cartesian_product and the order='F' reshape of v above. A
+                # direct reshape to (Npts, Npts, No, No) would therefore interleave the
+                # point and task axes and silently scramble S. Reshape to the layout the
+                # flat index actually has -- (point, task, point, task) -- and then move
+                # the axes into the documented (Npts, Npts, No, No) arrangement, so that
+                # S_re[i, j, t, u] == Cov(f(x_i, task_t), f(x_j, task_u)).
+                S_re = S.reshape(len(x_orig), len(x_out), len(x_orig), len(x_out),
+                                 order='F').transpose(0, 2, 1, 3)
             else: S_re = None
         else:
             v_re = v

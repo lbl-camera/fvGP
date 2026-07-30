@@ -1963,3 +1963,45 @@ def test_preconditioner_build_failure_falls_back():
     # And the build-failure warning fired
     msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
     assert any("Failed to build sparse preconditioner" in m for m in msgs)
+
+
+def test_multi_task_posterior_covariance_S_layout():
+    """`S` must be indexed [point, point, task, task] (issue: task/point axes swapped).
+
+    The flat product-space index is task-major (k = point + Npts*task), so reshaping
+    the (Npts*No, Npts*No) matrix straight to (Npts, Npts, No, No) interleaves the two
+    axes and scrambles the result. Nothing inside fvgp or gpCAM reads `S` -- they all
+    use `S_flat` -- so this only ever affected callers, silently.
+    """
+    def mkernel(x1, x2, hps):
+        d = get_distance_matrix(x1, x2)
+        return hps[0] * matern_kernel_diff1(d, hps[1])
+
+    # deliberately Npts != No so a swapped axis cannot pass by coincidence
+    n_data, No, n_pred = 12, 3, 4
+    xd = np.random.rand(n_data, input_dim)
+    yd = np.column_stack([np.sin(np.linalg.norm(xd, axis=1)),
+                          np.cos(np.linalg.norm(xd, axis=1)),
+                          np.linalg.norm(xd, axis=1)])
+    gp = fvGP(xd, yd, init_hyperparameters=np.array([1., 1.]), kernel_function=mkernel)
+
+    x_pred = np.random.rand(n_pred, input_dim)
+    x_out = np.arange(No)
+    res = gp.posterior_covariance(x_pred, x_out=x_out)
+    S, S_flat = res["S"], res["S_flat"]
+    v = gp.posterior_covariance(x_pred, x_out=x_out, variance_only=True)["v(x)"]
+
+    assert S.shape == (n_pred, n_pred, No, No)
+    assert S_flat.shape == (n_pred * No, n_pred * No)
+
+    # every entry must agree with the flat matrix under the task-major index
+    for i in range(n_pred):
+        for j in range(n_pred):
+            for t in range(No):
+                for u in range(No):
+                    assert np.isclose(S[i, j, t, u], S_flat[i + t * n_pred, j + u * n_pred])
+
+    # the point/task diagonal is the variance returned by variance_only=True
+    assert np.allclose(np.einsum('iijj->ij', S), v)
+    # and S is symmetric under swapping both index pairs together
+    assert np.allclose(S, S.transpose(1, 0, 3, 2))

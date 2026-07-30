@@ -1107,6 +1107,16 @@ class GP:
         Returns
         -------
         Solution : dict
+            With keys `x`, `x_pred`, `v(x)`, `S`, `S_flat`, `v_flat`.
+            For a single-task GP (`x_out is None`), `v(x)` is the (V) vector of posterior
+            variances and `S` the (V x V) posterior covariance matrix.
+            For a multi-task GP, the GP lives on the product of input and output space and
+            the flat product-space index is **task-major**, k = point + V * task. `v_flat`
+            (V*No) and `S_flat` (V*No x V*No) are in that flat indexing; `v(x)` (V x No) and
+            `S` (V x V x No x No) are reshaped views of them, such that
+            `v(x)[i, t]` is the variance of f(x_i, task_t) and
+            `S[i, j, t, u]` is Cov(f(x_i, task_t), f(x_j, task_u)).
+            `S` and `S_flat` are None when `variance_only=True`.
         """
         return self.posterior.posterior_covariance(x_pred, x_out=x_out, variance_only=variance_only,
                                                    add_noise=add_noise)
