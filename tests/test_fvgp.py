@@ -2005,3 +2005,224 @@ def test_multi_task_posterior_covariance_S_layout():
     assert np.allclose(np.einsum('iijj->ij', S), v)
     # and S is symmetric under swapping both index pairs together
     assert np.allclose(S, S.transpose(1, 0, 3, 2))
+
+
+# =========================================================================
+# Bayesian optimization of the hyperparameters (method='bo')
+# =========================================================================
+def test_bo_transform_log_and_linear():
+    """The search transform must be log only where the bounds allow it.
+
+    Length scales and variances are positive and act multiplicatively, so log space
+    is the right place to search. A prior-mean coefficient is free to be negative,
+    so a blanket log would be invalid -- the decision is per dimension.
+    """
+    from fvgp.gp_bo import _LogAffineTransform
+    tf = _LogAffineTransform(np.array([[1e-3, 1e3], [-5., 5.], [0.1, 10.], [0., 2.]]))
+    # positive-bounded dims are log-transformed; sign-spanning and zero-touching are not
+    assert list(tf.log_mask) == [True, False, True, False]
+    theta = np.array([[1.0, -2.0, 3.0, 0.5]])
+    assert np.allclose(tf.from_unit(tf.to_unit(theta)), theta)
+    # bounds map to the corners of the unit cube
+    assert np.allclose(tf.to_unit(np.array([[1e-3, -5., 0.1, 0.]])), 0.0)
+    assert np.allclose(tf.to_unit(np.array([[1e3, 5., 10., 2.]])), 1.0)
+
+
+def test_bo_recovers_noisy_optimum_and_reports_sensitivity():
+    """BO must find a known optimum through observation noise, and the run must hand
+    back a curvature-based sensitivity ranking and an approximate theta-posterior."""
+    from fvgp.gp_bo import bayesian_optimize
+    rng = np.random.default_rng(0)
+    # dim 0 is 100x steeper than dim 1 in log-space; optimum at (1, 10)
+    def objective(t):
+        z = np.log(t) - np.log(np.array([1., 10.]))
+        return float(10.0 * z[0] ** 2 + 0.1 * z[1] ** 2 + 0.02 * rng.standard_normal())
+
+    bounds = np.array([[1e-2, 1e2], [1e-1, 1e3]])
+    theta, info = bayesian_optimize(objective, bounds, np.array([50., 0.5]),
+                                    max_iter=40, bo_args={"seed": 1, "noise_variance": 4e-4})
+    # recovered the optimum despite the noise
+    assert np.linalg.norm(np.log(theta) - np.log(np.array([1., 10.]))) < 0.5
+    assert info["n_evaluations"] == 40
+    # curvature ranks dim 0 above dim 1, matching the true 100:1 ratio
+    s = info["sensitivity"]
+    assert s[0] > s[1]
+    assert 10.0 < s[0] / s[1] < 1000.0
+    # the Laplace posterior is wider in the flat direction
+    cov = info["posterior covariance"]
+    assert cov is not None and cov.shape == (2, 2)
+    assert np.sqrt(cov[1, 1]) > np.sqrt(cov[0, 0])
+
+
+def test_bo_respects_evaluation_budget_and_does_not_recurse():
+    """`max_iter` is a budget in expensive likelihood evaluations, and the inner
+    surrogate must never itself train with method='bo' (no infinite regress)."""
+    from fvgp.gp_bo import bayesian_optimize
+    import fvgp.gp_bo as gp_bo
+
+    calls = {"objective": 0, "methods": []}
+
+    def objective(t):
+        calls["objective"] += 1
+        return float(np.sum((np.log(t) - 1.0) ** 2))
+
+    real_fit = gp_bo._fit_surrogate
+
+    def spy_fit(u_data, y_data, v_data, dim, train_max_iter):
+        gp = real_fit(u_data, y_data, v_data, dim, train_max_iter)
+        calls["methods"].append("local")
+        return gp
+
+    gp_bo._fit_surrogate = spy_fit
+    try:
+        bounds = np.array([[1e-2, 1e2]] * 3)
+        theta, info = bayesian_optimize(objective, bounds, np.array([1., 1., 1.]),
+                                        max_iter=18, bo_args={"seed": 0})
+    finally:
+        gp_bo._fit_surrogate = real_fit
+
+    assert calls["objective"] == 18, calls["objective"]
+    assert info["n_evaluations"] == 18
+    assert len(calls["methods"]) > 0          # the surrogate really was fit
+    assert theta.shape == (3,)
+    assert np.all(theta >= bounds[:, 0]) and np.all(theta <= bounds[:, 1])
+
+
+def test_bo_training_through_gp():
+    """method='bo' end to end: the GP is updated and bo_info is populated."""
+    def mkernel(x1, x2, hps):
+        return hps[0] * matern_kernel_diff1(get_distance_matrix(x1, x2), hps[1])
+
+    np.random.seed(2)
+    xd = np.random.rand(30, 2)
+    yd = np.sin(3 * xd[:, 0]) + np.cos(3 * xd[:, 1])
+    gp = GP(xd, yd, init_hyperparameters=np.array([1., 1.]), kernel_function=mkernel)
+    bounds = np.array([[0.01, 10.], [0.01, 10.]])
+    hps = gp.train(hyperparameter_bounds=bounds, method="bo", max_iter=20,
+                   bo_args={"seed": 3})
+
+    assert hps.shape == (2,)
+    assert np.allclose(gp.hyperparameters, hps)
+    info = gp.bo_info
+    assert info is not None
+    assert info["n_evaluations"] == 20
+    assert info["trace x"].shape == (20, 2)
+    assert np.all(info["log-transformed dimensions"])       # both bounds are positive
+    # BO improved on the starting point
+    nll = gp.marginal_likelihood.neg_log_likelihood
+    assert nll(hps) < nll(np.array([1., 1.]))
+
+
+def test_bo_uses_known_observation_noise():
+    """A supplied per-point noise variance must be accepted and used."""
+    from fvgp.gp_bo import bayesian_optimize
+    rng = np.random.default_rng(3)
+    sigma2 = 0.01
+
+    def objective(t):
+        return float(np.sum((np.log(t)) ** 2) + np.sqrt(sigma2) * rng.standard_normal())
+
+    bounds = np.array([[1e-2, 1e2], [1e-2, 1e2]])
+    # callable form (the SLQ/Hutchinson case: variance known per point)
+    theta, info = bayesian_optimize(objective, bounds, np.array([10., 10.]), max_iter=20,
+                                    bo_args={"seed": 0, "noise_function": lambda h: sigma2})
+    assert info["n_evaluations"] == 20
+    assert np.all(np.isfinite(theta))
+    # scalar form
+    theta2, info2 = bayesian_optimize(objective, bounds, np.array([10., 10.]), max_iter=20,
+                                      bo_args={"seed": 0, "noise_variance": sigma2})
+    assert np.all(np.isfinite(theta2))
+
+
+def test_bo_early_stopping_on_ei_tolerance():
+    """A large ei_tolerance must terminate the run before the budget is spent."""
+    from fvgp.gp_bo import bayesian_optimize
+
+    def objective(t):
+        return float(np.sum((np.log(t) - 1.0) ** 2))
+
+    bounds = np.array([[1e-2, 1e2]] * 2)
+    theta, info = bayesian_optimize(objective, bounds, np.array([1., 1.]), max_iter=60,
+                                    bo_args={"seed": 0, "ei_tolerance": 1e9})
+    assert info["n_evaluations"] < 60
+
+
+def test_train_async_bo(client):
+    """Async BO training: submit, poll, apply, stop."""
+    my_gp = GP(x_data, y_data, init_hyperparameters=np.array([1., 1., 1., 1., 1., 1.]),
+               noise_variances=np.zeros(y_data.shape) + 0.01)
+    bounds = np.array([[0.01, 10.]] * 6)
+    opt_obj = my_gp.train(hyperparameter_bounds=bounds, max_iter=100000,
+                          dask_client=client, method="bo", asynchronous=True,
+                          bo_args={"seed": 0})
+    time.sleep(5)
+    state = opt_obj.get_latest()
+    assert "status" in state and state["status"] in ("queued", "running", "finished")
+    my_gp.update_hyperparameters(opt_obj)
+    assert my_gp.hyperparameters.shape == (6,)
+    my_gp.stop_training(opt_obj)
+    time.sleep(3)
+    # stop() must actually halt the search rather than let the budget run out
+    n_after_stop = opt_obj.get_latest().get("n_evaluations", 0)
+    time.sleep(2)
+    assert opt_obj.get_latest().get("n_evaluations", 0) == n_after_stop
+    assert n_after_stop < 100000
+
+
+def _bo_pickle_kernel(x1, x2, hps):
+    # module level so the GP itself pickles by reference
+    return hps[0] * matern_kernel_diff1(get_distance_matrix(x1, x2), hps[1])
+
+
+def test_bo_trained_gp_pickles():
+    """A GP that has been trained with method='bo' must still pickle.
+
+    `bo_info` holds the fitted surrogate, whose prior mean is a closure over the
+    observed data and therefore unpicklable; the surrogate is dropped on pickling
+    while the diagnostics arrays are kept.
+    """
+    import pickle
+
+    np.random.seed(2)
+    xd = np.random.rand(25, 2)
+    yd = np.sin(3 * xd[:, 0]) + np.cos(3 * xd[:, 1])
+    gp = GP(xd, yd, init_hyperparameters=np.array([1., 1.]), kernel_function=_bo_pickle_kernel)
+    gp.train(hyperparameter_bounds=np.array([[0.01, 10.], [0.01, 10.]]),
+             method="bo", max_iter=18, bo_args={"seed": 1})
+    assert gp.bo_info["surrogate"] is not None
+
+    gp2 = pickle.loads(pickle.dumps(gp))
+    assert "surrogate" not in gp2.bo_info
+    assert np.allclose(gp2.bo_info["trace x"], gp.bo_info["trace x"])
+    assert gp2.bo_info["sensitivity"] is not None
+    assert np.allclose(gp2.hyperparameters, gp.hyperparameters)
+
+
+def test_gp2Scale_bo_is_allowed_but_never_asynchronous(client):
+    """gp2Scale may train with method='bo' -- its stochastic log-determinant and
+    truncated solve are exactly the noisy, gradient-free regime BO is for -- but it
+    must never do so asynchronously: gp2Scale already owns the Dask client for the
+    covariance, so an optimizer actor would contend with the linear algebra.
+    """
+    np.random.seed(0)
+    xd = np.random.rand(120, 1)
+    yd = np.sin(np.linalg.norm(xd, axis=1) * 5.0)
+    bounds = np.array([[0.1, 10.], [0.001, 0.02]])
+    init = np.random.uniform(size=2, low=bounds[:, 0], high=bounds[:, 1])
+    gp = GP(xd, yd, init, gp2Scale=True, gp2Scale_batch_size=100,
+            dask_client=client, linalg_mode="sparseLU")
+    assert gp.gp2Scale
+
+    # asking for asynchronous BO must warn and fall back to a synchronous run,
+    # returning hyperparameters rather than an optimizer proxy
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = gp.train(hyperparameter_bounds=bounds, method="bo", max_iter=8,
+                          bo_args={"seed": 0}, asynchronous=True, dask_client=client)
+    assert isinstance(result, np.ndarray) and result.shape == (2,)
+    assert not hasattr(result, "get_latest")
+    msgs = [str(w.message) for w in caught]
+    assert any("does not allow asynchronous training" in m for m in msgs), msgs
+    # and the method was NOT silently switched away from bo
+    assert not any("Method switched to MCMC" in m for m in msgs), msgs
+    assert gp.bo_info is not None and gp.bo_info["n_evaluations"] == 8

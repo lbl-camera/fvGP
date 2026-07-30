@@ -134,6 +134,80 @@ class _AdamActor:
         self._running = False
 
 
+class _BOActor:
+    """Runs Bayesian optimization in a background thread; lives on a Dask worker."""
+
+    def __init__(self, objective_function, hyperparameter_bounds, init_hyperparameters,
+                 max_iter, bo_args, info):
+        self._objective_function = objective_function
+        self._bounds = hyperparameter_bounds
+        self._x0 = np.asarray(init_hyperparameters).copy()
+        self._max_iter = max_iter
+        self._bo_args = bo_args
+        self._info = info
+        self._lock = threading.Lock()
+        self._latest = {"x": self._x0.copy(), "iteration": 0,
+                        "objective": None, "n_evaluations": 0, "status": "queued"}
+        self._running = False
+        self._thread = None
+
+    def start(self):
+        self._running = True
+
+        def _callback(theta, fval, iteration, state):
+            # while running, `x` is the best point *observed* so far
+            with self._lock:
+                self._latest = {
+                    "x": np.asarray(theta).copy(),
+                    "iteration": iteration,
+                    "objective": float(fval),
+                    "n_evaluations": state.get("n_evaluations", 0),
+                    "status": "running",
+                }
+
+        def _run():
+            from .gp_bo import bayesian_optimize
+            try:
+                theta, bo_info = bayesian_optimize(
+                    self._objective_function,
+                    self._bounds,
+                    self._x0,
+                    max_iter=self._max_iter,
+                    bo_args=self._bo_args,
+                    info=self._info,
+                    callback=_callback,
+                    early_stop=lambda: not self._running,
+                )
+                with self._lock:
+                    self._latest = dict(self._latest)
+                    # On completion `x` switches from the best point observed to the
+                    # noise-aware recommendation (the evaluated point with the best
+                    # surrogate posterior mean). Those differ on purpose: the smallest
+                    # observed value is partly a lucky draw of the estimator noise. So
+                    # the reported `objective` can tick *up* on the final poll -- that
+                    # is the recommendation being less lucky, not the search regressing.
+                    self._latest["x"] = np.asarray(theta).copy()
+                    self._latest["objective"] = float(bo_info["f(x)"])
+                    self._latest["n_evaluations"] = bo_info["n_evaluations"]
+                    self._latest["status"] = "finished"
+                    # the surrogate itself is not shipped back across the wire
+                    self._latest["sensitivity"] = bo_info["sensitivity"]
+                    self._latest["posterior covariance"] = bo_info["posterior covariance"]
+                    self._latest["ard length scales"] = bo_info["ard length scales"]
+            finally:
+                self._running = False
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
+    def get_latest(self):
+        with self._lock:
+            return dict(self._latest)
+
+    def stop(self):
+        self._running = False
+
+
 class AsyncOptimizer:
     """
     Proxy returned by ``train(asynchronous=True)`` for ``method='mcmc'`` or ``method='adam'``.
@@ -159,6 +233,11 @@ class AsyncOptimizer:
         state : dict
             For MCMC: the full trace summary dict (same keys as the synchronous result).
             For Adam: ``{"x", "iteration", "nlml", "grad_norm"}``.
+            For BO: ``{"x", "iteration", "objective", "n_evaluations", "status"}``, plus
+            ``sensitivity``, ``posterior covariance`` and ``ard length scales`` once
+            ``status == "finished"``. While ``status == "running"``, ``x`` is the best
+            point observed so far; on completion it becomes the noise-aware
+            recommendation, so ``objective`` may tick up on the final poll.
         """
         return self._actor.get_latest().result()
 

@@ -5,13 +5,15 @@ from scipy.optimize import differential_evolution
 from hgdl.hgdl import HGDL
 from scipy.optimize import minimize
 from .gp_mcmc import *
-from .gp_actor import _MCMCActor, _AdamActor, AsyncOptimizer
+from .gp_actor import _MCMCActor, _AdamActor, _BOActor, AsyncOptimizer
+from .gp_bo import bayesian_optimize
 warnings.simplefilter("once", UserWarning)
 
 
 class GPtraining:
     def __init__(self, data, hyperparameters):
         self.mcmc_info = None
+        self.bo_info = None
         self.data = data
         self.hyperparameters = hyperparameters
 
@@ -39,6 +41,7 @@ class GPtraining:
               mcmc_prior=None,
               mcmc_prop_distrs="normal",
               mcmc_args={},
+              bo_args=None,
               dask_client=None,
               info=False):
 
@@ -149,6 +152,20 @@ class GPtraining:
             hyperparameters, history = self.adam_optimize(objective_function,
                                                           objective_function_gradient,
                                                           init_hyperparameters, max_iter=max_iter)
+        ############################
+        ####Bayesian optimization:##
+        ############################
+        elif method == "bo":
+            logger.debug("fvGP is Bayesian-optimizing the hyperparameters.")
+            logger.debug("evaluation budget: {}", max_iter)
+            logger.debug("bounds: {}", hyperparameter_bounds)
+            hyperparameters, self.bo_info = bayesian_optimize(
+                objective_function,
+                hyperparameter_bounds,
+                init_hyperparameters,
+                max_iter=max_iter,
+                bo_args=bo_args,
+                info=info)
         elif callable(method): hyperparameters = method(self)
         else: raise ValueError("No optimization mode specified in fvGP")
         assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1, \
@@ -172,18 +189,19 @@ class GPtraining:
               mcmc_prior=None,
               mcmc_prop_distrs="normal",
               mcmc_args={},
+              bo_args=None,
               info=False):
 
         """
         Submit an asynchronous training run and return an optimizer proxy.
 
-        Supports ``method='hgdl'``, ``'mcmc'``, and ``'adam'``. The returned object
-        can be polled with ``get_latest()`` and stopped with ``stop()``.
+        Supports ``method='hgdl'``, ``'mcmc'``, ``'adam'``, and ``'bo'``. The returned
+        object can be polled with ``get_latest()`` and stopped with ``stop()``.
         Pass the returned object to ``GP.update_hyperparameters()`` to pull the
         latest result into the GP.
         """
-        assert method == "hgdl" or method == "mcmc" or method == "adam", \
-            "Asynchronous training only supported for hgdl, mcmc, adam; got method=" + str(method)
+        assert method in ("hgdl", "mcmc", "adam", "bo"), \
+            "Asynchronous training only supported for hgdl, mcmc, adam, bo; got method=" + str(method)
         if method == 'hgdl':
             opt_obj = self.hgdl_async(
                 objective_function=objective_function,
@@ -215,6 +233,16 @@ class GPtraining:
                 objective_function_gradient=objective_function_gradient,
                 init_hyperparameters=init_hyperparameters,
                 max_iter=max_iter,
+                dask_client=dask_client,
+            )
+        elif method == 'bo':
+            opt_obj = self.bo_async(
+                objective_function=objective_function,
+                hyperparameter_bounds=hyperparameter_bounds,
+                init_hyperparameters=init_hyperparameters,
+                max_iter=max_iter,
+                bo_args=bo_args,
+                info=info,
                 dask_client=dask_client,
             )
         return opt_obj
@@ -359,6 +387,59 @@ class GPtraining:
             1e-8,    # eps
             max_iter,
             1e-6,    # tol
+            actor=True,
+        )
+        actor = actor_future.result()
+        actor.start()
+        return AsyncOptimizer(actor)
+
+    ##################################################################################
+    def bo_async(self,
+                 objective_function,
+                 hyperparameter_bounds,
+                 init_hyperparameters,
+                 max_iter=50,
+                 bo_args=None,
+                 info=False,
+                 dask_client=None):
+        """
+        Submit an asynchronous Bayesian-optimization run to a Dask worker and return an
+        :py:class:`AsyncOptimizer` proxy.
+
+        Because every objective evaluation is an expensive likelihood, running this
+        asynchronously lets the caller keep using the GP with the best hyperparameters
+        found so far while the search continues on a worker.
+
+        Parameters
+        ----------
+        objective_function : callable
+            Negative log marginal likelihood ``f(hps) -> float``, MINIMIZED.
+        hyperparameter_bounds : np.ndarray
+            Bounds of shape (N, 2).
+        init_hyperparameters : np.ndarray
+            Starting hyperparameters of shape (N,), used to warm-start the design.
+        max_iter : int, optional
+            Budget in objective evaluations. Default is 50.
+        bo_args : dict, optional
+            Inner-BO settings; see :py:func:`fvgp.gp_bo.bayesian_optimize`.
+        info : bool, optional
+            Log progress each iteration. Default is False.
+        dask_client : distributed.Client
+            Dask client used to host the actor on a worker.
+
+        Returns
+        -------
+        opt_obj : AsyncOptimizer
+            Proxy with ``get_latest()`` and ``stop()`` methods.
+        """
+        actor_future = dask_client.submit(
+            _BOActor,
+            objective_function,
+            hyperparameter_bounds,
+            init_hyperparameters,
+            max_iter,
+            bo_args,
+            info,
             actor=True,
         )
         actor = actor_future.result()
@@ -569,9 +650,16 @@ class GPtraining:
         return True
 
     def __getstate__(self):
+        # `bo_info` carries the fitted surrogate GP, whose prior mean is a closure over
+        # the observed data and so cannot be pickled. The diagnostics themselves are
+        # plain arrays, so drop only the surrogate and keep the rest.
+        bo_info = self.bo_info
+        if isinstance(bo_info, dict) and bo_info.get("surrogate") is not None:
+            bo_info = {k: v for k, v in bo_info.items() if k != "surrogate"}
         state = dict(
             data=self.data,
             mcmc_info=self.mcmc_info,
+            bo_info=bo_info,
             hyperparameters=self.hyperparameters
             )
         return state

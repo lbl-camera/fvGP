@@ -517,6 +517,23 @@ class GP:
         return self.trainer.mcmc_info
 
     @property
+    def bo_info(self):
+        """Diagnostics from the last synchronous ``method='bo'`` training run, or None.
+
+        Keys: ``x``, ``f(x)``, ``trace x``, ``trace f(x)``, ``trace u``,
+        ``n_evaluations``, ``ei history``, ``surrogate hyperparameters``,
+        ``ard length scales``, ``sensitivity``, ``posterior covariance``,
+        ``curvature``, ``log-transformed dimensions``, ``stopped early``, and the
+        fitted ``surrogate`` GP itself.
+
+        ``sensitivity`` and ``posterior covariance`` are the payoff of the run: a
+        curvature-based ranking of which hyperparameters matter, and an approximate
+        theta-posterior (Laplace at the mode, in the searched coordinates), both
+        obtained without any further likelihood evaluations.
+        """
+        return self.trainer.bo_info
+
+    @property
     def args(self):
         return self.data.args
 
@@ -693,6 +710,7 @@ class GP:
               mcmc_prior=None,
               mcmc_prop_distrs="normal",
               mcmc_args={},
+              bo_args=None,
               local_optimizer="L-BFGS-B",
               global_optimizer="genetic",
               constraints=(),
@@ -703,7 +721,8 @@ class GP:
         """
         This function finds the maximum of the log marginal likelihood and therefore trains the GP (synchronously).
         This can be done on a remote cluster/computer by specifying the method to be ``hgdl`` and
-        providing a dask client. Methods ``hgdl``, ``mcmc``, and ``adam`` can also be run asynchronously.
+        providing a dask client. Methods ``hgdl``, ``mcmc``, ``adam``, and ``bo`` can also be run
+        asynchronously.
         The GP prior will automatically be updated with the new hyperparameters after the training or when
         the :py:meth:`update_hyperparameters` method is called.
 
@@ -735,18 +754,29 @@ class GP:
             The default is a random draw from a uniform distribution within the ``hyperparameter_bounds``.
         method : str or Callable, optional
             The method used to train the hyperparameters.
-            The options are ``global``, ``local``, ``hgdl``, ``mcmc``, ``adam``, and a callable.
+            The options are ``global``, ``local``, ``hgdl``, ``mcmc``, ``adam``, ``bo``, and a callable.
             The callable gets a :py:class:`fvgp.GP` instance and has to return a 1d np.ndarray of hyperparameters.
             The default is ``mcmc``.
             If method = ``mcmc`` or default,
             the attribute :py:attr:`fvgp.GP.mcmc_info` is updated and contains convergence and distribution information.
             For ``hgdl``, please provide a :py:class:`distributed.Client`.
+            ``bo`` runs Bayesian optimization over the hyperparameters, using a small
+            :py:class:`fvgp.GP` as its own surrogate. It is the method to reach for when the
+            marginal likelihood is expensive, noisy, and effectively gradient-free -- for
+            instance when the log-determinant comes from stochastic Lanczos quadrature and
+            the solve from truncated CG, so that repeated evaluations of the same
+            hyperparameters do not agree. Unlike the other methods it treats ``max_iter`` as a
+            budget in *likelihood evaluations*, and it sets :py:attr:`fvgp.GP.bo_info`.
+            Configure it through ``bo_args``.
         pop_size : int, optional
             A number of individuals used for any optimizer with a global component. Default = 20.
         tolerance : float, optional
             Used as termination criterion for local optimizers. Default = 0.0001.
         max_iter : int, optional
             Maximum number of iterations for global and local optimizers. Default = 10000.
+            For ``method='bo'`` this is instead the number of *objective-function
+            evaluations* allowed, including the initial design, because each one is an
+            expensive likelihood; a few dozen is the intended order.
         mcmc_prior : callable, optional
             A function that defines the prior probability distribution for the MCMC sampler.
             The form of the function is f(x, bounds, args) and returns a scalar.
@@ -757,6 +787,29 @@ class GP:
             See :py:class:`~fvgp.gp_mcmc.ProposalDistribution` in the documentation for more information.
         mcmc_args : dict, optional
             A dictionary of additional arguments for the MCMC sampler. The default is an empty dictionary.
+        bo_args : dict, optional
+            Settings for ``method='bo'``; ignored otherwise. Recognized keys:
+
+            - ``noise_function`` : callable ``f(hps) -> float`` giving the *known* variance of
+              the objective estimator at that point, and ``noise_variance`` : a single float
+              for the same thing when it is constant. If the objective is a stochastic
+              estimator whose own spread you can compute -- as with SLQ/Hutchinson probes --
+              supplying it here is the single most valuable setting, because it beats
+              spending scarce evaluations fitting a noise term. If neither is given the
+              surrogate falls back to a small jitter.
+            - ``n_init`` : size of the space-filling (Sobol) initial design.
+              Default ``2*(d+1)`` clipped into ``[5, 10*d]``, where ``d = len(hyperparameters)``.
+            - ``ei_tolerance`` : stop once the expected improvement falls below this.
+              Calibrate it to what changes the GP's predictions, not to likelihood digits
+              that make no downstream difference. Default 0.0 (spend the whole budget).
+            - ``refit_every`` : refit the surrogate every k evaluations. Default 1.
+            - ``n_restarts``, ``n_raw`` : multi-start count and random pre-screen size for
+              the acquisition optimizer. Defaults 5 and 512.
+            - ``n_incumbent_samples`` : Monte-Carlo samples of the noisy incumbent used by
+              the noisy-EI acquisition. Default 64.
+            - ``surrogate_train_max_iter`` : L-BFGS-B iterations for the surrogate's own
+              hyperparameters. Default 100.
+            - ``seed`` : seed for the design and the acquisition sampling. Default 0.
         local_optimizer : str, optional
             Defining the local optimizer. Default = ``L-BFGS-B``, most :py:func:`scipy.optimize.minimize`
             functions are permissible.
@@ -775,24 +828,36 @@ class GP:
             documentation (separately for HGDL and fvgp if needed).
         asynchronous : bool, optional
             When True, submit the training job and return immediately with an optimizer
-            proxy object. Supported for ``method='hgdl'``, ``'mcmc'``, and ``'adam'``.
+            proxy object. Supported for ``method='hgdl'``, ``'mcmc'``, ``'adam'``, and ``'bo'``.
             Call ``get_latest()`` on the returned object to poll intermediate results,
             or call :py:meth:`update_hyperparameters` directly to apply them.
+            For ``bo`` the polled state is the best hyperparameters found so far, so the GP
+            stays usable while the remaining expensive likelihood evaluations continue on a
+            worker.
 
         Returns
         -------
         optimized hyperparameters (only fyi, gp is already updated) : np.ndarray
         """
         #gp2Scale checks
-        if self.gp2Scale and asynchronous:  # pragma: no cover
+        # This must stay ahead of the method checks below: gp2Scale already owns the Dask
+        # client to distribute the covariance, so handing the same client an optimizer
+        # actor would contend for the workers doing the linear algebra. It applies to
+        # `bo` as much as to the rest -- gp2Scale trains synchronously, whatever the method.
+        if self.gp2Scale and asynchronous:
             asynchronous = False
-            warnings.warn("gp2Scale does not allow asynchronous training! `asynchronous` set to False")
-        if self.gp2Scale and method != 'mcmc':  # pragma: no cover
+            warnings.warn(f"gp2Scale does not allow asynchronous training (method=`{method}`)! "
+                          "`asynchronous` set to False.")
+        # `bo` is allowed here alongside `mcmc`: gp2Scale's stochastic log-determinant and
+        # truncated solve are precisely the expensive, noisy, gradient-free regime that
+        # Bayesian optimization of the hyperparameters is meant for, so forcing it to MCMC
+        # would rule the method out exactly where it is most useful.
+        if self.gp2Scale and method not in ('mcmc', 'bo'):  # pragma: no cover
             warnings.warn("gp2Scale enabled. Method switched to MCMC!")
             method = 'mcmc'
 
         #async checks
-        _async_methods = {"hgdl", "mcmc", "adam"}
+        _async_methods = {"hgdl", "mcmc", "adam", "bo"}
         if asynchronous and method not in _async_methods:  # pragma: no cover
             warnings.warn(f"Asynchronous execution is not supported for method=`{method}`. "
                           f"Supported async methods: {sorted(_async_methods)}. `asynchronous` set to False.")
@@ -856,6 +921,7 @@ class GP:
                 mcmc_prior=mcmc_prior,
                 mcmc_prop_distrs=mcmc_prop_distrs,
                 mcmc_args=mcmc_args,
+                bo_args=bo_args,
                 local_optimizer=local_optimizer,
                 global_optimizer=global_optimizer,
                 constraints=constraints,
@@ -878,6 +944,7 @@ class GP:
                 mcmc_prior=mcmc_prior,
                 mcmc_prop_distrs=mcmc_prop_distrs,
                 mcmc_args=mcmc_args,
+                bo_args=bo_args,
                 local_optimizer=local_optimizer,
                 global_optimizer=global_optimizer,
                 constraints=constraints,
