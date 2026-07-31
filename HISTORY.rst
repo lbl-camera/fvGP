@@ -111,25 +111,6 @@ New features
   failure to converge acted as accidental exploration. Marginal-likelihood surfaces, which
   is what this method exists for, are far smoother and show no such effect.
 
-* Fixed the BO surrogate provoking fvGP's "Negative variances encountered" warning.
-  The cause was the design, not the noise level as such: once the search converges it
-  proposes points a whisker apart, and near-duplicate rows make K+V numerically
-  singular, so the posterior variance -- a difference of nearly equal numbers -- tips
-  below zero. Over 340 surrogate fits, 198 contained a pair of points closer than 1e-6
-  in the unit cube, with a median closest separation of 5.6e-8. The nugget rises from
-  1e-10 to 1e-7 of the residual scale, which clears the warning in every case tested;
-  it is far below any noise a real objective would carry, and the recovered optimum is
-  unchanged at every level tried.
-
-  The worst offender was the path with a *declared* noise level, which applied no floor
-  at all and so was less protected than the learned one. Reported noise is now floored
-  by the same nugget: a stochastic estimator can legitimately report a variance far
-  below what the conditioning of a duplicated design tolerates.
-
-  This also interacts with the ``CholInv`` mode adopted for speed -- an explicit inverse
-  is less accurate than a Cholesky solve on an ill-conditioned K+V, so part of the
-  nugget is buying back the headroom that traded away.
-
 * When no noise is known -- an exact linalg mode, or a user objective that cannot report
   its precision -- ``method='bo'`` learns a single homoscedastic noise level as an extra
   surrogate hyperparameter, with its lower bound acting as a nugget. A deterministic
@@ -150,6 +131,25 @@ New features
 
 Bug fixes
 ~~~~~~~~~
+
+* Fixed the BO surrogate provoking fvGP's "Negative variances encountered" warning.
+  The cause was the design, not the noise level as such: once the search converges it
+  proposes points a whisker apart, and near-duplicate rows make K+V numerically
+  singular, so the posterior variance -- a difference of nearly equal numbers -- tips
+  below zero. Over 340 surrogate fits, 198 contained a pair of points closer than 1e-6
+  in the unit cube, with a median closest separation of 5.6e-8. The nugget rises from
+  1e-10 to 1e-7 of the residual scale, which clears the warning in every case tested;
+  it is far below any noise a real objective would carry, and the recovered optimum is
+  unchanged at every level tried.
+
+  The worst offender was the path with a *declared* noise level, which applied no floor
+  at all and so was less protected than the learned one. Reported noise is now floored
+  by the same nugget: a stochastic estimator can legitimately report a variance far
+  below what the conditioning of a duplicated design tolerates.
+
+  This also interacts with the ``CholInv`` mode adopted for speed -- an explicit inverse
+  is less accurate than a Cholesky solve on an ill-conditioned K+V, so part of the
+  nugget is buying back the headroom that traded away.
 
 * Multi-task ``posterior_covariance`` returned a scrambled ``"S"``. The flat
   product-space index is task-major (``k = point + Npts*task``), which is what
@@ -175,3 +175,12 @@ Documentation
   indexing and the shapes of ``v(x)``/``S`` against ``v_flat``/``S_flat``. Previously
   the docstring said only ``Solution : dict``, which is much of why the layout above
   could be wrong without anyone noticing.
+
+Internal
+~~~~~~~~
+
+* ``sequential_linalg_state`` and its two setting constants moved from ``gp_bo`` to
+  ``gp_kv``. They govern which linear-algebra state may persist between likelihood
+  evaluations for *every* training method, so they never belonged with Bayesian
+  optimization; ``gp_kv`` already owns the per-evaluation staleness checks they pair
+  with. Import path only -- no behavior change.
