@@ -2668,3 +2668,48 @@ def test_bo_surrogate_training_uses_analytic_hyperparameter_gradients():
     # and the surrogate really is built with them
     gp = _fit_surrogate(xd, y, None, dim, 50)
     assert gp.prior._dk_dh is _surrogate_kernel_grad
+
+
+def test_bo_surrogate_stays_numerically_stable():
+    """A BO run must not provoke fvGP's "Negative variances encountered" warning.
+
+    Once the search converges it proposes points a whisker apart, and near-duplicate
+    rows make K numerically singular, so the posterior variance -- a difference of
+    nearly equal numbers -- tips below zero. The nugget has to be large enough to
+    absorb that. The declared-noise path is included because it previously applied no
+    floor at all and was therefore the worst case rather than the safest.
+    """
+    from fvgp.gp_bo import bayesian_optimize
+
+    target = np.log(np.array([1., 10.]))
+    bounds = np.array([[1e-2, 1e2], [1e-1, 1e3]])
+    warm = np.array([50., 0.5])
+
+    def smooth(t):
+        z = np.log(t) - target
+        return float(z @ z)
+
+    def rugged(t):
+        z = np.log(t) - np.log(np.array([1.0, 5.0]))
+        return float(z @ z + 500.0 * np.exp(3.0 * z[0]))
+
+    cases = [("learned noise", smooth, None),
+             ("declared tiny noise", smooth, {"noise_variance": 1e-10}),
+             ("rugged surface", rugged, {"noise_variance": 1e-10})]
+    for label, objective, extra in cases:
+        for seed in range(4):
+            args = dict(extra or {})
+            args["seed"] = seed
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                bayesian_optimize(objective, bounds, warm, max_iter=30, bo_args=args)
+            negative = [w for w in caught if "Negative variances" in str(w.message)]
+            assert not negative, (label, seed, len(negative))
+
+    # the design really does contain near-duplicates -- this is what the nugget is for,
+    # so if it ever stops being true the test above has lost its teeth
+    _, info = bayesian_optimize(smooth, bounds, warm, max_iter=40, bo_args={"seed": 0})
+    u = info["trace u"]
+    separations = np.linalg.norm(u[:, None, :] - u[None, :, :], axis=2)
+    np.fill_diagonal(separations, np.inf)
+    assert separations.min() < 1e-5
