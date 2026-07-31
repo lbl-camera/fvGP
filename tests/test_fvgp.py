@@ -2385,3 +2385,73 @@ def test_bo_never_recommends_worse_than_best_observed_on_deterministic_objective
         assert returned <= best_observed + 1e-9, (seed, returned, best_observed)
         # and never worse than the warm start it was handed
         assert returned <= objective(warm) + 1e-9, (seed, returned, objective(warm))
+
+
+def test_bo_disables_sequential_linalg_state():
+    """Warm starts and preconditioner reuse must be off during a BO run.
+
+    Both assume successive evaluations are close, which holds for mcmc/local but not
+    for BO, where a space-filling design and acquisition jumps put consecutive points
+    far apart. A truncated solve seeded with stale state then leaves an error that
+    depends on which hyperparameters ran before it, making the objective
+    order-dependent -- a bias, which BO's noise model cannot absorb.
+    """
+    from fvgp.gp_bo import disable_sequential_linalg_state, _SEQUENTIAL_STATE_DEFAULTS
+
+    # settings a user might reasonably have tuned for MCMC
+    args = {"sparse_krylov_warm_start": True,
+            "sparse_preconditioner_refresh_interval": 25,
+            "sparse_cg_tol": 1e-6}
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with disable_sequential_linalg_state(args):
+            assert args["sparse_krylov_warm_start"] is False
+            assert args["sparse_preconditioner_refresh_interval"] == 1
+            assert args["sparse_cg_tol"] == 1e-6          # unrelated keys untouched
+    # the override is announced rather than silent
+    assert any("disables sequential linear-algebra state" in str(w.message) for w in caught)
+    # and everything is restored afterwards
+    assert args["sparse_krylov_warm_start"] is True
+    assert args["sparse_preconditioner_refresh_interval"] == 25
+    assert args["sparse_cg_tol"] == 1e-6
+
+    # a user who never set them gets no warning and no leftover keys
+    clean = {"sparse_cg_tol": 1e-6}
+    with warnings.catch_warnings(record=True) as caught2:
+        warnings.simplefilter("always")
+        with disable_sequential_linalg_state(clean):
+            assert clean["sparse_krylov_warm_start"] is False
+    assert not any("disables sequential" in str(w.message) for w in caught2)
+    assert "sparse_krylov_warm_start" not in clean
+    assert "sparse_preconditioner_refresh_interval" not in clean
+
+    # restored even if the body raises
+    args2 = {"sparse_krylov_warm_start": True}
+    with pytest.raises(ValueError):
+        with disable_sequential_linalg_state(args2):
+            raise ValueError("boom")
+    assert args2["sparse_krylov_warm_start"] is True
+
+    # the safe values are the library defaults, so a default setup is already correct
+    assert _SEQUENTIAL_STATE_DEFAULTS["sparse_krylov_warm_start"] is False
+    assert _SEQUENTIAL_STATE_DEFAULTS["sparse_preconditioner_refresh_interval"] == 1
+
+
+def test_bo_training_leaves_user_linalg_args_restored(client):
+    """A real BO run must restore the user's settings when it finishes."""
+    np.random.seed(0)
+    xd = np.random.rand(150, 1)
+    yd = np.sin(np.linalg.norm(xd, axis=1) * 5.0)
+    bounds = np.array([[0.1, 10.], [0.001, 0.02]])
+    init = np.array([1., 0.01])
+    gp = GP(xd, yd, init, gp2Scale=True, gp2Scale_batch_size=75,
+            dask_client=client, linalg_mode="sparseCG",
+            args={"sparse_krylov_warm_start": True,
+                  "sparse_preconditioner_refresh_interval": 10})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp.train(hyperparameter_bounds=bounds, method="bo", max_iter=8, bo_args={"seed": 0})
+    assert any("disables sequential linear-algebra state" in str(w.message) for w in caught)
+    # the run is over; the user's configuration is theirs again
+    assert gp.args["sparse_krylov_warm_start"] is True
+    assert gp.args["sparse_preconditioner_refresh_interval"] == 10

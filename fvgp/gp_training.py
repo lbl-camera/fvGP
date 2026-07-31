@@ -6,7 +6,7 @@ from hgdl.hgdl import HGDL
 from scipy.optimize import minimize
 from .gp_mcmc import *
 from .gp_actor import _MCMCActor, _AdamActor, _BOActor, AsyncOptimizer
-from .gp_bo import bayesian_optimize
+from .gp_bo import bayesian_optimize, disable_sequential_linalg_state
 warnings.simplefilter("once", UserWarning)
 
 
@@ -159,13 +159,16 @@ class GPtraining:
             logger.debug("fvGP is Bayesian-optimizing the hyperparameters.")
             logger.debug("evaluation budget: {}", max_iter)
             logger.debug("bounds: {}", hyperparameter_bounds)
-            hyperparameters, self.bo_info = bayesian_optimize(
-                objective_function,
-                hyperparameter_bounds,
-                init_hyperparameters,
-                max_iter=max_iter,
-                bo_args=bo_args,
-                info=info)
+            # Warm starts and preconditioner reuse are valid for the step-wise methods
+            # but not here, where consecutive evaluations are deliberately far apart.
+            with disable_sequential_linalg_state(self.args):
+                hyperparameters, self.bo_info = bayesian_optimize(
+                    objective_function,
+                    hyperparameter_bounds,
+                    init_hyperparameters,
+                    max_iter=max_iter,
+                    bo_args=bo_args,
+                    info=info)
         elif callable(method): hyperparameters = method(self)
         else: raise ValueError("No optimization mode specified in fvGP")
         assert isinstance(hyperparameters, np.ndarray) and np.ndim(hyperparameters) == 1, \
@@ -432,18 +435,21 @@ class GPtraining:
         opt_obj : AsyncOptimizer
             Proxy with ``get_latest()`` and ``stop()`` methods.
         """
-        actor_future = dask_client.submit(
-            _BOActor,
-            objective_function,
-            hyperparameter_bounds,
-            init_hyperparameters,
-            max_iter,
-            bo_args,
-            info,
-            actor=True,
-        )
-        actor = actor_future.result()
-        actor.start()
+        # The override has to be in force while the objective is serialized to the
+        # worker, since that is what freezes the settings the worker will use.
+        with disable_sequential_linalg_state(self.args):
+            actor_future = dask_client.submit(
+                _BOActor,
+                objective_function,
+                hyperparameter_bounds,
+                init_hyperparameters,
+                max_iter,
+                bo_args,
+                info,
+                actor=True,
+            )
+            actor = actor_future.result()
+            actor.start()
         return AsyncOptimizer(actor)
 
     ##################################################################################

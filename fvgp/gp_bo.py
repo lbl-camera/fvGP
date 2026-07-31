@@ -17,6 +17,7 @@ standard analytic kernel, and is trained with ``method='local'`` (L-BFGS-B with
 analytic gradients). There is no infinite regress and no BO-tuning of the BO.
 """
 
+import contextlib
 import warnings
 import numpy as np
 from loguru import logger
@@ -112,6 +113,70 @@ def _polynomial_mean(u_data, y_data, dim):
 
     mean_f.coefficients = coef
     return mean_f
+
+
+#: linalg settings that carry state from one likelihood evaluation to the next, and the
+#: value each must take for the evaluations to be independent of the order they run in
+_SEQUENTIAL_STATE_DEFAULTS = {
+    "sparse_krylov_warm_start": False,
+    "sparse_preconditioner_refresh_interval": 1,
+}
+
+
+@contextlib.contextmanager
+def disable_sequential_linalg_state(args):
+    """Temporarily switch off warm starts and preconditioner reuse in ``args``.
+
+    Both exist because MCMC and local optimizers move in small steps: successive K+V
+    differ slightly, so the previous solve is an excellent starting guess and a
+    preconditioner built one step ago is still apt. Measured on a truncated CG solve,
+    warm-starting from a nearby set of hyperparameters cuts the error 25x, and reusing
+    a nearby preconditioner is as good as building a fresh one.
+
+    Bayesian optimization moves the opposite way. A space-filling design spans the box
+    and the acquisition then jumps wherever it likes, so consecutive evaluations are
+    deliberately far apart. In that regime the same measurements show warm-starting is
+    *worse than a cold start* and preconditioner reuse buys nothing over no
+    preconditioner at all.
+
+    The real problem is not the lost speed, it is what the leftover residual does to the
+    objective. A truncated solve seeded with stale state has an error that depends on
+    which hyperparameters were evaluated *before* it, which makes the likelihood
+    order-dependent: the same point can return different values at different stages of a
+    run. Bayesian optimization assumes its observations are noisy but unbiased, so an
+    order-dependent bias is precisely the thing its noise model cannot absorb -- unlike
+    the variance of the stochastic log-determinant, which is genuinely zero-mean.
+
+    Both settings default to the safe value, so this only bites a user who enabled them
+    for MCMC (which fvGP's own preconditioner-failure guidance suggests) and then
+    switched to ``method='bo'``. Overriding an explicit setting is warned about rather
+    than done silently.
+    """
+    if not isinstance(args, dict):
+        yield
+        return
+    overridden = {}
+    for key, safe_value in _SEQUENTIAL_STATE_DEFAULTS.items():
+        if key in args and args[key] != safe_value:
+            overridden[key] = args[key]
+    if overridden:
+        warnings.warn(
+            f"method='bo' disables sequential linear-algebra state for the duration of "
+            f"the run: {overridden}. Warm starts and preconditioner reuse assume "
+            f"successive evaluations are close, which is true for mcmc/local but not for "
+            f"Bayesian optimization, where they leave an order-dependent bias in the "
+            f"objective. The original settings are restored afterwards."
+        )
+    saved = {key: args[key] for key in _SEQUENTIAL_STATE_DEFAULTS if key in args}
+    try:
+        args.update(_SEQUENTIAL_STATE_DEFAULTS)
+        yield
+    finally:
+        for key in _SEQUENTIAL_STATE_DEFAULTS:
+            if key in saved:
+                args[key] = saved[key]
+            else:
+                args.pop(key, None)
 
 
 def _homoscedastic_noise(dim):

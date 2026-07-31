@@ -53,6 +53,21 @@ New features
   t -- is now settable through ``random_logdet_min_num_samples`` and
   ``random_logdet_max_num_samples``.
 
+* ``method='bo'`` switches off the sequential linear-algebra state -- Krylov warm starts
+  (``sparse_krylov_warm_start``) and preconditioner reuse
+  (``sparse_preconditioner_refresh_interval``) -- for the duration of the run, restoring
+  the user's settings afterwards and warning if it had to override an explicit choice.
+  Both assume successive evaluations are close, which holds for ``mcmc`` and ``local``
+  but not for Bayesian optimization, whose space-filling design and acquisition jumps
+  put consecutive points deliberately far apart. Measured on a truncated CG solve:
+  warm-starting from nearby hyperparameters cuts the error 25x, but from distant ones it
+  is *worse than a cold start*, and a reused preconditioner is worth no more than none at
+  all. The cost is not the lost speed but the leftover residual, which makes the
+  objective depend on the order the points were evaluated in -- a bias, and so exactly
+  what a Bayesian optimizer's zero-mean noise model cannot absorb. Both settings already
+  defaulted to the safe value, so this matters for users who tuned them for MCMC and
+  then switched method.
+
 * When no noise is known -- an exact linalg mode, or a user objective that cannot report
   its precision -- ``method='bo'`` learns a single homoscedastic noise level as an extra
   surrogate hyperparameter, with its lower bound acting as a nugget. A deterministic
