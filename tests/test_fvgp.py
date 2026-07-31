@@ -2539,3 +2539,26 @@ def test_preconditioner_and_warm_start_reuse_follow_matrix_drift():
     kv.Preconditioner_signature = kv._preconditioner_signature()
     assert kv._can_reuse_sparse_preconditioner(near) is False
     del kv.args["sparse_preconditioner_refresh_interval"]
+
+
+def test_bo_surrogate_uses_stored_inverse_for_cheap_variance():
+    """The inner surrogate must store the inverse of its covariance.
+
+    The acquisition asks for `variance_only=True` at hundreds of candidates per
+    iteration, and fvGP can only take that shortcut when KVinv is available; in the
+    default 'Chol' mode it builds the full (V x V) posterior covariance and discards
+    everything but the diagonal. That one setting was worth 3.7x on a 40-evaluation
+    run, so this pins it.
+    """
+    from fvgp.gp_bo import _fit_surrogate
+
+    rng = np.random.default_rng(0)
+    u = rng.random((24, 2))
+    y = np.sum((u - 0.5) ** 2, axis=1)
+    gp = _fit_surrogate(u, y, None, 2, 50)
+    assert gp.kv.KVinv is not None, "surrogate must keep the inverse for variance_only"
+    # and the cheap path really is taken: variance_only returns no full covariance
+    res = gp.posterior_covariance(rng.random((64, 2)), variance_only=True)
+    assert res["S"] is None
+    assert res["v(x)"].shape == (64,)
+    assert np.all(np.isfinite(res["v(x)"]))

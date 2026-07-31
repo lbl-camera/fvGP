@@ -244,7 +244,15 @@ def _fit_surrogate(u_data, y_data, v_data, dim, train_max_iter):
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        gp = GP(u_data, y_data, **kwargs)
+        # linalg_mode="CholInv" is a large win here, not a stylistic choice. The
+        # acquisition asks for variance_only=True at hundreds of candidates per
+        # iteration, but fvGP can only take that shortcut when the inverse is stored;
+        # in the default "Chol" mode it builds the full (V x V) posterior covariance
+        # and then throws away everything but the diagonal. At V = n_raw = 512 that is
+        # a 512x512 matmul per call. Storing the inverse of a covariance over a few
+        # dozen points costs nothing and made a 40-evaluation run 3.7x faster with
+        # identical results.
+        gp = GP(u_data, y_data, linalg_mode="CholInv", **kwargs)
         # method='local', never 'bo' -- this is where the recursion stops
         gp.train(hyperparameter_bounds=bounds, method="local", max_iter=train_max_iter)
     gp._bo_mean_function = mean_f
@@ -389,7 +397,10 @@ def bayesian_optimize(objective_function,
 
     n_init = int(a.get("n_init", min(max(2 * (dim + 1), 5), max(10 * dim, 5))))
     n_init = max(2, min(n_init, max_iter))
-    n_restarts = int(a.get("n_restarts", 5))
+    # 3 rather than 5: measured across two problems and eight seeds, 3 restarts match
+    # 5 and 8 exactly on solution quality while cutting 15-24% of the runtime. Dropping
+    # to 2 does start to cost quality on the harder surface.
+    n_restarts = int(a.get("n_restarts", 3))
     n_raw = int(a.get("n_raw", 512))
     n_inc = int(a.get("n_incumbent_samples", 64))
     ei_tol = float(a.get("ei_tolerance", 0.0))

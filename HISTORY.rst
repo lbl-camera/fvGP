@@ -82,6 +82,16 @@ New features
   defaulted to the safe value, so this matters for users who tuned them for MCMC and then
   switched method.
 
+* ``method='bo'`` is roughly 4x faster. The dominant cost was not the inner GP's
+  training, which is only a few percent of a run, but the acquisition: it asks for
+  ``variance_only=True`` at hundreds of candidates per iteration, and fvGP can only take
+  that shortcut when the inverse is stored. In the default ``Chol`` mode it instead built
+  the full (V x V) posterior covariance and kept only the diagonal -- a 512x512 matmul
+  per call. The surrogate now uses ``linalg_mode='CholInv'``, which for a covariance over
+  a few dozen points costs nothing and was worth 3.7x on its own. The acquisition's
+  multi-start count also drops from 5 to 3, measured across two problems and eight seeds
+  to match 5 and 8 exactly on solution quality while removing another 15-24%.
+
 * When no noise is known -- an exact linalg mode, or a user objective that cannot report
   its precision -- ``method='bo'`` learns a single homoscedastic noise level as an extra
   surrogate hyperparameter, with its lower bound acting as a nugget. A deterministic
