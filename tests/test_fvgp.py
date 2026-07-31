@@ -2387,8 +2387,8 @@ def test_bo_never_recommends_worse_than_best_observed_on_deterministic_objective
         assert returned <= objective(warm) + 1e-9, (seed, returned, objective(warm))
 
 
-def test_bo_disables_sequential_linalg_state():
-    """Warm starts and preconditioner reuse must be off during a BO run.
+def test_sequential_linalg_state_overrides_and_restores():
+    """The context manager must disable the state, warn, and put it back.
 
     Both assume successive evaluations are close, which holds for mcmc/local but not
     for BO, where a space-filling design and acquisition jumps put consecutive points
@@ -2396,7 +2396,7 @@ def test_bo_disables_sequential_linalg_state():
     depends on which hyperparameters ran before it, making the objective
     order-dependent -- a bias, which BO's noise model cannot absorb.
     """
-    from fvgp.gp_bo import sequential_linalg_state, _SEQUENTIAL_STATE_DEFAULTS
+    from fvgp.gp_kv import sequential_linalg_state, _SEQUENTIAL_STATE_DEFAULTS
 
     # settings a user might reasonably have tuned for MCMC
     args = {"sparse_krylov_warm_start": True,
@@ -2459,7 +2459,7 @@ def test_bo_training_leaves_user_linalg_args_restored(client):
 
 def test_sequential_linalg_state_only_for_mcmc():
     """Warm starts and preconditioner reuse are permitted for mcmc and nothing else."""
-    from fvgp.gp_bo import sequential_linalg_state
+    from fvgp.gp_kv import sequential_linalg_state
 
     for method in ("mcmc",):
         args = {"sparse_krylov_warm_start": True,

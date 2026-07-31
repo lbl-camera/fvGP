@@ -8,10 +8,9 @@ from .gp_prior import GPprior
 from .gp_data import GPdata
 from .gp_marginal_likelihood import GPMarginalLikelihood
 from .gp_likelihood import GPlikelihood
-from .gp_bo import sequential_linalg_state
 from .gp_training import GPtraining
 from .gp_posterior import GPposterior
-from .gp_kv import GPkv
+from .gp_kv import GPkv, sequential_linalg_state
 import importlib
 warnings.simplefilter("once", UserWarning)
 

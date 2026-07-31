@@ -17,7 +17,6 @@ standard analytic kernel, and is trained with ``method='local'`` (L-BFGS-B with
 analytic gradients). There is no infinite regress and no BO-tuning of the BO.
 """
 
-import contextlib
 import warnings
 import numpy as np
 from loguru import logger
@@ -247,76 +246,6 @@ def _polynomial_mean(u_data, y_data, dim):
 
     mean_f.coefficients = coef
     return mean_f
-
-
-#: linalg settings that carry state from one likelihood evaluation to the next, and the
-#: value each must take for the evaluations to be independent of the order they run in
-_SEQUENTIAL_STATE_DEFAULTS = {
-    "sparse_krylov_warm_start": False,
-    "sparse_preconditioner_refresh_interval": 1,
-}
-
-#: the only training method whose steps are small enough for that state to be sound
-_SEQUENTIAL_STATE_METHODS = {"mcmc"}
-
-
-@contextlib.contextmanager
-def sequential_linalg_state(args, method):
-    """Allow Krylov warm starts and preconditioner reuse only for ``method='mcmc'``.
-
-    Both mechanisms carry state from one likelihood evaluation to the next, which is
-    sound exactly when successive evaluations are close. MCMC proposes local steps, so
-    the previous solve is an excellent starting guess and a preconditioner built one
-    step ago is still apt: measured on a truncated CG solve, a warm start from nearby
-    hyperparameters cuts the error 25x and a reused nearby preconditioner is as good as
-    a fresh one.
-
-    Every other method moves non-locally. A Bayesian optimizer's space-filling design
-    spans the box and its acquisition then jumps wherever it likes; a global optimizer's
-    population samples the box outright. The same measurements show that in that regime
-    a warm start is *worse than a cold start* and a reused preconditioner is worth no
-    more than none at all.
-
-    The cost is not the lost speed but what the leftover residual does to the objective.
-    A truncated solve seeded with stale state has an error that depends on which
-    hyperparameters ran *before* it, making the likelihood order-dependent: the same
-    point can return different values at different stages of a run. A Bayesian optimizer
-    assumes its observations are noisy but unbiased, so an order-dependent bias is
-    precisely what its noise model cannot absorb -- unlike the variance of the stochastic
-    log-determinant, which is genuinely zero-mean and is fed in deliberately.
-
-    This is the coarse gate. The fine one lives in
-    :py:meth:`fvgp.gp_kv.GPkv._validated_warm_start` and
-    :py:meth:`fvgp.gp_kv.GPkv._can_reuse_sparse_preconditioner`, which discard cached
-    state whenever K+V has actually drifted, whatever the method. Both settings also
-    default to the safe value, so this only changes anything for a user who turned them
-    on for MCMC -- which fvGP's own preconditioner-failure guidance suggests -- and then
-    switched method. Overriding an explicit setting is warned about, not done silently.
-    """
-    if not isinstance(args, dict) or method in _SEQUENTIAL_STATE_METHODS:
-        yield
-        return
-    overridden = {key: args[key] for key, safe in _SEQUENTIAL_STATE_DEFAULTS.items()
-                  if key in args and args[key] != safe}
-    if overridden:
-        warnings.warn(
-            f"method={method!r} disables sequential linear-algebra state for the duration "
-            f"of the run: {overridden}. Warm starts and preconditioner reuse assume "
-            f"successive evaluations are close, which holds for 'mcmc' but not for a "
-            f"method that samples the space non-locally, where they leave an "
-            f"order-dependent bias in the objective. The original settings are restored "
-            f"afterwards."
-        )
-    saved = {key: args[key] for key in _SEQUENTIAL_STATE_DEFAULTS if key in args}
-    try:
-        args.update(_SEQUENTIAL_STATE_DEFAULTS)
-        yield
-    finally:
-        for key in _SEQUENTIAL_STATE_DEFAULTS:
-            if key in saved:
-                args[key] = saved[key]
-            else:
-                args.pop(key, None)
 
 
 def _homoscedastic_noise(dim):
