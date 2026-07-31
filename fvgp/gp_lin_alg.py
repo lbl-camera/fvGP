@@ -1017,8 +1017,30 @@ def _block_conjugate_gradient(KV, vec, cg_tol, x0=None, M=None, maxiter=None):
     return X, last_exit_code
 
 
-def calculate_random_logdet(KV, compute_device, args=None):
-    """Estimate log|det KV| for a sparse matrix via stochastic Lanczos quadrature (imate)."""
+def calculate_random_logdet(KV, compute_device, args=None, info_out=None):
+    """Estimate log|det KV| for a sparse matrix via stochastic Lanczos quadrature (imate).
+
+    Parameters
+    ----------
+    KV : sparse matrix
+        The matrix whose log-determinant is estimated.
+    compute_device : str
+        ``"cpu"`` or ``"gpu"``.
+    args : dict, optional
+        Recognized keys include ``random_logdet_lanczos_degree``,
+        ``random_logdet_error_rtol``, and the probe-count bounds
+        ``random_logdet_min_num_samples`` / ``random_logdet_max_num_samples``. The probe
+        count is the fidelity dial of this estimator: its noise falls as 1/sqrt(t) while
+        its cost grows as t.
+    info_out : dict, optional
+        If given, populated with ``variance`` (the variance of the returned estimate),
+        ``num_samples_used``, ``absolute_error`` and ``relative_error``. This is how the
+        stochastic estimator reports its own precision to a noise-aware caller.
+
+    Returns
+    -------
+    logdet : float
+    """
     args = _normalize_args(args)
     assert sparse.issparse(KV), "KV must be sparse for stochastic logdet"
     logger.debug("calculate_random_logdet")
@@ -1036,12 +1058,38 @@ def calculate_random_logdet(KV, compute_device, args=None):
     if "random_logdet_verbose" in args: verbose = args["random_logdet_verbose"]
     if "random_logdet_print_info" in args: print_info = args["random_logdet_print_info"]
 
-    logdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=10, max_num_samples=5000,
+    min_num_samples = args.get("random_logdet_min_num_samples", 10)
+    max_num_samples = args.get("random_logdet_max_num_samples", 5000)
+
+    logdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=min_num_samples,
+                                    max_num_samples=max_num_samples,
                                     lanczos_degree=lanczos_degree, error_rtol=error_rtol, gpu=gpu,
                                     return_info=True, plot=False, verbose=verbose, orthogonalize=0)
     logger.debug("Stochastic Lanczos logdet() compute time: {} seconds", time.time() - st)
     if print_info: logger.debug(info_slq)
     assert np.isscalar(logdet), "stochastic logdet result must be scalar"
+    # The estimator knows its own precision: SLQ averages `t` independent Hutchinson
+    # probes, so the variance of the returned mean is the sample variance over probes
+    # divided by t. It used to be discarded, but it is exactly what a noise-aware
+    # consumer needs -- `method='bo'` feeds it in as the observation noise of the
+    # marginal likelihood rather than making the user estimate it. Reported through an
+    # optional out-parameter so the return type stays a bare scalar for every existing
+    # caller.
+    if info_out is not None:
+        try:
+            conv = info_slq["convergence"]
+            n_used = int(conv["num_samples_used"])
+            samples = np.asarray(conv["samples"], dtype=float)[:n_used]
+            samples = samples[np.isfinite(samples)]
+            variance = float(np.var(samples, ddof=1) / len(samples)) if len(samples) > 1 else None
+            info_out.update({
+                "variance": variance,
+                "num_samples_used": n_used,
+                "absolute_error": float(info_slq["error"]["absolute_error"]),
+                "relative_error": float(info_slq["error"]["relative_error"]),
+            })
+        except Exception:  # pragma: no cover
+            info_out.update({"variance": None})
     return logdet
 
 

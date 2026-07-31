@@ -2161,12 +2161,19 @@ def test_train_async_bo(client):
     my_gp.update_hyperparameters(opt_obj)
     assert my_gp.hyperparameters.shape == (6,)
     my_gp.stop_training(opt_obj)
-    time.sleep(3)
-    # stop() must actually halt the search rather than let the budget run out
-    n_after_stop = opt_obj.get_latest().get("n_evaluations", 0)
-    time.sleep(2)
-    assert opt_obj.get_latest().get("n_evaluations", 0) == n_after_stop
-    assert n_after_stop < 100000
+    # stop() must actually halt the search rather than let the budget run out. An
+    # evaluation already in flight still finishes, so wait for the count to settle
+    # rather than assuming the very next poll is final.
+    settled, previous = False, -1
+    for _ in range(15):
+        time.sleep(2)
+        current = opt_obj.get_latest().get("n_evaluations", 0)
+        if current == previous:
+            settled = True
+            break
+        previous = current
+    assert settled, "evaluation count never stopped increasing after stop()"
+    assert previous < 100000
 
 
 def _bo_pickle_kernel(x1, x2, hps):
@@ -2226,3 +2233,155 @@ def test_gp2Scale_bo_is_allowed_but_never_asynchronous(client):
     # and the method was NOT silently switched away from bo
     assert not any("Method switched to MCMC" in m for m in msgs), msgs
     assert gp.bo_info is not None and gp.bo_info["n_evaluations"] == 8
+
+
+def test_random_logdet_reports_its_own_variance():
+    """The SLQ estimator must report its precision through `info_out`, and the probe
+    count must be controllable -- it is the fidelity dial: noise ~ 1/sqrt(t), cost ~ t."""
+    from fvgp.gp_lin_alg import calculate_random_logdet
+    pytest.importorskip("imate")
+
+    n = 400
+    A = sparse.random(n, n, density=0.02, random_state=0)
+    A = ((A + A.T) * 0.5 + sparse.identity(n) * 5.0).tocsr()
+
+    sigmas = {}
+    for t in (10, 80):
+        info = {}
+        args = {"random_logdet_min_num_samples": t, "random_logdet_max_num_samples": t,
+                "random_logdet_error_rtol": 1e-12}
+        ld = calculate_random_logdet(A, "cpu", args=args, info_out=info)
+        assert np.isscalar(ld) and np.isfinite(ld)
+        assert info["num_samples_used"] == t
+        assert info["variance"] is not None and info["variance"] > 0.0
+        sigmas[t] = np.sqrt(info["variance"])
+    # more probes must mean a tighter estimate
+    assert sigmas[80] < sigmas[10]
+    # the return type is unchanged when no sink is passed (existing callers keep working)
+    assert np.isscalar(calculate_random_logdet(A, "cpu", args={}))
+
+
+def test_log_likelihood_variance_exact_vs_stochastic(client):
+    """The likelihood must report noise only when it actually has any."""
+    np.random.seed(0)
+    n = 250
+    xd = np.random.rand(n, 1)
+    yd = np.sin(np.linalg.norm(xd, axis=1) * 5.0)
+    init = np.array([1., 0.01])
+
+    exact = GP(xd, yd, init, linalg_mode="Chol")
+    exact.log_likelihood(hyperparameters=init)
+    assert exact.marginal_likelihood.log_likelihood_variance() is None
+
+    stoch = GP(xd, yd, init, gp2Scale=True, gp2Scale_batch_size=100,
+               dask_client=client, linalg_mode="sparseCG")
+    vals = [stoch.log_likelihood(hyperparameters=init) for _ in range(5)]
+    var = stoch.marginal_likelihood.log_likelihood_variance()
+    assert var is not None and var > 0.0
+    # repeated evaluation at identical hyperparameters really does disagree
+    assert np.std(vals, ddof=1) > 0.0
+    # the reported sigma is the right order of magnitude (it is a lower bound: the
+    # truncated-CG solve contributes noise this does not capture)
+    assert np.sqrt(var) < 10.0 * np.std(vals, ddof=1) + 1.0
+
+
+def test_bo_learns_noise_when_objective_cannot_report_it():
+    """With no noise information, the surrogate learns a homoscedastic level. A
+    deterministic objective drives it to the nugget so the surrogate interpolates."""
+    from fvgp.gp_bo import bayesian_optimize
+    bounds = np.array([[1e-2, 1e2], [1e-1, 1e3]])
+    target = np.log(np.array([1., 10.]))
+
+    def deterministic(t):
+        z = np.log(t) - target
+        return float(z @ z)
+
+    theta, info = bayesian_optimize(deterministic, bounds, np.array([50., 0.5]),
+                                    max_iter=30, bo_args={"seed": 1})
+    assert info["noise was learned"]
+    assert info["observation noise variance"] < 1e-6      # collapsed to the nugget
+    assert np.linalg.norm(np.log(theta) - target) < 0.2
+    # never worse than the warm start it was given
+    assert deterministic(theta) <= deterministic(np.array([50., 0.5]))
+
+    rng = np.random.default_rng(0)
+    sd = 0.5
+
+    def noisy(t):
+        z = np.log(t) - target
+        return float(z @ z + sd * rng.standard_normal())
+
+    theta2, info2 = bayesian_optimize(noisy, bounds, np.array([50., 0.5]),
+                                      max_iter=40, bo_args={"seed": 1})
+    assert info2["noise was learned"]
+    # a genuinely noisy objective must be recognized as such, within an order of magnitude
+    assert 1e-3 < info2["observation noise variance"] < 10.0 * sd ** 2
+    assert np.linalg.norm(np.log(theta2) - target) < 1.0
+
+
+def test_bo_uses_estimator_noise_automatically(client):
+    """In a sparse mode, method='bo' must pick up the likelihood's own reported noise
+    rather than learning one; in an exact mode it must fall back to learning."""
+    np.random.seed(0)
+    n = 250
+    xd = np.random.rand(n, 1)
+    yd = np.sin(np.linalg.norm(xd, axis=1) * 5.0)
+    bounds = np.array([[0.1, 10.], [0.001, 0.02]])
+    init = np.array([1., 0.01])
+
+    import gc
+
+    def _release(gp_obj):
+        # only one live gp2Scale GP may share a dask client; flush before the next
+        del gp_obj
+        gc.collect()
+        client.run(lambda: None)
+
+    stoch = GP(xd, yd, init, gp2Scale=True, gp2Scale_batch_size=100,
+               dask_client=client, linalg_mode="sparseCG")
+    stoch.train(hyperparameter_bounds=bounds, method="bo", max_iter=10, bo_args={"seed": 0})
+    info = stoch.bo_info
+    assert info["noise was learned"] is False
+    assert info["observation noise variance"] > 0.0
+    _release(stoch)
+    stoch = None
+
+    exact = GP(xd, yd, init, linalg_mode="Chol")
+    exact.train(hyperparameter_bounds=bounds, method="bo", max_iter=10, bo_args={"seed": 0})
+    assert exact.bo_info["noise was learned"] is True
+
+    # an explicit setting still wins over the automatic one
+    stoch2 = GP(xd, yd, init, gp2Scale=True, gp2Scale_batch_size=100,
+                dask_client=client, linalg_mode="sparseCG")
+    stoch2.train(hyperparameter_bounds=bounds, method="bo", max_iter=10,
+                 bo_args={"seed": 0, "noise_variance": 0.25})
+    assert np.isclose(stoch2.bo_info["observation noise variance"], 0.25)
+    _release(stoch2)
+
+
+def test_bo_never_recommends_worse_than_best_observed_on_deterministic_objective():
+    """Regression: a learned noise level conflates estimator noise with surrogate
+    misfit. On a hard deterministic surface the surrogate explained its own misfit as
+    noise (measured: variance 90 against an IQR of 69), which widened the
+    recommendation tolerance enough to return a point far worse than one already
+    evaluated. The recommendation must never regress on a deterministic objective.
+    """
+    from fvgp.gp_bo import bayesian_optimize
+
+    # a surface with the awkward feature of a real marginal likelihood: a sharp optimum
+    # plus regions orders of magnitude worse, so the observed range is enormous
+    def objective(t):
+        z = np.log(t) - np.log(np.array([1.0, 5.0]))
+        return float(z @ z + 500.0 * np.exp(3.0 * z[0]))
+
+    bounds = np.array([[1e-2, 1e2], [1e-2, 1e2]])
+    for seed in (0, 1, 2, 3):
+        warm = np.array([1.0, 5.0])          # start exactly at the optimum
+        theta, info = bayesian_optimize(objective, bounds, warm, max_iter=25,
+                                        bo_args={"seed": seed})
+        best_observed = float(np.min(info["trace f(x)"]))
+        returned = objective(theta)
+        # the returned point is the best observed, never something the search rejected
+        assert returned <= best_observed + 1e-9, (seed, returned, best_observed)
+        # and never worse than the warm start it was handed
+        assert returned <= objective(warm) + 1e-9, (seed, returned, objective(warm))

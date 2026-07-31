@@ -790,13 +790,21 @@ class GP:
         bo_args : dict, optional
             Settings for ``method='bo'``; ignored otherwise. Recognized keys:
 
-            - ``noise_function`` : callable ``f(hps) -> float`` giving the *known* variance of
-              the objective estimator at that point, and ``noise_variance`` : a single float
-              for the same thing when it is constant. If the objective is a stochastic
-              estimator whose own spread you can compute -- as with SLQ/Hutchinson probes --
-              supplying it here is the single most valuable setting, because it beats
-              spending scarce evaluations fitting a noise term. If neither is given the
-              surrogate falls back to a small jitter.
+            - ``noise_function`` : callable ``f(hps) -> float or None`` giving the *known*
+              variance of the objective at that point, and ``noise_variance`` : a single
+              float for the same thing when it is constant. **Neither is usually needed.**
+              With the default objective the observation noise is supplied automatically:
+              in the sparse modes the log-determinant is a stochastic-Lanczos estimate that
+              reports its own precision, which is read straight off
+              :py:meth:`fvgp.gp_marginal_likelihood.GPmarginalLikelihood.log_likelihood_variance`.
+              Set these only to override that, or when passing a custom
+              ``objective_function`` whose noise you can characterize. Returning ``None``
+              means "unknown" and falls back to learning the level.
+            - If no noise is known -- an exact linalg mode, or a user objective that cannot
+              report its precision -- the surrogate **learns a single homoscedastic noise
+              level** as an extra hyperparameter, whose lower bound doubles as a nugget. A
+              deterministic objective simply drives it to that bound and the surrogate
+              interpolates, so ``method='bo'`` is usable with any objective.
             - ``n_init`` : size of the space-filling (Sobol) initial design.
               Default ``2*(d+1)`` clipped into ``[5, 10*d]``, where ``d = len(hyperparameters)``.
             - ``ei_tolerance`` : stop once the expected improvement falls below this.
@@ -903,6 +911,25 @@ class GP:
             objective_function_gradient = self.marginal_likelihood.neg_log_likelihood_gradient
         if objective_function_hessian is None:
             objective_function_hessian = self.marginal_likelihood.neg_log_likelihood_hessian
+
+        # For `bo`, hand the optimizer the likelihood's own precision when it has one.
+        # In the sparse modes the log-determinant is a stochastic-Lanczos estimate, so
+        # the marginal likelihood really is a noisy observation and imate already reports
+        # how noisy. Feeding that in beats spending scarce evaluations fitting a noise
+        # term, and it means the user does not have to characterize the estimator by hand.
+        # This is safe to read after the fact: the BO loop queries the noise immediately
+        # after evaluating the objective at that point, so it describes that evaluation.
+        # Exact modes return None, which the optimizer reads as "unknown" and responds to
+        # by learning a single noise level instead.
+        if method == "bo" and not user_provided_obj:
+            bo_args = dict(bo_args or {})
+            if "noise_function" not in bo_args and "noise_variance" not in bo_args:
+                _ml = self.marginal_likelihood
+
+                def _estimator_noise(hps, _ml=_ml):
+                    return _ml.log_likelihood_variance()
+
+                bo_args["noise_function"] = _estimator_noise
 
         logger.debug("objective function: {}", objective_function)
         logger.debug("method: {}", method)

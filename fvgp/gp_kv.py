@@ -24,6 +24,10 @@ class GPkv:
         self.data = data
         self.prior = prior
         self.likelihood = likelihood
+        # variance of the most recent stochastic log-determinant estimate; stays None
+        # for the exact modes, where log|KV| carries no estimator noise
+        self.last_logdet_variance = None
+        self.last_logdet_info = {}
 
         # Resolve aliases like "sparseCGpre_amg" → mode "sparseCGpre" with
         # args["sparse_preconditioner_type"]="amg".  Writes resolved args back
@@ -347,6 +351,21 @@ class GPkv:
             raise Exception(f"No mode: {mode}")
         return KVinvY.reshape(y_mean.shape)
 
+    def _random_logdet(self, KV):
+        """Stochastic-Lanczos log-determinant, recording the estimator's own variance.
+
+        The sparse modes estimate log|KV| from a finite number of Hutchinson probes, so
+        the value is a random variable. Capturing its variance here is what lets a
+        noise-aware consumer -- ``train(method='bo')`` -- treat the marginal likelihood
+        as the noisy observation it actually is, instead of asking the user to supply a
+        noise level by hand. ``None`` when the estimate is exact or unavailable.
+        """
+        info = {}
+        logdet = calculate_random_logdet(KV, self.compute_device, args=self.args, info_out=info)
+        self.last_logdet_variance = info.get("variance", None)
+        self.last_logdet_info = info
+        return logdet
+
     def compute_new_KVlogdet_KVinvY(self, K, V, m, x0=None):
         """
         Compute KVinvY and log|KV| jointly in one factorization pass (used during training).
@@ -377,25 +396,25 @@ class GPkv:
         elif mode == "sparseCG":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             KVinvY = calculate_sparse_conj_grad(KV, y_mean, x0=x0, args=self.args)
-            KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
+            KVlogdet = self._random_logdet(KV)
         elif mode == "sparseMINRES":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             KVinvY = calculate_sparse_minres(KV, y_mean, x0=x0, args=self.args)
-            KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
+            KVlogdet = self._random_logdet(KV)
         elif mode == "sparseMINRESpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             M = self._get_or_refresh_preconditioner(KV)
             KVinvY = calculate_sparse_minres(KV, y_mean, M=M, x0=x0, args=self.args)
-            KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
+            KVlogdet = self._random_logdet(KV)
         elif mode == "sparseCGpre":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             M = self._get_or_refresh_preconditioner(KV)
             KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, x0=x0, args=self.args)
-            KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
+            KVlogdet = self._random_logdet(KV)
         elif mode == "sparseSolve":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
-            KVlogdet = calculate_random_logdet(KV, self.compute_device, args=self.args)
+            KVlogdet = self._random_logdet(KV)
         elif callable(mode[0]) and callable(mode[1]) and callable(mode[2]):
             factor = mode[0](KV)
             KVinvY = mode[1](factor, y_mean)
@@ -481,11 +500,11 @@ class GPkv:
         elif self.mode == "CholInv": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "sparseLU": return calculate_LU_logdet(self.LU_factor, args=self.args)
         elif self.mode == "Inv": return calculate_logdet(self.KV, args=self.args)
-        elif self.mode == "sparseCG": return calculate_random_logdet(self.KV, self.compute_device, args=self.args)
-        elif self.mode == "sparseMINRES": return calculate_random_logdet(self.KV, self.compute_device, args=self.args)
-        elif self.mode == "sparseMINRESpre": return calculate_random_logdet(self.KV, self.compute_device, args=self.args)
-        elif self.mode == "sparseCGpre": return calculate_random_logdet(self.KV, self.compute_device, args=self.args)
-        elif self.mode == "sparseSolve": return calculate_random_logdet(self.KV, self.compute_device, args=self.args)
+        elif self.mode == "sparseCG": return self._random_logdet(self.KV)
+        elif self.mode == "sparseMINRES": return self._random_logdet(self.KV)
+        elif self.mode == "sparseMINRESpre": return self._random_logdet(self.KV)
+        elif self.mode == "sparseCGpre": return self._random_logdet(self.KV)
+        elif self.mode == "sparseSolve": return self._random_logdet(self.KV)
         elif callable(self.mode[2]): return self.mode[2](self.custom_obj)
         else: raise Exception(f"No Mode. Choose from: {self.allowed_modes}")
 
@@ -514,6 +533,8 @@ class GPkv:
             Last_preconditioner_error=self.Last_preconditioner_error,
             custom_obj=self.custom_obj,
             allowed_modes=self.allowed_modes,
+            last_logdet_variance=self.last_logdet_variance,
+            last_logdet_info=self.last_logdet_info,
             logdet_KV=self.logdet_KV
         )
         return state

@@ -41,6 +41,24 @@ New features
   approximation of the theta-posterior -- both obtained with no further likelihood
   evaluations.
 
+* The stochastic-Lanczos log-determinant now reports its own precision.
+  :py:func:`fvgp.gp_lin_alg.calculate_random_logdet` takes an optional ``info_out``
+  dict, filled with the variance of the estimate, the probe count, and the error
+  bounds; the return type is unchanged for existing callers. The new
+  ``log_likelihood_variance()`` on the marginal likelihood turns that into the variance
+  of the (negative) log marginal likelihood, and ``train(method='bo')`` feeds it to the
+  optimizer automatically. Users of the sparse modes therefore get a properly
+  noise-aware search without having to characterize the estimator themselves. The probe
+  count -- the fidelity dial, since its noise falls as 1/sqrt(t) while its cost grows as
+  t -- is now settable through ``random_logdet_min_num_samples`` and
+  ``random_logdet_max_num_samples``.
+
+* When no noise is known -- an exact linalg mode, or a user objective that cannot report
+  its precision -- ``method='bo'`` learns a single homoscedastic noise level as an extra
+  surrogate hyperparameter, with its lower bound acting as a nugget. A deterministic
+  objective drives it to that bound and the surrogate interpolates. This is what makes
+  ``bo`` usable with any objective rather than only with stochastic ones.
+
 * ``method='bo'`` also runs asynchronously via ``train(asynchronous=True)``, like
   ``hgdl``, ``mcmc`` and ``adam``. Polling with ``get_latest()`` returns the best
   hyperparameters found so far, so the GP stays usable while the remaining expensive

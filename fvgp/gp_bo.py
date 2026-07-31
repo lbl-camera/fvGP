@@ -114,11 +114,25 @@ def _polynomial_mean(u_data, y_data, dim):
     return mean_f
 
 
+def _homoscedastic_noise(dim):
+    """Noise function exposing a single learned noise variance as hyperparameter dim+1."""
+    def noise_f(x, hps):
+        return np.full(len(x), max(float(hps[dim + 1]), 1e-14))
+    return noise_f
+
+
 def _fit_surrogate(u_data, y_data, v_data, dim, train_max_iter):
     """Fit the inner GP on the points evaluated so far.
 
     N is tiny and the kernel is standard and differentiable, so this is an exact GP
     trained by type-II maximum likelihood with L-BFGS-B and analytic gradients.
+
+    ``v_data`` is the known per-point observation variance, or None when the objective
+    does not report its own precision. In that case a single homoscedastic noise level
+    is learned as an extra surrogate hyperparameter, which is what lets ``method='bo'``
+    be used with any user objective: a deterministic one simply drives the learned
+    noise to its lower bound and the surrogate interpolates, while a noisy one has its
+    noise estimated rather than assumed.
     """
     from .gp import GP
 
@@ -142,16 +156,28 @@ def _fit_surrogate(u_data, y_data, v_data, dim, train_max_iter):
     # meaningful as a relative ranking.
     bounds = np.vstack([[1e-4 * scale + 1e-12, 1e2 * scale + 1e-9],
                         np.tile([1e-2, 2.0], (dim, 1))])
+
+    kwargs = dict(kernel_function=_surrogate_kernel)
+    if v_data is not None:
+        kwargs["noise_variances"] = v_data
+    else:
+        # learn one noise level; the lower bound doubles as a nugget so a perfectly
+        # deterministic objective still yields a well-conditioned covariance
+        nugget = max(1e-10 * scale, 1e-14)
+        init = np.concatenate([init, [max(1e-4 * scale, nugget)]])
+        bounds = np.vstack([bounds, [nugget, max(scale, 10.0 * nugget)]])
+        kwargs["noise_function"] = _homoscedastic_noise(dim)
+    kwargs["init_hyperparameters"] = init
+    if mean_f is not None:
+        kwargs["prior_mean_function"] = mean_f
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        kwargs = dict(init_hyperparameters=init, kernel_function=_surrogate_kernel,
-                      noise_variances=v_data)
-        if mean_f is not None:
-            kwargs["prior_mean_function"] = mean_f
         gp = GP(u_data, y_data, **kwargs)
         # method='local', never 'bo' -- this is where the recursion stops
         gp.train(hyperparameter_bounds=bounds, method="local", max_iter=train_max_iter)
     gp._bo_mean_function = mean_f
+    gp._bo_learned_noise = None if v_data is not None else float(gp.hyperparameters[dim + 1])
     return gp
 
 
@@ -310,8 +336,17 @@ def bayesian_optimize(objective_function,
     # `noise_variance`, else fall back to a small jitter scaled to the observed
     # spread and let the surrogate absorb the rest.
     def _noise_for(theta, y_obs):
+        """Known observation variance at ``theta``, or None if the objective cannot say.
+
+        Called immediately after the objective has been evaluated at ``theta``, which is
+        what lets a ``noise_function`` simply report the precision of the evaluation that
+        just happened -- the way the stochastic-Lanczos estimator does.
+        """
         if callable(noise_function):
-            return max(float(noise_function(theta)), 1e-12)
+            v = noise_function(theta)
+            if v is not None and np.isfinite(v) and float(v) > 0.0:
+                return float(v)
+            return None
         if fixed_noise is not None:
             return max(float(fixed_noise), 1e-12)
         return None
@@ -362,7 +397,15 @@ def bayesian_optimize(objective_function,
         spread = float(np.std(y_arr))
         if not np.isfinite(spread) or spread <= 0.0:
             spread = 1.0
-        v_arr = np.array([(1e-6 * spread ** 2) if v is None else v for v in v_list])
+        # Known per-point variances are used as they are; if the objective reported none
+        # at all, hand the surrogate None so it learns a single noise level instead.
+        # A partial report is filled in with the mean of what is known.
+        if all(v is None for v in v_list):
+            v_arr = None
+        else:
+            known = [v for v in v_list if v is not None]
+            filler = float(np.mean(known))
+            v_arr = np.array([filler if v is None else v for v in v_list])
 
         if gp is None or (n_eval % refit_every) == 0:
             try:
@@ -399,23 +442,40 @@ def bayesian_optimize(objective_function,
     # draw of the estimator -- so the right recommendation is the evaluated point with
     # the best surrogate posterior mean, which averages that luck out.
     #
-    # That reasoning only holds if the observations really are noisy. When the caller
-    # declared no noise, the observation is the better evidence and deferring to the
-    # surrogate just imports its fitting error; on a smooth deterministic likelihood
-    # that can return a point worse than the starting one. So the smoothed rule is
-    # used only when a noise model was actually supplied, and even then it is not
-    # allowed to pick something more than a few noise standard deviations worse than
-    # the best observation.
+    # That reasoning only holds to the extent the observations really are noisy. With a
+    # deterministic objective the observation is exact and deferring to the surrogate
+    # only imports its fitting error -- which can return a point worse than the one the
+    # search started from. The scale of the correction is therefore tied to the actual
+    # noise level, whether it was reported by the objective or learned by the surrogate,
+    # and the smoothed pick is rejected if it is more than a few noise standard
+    # deviations worse than the best observation. A deterministic objective drives the
+    # learned noise to its nugget, which collapses this back to the best observation.
     y_arr = np.asarray(y_list)
     u_arr = np.asarray(u_list)
     best_idx = int(np.argmin(y_arr))
-    noise_declared = callable(noise_function) or fixed_noise is not None
-    if gp is not None and noise_declared:
+    known = [v for v in v_list if v is not None]
+    noise_learned = False
+    if known:
+        noise_var = float(np.mean(known))
+    elif gp is not None and getattr(gp, "_bo_learned_noise", None) is not None:
+        noise_var = float(gp._bo_learned_noise)
+        noise_learned = True
+    else:
+        noise_var = 0.0
+    # Only a *reported* noise level earns the right to override the observations. A
+    # learned one cannot separate estimator noise from surrogate misfit: on a hard
+    # deterministic surface the surrogate explains its own misfit as noise, and this was
+    # measured inflating the level to the order of the spread of the data itself. Tying
+    # the tolerance to robust spread statistics does not rescue it either, because a
+    # marginal-likelihood surface is heavy-tailed enough to inflate those too. Since the
+    # upside of smoothing is small and returning a point worse than one already measured
+    # is a visible failure, a learned level is used for conditioning and acquisition but
+    # not for the final pick.
+    if gp is not None and known and noise_var > 0.0:
         try:
             m_obs = np.asarray(gp.posterior_mean(u_arr)["m(x)"]).reshape(len(u_arr))
             cand = int(np.argmax(m_obs))
-            noise_sd = float(np.sqrt(np.mean([v for v in v_list if v is not None])))
-            if y_arr[cand] <= y_arr[best_idx] + 3.0 * noise_sd:
+            if y_arr[cand] <= y_arr[best_idx] + 3.0 * np.sqrt(noise_var):
                 best_idx = cand
         except Exception:  # pragma: no cover
             pass
@@ -460,6 +520,8 @@ def bayesian_optimize(objective_function,
         "curvature": curvature,
         "log-transformed dimensions": tf.log_mask,
         "stopped early": stopped_early,
+        "observation noise variance": noise_var if noise_var > 0.0 else None,
+        "noise was learned": noise_learned,
         "surrogate": gp,
     }
     return theta_best, bo_info

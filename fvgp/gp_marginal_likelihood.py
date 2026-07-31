@@ -178,6 +178,31 @@ class GPMarginalLikelihood:
         return L
 
     ##################################################################################
+    def log_likelihood_variance(self):
+        """Variance of the most recent (log) marginal-likelihood evaluation.
+
+        In the sparse modes the log-determinant is estimated by stochastic Lanczos
+        quadrature, so the marginal likelihood is a random variable rather than a
+        number: evaluating it twice at the same hyperparameters gives two different
+        answers. This reports how much it wobbles.
+
+        ``L = -0.5 * (l1 + logdet + n log 2pi)``, so the log-determinant enters with a
+        coefficient of -0.5 and its variance is scaled by 0.25. ``neg_log_likelihood``
+        is a sign flip and has the same variance. The truncated-CG solve contributes
+        additional noise through ``l1`` that is not captured here, so this is a lower
+        bound on the total.
+
+        Returns
+        -------
+        variance : float or None
+            None for the exact modes, where the likelihood is deterministic.
+        """
+        v = getattr(self.kv, "last_logdet_variance", None)
+        if v is None:
+            return None
+        return 0.25 * float(v)
+
+    ##################################################################################
     def neg_log_likelihood(self, hyperparameters=None):
         """
         Function that computes the negative marginal log-likelihood
