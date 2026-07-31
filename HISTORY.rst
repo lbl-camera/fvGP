@@ -92,6 +92,25 @@ New features
   multi-start count also drops from 5 to 3, measured across two problems and eight seeds
   to match 5 and 8 exactly on solution quality while removing another 15-24%.
 
+* The BO surrogate now uses analytic derivatives throughout. The acquisition is
+  maximized with an exact gradient rather than scipy's finite differences, and the
+  surrogate's own hyperparameter training gets an analytic ``kernel_function_grad`` and
+  ``noise_function_grad`` instead of fvGP's finite-difference fallback (``_dkernel_dh``,
+  a fixed 1e-8 step that rebuilds the covariance twice per hyperparameter). The
+  hyperparameter gradient is 20-60x more accurate and 1.5-2x cheaper; on a real marginal
+  likelihood the whole run is ~2.6x faster at indistinguishable quality.
+
+  The expected-improvement gradient collapses to ``Phi(z) dmu/dx + phi(z) dsigma/dx`` --
+  the chain-rule terms through ``z`` cancel identically -- and the Monte-Carlo incumbent
+  enters only as two scalars, so nothing has to be differentiated through the sampling.
+
+  One caveat worth stating: exact gradients maximize the acquisition *better*, which is
+  not always better BO. On a deliberately rugged surface where the surrogate collapses
+  (its learned noise absorbing the entire residual variance), the sharper search exploits
+  that bad surrogate harder and does worse than the sloppier finite-difference one, whose
+  failure to converge acted as accidental exploration. Marginal-likelihood surfaces, which
+  is what this method exists for, are far smoother and show no such effect.
+
 * When no noise is known -- an exact linalg mode, or a user objective that cannot report
   its precision -- ``method='bo'`` learns a single homoscedastic noise level as an extra
   surrogate hyperparameter, with its lower bound acting as a nugget. A deterministic

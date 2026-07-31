@@ -2562,3 +2562,109 @@ def test_bo_surrogate_uses_stored_inverse_for_cheap_variance():
     assert res["S"] is None
     assert res["v(x)"].shape == (64,)
     assert np.all(np.isfinite(res["v(x)"]))
+
+
+def test_bo_analytic_gradients_match_central_differences():
+    """Every analytic derivative in the BO surrogate must match finite differences.
+
+    This is the test that makes the hand-derived gradients safe: a sign or index slip
+    is invisible in an optimization result but obvious here.
+    """
+    from fvgp.gp_bo import (_fit_surrogate, _surrogate_kernel, _surrogate_kernel_dx,
+                            _surrogate_kernel_grad, _nei_value_and_grad,
+                            _posterior_mean_var_and_grad, _noisy_expected_improvement)
+    rng = np.random.default_rng(0)
+
+    # --- dk/dx and dk/dhyperparameters, against the kernel itself ---
+    for dim in (1, 2, 4):
+        n = 15
+        xd = rng.random((n, dim))
+        hps = np.concatenate([[0.7], rng.uniform(0.2, 1.5, dim)])
+        q = rng.random(dim)
+        h = 1e-7
+        fd = np.zeros((dim, n))
+        for i in range(dim):
+            e = np.zeros(dim); e[i] = h
+            fd[i] = ((_surrogate_kernel(xd, (q + e)[None, :], hps).reshape(-1) -
+                      _surrogate_kernel(xd, (q - e)[None, :], hps).reshape(-1)) / (2 * h))
+        dk = _surrogate_kernel_dx(q, xd, hps)
+        assert np.max(np.abs(dk - fd)) / max(np.max(np.abs(fd)), 1e-12) < 1e-6, dim
+
+        gh = _surrogate_kernel_grad(xd, xd, hps)
+        assert gh.shape == (len(hps), n, n)
+        for j in range(len(hps)):
+            step = 1e-6 * max(abs(hps[j]), 1e-3)
+            hp, hm = hps.copy(), hps.copy()
+            hp[j] += step; hm[j] -= step
+            fdh = (_surrogate_kernel(xd, xd, hp) - _surrogate_kernel(xd, xd, hm)) / (2 * step)
+            assert np.max(np.abs(gh[j] - fdh)) / max(np.max(np.abs(fdh)), 1e-12) < 1e-6, (dim, j)
+
+    # --- posterior mean/variance gradients and the acquisition gradient ---
+    # declared noise keeps the posterior variance away from the cancellation floor,
+    # where the variance is a difference of near-equal numbers and finite differences
+    # of it are meaningless (the GP is interpolating and the acquisition is ~0 anyway)
+    for dim, n in ((1, 8), (2, 20), (5, 40)):
+        u = rng.random((n, dim))
+        y = np.sum((u - 0.4) ** 2, axis=1) + 0.1 * np.sin(6 * u[:, 0])
+        gp = _fit_surrogate(u, y, np.full(n, 1e-3), dim, 80)
+        y_best = rng.standard_normal(32) * 0.1 + float(np.max(-y))
+        for _ in range(10):
+            q = rng.uniform(0.05, 0.95, dim)
+            _, _, d_mean, d_var = _posterior_mean_var_and_grad(q, gp, dim)
+            value, grad = _nei_value_and_grad(q, gp, y_best, dim)
+            h = 1e-6
+            fdm = np.zeros(dim); fdv = np.zeros(dim); fda = np.zeros(dim)
+            for i in range(dim):
+                e = np.zeros(dim); e[i] = h
+                mp, vp, _, _ = _posterior_mean_var_and_grad(q + e, gp, dim)
+                mm, vm, _, _ = _posterior_mean_var_and_grad(q - e, gp, dim)
+                fdm[i] = (mp - mm) / (2 * h)
+                fdv[i] = (vp - vm) / (2 * h)
+                fda[i] = (_nei_value_and_grad(q + e, gp, y_best, dim)[0] -
+                          _nei_value_and_grad(q - e, gp, y_best, dim)[0]) / (2 * h)
+            rel = lambda a, b: np.max(np.abs(a - b)) / max(np.max(np.abs(b)), 1e-10)
+            assert rel(d_mean, fdm) < 1e-5, (dim, "dmean")
+            assert rel(d_var, fdv) < 1e-4, (dim, "dvar")
+            assert rel(grad, fda) < 1e-5, (dim, "dNEI")
+
+        # the single-point analytic value must agree with the vectorized acquisition
+        # that the random pre-screen uses, or the optimizer would be maximizing a
+        # slightly different function than it screened with
+        pts = rng.uniform(0.05, 0.95, (12, dim))
+        single = np.array([_nei_value_and_grad(p, gp, y_best, dim)[0] for p in pts])
+        vectorized = _noisy_expected_improvement(pts, gp, y_best, None)
+        assert np.allclose(single, vectorized, rtol=1e-10, atol=1e-14)
+
+
+def test_bo_surrogate_training_uses_analytic_hyperparameter_gradients():
+    """The surrogate must be given analytic dk/dhps, and fvGP's resulting NLML gradient
+    must be more accurate than the finite-difference fallback it replaces."""
+    from fvgp.gp_bo import _fit_surrogate, _surrogate_kernel, _surrogate_kernel_grad
+
+    rng = np.random.default_rng(1)
+    dim, n = 3, 25
+    xd = rng.random((n, dim))
+    y = np.sum((xd - 0.4) ** 2, axis=1) + 0.05 * rng.standard_normal(n)
+    hps = np.concatenate([[0.5], np.full(dim, 0.4)])
+    common = dict(init_hyperparameters=hps, kernel_function=_surrogate_kernel,
+                  noise_variances=np.full(n, 1e-3))
+    fd_gp = GP(xd, y, linalg_mode="CholInv", **common)
+    an_gp = GP(xd, y, linalg_mode="CholInv",
+               kernel_function_grad=_surrogate_kernel_grad, **common)
+
+    reference = np.zeros(len(hps))
+    for j in range(len(hps)):
+        step = 1e-6 * max(abs(hps[j]), 1e-3)
+        hp, hm = hps.copy(), hps.copy()
+        hp[j] += step; hm[j] -= step
+        reference[j] = ((fd_gp.marginal_likelihood.neg_log_likelihood(hp) -
+                         fd_gp.marginal_likelihood.neg_log_likelihood(hm)) / (2 * step))
+    err = lambda g: np.max(np.abs(g - reference)) / np.max(np.abs(reference))
+    e_fd = err(fd_gp.marginal_likelihood.neg_log_likelihood_gradient(hyperparameters=hps))
+    e_an = err(an_gp.marginal_likelihood.neg_log_likelihood_gradient(hyperparameters=hps))
+    assert e_an < 1e-7
+    assert e_an < e_fd          # strictly better than fvGP's finite-difference fallback
+
+    # and the surrogate really is built with them
+    gp = _fit_surrogate(xd, y, None, dim, 50)
+    assert gp.prior._dk_dh is _surrogate_kernel_grad

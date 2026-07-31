@@ -81,6 +81,140 @@ def _surrogate_kernel(x1, x2, hps):
     return hps[0] * matern_kernel_diff2(d, 1.0)
 
 
+_SQRT5 = np.sqrt(5.0)
+
+
+def _surrogate_kernel_dx(x_query, x_data, hps):
+    """d/dx_query of the Matern-5/2 ARD kernel between one query point and the data.
+
+    With r the anisotropic distance and k = s * (1 + sqrt5 r + 5r^2/3) exp(-sqrt5 r),
+
+        dk/dr    = -(5/3) s r (1 + sqrt5 r) exp(-sqrt5 r)
+        dr/dx_i  = (x_i - x'_i) / (l_i^2 r)
+
+    so the r cancels and
+
+        dk/dx_i  = -(5/3) s (1 + sqrt5 r) exp(-sqrt5 r) (x_i - x'_i) / l_i^2
+
+    which is finite at r = 0, where it correctly vanishes -- no special case needed.
+    Written out rather than taken from fvGP's ``d_kernel_dx``, which is a finite
+    difference with a fixed 1e-8 step and so would defeat the point of doing this.
+
+    Parameters
+    ----------
+    x_query : np.ndarray, shape (D,)
+    x_data : np.ndarray, shape (N, D)
+    hps : np.ndarray
+        ``[signal_variance, length_scales...]``.
+
+    Returns
+    -------
+    np.ndarray, shape (D, N)
+    """
+    signal, lengths = hps[0], np.asarray(hps[1:1 + x_data.shape[1]], dtype=float)
+    delta = (np.asarray(x_query, dtype=float)[None, :] - x_data) / lengths[None, :]   # (N, D)
+    r = np.sqrt(np.sum(delta ** 2, axis=1))                                           # (N,)
+    radial = -(5.0 / 3.0) * signal * (1.0 + _SQRT5 * r) * np.exp(-_SQRT5 * r)          # (N,)
+    # delta / lengths converts d/d(scaled) back to d/d(x_i)
+    return (radial[:, None] * delta / lengths[None, :]).T                              # (D, N)
+
+
+def _surrogate_kernel_grad(x1, x2, hps):
+    """dk/d(hyperparameters) for the Matern-5/2 ARD kernel, shape (H, N1, N2).
+
+    Supplied so the surrogate's own type-II ML training runs on real gradients. Without
+    it fvGP falls back to ``_dkernel_dh``, a central difference with a fixed 1e-8 step
+    that rebuilds the full covariance matrix twice per hyperparameter -- 2(D+2) matrix
+    builds for every gradient evaluation, each one only accurate to a few digits.
+
+    With s the signal variance, l the length scales and r the anisotropic distance,
+
+        dk/ds   = (1 + sqrt5 r + 5r^2/3) exp(-sqrt5 r)
+        dk/dl_i = (5/3) s (1 + sqrt5 r) exp(-sqrt5 r) (x1_i - x2_i)^2 / l_i^3
+
+    The second follows from dk/dr = -(5/3) s r (1 + sqrt5 r) exp(-sqrt5 r) and
+    dr/dl_i = -(x1_i - x2_i)^2 / (l_i^3 r); the r cancels, so it is finite at r = 0.
+    Any trailing hyperparameters (the learned noise level) do not enter the kernel and
+    get a zero row.
+    """
+    x1 = np.asarray(x1, dtype=float)
+    x2 = np.asarray(x2, dtype=float)
+    hps = np.asarray(hps, dtype=float)
+    dim = x1.shape[1]
+    lengths = hps[1:1 + dim]
+
+    diff = x1[:, None, :] - x2[None, :, :]                       # (N1, N2, D)
+    scaled = diff / lengths[None, None, :]
+    r = np.sqrt(np.sum(scaled ** 2, axis=2))                     # (N1, N2)
+    decay = np.exp(-_SQRT5 * r)
+
+    grad = np.zeros((len(hps), x1.shape[0], x2.shape[0]))
+    grad[0] = (1.0 + _SQRT5 * r + (5.0 / 3.0) * r ** 2) * decay
+    common = (5.0 / 3.0) * hps[0] * (1.0 + _SQRT5 * r) * decay
+    for i in range(dim):
+        grad[1 + i] = common * diff[:, :, i] ** 2 / lengths[i] ** 3
+    return grad
+
+
+def _homoscedastic_noise_grad(dim):
+    """d(noise)/d(hyperparameters) for the learned homoscedastic level, shape (H, N)."""
+    def noise_grad(x, hps):
+        out = np.zeros((len(hps), len(x)))
+        out[dim + 1] = 1.0
+        return out
+    return noise_grad
+
+
+def _polynomial_mean_dx(coefficients, u, dim):
+    """d/du of the fitted quadratic mean ``c0 + sum c1_i u_i + sum c2_i u_i^2``."""
+    if coefficients is None:
+        return np.zeros(dim)
+    linear = np.asarray(coefficients[1:1 + dim], dtype=float)
+    quadratic = np.asarray(coefficients[1 + dim:1 + 2 * dim], dtype=float)
+    return linear + 2.0 * quadratic * np.asarray(u, dtype=float)
+
+
+def _posterior_mean_var_and_grad(u, gp, dim):
+    """Posterior mean, variance and both of their gradients at a single point.
+
+    Everything is assembled from quantities the surrogate already holds -- KVinvY and
+    the stored inverse -- so the gradient costs one (D, N) derivative matrix and two
+    matvecs on top of the value, rather than the D+1 full acquisition evaluations a
+    finite-difference gradient needs.
+    """
+    u = np.asarray(u, dtype=float).reshape(-1)
+    x_data = np.asarray(gp.x_data, dtype=float)
+    hps = np.asarray(gp.hyperparameters, dtype=float)
+
+    k = np.asarray(_surrogate_kernel(x_data, u[None, :], hps)).reshape(-1)   # (N,)
+    dk = _surrogate_kernel_dx(u, x_data, hps)                               # (D, N)
+    kvinv_y = np.asarray(gp.kv.KVinvY, dtype=float)[:, 0]                   # (N,)
+    alpha = np.asarray(gp.kv.solve(k.reshape(-1, 1)), dtype=float).reshape(-1)  # KV^-1 k
+
+    mean_f = getattr(gp, "_bo_mean_function", None)
+    coefficients = getattr(mean_f, "coefficients", None) if mean_f is not None else None
+    prior = 0.0 if mean_f is None else float(np.asarray(mean_f(u[None, :], None)).reshape(-1)[0])
+
+    mean = prior + float(k @ kvinv_y)
+    d_mean = _polynomial_mean_dx(coefficients, u, dim) + dk @ kvinv_y
+
+    # k(u, u) is the signal variance for a stationary kernel, so its gradient is zero
+    var = float(hps[0] - k @ alpha)
+    d_var = -2.0 * (dk @ alpha)
+
+    # Below a small fraction of the signal variance the posterior variance is a
+    # difference of two nearly equal numbers and has lost all of its significant
+    # digits -- the GP is interpolating there. Its derivative is then noise, and
+    # dividing by the vanishing std to get d(std) would amplify that noise by 1/std.
+    # Report the floor with a zero derivative instead: a variance indistinguishable
+    # from zero carries no directional information. This costs nothing where it
+    # matters, since the acquisition is driven by the mean once the variance is gone.
+    floor = 1e-10 * max(float(hps[0]), 1e-300)
+    if var <= floor:
+        return mean, floor, d_mean, np.zeros_like(d_var)
+    return mean, var, d_mean, d_var
+
+
 def _polynomial_mean(u_data, y_data, dim):
     """Least-squares quadratic (no cross terms) in the searched coordinates.
 
@@ -228,7 +362,10 @@ def _fit_surrogate(u_data, y_data, v_data, dim, train_max_iter):
     bounds = np.vstack([[1e-4 * scale + 1e-12, 1e2 * scale + 1e-9],
                         np.tile([1e-2, 2.0], (dim, 1))])
 
-    kwargs = dict(kernel_function=_surrogate_kernel)
+    # analytic derivatives so the surrogate's own training uses real gradients rather
+    # than fvGP's finite-difference fallback
+    kwargs = dict(kernel_function=_surrogate_kernel,
+                  kernel_function_grad=_surrogate_kernel_grad)
     if v_data is not None:
         kwargs["noise_variances"] = v_data
     else:
@@ -238,6 +375,7 @@ def _fit_surrogate(u_data, y_data, v_data, dim, train_max_iter):
         init = np.concatenate([init, [max(1e-4 * scale, nugget)]])
         bounds = np.vstack([bounds, [nugget, max(scale, 10.0 * nugget)]])
         kwargs["noise_function"] = _homoscedastic_noise(dim)
+        kwargs["noise_function_grad"] = _homoscedastic_noise_grad(dim)
     kwargs["init_hyperparameters"] = init
     if mean_f is not None:
         kwargs["prior_mean_function"] = mean_f
@@ -322,22 +460,67 @@ def _noisy_expected_improvement(u, gp, y_best_samples, rng):
     return np.maximum(np.mean(ei, axis=1), 0.0)
 
 
-def _maximize_acquisition(acq, dim, rng, n_restarts, n_raw):
+def _nei_value_and_grad(u, gp, y_best_samples, dim):
+    """Noisy expected improvement and its exact gradient at a single point.
+
+    The gradient of expected improvement collapses. With imp = mu - y*, z = imp/sigma,
+
+        dEI/dx = (dimp/dx) Phi(z) + imp phi(z) dz/dx + (dsigma/dx) phi(z)
+                 + sigma phi'(z) dz/dx
+
+    and phi'(z) = -z phi(z) with sigma z = imp, so the second and fourth terms cancel
+    identically and
+
+        dEI/dx = Phi(z) dmu/dx + phi(z) dsigma/dx.
+
+    Averaging over the sampled incumbents leaves that structure untouched: the Monte
+    Carlo enters only through the two scalars mean(Phi(z_k)) and mean(phi(z_k)), so
+    nothing has to be differentiated through the sampling.
+    """
+    mean, var, d_mean, d_var = _posterior_mean_var_and_grad(u, gp, dim)
+    std = np.sqrt(var)
+    d_std = d_var / (2.0 * std)
+
+    imp = mean - y_best_samples                       # (K,)
+    z = imp / std
+    cdf, pdf = norm.cdf(z), norm.pdf(z)
+    value = float(np.mean(imp * cdf + std * pdf))
+    grad = np.mean(cdf) * d_mean + np.mean(pdf) * d_std
+    if value <= 0.0:
+        # the acquisition is clipped at zero, so its gradient is too
+        return 0.0, np.zeros(dim)
+    return value, grad
+
+
+def _maximize_acquisition(acq, dim, rng, n_restarts, n_raw, acq_grad=None):
     """Multi-start L-BFGS-B on the surrogate.
 
-    The outer likelihood having no usable gradient says nothing about the
-    acquisition, which is an analytic function of a cheap surrogate -- the two are
-    routinely conflated. Gradients are left to scipy's finite differences because
-    each acquisition evaluation costs microseconds at this N.
+    The outer likelihood having no usable gradient says nothing about the acquisition,
+    which is an analytic function of a cheap surrogate -- the two are routinely
+    conflated.
+
+    ``acq_grad`` supplies the exact gradient, which is both faster and better
+    conditioned than letting scipy difference the acquisition: a finite-difference
+    gradient costs D+1 evaluations per step, and its error dominates precisely where
+    the true gradient is small, which is the flat region near the optimum where the
+    search spends most of its time. The vectorized ``acq`` is still used for the random
+    pre-screen, where only values are needed.
     """
     raw = rng.random((n_raw, dim))
     vals = acq(raw)
     starts = raw[np.argsort(-vals)[:n_restarts]]
     best_u, best_v = starts[0], float(vals.max())
+    if acq_grad is None:
+        objective, jac = lambda z: -float(acq(z.reshape(1, -1))[0]), None
+    else:
+        def objective(z):
+            value, gradient = acq_grad(z)
+            return -value, -gradient
+        jac = True
     for u0 in starts:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            res = minimize(lambda z: -float(acq(z.reshape(1, -1))[0]), u0,
+            res = minimize(objective, u0, jac=jac,
                            method="L-BFGS-B", bounds=[(0.0, 1.0)] * dim)
         if res.success and -res.fun > best_v:
             best_v, best_u = -float(res.fun), np.clip(res.x, 0.0, 1.0)
@@ -504,7 +687,8 @@ def bayesian_optimize(objective_function,
 
         u_next, ei = _maximize_acquisition(
             lambda z: _noisy_expected_improvement(z, gp, y_best_samples, rng),
-            dim, rng, n_restarts, n_raw)
+            dim, rng, n_restarts, n_raw,
+            acq_grad=lambda z: _nei_value_and_grad(z, gp, y_best_samples, dim))
         ei_history.append(float(ei))
         if info:
             logger.debug("BO iteration {}: best={:.6g}, EI={:.3g}", n_eval, min(y_list), ei)
