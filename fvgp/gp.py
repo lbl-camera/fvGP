@@ -8,6 +8,7 @@ from .gp_prior import GPprior
 from .gp_data import GPdata
 from .gp_marginal_likelihood import GPMarginalLikelihood
 from .gp_likelihood import GPlikelihood
+from .gp_bo import sequential_linalg_state
 from .gp_training import GPtraining
 from .gp_posterior import GPposterior
 from .gp_kv import GPkv
@@ -22,7 +23,6 @@ _GP_INSTANCES_PER_CLIENT = weakref.WeakValueDictionary()
 
 # TODO: also search below "TODO"
 # Appends and rank_n_updates for gp2Scale are not yet fully tested. Have to check the compute graph and test (what does rank_n_update even mean for the different modes? ). 
-# Caching a preconditioner should depend on how much the hps changed
 
 class GP:
     """
@@ -934,7 +934,10 @@ class GP:
         logger.debug("objective function: {}", objective_function)
         logger.debug("method: {}", method)
 
+        # Warm starts and preconditioner reuse are only sound when successive
+        # evaluations are close, which is true for mcmc and nothing else here.
         if not asynchronous:
+          with sequential_linalg_state(self.args, method):
             hyperparameters = self.trainer.train(
                 objective_function=objective_function,
                 objective_function_gradient=objective_function_gradient,
@@ -957,6 +960,9 @@ class GP:
             self.set_hyperparameters(hyperparameters)
             return hyperparameters
         else:
+          # in force while the objective is serialized, since that freezes the
+          # settings the worker will use
+          with sequential_linalg_state(self.args, method):
             opt_obj = self.trainer.train_async(
                 dask_client,
                 objective_function=objective_function,

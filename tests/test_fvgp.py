@@ -2396,7 +2396,7 @@ def test_bo_disables_sequential_linalg_state():
     depends on which hyperparameters ran before it, making the objective
     order-dependent -- a bias, which BO's noise model cannot absorb.
     """
-    from fvgp.gp_bo import disable_sequential_linalg_state, _SEQUENTIAL_STATE_DEFAULTS
+    from fvgp.gp_bo import sequential_linalg_state, _SEQUENTIAL_STATE_DEFAULTS
 
     # settings a user might reasonably have tuned for MCMC
     args = {"sparse_krylov_warm_start": True,
@@ -2404,7 +2404,7 @@ def test_bo_disables_sequential_linalg_state():
             "sparse_cg_tol": 1e-6}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        with disable_sequential_linalg_state(args):
+        with sequential_linalg_state(args, "bo"):
             assert args["sparse_krylov_warm_start"] is False
             assert args["sparse_preconditioner_refresh_interval"] == 1
             assert args["sparse_cg_tol"] == 1e-6          # unrelated keys untouched
@@ -2419,7 +2419,7 @@ def test_bo_disables_sequential_linalg_state():
     clean = {"sparse_cg_tol": 1e-6}
     with warnings.catch_warnings(record=True) as caught2:
         warnings.simplefilter("always")
-        with disable_sequential_linalg_state(clean):
+        with sequential_linalg_state(clean, "bo"):
             assert clean["sparse_krylov_warm_start"] is False
     assert not any("disables sequential" in str(w.message) for w in caught2)
     assert "sparse_krylov_warm_start" not in clean
@@ -2428,7 +2428,7 @@ def test_bo_disables_sequential_linalg_state():
     # restored even if the body raises
     args2 = {"sparse_krylov_warm_start": True}
     with pytest.raises(ValueError):
-        with disable_sequential_linalg_state(args2):
+        with sequential_linalg_state(args2, "bo"):
             raise ValueError("boom")
     assert args2["sparse_krylov_warm_start"] is True
 
@@ -2455,3 +2455,87 @@ def test_bo_training_leaves_user_linalg_args_restored(client):
     # the run is over; the user's configuration is theirs again
     assert gp.args["sparse_krylov_warm_start"] is True
     assert gp.args["sparse_preconditioner_refresh_interval"] == 10
+
+
+def test_sequential_linalg_state_only_for_mcmc():
+    """Warm starts and preconditioner reuse are permitted for mcmc and nothing else."""
+    from fvgp.gp_bo import sequential_linalg_state
+
+    for method in ("mcmc",):
+        args = {"sparse_krylov_warm_start": True,
+                "sparse_preconditioner_refresh_interval": 25}
+        with sequential_linalg_state(args, method):
+            assert args["sparse_krylov_warm_start"] is True
+            assert args["sparse_preconditioner_refresh_interval"] == 25
+
+    for method in ("bo", "global", "local", "hgdl", "adam"):
+        args = {"sparse_krylov_warm_start": True,
+                "sparse_preconditioner_refresh_interval": 25}
+        with sequential_linalg_state(args, method):
+            assert args["sparse_krylov_warm_start"] is False, method
+            assert args["sparse_preconditioner_refresh_interval"] == 1, method
+        assert args["sparse_krylov_warm_start"] is True, method
+        assert args["sparse_preconditioner_refresh_interval"] == 25, method
+
+
+def test_preconditioner_and_warm_start_reuse_follow_matrix_drift():
+    """Cached state must be discarded when K+V has actually moved, not after k steps.
+
+    A counter cannot distinguish k tiny MCMC steps from one jump across the domain;
+    the drift of the matrix itself can.
+    """
+    np.random.seed(0)
+    n = 200
+    xd = np.random.rand(n, 2)
+    yd = np.sin(np.linalg.norm(xd, axis=1))
+    gp = GP(xd, yd, np.array([1., 1., 1.]))   # default kernel needs D+1 hyperparameters
+    kv = gp.kv
+
+    def build(scale):
+        A = sparse.random(n, n, density=0.05, random_state=0)
+        A = (A + A.T) * 0.5
+        return (A * scale + sparse.identity(n) * (1.0 + scale)).tocsr()
+
+    base = build(1.0)
+    near = build(1.0005)      # an mcmc-sized step
+    far = build(4.0)          # a bo/global-sized jump
+
+    fp_base = kv.matrix_fingerprint(base)
+    assert fp_base is not None
+    # drift is ~0 against itself, small for a near step, large for a jump
+    assert kv._fingerprint_drift(fp_base, fp_base) == 0.0
+    drift_near = kv._fingerprint_drift(fp_base, kv.matrix_fingerprint(near))
+    drift_far = kv._fingerprint_drift(fp_base, kv.matrix_fingerprint(far))
+    threshold = kv._max_matrix_drift()
+    assert drift_near < threshold < drift_far, (drift_near, threshold, drift_far)
+    # a different shape is never comparable
+    assert kv._fingerprint_drift(fp_base, kv.matrix_fingerprint(build(1.0)[:-1, :-1])) == np.inf
+
+    # warm start survives a near step and is dropped after a jump
+    x0 = np.ones((n, 1))
+    kv.Warm_start_fingerprint = fp_base
+    assert kv._validated_warm_start(near, x0) is x0
+    assert kv._validated_warm_start(far, x0) is None
+    # with nothing cached there is nothing to invalidate
+    kv.Warm_start_fingerprint = None
+    assert kv._validated_warm_start(far, x0) is x0
+    # and a caller that passed no guess still gets none
+    assert kv._validated_warm_start(near, None) is None
+
+    # the preconditioner cache uses the same test
+    kv.mode = "sparseCGpre"
+    kv.Preconditioner_operator = object()
+    kv.Preconditioner_KV_shape = base.shape
+    kv.Preconditioner_signature = kv._preconditioner_signature()
+    kv.Preconditioner_fingerprint = fp_base
+    kv.Preconditioner_reuse_counter = 0
+    assert kv._can_reuse_sparse_preconditioner(near) is True
+    assert kv._can_reuse_sparse_preconditioner(far) is False
+    # ... and reuse is no longer capped by a blind counter
+    kv.Preconditioner_reuse_counter = 10_000
+    assert kv._can_reuse_sparse_preconditioner(near) is True
+    # unless the user explicitly asks for a cap
+    kv.args["sparse_preconditioner_refresh_interval"] = 5
+    kv.Preconditioner_signature = kv._preconditioner_signature()
+    assert kv._can_reuse_sparse_preconditioner(near) is False
+    del kv.args["sparse_preconditioner_refresh_interval"]

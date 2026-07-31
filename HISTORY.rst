@@ -53,20 +53,34 @@ New features
   t -- is now settable through ``random_logdet_min_num_samples`` and
   ``random_logdet_max_num_samples``.
 
-* ``method='bo'`` switches off the sequential linear-algebra state -- Krylov warm starts
-  (``sparse_krylov_warm_start``) and preconditioner reuse
-  (``sparse_preconditioner_refresh_interval``) -- for the duration of the run, restoring
-  the user's settings afterwards and warning if it had to override an explicit choice.
-  Both assume successive evaluations are close, which holds for ``mcmc`` and ``local``
-  but not for Bayesian optimization, whose space-filling design and acquisition jumps
-  put consecutive points deliberately far apart. Measured on a truncated CG solve:
-  warm-starting from nearby hyperparameters cuts the error 25x, but from distant ones it
-  is *worse than a cold start*, and a reused preconditioner is worth no more than none at
-  all. The cost is not the lost speed but the leftover residual, which makes the
-  objective depend on the order the points were evaluated in -- a bias, and so exactly
-  what a Bayesian optimizer's zero-mean noise model cannot absorb. Both settings already
-  defaulted to the safe value, so this matters for users who tuned them for MCMC and
-  then switched method.
+* Cached linear-algebra state is now invalidated by measuring the matrix rather than by
+  counting steps. A preconditioner used to be reusable for a fixed
+  ``sparse_preconditioner_refresh_interval`` number of calls, a control that knows
+  nothing about whether K+V actually moved -- k tiny MCMC steps and one jump across the
+  domain counted the same. Reuse, and the Krylov warm start alongside it, are now
+  conditioned on the relative drift of a cheap O(nnz) fingerprint of K+V (trace and
+  Frobenius norm), with the threshold ``sparse_preconditioner_max_matrix_drift``
+  defaulting to 0.1. The refresh interval survives only as an optional hard cap and no
+  longer has a default.
+
+  The threshold is calibrated against how much benefit a preconditioner actually retains
+  as the matrix moves: on a truncated CG solve it holds ~100% of the speed-up out to a
+  drift of a few percent and fades past ~0.15. In hyperparameter terms that admits steps
+  of several percent -- covering MCMC proposals and local optimizer steps -- while a
+  doubling of the hyperparameters drifts 0.58 and a tenfold change 0.92, both refused.
+
+* Krylov warm starts and preconditioner reuse are additionally restricted to
+  ``method='mcmc'``; every other method runs with them off and the user's settings
+  restored afterwards, with a warning if an explicit choice had to be overridden. Both
+  carry state between likelihood evaluations, which is sound only when successive
+  evaluations are close. Measured on a truncated CG solve, a warm start from nearby
+  hyperparameters cuts the error 25x while one from distant hyperparameters is *worse
+  than a cold start*, and a reused preconditioner is then worth no more than none at all.
+  The cost is not the lost speed but the leftover residual, which makes the objective
+  depend on the order the points were evaluated in -- a bias, and so exactly what a
+  Bayesian optimizer's zero-mean noise model cannot absorb. Both settings already
+  defaulted to the safe value, so this matters for users who tuned them for MCMC and then
+  switched method.
 
 * When no noise is known -- an exact linalg mode, or a user objective that cannot report
   its precision -- ``method='bo'`` learns a single homoscedastic noise level as an extra
