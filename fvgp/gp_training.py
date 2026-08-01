@@ -459,9 +459,9 @@ class GPtraining:
         """
         try:
             opt_obj.cancel_tasks()
-            logger.debug("fvGP successfully cancelled the current training.")
+            logger.debug("fvGP successfully canceled the current training.")
         except Exception:
-            warnings.warn("No asynchronous training to be cancelled in fvGP, \
+            warnings.warn("No asynchronous training to be canceled in fvGP, \
             no training is running.", UserWarning, stacklevel=2)
 
     ###################################################################################

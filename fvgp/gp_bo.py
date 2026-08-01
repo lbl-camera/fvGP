@@ -15,6 +15,19 @@ The recursion bottoms out immediately. The inner GP only ever sees the
 tens-to-low-hundreds of theta points the BO evaluates, so it is tiny, uses a
 standard analytic kernel, and is trained with ``method='local'`` (L-BFGS-B with
 analytic gradients). There is no infinite regress and no BO-tuning of the BO.
+
+What this makes no assumption about is what the outer hyperparameters *mean*. The
+surrogate models the likelihood as a function of position in the search box, so it is
+indifferent to whether a coordinate is a length scale, a periodicity or a mixing
+weight. Two things are not indifferent, and both matter for a user-supplied kernel,
+prior mean or noise function:
+
+* the log transform, which assumes a positive hyperparameter is scale-like. That is
+  right for length scales, variances and noise and wrong for anything positive that
+  enters additively, such as a position in a non-stationary or Gibbs kernel. Override
+  it per dimension with ``bo_args['log_scale']``.
+* the number of hyperparameters. Bayesian optimization is for a handful up to roughly
+  20; a deep kernel's hundreds are far outside it. ``GP.train`` warns about this.
 """
 
 import warnings
@@ -39,11 +52,33 @@ class _LogAffineTransform:
     the transform is decided per dimension: log where the bounds are strictly
     positive, identity everywhere else. The searched box is then rescaled to the
     unit cube, which is what the Sobol design and the acquisition optimizer expect.
+
+    Positivity is a *proxy* for being scale-like, and it is only a proxy. A parameter
+    that is positive but enters the likelihood additively -- a position or center in a
+    non-stationary kernel, a mixing weight, a correlation -- is hurt by the log, and the
+    more decades its bounds span the worse it gets. On an objective quadratic in such a
+    parameter over bounds [0.1, 100], logging turned the searched surface from a clean
+    quadratic into a flat-then-explosive one and cost roughly half a unit of median
+    error against no error at all. That is the sort of hyperparameter a custom kernel
+    introduces, so ``log_scale`` overrides the guess: ``True``/``False`` for all
+    dimensions, or a per-dimension sequence of booleans.
     """
 
-    def __init__(self, bounds):
+    def __init__(self, bounds, log_scale=None):
         bounds = np.asarray(bounds, dtype=float)
-        self.log_mask = (bounds[:, 0] > 0.0) & (bounds[:, 1] > 0.0)
+        positive = (bounds[:, 0] > 0.0) & (bounds[:, 1] > 0.0)
+        if log_scale is None:
+            self.log_mask = positive
+        else:
+            requested = np.broadcast_to(np.asarray(log_scale, dtype=bool), (len(bounds),)).copy()
+            # a log transform is simply undefined where the box touches or crosses zero
+            impossible = requested & ~positive
+            if np.any(impossible):
+                warnings.warn(
+                    f"log_scale requested for hyperparameter(s) {list(np.flatnonzero(impossible))} "
+                    f"whose bounds are not strictly positive; those dimensions are searched "
+                    f"linearly instead.")
+            self.log_mask = requested & positive
         lo = np.where(self.log_mask, np.log(np.where(self.log_mask, bounds[:, 0], 1.0)), bounds[:, 0])
         hi = np.where(self.log_mask, np.log(np.where(self.log_mask, bounds[:, 1], 1.0)), bounds[:, 1])
         self.lo, self.hi = lo, hi
@@ -66,6 +101,17 @@ class _LogAffineTransform:
 # ----------------------------------------------------------------------------- #
 # surrogate
 # ----------------------------------------------------------------------------- #
+def default_initial_design_size(dim, max_iter):
+    """Size of the Sobol design ``bayesian_optimize`` uses when ``n_init`` is not set.
+
+    Roughly ``2(d+1)``, the usual rule of thumb, clipped into ``[5, 10d]`` and then into
+    the budget. Exposed so callers can warn *before* starting an expensive run if the
+    design would swallow the whole budget, without duplicating the rule.
+    """
+    n_init = min(max(2 * (dim + 1), 5), max(10 * dim, 5))
+    return max(2, min(n_init, max_iter))
+
+
 def _surrogate_kernel(x1, x2, hps):
     """Matern-5/2 with ARD: hps[0] is the signal variance, hps[1:] the length scales.
 
@@ -500,12 +546,16 @@ def bayesian_optimize(objective_function,
         acquisitions, so seeding from the previous optimum often converges in a
         handful of evaluations.
     max_iter : int, optional
-        Budget in *objective evaluations*, including the initial design. Each one is
-        an expensive likelihood, so this is the quantity worth capping. Default 50.
+        Cap on the number of objective evaluations, including the initial design. Each
+        one is an expensive likelihood, so this is the quantity worth limiting -- but it
+        is a ceiling, not a target: the search stops once the best value found and its
+        location have both stopped moving (see ``patience``). Default 50.
     bo_args : dict, optional
-        ``n_init``, ``n_restarts``, ``n_raw``, ``n_incumbent_samples``, ``seed``,
-        ``noise_function``, ``noise_variance``, ``ei_tolerance``,
-        ``surrogate_train_max_iter``, ``refit_every``.
+        ``log_scale`` (which dimensions are searched logarithmically; default guesses
+        from the bounds), ``n_init``, ``n_restarts``, ``n_raw``, ``n_incumbent_samples``,
+        ``seed``, ``noise_function``, ``noise_variance``, ``surrogate_train_max_iter``,
+        ``refit_every``, and the stopping controls ``patience`` (default 10), ``f_rtol``
+        (1e-3), ``x_tol`` (1e-3) and ``ei_tolerance`` (0.0, off).
     info : bool, optional
         Log progress each iteration.
     callback : callable, optional
@@ -523,10 +573,10 @@ def bayesian_optimize(objective_function,
     a = dict(bo_args or {})
     bounds = np.asarray(hyperparameter_bounds, dtype=float)
     dim = len(bounds)
-    tf = _LogAffineTransform(bounds)
+    tf = _LogAffineTransform(bounds, log_scale=a.get("log_scale", None))
     rng = np.random.default_rng(a.get("seed", 0))
 
-    n_init = int(a.get("n_init", min(max(2 * (dim + 1), 5), max(10 * dim, 5))))
+    n_init = int(a["n_init"]) if "n_init" in a else default_initial_design_size(dim, max_iter)
     n_init = max(2, min(n_init, max_iter))
     # 3 rather than 5: measured across two problems and eight seeds, 3 restarts match
     # 5 and 8 exactly on solution quality while cutting 15-24% of the runtime. Dropping
@@ -535,6 +585,16 @@ def bayesian_optimize(objective_function,
     n_raw = int(a.get("n_raw", 512))
     n_inc = int(a.get("n_incumbent_samples", 64))
     ei_tol = float(a.get("ei_tolerance", 0.0))
+    # Convergence, on by default. `max_iter` is a *cap* on an expensive objective, not a
+    # target -- and it inherits GP.train's 10000 -- so without a criterion of its own the
+    # search would keep buying evaluations long after it had stopped learning anything.
+    # The test is that the answer has stopped moving: neither the best value found nor
+    # where it was found changes materially for `patience` consecutive iterations.
+    # Both must hold, since a flat stretch of values while the recommendation is still
+    # traveling means the search is exploring, not converged.
+    patience = int(a.get("patience", 10))
+    f_rtol = float(a.get("f_rtol", 1e-3))
+    x_tol = float(a.get("x_tol", 1e-3))
     refit_every = max(1, int(a.get("refit_every", 1)))
     train_max_iter = int(a.get("surrogate_train_max_iter", 100))
     noise_function = a.get("noise_function", None)
@@ -600,9 +660,14 @@ def bayesian_optimize(objective_function,
     gp = None
     ei_history = []
     n_eval = len(y_list)
+    stall = 0
+    previous_best = float(np.min(y_list)) if y_list else np.inf
+    previous_u = np.asarray(u_list[int(np.argmin(y_list))]) if y_list else None
+    stopping_reason = "budget"
     while n_eval < max_iter and not stopped_early:
         if callable(early_stop) and early_stop():
             stopped_early = True
+            stopping_reason = "stopped"
             break
         u_arr = np.asarray(u_list)
         # the surrogate models the NEGATED objective, so BO maximizes throughout
@@ -646,10 +711,34 @@ def bayesian_optimize(objective_function,
         # that make no downstream difference.
         if ei_tol > 0.0 and ei < ei_tol:
             logger.debug("BO terminated: EI {} below tolerance {}", ei, ei_tol)
+            stopping_reason = "ei_tolerance"
             break
 
         _evaluate(u_next, n_eval)
         n_eval = len(y_list)
+
+        # --- convergence ------------------------------------------------------
+        # Improvement is judged against the observed spread rather than the value
+        # itself, which makes the test scale-free and keeps it meaningful for a
+        # marginal likelihood that may be large, negative, or near zero.
+        best_index = int(np.argmin(y_list))
+        current_best = float(y_list[best_index])
+        current_u = np.asarray(u_list[best_index])
+        observed_range = float(np.max(y_list) - np.min(y_list))
+        reference = observed_range if observed_range > 0.0 else max(abs(current_best), 1.0)
+
+        gained = (previous_best - current_best) / reference
+        moved = np.inf if previous_u is None else float(np.linalg.norm(current_u - previous_u))
+        if gained <= f_rtol and moved <= x_tol:
+            stall += 1
+        else:
+            stall = 0
+        previous_best, previous_u = current_best, current_u
+
+        if patience > 0 and stall >= patience:
+            logger.debug("BO terminated: best value and location stable for {} iterations", stall)
+            stopping_reason = "converged"
+            break
 
     # --- recommendation ------------------------------------------------------
     # Under noise the smallest observed value is a biased pick -- it is partly a lucky
@@ -734,6 +823,7 @@ def bayesian_optimize(objective_function,
         "curvature": curvature,
         "log-transformed dimensions": tf.log_mask,
         "stopped early": stopped_early,
+        "stopping reason": stopping_reason,
         "observation noise variance": noise_var if noise_var > 0.0 else None,
         "noise was learned": noise_learned,
         "surrogate": gp,

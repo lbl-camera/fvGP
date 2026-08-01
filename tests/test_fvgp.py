@@ -2043,7 +2043,8 @@ def test_bo_recovers_noisy_optimum_and_reports_sensitivity():
                                     max_iter=40, bo_args={"seed": 1, "noise_variance": 4e-4})
     # recovered the optimum despite the noise
     assert np.linalg.norm(np.log(theta) - np.log(np.array([1., 10.]))) < 0.5
-    assert info["n_evaluations"] == 40
+    # the budget is a cap; the run may converge before reaching it
+    assert 0 < info["n_evaluations"] <= 40
     # curvature ranks dim 0 above dim 1, matching the true 100:1 ratio
     s = info["sensitivity"]
     assert s[0] > s[1]
@@ -2077,7 +2078,7 @@ def test_bo_respects_evaluation_budget_and_does_not_recurse():
     try:
         bounds = np.array([[1e-2, 1e2]] * 3)
         theta, info = bayesian_optimize(objective, bounds, np.array([1., 1., 1.]),
-                                        max_iter=18, bo_args={"seed": 0})
+                                        max_iter=18, bo_args={"seed": 0, "patience": 0})
     finally:
         gp_bo._fit_surrogate = real_fit
 
@@ -2099,7 +2100,7 @@ def test_bo_training_through_gp():
     gp = GP(xd, yd, init_hyperparameters=np.array([1., 1.]), kernel_function=mkernel)
     bounds = np.array([[0.01, 10.], [0.01, 10.]])
     hps = gp.train(hyperparameter_bounds=bounds, method="bo", max_iter=20,
-                   bo_args={"seed": 3})
+                   bo_args={"seed": 3, "patience": 0})
 
     assert hps.shape == (2,)
     assert np.allclose(gp.hyperparameters, hps)
@@ -2713,3 +2714,195 @@ def test_bo_surrogate_stays_numerically_stable():
     separations = np.linalg.norm(u[:, None, :] - u[None, :, :], axis=2)
     np.fill_diagonal(separations, np.inf)
     assert separations.min() < 1e-5
+
+
+def test_bo_warns_when_it_is_the_wrong_tool():
+    """method='bo' must say so when it is being misapplied, since it never raises.
+
+    The default kernel gives a handful of hyperparameters, which is BO's home ground. A
+    user-supplied kernel, prior mean or noise function can produce a far longer vector --
+    a deep kernel runs to hundreds -- where the method degrades badly and silently.
+    """
+    bounds = lambda n: np.array([[0.01, 10.]] * n)
+
+    def messages(n_hps, max_iter, bo_args=None):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            GP._warn_about_bo_suitability(bounds(n_hps), max_iter, bo_args)
+        return [str(w.message) for w in caught]
+
+    # the ordinary case must stay quiet, or the warnings become noise people filter out
+    assert messages(3, 40) == []
+    assert messages(2, 60) == []
+
+    # the quiet failure: the design eats the whole budget and no surrogate is ever fitted
+    quiet = messages(40, 60)
+    assert any("no Bayesian optimization is" in m for m in quiet)
+    # ...and it must not fire once the budget is genuinely large enough
+    assert not any("no Bayesian optimization is" in m for m in messages(40, 500))
+
+    # dimensionality, with a softer note at the edge
+    assert any("roughly 20" in m for m in messages(40, 500))
+    assert any("edge of what it does well" in m for m in messages(12, 60))
+    assert not any("roughly 20" in m for m in messages(12, 60))
+
+    # an explicit n_init is respected when judging whether the design fits
+    assert not any("no Bayesian optimization is" in m
+                   for m in messages(40, 60, {"n_init": 10}))
+
+
+def test_bo_initial_design_size_is_shared_with_the_optimizer():
+    """The warning and the optimizer must use one rule, or the warning goes stale."""
+    from fvgp.gp_bo import default_initial_design_size, bayesian_optimize
+
+    for dim, budget in ((2, 40), (5, 60), (20, 60), (40, 60)):
+        n = default_initial_design_size(dim, budget)
+        assert 2 <= n <= budget
+    # the optimizer really uses it: with a budget equal to the design size, every
+    # evaluation is a design point and nothing is left for the search
+    dim = 3
+    budget = default_initial_design_size(dim, 8)
+    calls = {"n": 0}
+
+    def objective(t):
+        calls["n"] += 1
+        return float(np.sum(np.log(t) ** 2))
+
+    _, info = bayesian_optimize(objective, np.array([[1e-2, 1e2]] * dim),
+                                np.ones(dim), max_iter=budget, bo_args={"seed": 0})
+    assert calls["n"] == budget
+    assert info["n_evaluations"] == budget
+    assert len(info["ei history"]) == 0        # no acquisition step ever ran
+
+
+def test_bo_stops_itself_when_the_answer_stops_moving():
+    """`max_iter` is a cap, not a target. Left at GP.train's inherited 10000, a run must
+    still terminate in a few dozen evaluations once the answer has settled."""
+    from fvgp.gp_bo import bayesian_optimize
+
+    target = np.log(np.array([1., 10.]))
+    bounds = np.array([[1e-2, 1e2], [1e-1, 1e3]])
+    warm = np.array([50., 0.5])
+
+    def smooth(t):
+        z = np.log(t) - target
+        return float(z @ z)
+
+    for seed in range(3):
+        theta, info = bayesian_optimize(smooth, bounds, warm, max_iter=10000,
+                                        bo_args={"seed": seed})
+        assert info["stopping reason"] == "converged"
+        assert info["n_evaluations"] < 100, info["n_evaluations"]
+        # stopping early must not mean stopping short of the answer
+        assert np.linalg.norm(np.log(theta) - target) < 0.1
+
+    # patience=0 disables it, and then the cap is what binds
+    _, info = bayesian_optimize(smooth, bounds, warm, max_iter=30,
+                                bo_args={"seed": 0, "patience": 0})
+    assert info["stopping reason"] == "budget"
+    assert info["n_evaluations"] == 30
+
+    # a tiny patience stops sooner than the default
+    _, quick = bayesian_optimize(smooth, bounds, warm, max_iter=10000,
+                                 bo_args={"seed": 0, "patience": 2})
+    _, normal = bayesian_optimize(smooth, bounds, warm, max_iter=10000,
+                                  bo_args={"seed": 0})
+    assert quick["n_evaluations"] < normal["n_evaluations"]
+
+    # the absolute EI criterion still works and is reported distinctly
+    _, ei_stopped = bayesian_optimize(smooth, bounds, warm, max_iter=10000,
+                                      bo_args={"seed": 0, "ei_tolerance": 1e9})
+    assert ei_stopped["stopping reason"] == "ei_tolerance"
+
+    # the cap is still honored when convergence never triggers
+    _, capped = bayesian_optimize(smooth, bounds, warm, max_iter=14,
+                                  bo_args={"seed": 0, "patience": 1000})
+    assert capped["n_evaluations"] == 14
+    assert capped["stopping reason"] == "budget"
+
+
+def test_bo_convergence_test_is_scale_free():
+    """Improvement is judged against the observed spread, so an objective that is large,
+    negative or near zero converges the same way -- a marginal likelihood is all three
+    depending on the dataset."""
+    from fvgp.gp_bo import bayesian_optimize
+
+    target = np.log(np.array([1., 10.]))
+    bounds = np.array([[1e-2, 1e2], [1e-1, 1e3]])
+    warm = np.array([50., 0.5])
+
+    def base(t):
+        z = np.log(t) - target
+        return float(z @ z)
+
+    # the criterion itself must fire whatever the offset or magnitude, including
+    # combinations far outside anything a likelihood produces
+    for shift, scale in ((0.0, 1.0), (-1e6, 1.0), (0.0, 1e6), (1e6, 1e-6)):
+        def objective(t, shift=shift, scale=scale):
+            return shift + scale * base(t)
+        _, info = bayesian_optimize(objective, bounds, warm, max_iter=10000,
+                                    bo_args={"seed": 0})
+        assert info["stopping reason"] == "converged", (shift, scale)
+
+    # and over the range a marginal likelihood actually spans, it should converge after
+    # the same amount of work. Beyond that the *surrogate* stops being scale-free -- its
+    # nugget and variance bounds carry absolute floors for conditioning -- so the count
+    # can drift even though the criterion does not.
+    counts = []
+    for shift, scale in ((0.0, 1.0), (-1e3, 1.0), (1e3, 1.0), (0.0, 1e3), (0.0, 1e-3)):
+        def objective(t, shift=shift, scale=scale):
+            return shift + scale * base(t)
+        _, info = bayesian_optimize(objective, bounds, warm, max_iter=10000,
+                                    bo_args={"seed": 0})
+        counts.append(info["n_evaluations"])
+    # within ~30%: the criterion is exactly scale-free, but the surrogate's nugget has
+    # an absolute floor (max(1e-7*scale, 1e-12)) that starts to bind once the objective's
+    # spread falls below ~1e-3, which shifts the count slightly. Convergence at a similar
+    # cost is the claim, not at an identical one.
+    assert max(counts) <= 1.3 * min(counts), counts
+
+
+def test_bo_log_scale_override():
+    """The log transform is a guess from the bounds and must be overridable.
+
+    Positivity is a proxy for being scale-like. A hyperparameter that is positive but
+    enters the likelihood additively -- a position in a non-stationary or Gibbs kernel --
+    is hurt by the log, and the wider its bounds the worse it gets.
+    """
+    from fvgp.gp_bo import bayesian_optimize, _LogAffineTransform
+
+    bounds = np.array([[0.1, 100.], [0.1, 100.]])
+    # automatic: both positive, so both logged
+    assert list(_LogAffineTransform(bounds).log_mask) == [True, True]
+    # explicit overrides, scalar and per-dimension
+    assert list(_LogAffineTransform(bounds, log_scale=False).log_mask) == [False, False]
+    assert list(_LogAffineTransform(bounds, log_scale=[False, True]).log_mask) == [False, True]
+    # a log cannot be applied where the box touches zero; that is warned, not silent
+    crossing = np.array([[-1.0, 1.0], [0.1, 10.]])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tf = _LogAffineTransform(crossing, log_scale=True)
+    assert list(tf.log_mask) == [False, True]
+    assert any("not strictly positive" in str(w.message) for w in caught)
+    # round-trip holds under every setting
+    theta = np.array([[2.0, 40.0]])
+    for setting in (None, True, False, [True, False]):
+        tf = _LogAffineTransform(bounds, log_scale=setting)
+        assert np.allclose(tf.from_unit(tf.to_unit(theta)), theta)
+
+    # and it matters: an objective quadratic in the hyperparameters is solved exactly in
+    # linear coordinates and only approximately through the log
+    def positional(t):
+        return float((t[0] - 5.0) ** 2 + (t[1] - 30.0) ** 2)
+
+    warm = np.array([50., 80.])
+    errors = {}
+    for label, extra in (("auto", {}), ("linear", {"log_scale": False})):
+        found = []
+        for seed in range(4):
+            args = {"seed": seed, "patience": 0}
+            args.update(extra)
+            theta, _ = bayesian_optimize(positional, bounds, warm, max_iter=50, bo_args=args)
+            found.append(np.linalg.norm(theta - np.array([5., 30.])))
+        errors[label] = float(np.median(found))
+    assert errors["linear"] < errors["auto"], errors

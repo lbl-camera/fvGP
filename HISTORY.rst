@@ -111,6 +111,53 @@ New features
   failure to converge acted as accidental exploration. Marginal-likelihood surfaces, which
   is what this method exists for, are far smoother and show no such effect.
 
+* ``method='bo'`` stops on its own once the answer stops moving, so ``max_iter`` is a
+  cap rather than a target. Neither the best value found nor its location changing
+  materially for ``patience`` consecutive iterations (default 10) ends the run; both
+  conditions are required, since a flat stretch of values while the recommendation is
+  still traveling means the search is exploring rather than converged. Improvement is
+  judged against the observed spread, not the value, so the test stays meaningful for a
+  marginal likelihood that may be large, negative or near zero. Tunable through
+  ``patience``, ``f_rtol`` and ``x_tol``, and ``patience=0`` restores the old behavior of
+  spending the whole budget. ``bo_info['stopping reason']`` reports which criterion
+  ended the run.
+
+  This matters because ``max_iter`` inherits ``GP.train``'s default of 10000, which for
+  this method counts evaluations of an expensive objective. A smooth two-hyperparameter
+  problem left at that default now converges in about 21 evaluations rather than running
+  to the cap.
+
+* ``bo_args['log_scale']`` controls which hyperparameters are searched logarithmically.
+  The default still guesses from the bounds -- log wherever both are strictly positive --
+  because length scales, variances and noise are scale-like and a log makes the
+  likelihood far more stationary in them. Positivity is only a proxy for that, though: a
+  hyperparameter that is positive but enters the likelihood *additively*, such as a
+  position in a non-stationary or Gibbs kernel, is hurt by it. On an objective quadratic
+  in two such parameters over bounds [0.1, 100], the log turned a clean quadratic into a
+  flat-then-explosive surface -- the worst case for a stationary surrogate -- and cost a
+  median error of 0.42 against 0.00 searching linearly. Pass ``False``, ``True``, or a
+  per-dimension sequence of booleans.
+
+  There is deliberately no automatic warning for this. Whether a positive hyperparameter
+  is scale-like cannot be read off its bounds, and the obvious proxy -- positive bounds
+  spanning several decades -- fires on ``[1e-2, 1e1]`` length scales, the commonest
+  correct usage.
+
+* ``train(method='bo')`` now warns when it is being misapplied, since it degrades
+  quietly rather than raising. Bayesian optimization is built for a handful of
+  hyperparameters, which is what the default kernel gives; a user-supplied kernel, prior
+  mean or noise function can produce a far longer vector -- a deep kernel runs to
+  hundreds -- and the method falls apart there. On a smooth quadratic with a 60-evaluation
+  budget, the friendliest surface there is, the distance to the known optimum goes 0.00 at
+  2 hyperparameters, 0.67 at 5, 3.22 at 10, 5.20 at 20 and 15.03 at 40.
+
+  Two checks, both before the expensive run starts: above roughly 20 hyperparameters
+  (with a softer note past 10), and when the space-filling initial design would consume
+  the whole budget, which leaves the run doing no Bayesian optimization at all and is
+  otherwise silent. The design-size rule is shared with the optimizer through the new
+  ``fvgp.gp_bo.default_initial_design_size`` so the warning cannot drift out of step with
+  it.
+
 * When no noise is known -- an exact linalg mode, or a user objective that cannot report
   its precision -- ``method='bo'`` learns a single homoscedastic noise level as an extra
   surrogate hyperparameter, with its lower bound acting as a nugget. A deterministic

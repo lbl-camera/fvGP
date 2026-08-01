@@ -790,9 +790,11 @@ class GP:
             Used as termination criterion for local optimizers. Default = 0.0001.
         max_iter : int, optional
             Maximum number of iterations for global and local optimizers. Default = 10000.
-            For ``method='bo'`` this is instead the number of *objective-function
-            evaluations* allowed, including the initial design, because each one is an
-            expensive likelihood; a few dozen is the intended order.
+            For ``method='bo'`` this is instead a *cap* on the number of objective-function
+            evaluations, including the initial design, because each one is an expensive
+            likelihood. It is a ceiling rather than a target: the search stops on its own
+            once the best value found and its location have both stopped moving, which
+            typically takes a few dozen evaluations. See ``patience`` in ``bo_args``.
         mcmc_prior : callable, optional
             A function that defines the prior probability distribution for the MCMC sampler.
             The form of the function is f(x, bounds, args) and returns a scalar.
@@ -821,11 +823,34 @@ class GP:
               level** as an extra hyperparameter, whose lower bound doubles as a nugget. A
               deterministic objective simply drives it to that bound and the surrogate
               interpolates, so ``method='bo'`` is usable with any objective.
+            - ``log_scale`` : which hyperparameters are searched in log space. The
+              default guesses from the bounds -- log wherever both are strictly positive,
+              linear otherwise -- because length scales, variances and noise are
+              scale-like and a log makes the likelihood far more stationary in them.
+              Positivity is only a proxy for that, though. A hyperparameter that is
+              positive but enters the likelihood *additively* -- a position or center in
+              a non-stationary or Gibbs kernel, a mixing weight, a correlation -- is hurt
+              by the log, the more so the more decades its bounds span. Pass ``False`` to
+              search everything linearly, ``True`` for everything logarithmically, or a
+              per-dimension sequence of booleans. This is the setting to reach for when a
+              custom kernel's hyperparameters are not all scale-like.
             - ``n_init`` : size of the space-filling (Sobol) initial design.
               Default ``2*(d+1)`` clipped into ``[5, 10*d]``, where ``d = len(hyperparameters)``.
-            - ``ei_tolerance`` : stop once the expected improvement falls below this.
-              Calibrate it to what changes the GP's predictions, not to likelihood digits
-              that make no downstream difference. Default 0.0 (spend the whole budget).
+            - ``patience`` : stop once the best value found, and where it was found, have
+              both stopped changing for this many consecutive iterations. Default 10; set
+              0 to disable and spend the whole budget. This is what makes ``max_iter`` a
+              cap rather than a target -- a typical run converges in a few dozen
+              evaluations regardless of the number given.
+            - ``f_rtol`` : improvement below this fraction of the observed spread counts
+              as no improvement. Default 1e-3. Judged against the spread rather than the
+              value so it stays meaningful for a likelihood that may be large, negative
+              or near zero.
+            - ``x_tol`` : movement of the best point below this distance, in the unit cube
+              the search works in, counts as no movement. Default 1e-3.
+            - ``ei_tolerance`` : also stop once the expected improvement falls below this
+              absolute value. Calibrate it to what changes the GP's predictions, not to
+              likelihood digits that make no downstream difference. Default 0.0 (off, in
+              favor of the ``patience`` test above).
             - ``refit_every`` : refit the surrogate every k evaluations. Default 1.
             - ``n_restarts``, ``n_raw`` : multi-start count and random pre-screen size for
               the acquisition optimizer. Defaults 5 and 512.
@@ -947,6 +972,9 @@ class GP:
 
                 bo_args["noise_function"] = _estimator_noise
 
+        if method == "bo":
+            self._warn_about_bo_suitability(hyperparameter_bounds, max_iter, bo_args)
+
         logger.debug("objective function: {}", objective_function)
         logger.debug("method: {}", method)
 
@@ -1000,6 +1028,70 @@ class GP:
                 info=info,
             )
             return opt_obj
+
+    ##################################################################################
+    @staticmethod
+    def _warn_about_bo_suitability(hyperparameter_bounds, max_iter, bo_args):
+        """Flag the ways ``method='bo'`` quietly stops working, before the run starts.
+
+        Bayesian optimization is built for a handful of hyperparameters, which is what
+        the default kernel gives (a signal variance plus one length scale per input
+        dimension). A user-supplied kernel, prior mean or noise function can produce a
+        far longer hyperparameter vector -- a deep kernel runs to hundreds -- and the
+        method degrades badly there without complaining. Measured on a smooth quadratic,
+        the friendliest possible surface, with a budget of 60 evaluations:
+
+            dim   2  ->  distance to optimum 0.00
+            dim   5  ->  0.67
+            dim  10  ->  3.22
+            dim  20  ->  5.20     (the polynomial mean can no longer be fitted)
+            dim  40  ->  15.03    (no Bayesian optimization happens at all)
+
+        None of this raises, so it is worth saying out loud.
+        """
+        from .gp_bo import default_initial_design_size
+
+        n_hps = len(hyperparameter_bounds)
+        n_init = int((bo_args or {}).get("n_init", default_initial_design_size(n_hps, max_iter)))
+        n_init = max(2, min(n_init, max_iter))
+
+        # No warning about a large max_iter: for this method it is a cap on an expensive
+        # objective, not a target, and the search stops on its own once the answer stops
+        # moving (see `patience` in bo_args). Inheriting GP.train's 10000 is therefore
+        # harmless -- typical runs converge in a few dozen evaluations.
+
+        # the design swallowing the budget is the quiet one: the run completes, returns
+        # hyperparameters, and never fits a surrogate at all
+        if n_init >= max_iter:
+            warnings.warn(
+                f"method='bo' has a budget of {max_iter} evaluations but its space-filling "
+                f"initial design alone needs {n_init} for {n_hps} hyperparameters, so the "
+                f"entire budget goes to that design and no Bayesian optimization is "
+                f"performed -- this is random search. Raise max_iter well above {n_init}, "
+                f"or lower bo_args['n_init'].")
+
+        # Deliberately no warning about the log transform. It is applied wherever the
+        # bounds are strictly positive, which is right for scale-like hyperparameters and
+        # wrong for positive ones that enter additively -- but the bounds alone cannot
+        # tell those apart. A check on "positive and spanning several decades" fires on
+        # [1e-2, 1e1] length-scale bounds, the single most common correct usage, and a
+        # warning that cries wolf on correct usage is worse than none. The override lives
+        # in bo_args['log_scale'] and is documented there and on the module.
+
+        if n_hps > 20:
+            warnings.warn(
+                f"method='bo' is being asked to tune {n_hps} hyperparameters. Bayesian "
+                f"optimization is intended for a handful up to roughly 20; beyond that the "
+                f"surrogate cannot model the likelihood from the few dozen evaluations a "
+                f"budget allows, and the result degrades without any error being raised. A "
+                f"long hyperparameter vector usually means a custom kernel, prior mean or "
+                f"noise function -- a deep kernel especially. Consider 'mcmc' or 'global', "
+                f"or reduce the number of trained hyperparameters.")
+        elif n_hps > 10:
+            warnings.warn(
+                f"method='bo' is being asked to tune {n_hps} hyperparameters, which is at "
+                f"the edge of what it does well. Expect a noticeably less precise optimum "
+                f"than at 2-5, and give it a correspondingly larger max_iter.")
 
     ##################################################################################
     def stop_training(self, opt_obj):
