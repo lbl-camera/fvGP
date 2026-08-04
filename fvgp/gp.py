@@ -317,10 +317,14 @@ class GP:
         - Sweep preconditioner parameters at the target scale. For ILU, ``drop_tol`` and
           ``fill_factor`` control a memory/solve-time tradeoff; a slightly more expressive
           factor can cost only marginally more to build but reduce solve time substantially.
-        - For repeated nearby K+V updates, enable ``sparse_krylov_warm_start`` and reuse
-          preconditioners with ``sparse_preconditioner_refresh_interval``. The best refresh
-          interval is problem-dependent because preconditioner build cost can be comparable
-          to an unconditioned solve.
+        - Preconditioner reuse across nearby K+V updates is automatic and needs no tuning:
+          the cached factor is kept until K+V has actually drifted past
+          ``sparse_preconditioner_max_matrix_drift``. Reach for
+          ``sparse_preconditioner_refresh_interval`` only to impose an extra hard cap.
+          ``sparse_krylov_warm_start`` is a separate opt-in and is honored only for
+          ``train(method='mcmc')``, whose steps are small enough for the previous solution
+          to be a good starting guess; the other methods sample non-locally, where a warm
+          start is worse than a cold one.
 
         Cholesky compute-device routing:
 

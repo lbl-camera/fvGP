@@ -409,7 +409,7 @@ def sparse_preconditioner_failure_guidance(args=None):
             "For block/local preconditioners, sweep block size and overlap; these may fit easily but can be weaker than ILU on large covariance systems."
         )
     guidance.append(
-        "For repeated nearby K+V updates, `sparse_krylov_warm_start=True` and a nontrivial `sparse_preconditioner_refresh_interval` can avoid rebuilding every solve."
+        "Preconditioner reuse across nearby K+V updates is automatic: the cached factor is kept until K+V drifts past `sparse_preconditioner_max_matrix_drift`, so no refresh interval needs setting."
     )
     guidance.append(
         "If MINRES returns with a poor raw residual, try a stricter `sparse_minres_tol` before judging the method."
