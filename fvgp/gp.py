@@ -853,7 +853,7 @@ class GP:
               favor of the ``patience`` test above).
             - ``refit_every`` : refit the surrogate every k evaluations. Default 1.
             - ``n_restarts``, ``n_raw`` : multi-start count and random pre-screen size for
-              the acquisition optimizer. Defaults 5 and 512.
+              the acquisition optimizer. Defaults 3 and 512.
             - ``n_incumbent_samples`` : Monte-Carlo samples of the noisy incumbent used by
               the noisy-EI acquisition. Default 64.
             - ``surrogate_train_max_iter`` : L-BFGS-B iterations for the surrogate's own
