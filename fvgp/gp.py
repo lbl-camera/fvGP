@@ -872,9 +872,24 @@ class GP:
             A Dask Distributed Client instance for asynchronous training. This can also be provided at initialization, but
             this will be used if not provided.
         info : bool, optional
-            Provides a way how to access information reports during training of the GP. The default is False.
-            If other information is needed please utilize ``logger`` as described in the online
-            documentation (separately for HGDL and fvgp if needed).
+            Print progress during training. The default is False. What gets printed
+            depends on the method, because their iterations mean different things:
+
+            - ``bo`` : one line per objective evaluation, giving the value reached, the
+              best so far and the expected improvement that selected the point, plus the
+              size of the initial design and the reason the run ended. Every evaluation
+              is reported because each one is a full, expensive objective call.
+            - ``mcmc`` : the likelihood every 10 updates.
+            - ``adam`` : the objective and gradient norm every 10 iterations.
+            - ``local`` : the objective at every iteration.
+            - ``global`` : ``scipy``'s own ``differential_evolution`` progress line per
+              step.
+            - ``hgdl`` : nothing; use the ``hgdl`` logger.
+
+            This prints. It is separate from the ``logger``, which fvGP disables at
+            import (``logger.disable('fvgp')``) and which you can re-enable for the much
+            more detailed debug stream, as described in the online documentation
+            (separately for HGDL and fvgp if needed).
         asynchronous : bool, optional
             When True, submit the training job and return immediately with an optimizer
             proxy object. Supported for ``method='hgdl'``, ``'mcmc'``, ``'adam'``, and ``'bo'``.

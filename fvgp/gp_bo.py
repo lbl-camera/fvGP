@@ -650,11 +650,16 @@ def bayesian_optimize(objective_function,
                      {"n_evaluations": len(y_list)})
         return val
 
+    if info:
+        print(f"fvGP bo: evaluating a space-filling design of {len(u_init)} points "
+              f"in {dim} hyperparameters (budget {max_iter})")
     for i in range(len(u_init)):
         if callable(early_stop) and early_stop():
             stopped_early = True
             break
         _evaluate(u_init[i], i)
+    if info and y_list:
+        print(f"fvGP bo: design complete, best f(x)= {min(y_list)}")
 
     # --- BO loop -------------------------------------------------------------
     gp = None
@@ -703,8 +708,7 @@ def bayesian_optimize(objective_function,
             dim, rng, n_restarts, n_raw,
             acq_grad=lambda z: _nei_value_and_grad(z, gp, y_best_samples, dim))
         ei_history.append(float(ei))
-        if info:
-            logger.debug("BO iteration {}: best={:.6g}, EI={:.3g}", n_eval, min(y_list), ei)
+        logger.debug("BO iteration {}: best={:.6g}, EI={:.3g}", n_eval, min(y_list), ei)
 
         # Stop when the expected gain no longer matters. Calibrate `ei_tolerance` to
         # what actually changes the outer GP's predictions, not to likelihood digits
@@ -714,8 +718,16 @@ def bayesian_optimize(objective_function,
             stopping_reason = "ei_tolerance"
             break
 
-        _evaluate(u_next, n_eval)
+        latest = _evaluate(u_next, n_eval)
         n_eval = len(y_list)
+        if info:
+            # printed rather than logged: fvgp/__init__.py disables the loguru logger,
+            # so logger.debug is invisible unless the user re-enables it. One line per
+            # iteration is the right cadence here, because unlike the optimizer-iteration
+            # counts of the other methods each one is a full objective evaluation.
+            # Reported after the evaluation so `f(x)` is the value actually reached.
+            print(f"fvGP bo evaluation {n_eval} of at most {max_iter}: "
+                  f"f(x)= {latest}, best= {min(y_list)}, EI was {ei}")
 
         # --- convergence ------------------------------------------------------
         # Improvement is judged against the observed spread rather than the value
@@ -808,6 +820,9 @@ def bayesian_optimize(objective_function,
         if sensitivity is None:
             sensitivity = 1.0 / np.maximum(ard, 1e-12)
 
+    if info:
+        print(f"fvGP bo finished after {len(y_list)} evaluations ({stopping_reason}): "
+              f"f(x)= {y_arr[best_idx]} at {theta_best}")
     bo_info = {
         "x": theta_best,
         "f(x)": float(y_arr[best_idx]),

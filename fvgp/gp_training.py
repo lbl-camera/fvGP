@@ -88,6 +88,18 @@ class GPtraining:
             logger.debug("maximum number of iterations: {}", max_iter)
             logger.debug("termination tolerance: {}", tolerance)
             logger.debug("bounds: {}", hyperparameter_bounds)
+            # `info` has to print, not log: fvgp/__init__.py disables the loguru
+            # logger, so logger.debug is invisible unless the user re-enables it.
+            # The parameter must be named `intermediate_result` -- that is how scipy
+            # decides to hand over an OptimizeResult, which carries the objective
+            # value already computed, so reporting costs no extra evaluations.
+            progress = None
+            if info:
+                def progress(intermediate_result):
+                    _local_state["i"] += 1
+                    print(f"fvGP local iteration {_local_state['i']}: "
+                          f"f(x)= {float(intermediate_result.fun)}")
+                _local_state = {"i": 0}
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 OptimumEvaluation = minimize(
@@ -98,7 +110,7 @@ class GPtraining:
                     hess=objective_function_hessian,
                     bounds=hyperparameter_bounds,
                     tol=tolerance,
-                    callback=None,
+                    callback=progress,
                     constraints=constraints,
                     options={"maxiter": max_iter})
 
@@ -149,9 +161,20 @@ class GPtraining:
             hyperparameters = res["median(x)"]
             self.mcmc_info = res
         elif method == "adam":
+            # every 10 rather than every step: max_iter here is an optimizer-iteration
+            # count that routinely runs to thousands, unlike `bo` where each iteration
+            # is one expensive objective evaluation. Same cadence as mcmc.
+            adam_progress = None
+            if info:
+                def adam_progress(theta, fval, grad, iteration):
+                    # first iteration too, so a short run still reports something
+                    if iteration % 10 == 0 or iteration == 1:
+                        print(f"fvGP adam iteration {iteration} out of {max_iter}: "
+                              f"f(x)= {float(fval)}, |grad|= {float(np.linalg.norm(grad))}")
             hyperparameters, history = self.adam_optimize(objective_function,
                                                           objective_function_gradient,
-                                                          init_hyperparameters, max_iter=max_iter)
+                                                          init_hyperparameters, max_iter=max_iter,
+                                                          callback=adam_progress)
         ############################
         ####Bayesian optimization:##
         ############################

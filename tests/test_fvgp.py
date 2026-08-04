@@ -2906,3 +2906,63 @@ def test_bo_log_scale_override():
             found.append(np.linalg.norm(theta - np.array([5., 30.])))
         errors[label] = float(np.median(found))
     assert errors["linear"] < errors["auto"], errors
+
+
+def test_train_info_prints_progress_for_every_method(capsys):
+    """`info=True` must actually surface something for each method.
+
+    It used to be a no-op everywhere except mcmc: the other methods reported through
+    `logger.debug`, and fvgp/__init__.py calls `logger.disable('fvgp')`, so nothing
+    reached the user. `info` now prints.
+    """
+    np.random.seed(0)
+    xd = np.random.rand(25, 2)
+    yd = np.sin(np.linalg.norm(xd, axis=1))
+    bounds = np.array([[0.01, 10.]] * 3)
+    hps = np.array([1., 1., 1.])
+
+    cases = [
+        ("bo", dict(max_iter=12, bo_args={"seed": 0, "patience": 0}), "bo evaluation"),
+        ("local", dict(max_iter=5), "local iteration"),
+        ("adam", dict(max_iter=25), "adam iteration"),
+        ("global", dict(max_iter=2, pop_size=4), "differential_evolution step"),
+    ]
+    for method, kwargs, marker in cases:
+        gp = GP(xd, yd, hps)
+        gp.train(hyperparameter_bounds=bounds, method=method, info=True, **kwargs)
+        printed = capsys.readouterr().out
+        assert marker in printed, (method, printed[:200])
+
+        # and it must stay quiet when not asked
+        gp2 = GP(xd, yd, hps)
+        gp2.train(hyperparameter_bounds=bounds, method=method, info=False, **kwargs)
+        quiet = capsys.readouterr().out
+        assert marker not in quiet, (method, quiet[:200])
+
+
+def test_bo_info_reports_the_value_actually_reached(capsys):
+    """The per-evaluation line must report the value at that evaluation, not the
+    running best -- it is printed after the objective call for exactly that reason."""
+    from fvgp.gp_bo import bayesian_optimize, default_initial_design_size
+
+    target = np.log(np.array([1., 10.]))
+    n_design = default_initial_design_size(2, 14)
+
+    def smooth(t):
+        z = np.log(t) - target
+        return float(z @ z)
+
+    _, info = bayesian_optimize(smooth, np.array([[1e-2, 1e2], [1e-1, 1e3]]),
+                                np.array([50., 0.5]), max_iter=14,
+                                bo_args={"seed": 0, "patience": 0}, info=True)
+    printed = capsys.readouterr().out
+    assert "space-filling design" in printed
+    assert "design complete" in printed
+    assert printed.count("bo evaluation") == info["n_evaluations"] - n_design
+    assert "finished after" in printed and "(budget)" in printed
+
+    # the reported f(x) values are the trace, not a monotone running best
+    reported = [float(line.split("f(x)= ")[1].split(",")[0])
+                for line in printed.splitlines() if "bo evaluation" in line]
+    assert np.allclose(sorted(reported), sorted(info["trace f(x)"][n_design:]))
+    assert reported != sorted(reported, reverse=True)   # not a monotone best-so-far

@@ -127,6 +127,22 @@ New features
   problem left at that default now converges in about 21 evaluations rather than running
   to the cap.
 
+* ``train(info=True)`` now reports progress for every method, not just ``mcmc``. It was
+  effectively a no-op elsewhere: ``mcmc`` printed, while the other methods reported
+  through ``logger.debug`` and fvGP disables the loguru logger at import, so nothing
+  reached the user. ``bo`` prints one line per objective evaluation -- the value reached,
+  the best so far, and the expected improvement that selected the point -- plus the size
+  of the initial design and the reason the run ended; ``local`` prints the objective each
+  iteration; ``adam`` prints the objective and gradient norm every ten. ``global`` already
+  worked, since ``disp=info`` reaches ``scipy``; ``hgdl`` still reports through its own
+  logger.
+
+  The cadence differs on purpose: a ``bo`` iteration is one full evaluation of an
+  expensive objective, whereas ``adam``'s ``max_iter`` counts cheap optimizer steps and
+  runs to thousands. The ``local`` report costs nothing extra -- naming the callback
+  parameter ``intermediate_result`` makes ``scipy`` hand over an ``OptimizeResult`` whose
+  objective value has already been computed.
+
 * ``bo_args['log_scale']`` controls which hyperparameters are searched logarithmically.
   The default still guesses from the bounds -- log wherever both are strictly positive --
   because length scales, variances and noise are scale-like and a log makes the
