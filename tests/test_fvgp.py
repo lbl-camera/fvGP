@@ -2966,3 +2966,169 @@ def test_bo_info_reports_the_value_actually_reached(capsys):
                 for line in printed.splitlines() if "bo evaluation" in line]
     assert np.allclose(sorted(reported), sorted(info["trace f(x)"][n_design:]))
     assert reported != sorted(reported, reverse=True)   # not a monotone best-so-far
+
+
+###########################################################################
+#################### gp2Scale distributed covariance ######################
+###########################################################################
+def _reference_wendland(x1, x2, hps):
+    """Dense reference for the assembler tests."""
+    return wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
+
+
+def _wendland_with_args(x1, x2, hps, args):
+    """Four-argument kernel. The historical gp2Scale workers could not call one."""
+    return args["scale"] * wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
+
+
+def test_distributed_covariance_matches_dense(client):
+    """One primitive, four shapes of problem: the assembled sparse matrix must equal the
+    dense kernel evaluation for both distributions, symmetric and rectangular."""
+    from fvgp.gp2Scale_covariance import distributed_covariance
+
+    rng = np.random.default_rng(42)
+    x1 = rng.random((57, 2))
+    x2 = rng.random((23, 2))
+    hps = np.array([2.0, 0.4, 0.35])
+
+    f1 = client.scatter(x1, broadcast=True, direct=True)
+    f2 = client.scatter(x2, broadcast=True, direct=True)
+
+    for distribution in ("blockwise", "rowwise"):
+        K = distributed_covariance(client, _reference_wendland, hps,
+                                   x1_future=f1, n1=len(x1), x2_future=f1, n2=len(x1),
+                                   batch_size=10, symmetric=True, distribution=distribution)
+        assert sparse.issparse(K)
+        assert np.allclose(K.toarray(), _reference_wendland(x1, x1, hps))
+        # the mirror must actually be a mirror, not a triangle
+        assert np.allclose(K.toarray(), K.toarray().T)
+
+        B = distributed_covariance(client, _reference_wendland, hps,
+                                   x1_future=f1, n1=len(x1), x2_future=f2, n2=len(x2),
+                                   batch_size=10, symmetric=False, distribution=distribution)
+        assert B.shape == (len(x1), len(x2))
+        assert np.allclose(B.toarray(), _reference_wendland(x1, x2, hps))
+
+        # a single block (batch_size larger than the data) must behave identically
+        K1 = distributed_covariance(client, _reference_wendland, hps,
+                                    x1_future=f1, n1=len(x1), x2_future=f1, n2=len(x1),
+                                    batch_size=10000, symmetric=True, distribution=distribution)
+        assert np.allclose(K1.toarray(), _reference_wendland(x1, x1, hps))
+
+    f1.release()
+    f2.release()
+
+
+def test_distributed_covariance_empty_and_args_kernel(client):
+    """Two things the old workers got wrong: an all-empty result, and a kernel that takes
+    ``args`` -- supported everywhere else in fvGP but not on the gp2Scale workers."""
+    from fvgp.gp2Scale_covariance import distributed_covariance
+
+    rng = np.random.default_rng(7)
+    x1 = rng.random((40, 2))
+    x2 = rng.random((40, 2)) + 100.0        # far outside the Wendland support
+    hps = np.array([1.0, 0.1, 0.1])
+
+    f1 = client.scatter(x1, broadcast=True, direct=True)
+    f2 = client.scatter(x2, broadcast=True, direct=True)
+
+    for distribution in ("blockwise", "rowwise"):
+        empty = distributed_covariance(client, _reference_wendland, hps,
+                                       x1_future=f1, n1=len(x1), x2_future=f2, n2=len(x2),
+                                       batch_size=10, distribution=distribution)
+        assert empty.shape == (len(x1), len(x2))
+        assert empty.nnz == 0
+
+        with_args = distributed_covariance(client, _wendland_with_args, hps,
+                                           x1_future=f1, n1=len(x1), x2_future=f1, n2=len(x1),
+                                           batch_size=10, symmetric=True,
+                                           distribution=distribution,
+                                           k_n_params=4, args={"scale": 3.0})
+        assert np.allclose(with_args.toarray(), 3.0 * _reference_wendland(x1, x1, hps))
+
+    f1.release()
+    f2.release()
+
+
+def test_distributed_covariance_rejects_bad_distribution(client):
+    from fvgp.gp2Scale_covariance import distributed_covariance
+
+    x = np.random.rand(5, 1)
+    f = client.scatter(x, broadcast=True, direct=True)
+    try:
+        distributed_covariance(client, _reference_wendland, np.array([1., 1.]),
+                               x1_future=f, n1=5, x2_future=f, n2=5,
+                               batch_size=2, distribution="columnwise")
+    except Exception as e:
+        assert "columnwise" in str(e)
+    else:
+        raise AssertionError("an unknown distribution must be rejected")
+    f.release()
+
+
+def test_gp2Scale_posterior_matches_dense(client):
+    """The gp2Scale posterior goes through the distributed sparse cross-covariance while
+    the dense GP calls the kernel directly. Same kernel, same data: same answers."""
+    import gc
+
+    rng = np.random.default_rng(3)
+    x = rng.random((120, 1))
+    y = np.sin(np.linalg.norm(x, axis=1) * 5.0)
+    hps = np.array([1.5, 0.3])
+    x_pred_local = rng.random((17, 1))
+
+    dense = GP(x, y, hps, kernel_function=wendland_anisotropic_gp2Scale_cpu,
+               linalg_mode="Chol")
+    reference_mean = dense.posterior_mean(x_pred_local)["m(x)"]
+    reference_var = dense.posterior_covariance(x_pred_local)["v(x)"]
+    reference_S = dense.posterior_covariance(x_pred_local)["S"]
+    del dense
+    gc.collect()
+
+    for distribution in ("blockwise", "rowwise"):
+        # batch_size below len(x) is what puts the cross-covariance on the cluster
+        scaled = GP(x, y, hps, gp2Scale=True, gp2Scale_batch_size=40,
+                    gp2Scale_distribution=distribution, dask_client=client,
+                    linalg_mode="Chol")
+        assert sparse.issparse(scaled.prior.compute_data_cross_covariance(x_pred_local, hps))
+        assert np.allclose(scaled.posterior_mean(x_pred_local)["m(x)"], reference_mean)
+        post = scaled.posterior_covariance(x_pred_local)
+        assert np.allclose(post["v(x)"], reference_var)
+        assert np.allclose(post["S"], reference_S)
+        del scaled
+        gc.collect()
+        client.run(lambda: None)
+
+
+def test_gp2Scale_distributions_agree(client):
+    """Row-wise and block-wise must produce the same prior covariance and the same
+    likelihood, including after an append."""
+    import gc
+
+    rng = np.random.default_rng(11)
+    x = rng.random((90, 2))
+    y = np.sin(np.linalg.norm(x, axis=1) * 5.0)
+    x_add = rng.random((7, 2))
+    y_add = np.sin(np.linalg.norm(x_add, axis=1) * 5.0)
+    hps = np.array([1.2, 0.35, 0.3])
+
+    results = {}
+    for distribution in ("blockwise", "rowwise"):
+        gp = GP(x, y, hps, gp2Scale=True, gp2Scale_batch_size=25,
+                gp2Scale_distribution=distribution, dask_client=client,
+                linalg_mode="sparseLU")
+        K = gp.prior.K.toarray().copy()
+        gp.update_gp_data(x_add, y_add, append=True)
+        results[distribution] = (K, gp.prior.K.toarray().copy(), gp.log_likelihood())
+        del gp
+        gc.collect()
+        client.run(lambda: None)
+
+    K_block, K_block_aug, ll_block = results["blockwise"]
+    K_row, K_row_aug, ll_row = results["rowwise"]
+    assert np.allclose(K_block, wendland_anisotropic_gp2Scale_cpu(x, x, hps))
+    assert np.allclose(K_block, K_row)
+    assert np.allclose(K_block_aug, K_row_aug)
+    assert np.allclose(K_block_aug, wendland_anisotropic_gp2Scale_cpu(
+        np.vstack([x, x_add]), np.vstack([x, x_add]), hps))
+    assert np.isclose(ll_block, ll_row)
