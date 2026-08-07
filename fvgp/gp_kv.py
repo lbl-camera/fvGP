@@ -366,6 +366,13 @@ class GPkv:
             return None
         if not force_refresh and self._can_reuse_sparse_preconditioner(KV):
             self.Preconditioner_reuse_counter += 1
+            # Say so explicitly: otherwise a reuse is indistinguishable in the log from a
+            # build that never happened, and the missing construction time reads as a gap.
+            # Phrased like the construction line in gp_lin_alg so both grep together.
+            logger.debug("{} preconditioner reused ({} consecutive reuses), no construction cost.",
+                         normalize_sparse_preconditioner_type(
+                             self.args.get("sparse_preconditioner_type", "ilu")),
+                         self.Preconditioner_reuse_counter)
             return self.Preconditioner_operator
         factor, operator = self._build_sparse_preconditioner_or_none(KV)
         if operator is None:

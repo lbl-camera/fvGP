@@ -5887,3 +5887,68 @@ def test_stochastic_logdet_warning_survives_the_imate_import():
         assert any("imate reports no usable GPU device" in str(w.message) for w in caught)
     finally:
         la._imate_gpu_enabled = original
+
+
+###########################################################################
+################ preconditioners are logged and timed #####################
+###########################################################################
+def _capture_fvgp_debug_log():
+    """Collect fvGP's debug records; fvGP disables its logger at import."""
+    from loguru import logger
+    sink = []
+    logger.enable("fvgp")
+    handle = logger.add(lambda m: sink.append(str(m)), level="DEBUG", format="{message}")
+    return logger, handle, sink
+
+
+def test_every_preconditioner_logs_its_construction_time():
+    """The solvers announce themselves and report a compute time; a preconditioner is
+    just as expensive, so it reports one in the same shape."""
+    from fvgp.gp_lin_alg import calculate_sparse_preconditioner
+
+    KV = sparse.csr_matrix(_spd(40, seed=61))
+    types = ["ilu", "block_jacobi", "additive_schwarz", "native_incomplete_cholesky"]
+    if _importlib_for_tests.util.find_spec("pyamg") is not None:
+        types.append("amg")
+    if _importlib_for_tests.util.find_spec("ilupp") is not None:
+        types.append("ichol0")
+
+    logger, handle, sink = _capture_fvgp_debug_log()
+    try:
+        for kind in types:
+            calculate_sparse_preconditioner(KV, args={"sparse_preconditioner_type": kind})
+    finally:
+        logger.remove(handle)
+        logger.disable("fvgp")
+
+    text = "\n".join(sink)
+    for kind in types:
+        assert f"{kind} preconditioner construction in progress" in text, kind
+        assert f"{kind} preconditioner compute time:" in text, kind
+    # the size of the problem is on the line, so a time can be judged against it
+    assert "n = 40" in text and "K+V nnz =" in text
+
+
+def test_a_reused_preconditioner_says_so_instead_of_going_quiet():
+    """A cached preconditioner produces no construction time. Without a line saying it
+    was reused, that gap reads as a preconditioner that never ran."""
+    gp = _tiny_gp(linalg_mode="sparseCGpre",
+                  args={"sparse_preconditioner_refresh_interval": 5})
+    K, V, m = gp.kv._get_KVm()
+    KV = sparse.csr_matrix(gp.kv.addKV(K, V))
+
+    logger, handle, sink = _capture_fvgp_debug_log()
+    try:
+        gp.kv._get_or_refresh_preconditioner(KV, force_refresh=True)   # builds
+        gp.kv._get_or_refresh_preconditioner(KV)                        # reuses
+        gp.kv._get_or_refresh_preconditioner(KV)                        # reuses again
+    finally:
+        logger.remove(handle)
+        logger.disable("fvgp")
+
+    text = "\n".join(sink)
+    assert "ilu preconditioner construction in progress" in text
+    assert "ilu preconditioner reused (1 consecutive reuses)" in text
+    assert "ilu preconditioner reused (2 consecutive reuses)" in text
+    # build and reuse lines share the word, so one grep shows the whole story
+    assert sum("preconditioner" in line for line in sink) >= 4

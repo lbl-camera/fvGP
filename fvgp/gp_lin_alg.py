@@ -897,10 +897,11 @@ def calculate_sparse_preconditioner(KV, args=None):
     """
     args = _normalize_args(args)
     assert sparse.issparse(KV)
-    logger.debug("calculate_sparse_preconditioner")
     preconditioner_type = normalize_sparse_preconditioner_type(
         args.get("sparse_preconditioner_type", "ilu")
     )
+    st = time.time()
+    logger.debug("{} preconditioner construction in progress ...", preconditioner_type)
 
     builders = {
         "ilu": _build_ilu_preconditioner,
@@ -922,6 +923,10 @@ def calculate_sparse_preconditioner(KV, args=None):
     factor, operator = builders[preconditioner_type](KV, args=args)
     if isinstance(factor, dict):
         factor.setdefault("type", preconditioner_type)
+    # Same shape of message as the solvers it feeds, so a gp2Scale debug log reads as one
+    # timeline: how long the preconditioner cost, against how long the solve it bought.
+    logger.debug("{} preconditioner compute time: {} seconds. (n = {}, K+V nnz = {})",
+                 preconditioner_type, time.time() - st, KV.shape[0], KV.nnz)
     return factor, operator
 
 
