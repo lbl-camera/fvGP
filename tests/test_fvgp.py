@@ -1754,8 +1754,13 @@ def test_wendland_support_aware_cpu_empty_input():
 
 
 def test_kernels_gpu_engine_detection():
-    """The kernels module's GPU engine helper should agree with availability."""
-    engine = _kernels._get_default_gpu_engine()
+    """kernels no longer keeps its own backend detection: it resolves through
+    gp_lin_alg, so args["GPU_engine"] and args["GPU_device"] are honored there too."""
+    assert not hasattr(_kernels, "_get_default_gpu_engine")
+    assert _kernels._get_gpu_engine is _gp_lin_alg.get_gpu_engine
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        engine = _kernels._get_gpu_engine(None)
     if _gpu_engines_available():
         assert engine in ("torch", "cupy")
     else:
@@ -3132,3 +3137,2753 @@ def test_gp2Scale_distributions_agree(client):
     assert np.allclose(K_block_aug, wendland_anisotropic_gp2Scale_cpu(
         np.vstack([x, x_add]), np.vstack([x, x_add]), hps))
     assert np.isclose(ll_block, ll_row)
+
+
+###########################################################################
+############ gp2Scale covariance: worker-side units #######################
+###########################################################################
+# These functions execute on dask workers, in subprocesses where coverage is not
+# collected. They are plain functions over plain arrays, so calling them directly is both
+# the way to measure them and a sharper test than going through a cluster.
+def test_evaluate_kernel_signatures():
+    from fvgp.gp2Scale_covariance import evaluate_kernel
+
+    x1 = np.random.rand(4, 2)
+    x2 = np.random.rand(3, 2)
+    hps = np.array([1.0, 0.5, 0.5])
+
+    three = evaluate_kernel(wendland_anisotropic_gp2Scale_cpu, x1, x2, hps, 3, None)
+    four = evaluate_kernel(_wendland_with_args, x1, x2, hps, 4, {"scale": 2.0})
+    assert np.allclose(four, 2.0 * three)
+
+    try:
+        evaluate_kernel(wendland_anisotropic_gp2Scale_cpu, x1, x2, hps, 5, None)
+    except Exception as e:
+        assert "signature" in str(e)
+    else:
+        raise AssertionError("an unsupported kernel arity must be rejected")
+
+
+def test_block_to_coo_dense_and_sparse():
+    """A support-aware kernel hands back a sparse block; it must not be densified."""
+    from fvgp.gp2Scale_covariance import block_to_coo
+
+    dense = np.array([[1.0, 0.0], [0.0, 2.0], [3.0, 0.0]])
+    data, rows, cols = block_to_coo(dense, np.int32)
+    assert rows.dtype == np.int32 and cols.dtype == np.int32
+    assert sorted(data) == [1.0, 2.0, 3.0]
+    assert sparse.coo_matrix((data, (rows, cols)), shape=dense.shape).toarray().tolist() == dense.tolist()
+
+    data_s, rows_s, cols_s = block_to_coo(sparse.csr_matrix(dense), np.int64)
+    assert rows_s.dtype == np.int64
+    assert sorted(data_s) == [1.0, 2.0, 3.0]
+
+
+def test_block_triplets_masking_and_offsets():
+    from fvgp.gp2Scale_covariance import block_triplets
+
+    x = np.sort(np.random.rand(20, 1), axis=0)
+    hps = np.array([1.0, 0.5])
+
+    # a diagonal block of a symmetric matrix reports its upper triangle only
+    data, rows, cols = block_triplets(((0, 10), (0, 10)), x, x, hps,
+                                      wendland_anisotropic_gp2Scale_cpu, 3, None, True, np.int32)
+    assert np.all(rows <= cols)
+    reference = wendland_anisotropic_gp2Scale_cpu(x[0:10], x[0:10], hps)
+    assert np.isclose(data.sum(), np.triu(reference).sum())
+
+    # the same block without symmetry keeps everything
+    full, _, _ = block_triplets(((0, 10), (0, 10)), x, x, hps,
+                                wendland_anisotropic_gp2Scale_cpu, 3, None, False, np.int32)
+    assert np.isclose(full.sum(), reference.sum())
+
+    # an off-diagonal block is never masked, and its indices are global
+    data2, rows2, cols2 = block_triplets(((10, 20), (0, 10)), x, x, hps,
+                                         wendland_anisotropic_gp2Scale_cpu, 3, None, True, np.int32)
+    if data2.size:
+        assert rows2.min() >= 10 and cols2.max() < 10
+
+
+def test_block_triplets_empty_block():
+    from fvgp.gp2Scale_covariance import block_triplets
+
+    x1 = np.random.rand(5, 1)
+    x2 = np.random.rand(5, 1) + 50.0
+    data, rows, cols = block_triplets(((0, 5), (0, 5)), x1, x2, np.array([1.0, 0.1]),
+                                      wendland_anisotropic_gp2Scale_cpu, 3, None, True, np.int32)
+    assert data.size == 0 and rows.size == 0 and cols.size == 0
+
+
+def test_row_strip_csr_full_and_empty():
+    from fvgp.gp2Scale_covariance import row_strip_csr
+
+    x = np.sort(np.random.rand(30, 1), axis=0)
+    hps = np.array([1.0, 0.4])
+    start, strip = row_strip_csr((10, 20), x, x, hps, wendland_anisotropic_gp2Scale_cpu,
+                                 3, None, 30, 7, np.int32)
+    assert start == 10 and strip.shape == (10, 30)
+    assert np.allclose(strip.toarray(), wendland_anisotropic_gp2Scale_cpu(x[10:20], x, hps))
+
+    far = np.random.rand(30, 1) + 50.0
+    start, empty = row_strip_csr((0, 30), x, far, np.array([1.0, 0.1]),
+                                 wendland_anisotropic_gp2Scale_cpu, 3, None, 30, 7, np.int32)
+    assert start == 0 and empty.shape == (30, 30) and empty.nnz == 0
+
+
+def test_assemblers_handle_nothing_to_assemble():
+    from fvgp.gp2Scale_covariance import assemble_triplets, assemble_row_strips, index_dtype_for
+
+    empty_triplets = [(np.empty(0), np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32))]
+    K = assemble_triplets(iter(empty_triplets), 6, 6, True, np.int32)
+    assert K.shape == (6, 6) and K.nnz == 0
+
+    assert assemble_row_strips(iter([]), 4, 9).shape == (4, 9)
+    assert index_dtype_for(10, 10) == np.int32
+
+
+def test_harvest_raises_on_a_failed_block():
+    """A cancelled task comes back *as* its exception; it must not reach the assembly."""
+    from fvgp.gp2Scale_covariance import _harvest
+
+    class _FakeFuture:
+        def __init__(self): self.released = False
+        def release(self): self.released = True
+
+    good = _FakeFuture()
+    assert _harvest((good, "payload")) == "payload"
+    assert good.released
+
+    bad = _FakeFuture()
+    try:
+        _harvest((bad, ValueError("worker exploded")))
+    except Exception as e:
+        assert "worker exploded" in str(e) and "failed on the cluster" in str(e)
+    else:
+        raise AssertionError("an exception result must be raised, not returned")
+    assert bad.released, "the future must be released even when the result is an error"
+
+
+def test_stack_augmented_covariance():
+    from fvgp.gp2Scale_covariance import stack_augmented_covariance
+
+    K = sparse.csr_matrix(np.array([[1.0, 2.0], [2.0, 3.0]]))
+    B = sparse.coo_matrix(np.array([[4.0], [5.0]]))
+    D = np.array([[6.0]])
+    out = stack_augmented_covariance(K, B, D)
+    assert out.format == "csr"
+    assert np.allclose(out.toarray(), np.array([[1., 2., 4.],
+                                                [2., 3., 5.],
+                                                [4., 5., 6.]]))
+
+
+def test_log_time_helper(capsys):
+    """fvgp.utils.log_time -- the loguru timing helper."""
+    from loguru import logger
+    from fvgp import utils
+
+    logger.enable("fvgp")
+    sink = []
+    handle = logger.add(lambda msg: sink.append(str(msg)), level="INFO")
+    try:
+        with utils.log_time("plain"):
+            pass
+        with utils.log_time("keyed", cumulative_key="k"):
+            pass
+        with utils.log_time("keyed", cumulative_key="k"):
+            pass
+    finally:
+        logger.remove(handle)
+        logger.disable("fvgp")
+
+    assert len(sink) == 3
+    assert "elapsed" in sink[0] and "cumulative elapsed" not in sink[0]
+    assert "cumulative elapsed" in sink[1] and "avg elapsed" in sink[1]
+    assert utils.cumulative_count["k"] == 2
+
+
+###########################################################################
+################ gp_actor: the async optimizer actors #####################
+###########################################################################
+# These live on a Dask worker in production, so nothing measures them there. They are
+# ordinary classes driven by a background thread, so they can be exercised directly.
+def _wait_for_actor(actor, timeout=60.0):
+    actor._thread.join(timeout)
+    assert not actor._thread.is_alive(), "actor thread did not finish"
+
+
+def test_mcmc_actor_runs_and_reports():
+    from fvgp.gp_actor import _MCMCActor
+    from fvgp import ProposalDistribution
+
+    bounds = np.array([[-2., 2.], [-2., 2.]])
+
+    def log_likelihood(x, args):
+        return -float(x @ x)
+
+    def prior_function(theta, bounds, args):
+        if np.any(theta < bounds[:, 0]) or np.any(theta > bounds[:, 1]): return -np.inf
+        return 0.
+
+    pd = ProposalDistribution([0, 1], init_prop_Sigma=np.diag([0.1, 0.1]),
+                              adapt_callable="normal")
+    actor = _MCMCActor(log_likelihood, bounds, prior_function, [pd], {},
+                       np.array([0.5, -0.5]), 30, False)
+    assert actor.get_latest() == {}
+    actor.start()
+    _wait_for_actor(actor)
+
+    latest = actor.get_latest()
+    for key in ("f(x)", "max f(x)", "MAP", "max x", "time stamps", "x",
+                "mean(x)", "median(x)", "var(x)"):
+        assert key in latest, key
+    # the callback fires between the x and f(x) appends, so x may lead by one
+    assert len(latest["x"]) - len(latest["f(x)"]) in (0, 1)
+    assert latest["max f(x)"] == np.max(latest["f(x)"])
+    assert not actor._running
+    actor.stop()
+    assert not actor._running
+
+
+def test_mcmc_actor_stop_breaks_the_run():
+    """stop() must end the chain through the break condition, not just flip a flag."""
+    from fvgp.gp_actor import _MCMCActor
+    from fvgp import ProposalDistribution
+
+    bounds = np.array([[-2., 2.]])
+
+    def log_likelihood(x, args):
+        return -float(x @ x)
+
+    def prior_function(theta, bounds, args):
+        return 0.
+
+    pd = ProposalDistribution([0], init_prop_Sigma=np.diag([0.1]), adapt_callable="normal")
+    actor = _MCMCActor(log_likelihood, bounds, prior_function, [pd], {},
+                       np.array([0.5]), 2000000, False)
+    actor.start()
+    actor.stop()
+    _wait_for_actor(actor)
+    assert not actor._running
+
+
+def test_adam_actor_descends_and_reports():
+    from fvgp.gp_actor import _AdamActor
+
+    target = np.array([1.0, -2.0])
+
+    def nlml(theta):
+        d = theta - target
+        return float(d @ d)
+
+    def grad_nlml(theta):
+        return 2.0 * (theta - target)
+
+    theta0 = np.array([5.0, 5.0])
+    actor = _AdamActor(nlml, grad_nlml, theta0, 0.2, 0.9, 0.999, 1e-8, 400, 1e-10)
+    initial = actor.get_latest()
+    assert initial["iteration"] == 0 and initial["nlml"] is None
+    assert np.allclose(initial["x"], theta0), "theta0 must be copied, not aliased"
+
+    actor.start()
+    _wait_for_actor(actor)
+    latest = actor.get_latest()
+    assert latest["iteration"] > 0
+    assert latest["nlml"] < nlml(theta0)
+    assert latest["grad_norm"] >= 0.0
+    assert np.linalg.norm(latest["x"] - target) < np.linalg.norm(theta0 - target)
+    actor.stop()
+
+
+def test_adam_actor_stop_ends_the_run_early():
+    from fvgp.gp_actor import _AdamActor
+
+    def nlml(theta):
+        return float(theta @ theta)
+
+    def grad_nlml(theta):
+        return 2.0 * theta
+
+    actor = _AdamActor(nlml, grad_nlml, np.array([1.0]), 1e-6, 0.9, 0.999, 1e-8,
+                       2000000, 0.0)
+    actor.start()
+    actor.stop()
+    _wait_for_actor(actor)
+    assert not actor._running
+    assert actor.get_latest()["iteration"] < 2000000
+
+
+def test_bo_actor_runs_and_switches_to_the_recommendation():
+    """While running, `x` is the best point observed; when finished it becomes the
+    noise-aware recommendation and the extra diagnostics appear."""
+    from fvgp.gp_actor import _BOActor
+
+    target = np.log(np.array([1.0, 10.0]))
+
+    def objective(theta):
+        z = np.log(theta) - target
+        return float(z @ z)
+
+    bounds = np.array([[1e-2, 1e2], [1e-1, 1e3]])
+    actor = _BOActor(objective, bounds, np.array([50.0, 0.5]), 14,
+                     {"seed": 0, "patience": 0}, False)
+    assert actor.get_latest()["status"] == "queued"
+    actor.start()
+    _wait_for_actor(actor, timeout=300)
+
+    latest = actor.get_latest()
+    assert latest["status"] == "finished"
+    assert latest["n_evaluations"] > 0
+    assert latest["iteration"] >= 0
+    assert np.isfinite(latest["objective"])
+    for key in ("sensitivity", "posterior covariance", "ard length scales"):
+        assert key in latest, key
+    assert "surrogate" not in latest, "the surrogate GP must not be shipped back"
+    assert not actor._running
+    actor.stop()
+
+
+def test_bo_actor_stop_ends_the_run_early():
+    from fvgp.gp_actor import _BOActor
+
+    def objective(theta):
+        return float(np.sum(theta ** 2))
+
+    actor = _BOActor(objective, np.array([[0.1, 10.0]]), np.array([1.0]), 1000000,
+                     {"seed": 0, "patience": 0}, False)
+    actor.start()
+    actor.stop()
+    _wait_for_actor(actor, timeout=300)
+    assert not actor._running
+
+
+def test_async_optimizer_proxies_to_the_actor():
+    """AsyncOptimizer only unwraps the Dask Actor's futures; check every alias."""
+    from fvgp.gp_actor import AsyncOptimizer
+
+    class _Result:
+        def __init__(self, value): self.value = value
+        def result(self): return self.value
+
+    class _FakeActor:
+        def __init__(self): self.stops = 0
+        def get_latest(self): return _Result({"x": 1})
+        def stop(self):
+            self.stops += 1
+            return _Result(None)
+
+    fake = _FakeActor()
+    opt = AsyncOptimizer(fake)
+    assert opt.get_latest() == {"x": 1}
+    opt.stop()
+    opt.cancel_tasks()
+    opt.kill_client()
+    assert fake.stops == 3
+
+
+###########################################################################
+################ narrow branches in the small modules #####################
+###########################################################################
+def _tiny_gp(**kwargs):
+    xx = np.random.rand(20, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    return GP(xx, yy, np.array([1., 1., 1.]), **kwargs)
+
+
+def test_gp_data_update_rejects_bad_noise_combinations():
+    from fvgp.gp_data import GPdata
+
+    xx = np.random.rand(10, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1)).reshape(-1, 1)
+    v = np.ones(10) * 0.01
+
+    with_noise = GPdata(xx, yy, noise_variances=v)
+    try:
+        with_noise.update(xx[:2], yy[:2], None, append=True)
+    except Exception as e:
+        assert "Please provide noise_variances" in str(e)
+    else:
+        raise AssertionError("dropping noise on update must be rejected")
+
+    without_noise = GPdata(xx, yy)
+    try:
+        without_noise.update(xx[:2], yy[:2], v[:2], append=True)
+    except Exception as e:
+        assert "did not initialize noise" in str(e)
+    else:
+        raise AssertionError("adding noise on update must be rejected")
+
+
+
+def test_gp_data_non_euclidean_shapes():
+    """A list x_data marks the space non-Euclidean and fixes the index dims at 1."""
+    from fvgp.gp_data import GPdata
+
+    x_list = [["a"], ["b"], ["c"]]
+    yy = np.array([[1.0], [2.0], [3.0]])
+    d = GPdata(x_list, yy)
+    assert d.Euclidean is False
+    assert d.index_set_dim == 1 and d.input_set_dim == 1
+
+
+def test_gp_data_append_with_noise_arrays():
+    from fvgp.gp_data import GPdata
+
+    xx = np.random.rand(6, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1)).reshape(-1, 1)
+    v = np.full(6, 0.01)
+    d = GPdata(xx, yy, noise_variances=v)
+    d.update(xx[:2], yy[:2], v[:2], append=True)
+    assert len(d.x_data) == 8 and len(d.noise_variances) == 8
+    assert len(d.x_new) == 2 and len(d.x_old) == 6
+
+
+def test_gp_likelihood_branches():
+    from fvgp.gp_likelihood import GPlikelihood
+
+    xx = np.random.rand(12, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    v = np.full(12, 0.01)
+
+    # noise variances and a noise function together are ambiguous
+    try:
+        GP(xx, yy, np.array([1., 1., 1.]), noise_variances=v,
+           noise_function=lambda x, hps: np.full(len(x), 0.01))
+    except Exception as e:
+        assert "Decide which one to use" in str(e)
+    else:
+        raise AssertionError("noise_variances plus noise_function must be rejected")
+
+    # ram_economy picks the economical default noise gradient
+    econ = _tiny_gp(ram_economy=True)
+    assert np.allclose(econ.likelihood.calculate_V_grad(xx, np.array([1., 1., 1.]), 0),
+                       np.zeros(len(xx)))
+    assert econ.likelihood.gp2Scale is False
+
+    # a three-argument noise function takes args, and anything else is rejected
+    gp3 = GP(xx, yy, np.array([1., 1., 1.]),
+             noise_function=lambda x, hps, args: np.full(len(x), args["level"]),
+             args={"level": 0.02})
+    assert np.allclose(gp3.likelihood.calculate_V(xx, np.array([1., 1., 1.])), 0.02)
+
+    gp3.likelihood.v_n_params = 7
+    try:
+        gp3.likelihood.calculate_V(xx, np.array([1., 1., 1.]))
+    except Exception as e:
+        assert "No valid noise function signature" in str(e)
+    else:
+        raise AssertionError("an unsupported noise arity must be rejected")
+
+
+def test_fvgp_rejects_single_task_y_data():
+    x2 = np.random.rand(10, 2)
+    y1 = np.sin(np.linalg.norm(x2, axis=1))
+    try:
+        fvGP(x2, y1, np.array([1., 1., 1., 1.]))
+    except ValueError as e:
+        assert "output number is 1" in str(e)
+    else:
+        raise AssertionError("1-d y_data must be rejected by fvGP")
+
+
+def test_fvgp_update_data_formats_and_nan_skipping():
+    """The multi-task transform drops NaN entries, and the append path validates formats."""
+    x2 = np.random.rand(12, 2)
+    y2 = np.column_stack([np.sin(np.linalg.norm(x2, axis=1)),
+                          np.cos(np.linalg.norm(x2, axis=1))])
+    y2[0, 1] = np.nan                       # this task/point pair must be dropped
+    v2 = np.full(y2.shape, 0.01)
+    gp = fvGP(x2, y2, np.array([1., 1., 1., 1.]), noise_variances=v2)
+    assert len(gp.x_data) == y2.size - 1, "the NaN entry must not enter the product space"
+
+    x_add = np.random.rand(2, 2)
+    y_add = np.column_stack([np.sin(np.linalg.norm(x_add, axis=1)),
+                             np.cos(np.linalg.norm(x_add, axis=1))])
+    gp.update_gp_data(x_add, y_add, np.full(y_add.shape, 0.01), append=True)
+    assert len(gp.fvgp_x_data) == 14
+
+    try:
+        gp.update_gp_data("not an array", y_add, np.full(y_add.shape, 0.01), append=True)
+    except (Exception, AssertionError) as e:
+        assert "format in x_new" in str(e) or "allowed format" in str(e)
+    else:
+        raise AssertionError("a bad x_new format must be rejected")
+
+
+def test_wendland_support_aware_empty_returns():
+    """The support-aware kernel's early exits: nothing within the radius, and points
+    exactly on the boundary where the polynomial evaluates to zero."""
+    from fvgp.kernels import _wendland_support_aware_cpu_triplets
+
+    # bounding boxes overlap so the block-gap prune passes, but no pair is within 1
+    hps = np.array([1.0, 1.0, 1.0])
+    values, rows, cols = _wendland_support_aware_cpu_triplets(
+        np.array([[0.0, 0.0]]), np.array([[0.8, 0.8]]), hps)
+    assert values.size == 0 and rows.size == 0 and cols.size == 0
+
+    # exactly on the support boundary: inside the radius search, but the value is 0
+    values, rows, cols = _wendland_support_aware_cpu_triplets(
+        np.array([[0.0, 0.0]]), np.array([[1.0, 0.0]]), hps)
+    assert values.size == 0 and rows.size == 0 and cols.size == 0
+
+
+def test_warm_start_candidate_shape_reconciliation():
+    """The warm-start cache is reused across shapes: a 1-d guess is promoted to a
+    column, a single column is broadcast across tasks, and a stale row count is
+    rejected outright."""
+    gp = _tiny_gp(args={"sparse_krylov_warm_start": True})
+    ml = gp.marginal_likelihood
+    n = len(gp.x_data)
+
+    ml._warm_start_KVinvY = np.ones(n)                       # 1-d -> column
+    assert ml._iterative_initial_guess((n, 1)).shape == (n, 1)
+
+    ml._warm_start_KVinvY = np.ones((n, 1))                  # one column -> many
+    assert ml._iterative_initial_guess((n, 3)).shape == (n, 3)
+
+    ml._warm_start_KVinvY = np.ones((n + 5, 1))              # wrong row count
+    assert ml.kv.KVinvY is not None
+    ml.kv.KVinvY = np.ones((n + 5, 1))
+    assert ml._iterative_initial_guess((n, 1)) is None
+
+    gp_off = _tiny_gp()
+    assert gp_off.marginal_likelihood._iterative_initial_guess((n, 1)) is None
+
+
+def test_marginal_likelihood_reports_linalg_and_gradient_failures():
+    gp = _tiny_gp()
+    ml = gp.marginal_likelihood
+    hps = gp.hyperparameters
+
+    def boom(*a, **k):
+        raise RuntimeError("factorization exploded")
+
+    original = ml.compute_new_KVlogdet_KVinvY
+    ml.compute_new_KVlogdet_KVinvY = boom
+    try:
+        ml.log_likelihood(hyperparameters=hps * 1.1)
+    except Exception as e:
+        assert "Linear algebra failed" in str(e) and "factorization exploded" in str(e)
+    else:
+        raise AssertionError("a linalg failure must be reported with its hyperparameters")
+    finally:
+        ml.compute_new_KVlogdet_KVinvY = original
+
+    original_dk = ml.dk_dh
+    ml.dk_dh = boom
+    try:
+        ml.neg_log_likelihood_gradient(hyperparameters=hps)
+    except Exception as e:
+        assert "dK/dh" in str(e)
+    else:
+        raise AssertionError("a kernel-gradient failure must be reported")
+    finally:
+        ml.dk_dh = original_dk
+
+
+def test_marginal_likelihood_unpickles_without_a_warm_start_slot():
+    """State written before warm starts existed must still load."""
+    gp = _tiny_gp()
+    state = gp.marginal_likelihood.__getstate__()
+    state.pop("_warm_start_KVinvY", None)
+    gp.marginal_likelihood.__setstate__(state)
+    assert gp.marginal_likelihood._warm_start_KVinvY is None
+
+
+def test_training_rejects_bad_starting_points_and_methods():
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+    assert gp.trainer.gp2Scale is False
+
+    try:
+        gp.trainer.train(objective_function=gp.marginal_likelihood.neg_log_likelihood,
+                         objective_function_gradient=gp.marginal_likelihood.neg_log_likelihood_gradient,
+                         objective_function_hessian=gp.marginal_likelihood.neg_log_likelihood_hessian,
+                         hyperparameter_bounds=bounds,
+                         init_hyperparameters=np.array([100., 100., 100.]),
+                         method="local")
+    except Exception as e:
+        assert "outside of optimization bounds" in str(e)
+    else:
+        raise AssertionError("out-of-bounds starting hyperparameters must be rejected")
+
+    try:
+        gp.trainer.train(objective_function=gp.marginal_likelihood.neg_log_likelihood,
+                         objective_function_gradient=gp.marginal_likelihood.neg_log_likelihood_gradient,
+                         objective_function_hessian=gp.marginal_likelihood.neg_log_likelihood_hessian,
+                         hyperparameter_bounds=bounds,
+                         init_hyperparameters=np.array([1., 1., 1.]),
+                         method=42)
+    except ValueError as e:
+        assert "No optimization mode" in str(e)
+    else:
+        raise AssertionError("an unknown training method must be rejected")
+
+
+def test_stop_training_and_kill_client_warn_when_nothing_runs():
+    from fvgp.gp_training import GPtraining
+
+    class _Nothing:
+        pass
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        GPtraining.stop_training(_Nothing())
+        GPtraining.kill_client(_Nothing())
+    messages = " ".join(str(w.message) for w in caught)
+    assert "no training is running" in messages
+    assert "killed" in messages
+
+
+###########################################################################
+##################### gp_prior narrow branches ############################
+###########################################################################
+def test_prior_rejects_bad_kernel_and_space_combinations():
+    x_list = [["a"], ["b"], ["c"]]
+    y_list = np.array([1.0, 2.0, 3.0])
+
+    # a non-Euclidean space needs a user kernel
+    try:
+        GP(x_list, y_list, np.array([1., 1.]))
+    except Exception as e:
+        assert "non-Euclidean" in str(e)
+    else:
+        raise AssertionError("a non-Euclidean space without a kernel must be rejected")
+
+    # a non-callable, non-None kernel is not a kernel
+    xx = np.random.rand(10, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    try:
+        GP(xx, yy, np.array([1., 1., 1.]), kernel_function="matern")
+    except Exception as e:
+        assert "wrong format in kernel_function" in str(e) or "No valid kernel" in str(e)
+    else:
+        raise AssertionError("a non-callable kernel must be rejected")
+
+
+def test_prior_non_euclidean_needs_initial_hyperparameters():
+    x_list = [["a"], ["b"], ["c"]]
+    y_list = np.array([1.0, 2.0, 3.0])
+
+    def k(x1, x2, hps):
+        return hps[0] * np.equal.outer([a[0] for a in x1], [a[0] for a in x2]).astype(float)
+
+    gp = GP(x_list, y_list, np.array([1.0]), kernel_function=k)
+    assert gp.prior.Euclidean is False
+
+    try:
+        GP(x_list, y_list, None, kernel_function=k)
+    except Exception as e:
+        assert "init_hyperparameters" in str(e)
+    else:
+        raise AssertionError("a non-Euclidean GP without initial hyperparameters must be rejected")
+
+
+def test_prior_four_argument_kernel_and_three_argument_mean():
+    """The args-taking signatures of kernel and mean, outside gp2Scale."""
+    xx = np.random.rand(15, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    hps = np.array([1., 1., 1.])
+
+    def kernel_with_args(x1, x2, hps, args):
+        return args["amp"] * np.exp(-get_anisotropic_distance_matrix(x1, x2, hps[1:]) ** 2)
+
+    def mean_with_args(x, hps, args):
+        return np.full(len(x), args["offset"])
+
+    def mean_grad(x, hps):
+        return np.zeros((len(hps), len(x)))
+
+    gp = GP(xx, yy, hps, kernel_function=kernel_with_args,
+            prior_mean_function=mean_with_args, prior_mean_function_grad=mean_grad,
+            args={"amp": 2.0, "offset": 0.5})
+    assert gp.prior.k_n_params == 4 and gp.prior.m_n_params == 3
+    assert np.allclose(gp.prior.compute_mean(xx, hps), 0.5)
+    assert gp.prior._dm_dh is mean_grad
+    assert np.allclose(np.diag(gp.prior.compute_covariances(xx, xx, hps)), 2.0)
+
+    # a custom mean takes the incremental update path on append
+    x_add = np.random.rand(2, 2)
+    gp.update_gp_data(x_add, np.sin(np.linalg.norm(x_add, axis=1)), append=True)
+    assert len(gp.prior.m) == 17
+
+
+def test_prior_update_mean_rejects_a_matrix_mean():
+    gp = _tiny_gp()
+    gp.prior.m = np.zeros((5, 2))
+    try:
+        gp.prior._update_mean(np.random.rand(2, 2), gp.hyperparameters)
+    except Exception as e:
+        assert "has to be a vector" in str(e)
+    else:
+        raise AssertionError("a 2-d prior mean must be rejected")
+
+    gp.prior.m = 1.0
+    try:
+        gp.prior._update_mean(np.random.rand(2, 2), gp.hyperparameters)
+    except Exception as e:
+        assert "wrong format" in str(e)
+    else:
+        raise AssertionError("a scalar prior mean must be rejected")
+
+
+def test_prior_default_mean_rejects_bad_y_shapes():
+    gp = _tiny_gp()
+    original = gp.data.y_data
+    try:
+        gp.data.y_data = original.reshape(-1)
+        try:
+            gp.prior._default_mean_function(gp.x_data, gp.hyperparameters)
+        except Exception as e:
+            assert "y_data wrong format" in str(e)
+        else:
+            raise AssertionError("1-d y_data must be rejected by the default mean")
+
+        gp.data.y_data = original.reshape(-1, 1, 1)
+        try:
+            gp.prior._default_mean_function(gp.x_data, gp.hyperparameters)
+        except Exception as e:
+            assert "Wrong dim" in str(e)
+        else:
+            raise AssertionError("3-d y_data must be rejected by the default mean")
+    finally:
+        gp.data.y_data = original
+
+
+def test_gp2Scale_covariance_needs_a_client():
+    gp = _tiny_gp()
+    gp.data.gp2Scale = True
+    try:
+        gp.prior._gp2Scale_covariance(gp.x_data, gp.x_data, gp.hyperparameters, symmetric=True)
+    except Exception as e:
+        assert "needs a dask client" in str(e)
+    else:
+        raise AssertionError("gp2Scale without a client must be rejected")
+
+
+###########################################################################
+######################## gp.py narrow branches ############################
+###########################################################################
+def test_gp_properties_and_deprecated_accessor():
+    xx = np.random.rand(15, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    v = np.full(15, 0.01)
+    gp = GP(xx, yy, np.array([1., 1., 1.]), noise_variances=v)
+
+    assert np.allclose(gp.noise_variances, v)
+    assert gp.dask_client is None
+    assert len(gp.m) == 15
+    assert gp.mcmc_info is None
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        hps = gp.get_hyperparameters()
+    assert np.allclose(hps, gp.hyperparameters)
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught)
+
+
+def test_gp_warns_about_a_gpu_without_a_backend(monkeypatch):
+    import importlib
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
+    xx = np.random.rand(10, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        GP(xx, yy, np.array([1., 1., 1.]), compute_device="gpu")
+    assert any("install pytorch or cupy" in str(w.message) for w in caught)
+
+
+def test_default_hyperparameter_bounds_refuse_custom_functions():
+    xx = np.random.rand(10, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    gp = GP(xx, yy, np.array([1., 1.]),
+            kernel_function=lambda x1, x2, hps: hps[0] * np.exp(
+                -get_anisotropic_distance_matrix(x1, x2, np.array([hps[1], hps[1]])) ** 2))
+    try:
+        gp._get_default_hyperparameter_bounds()
+    except Exception as e:
+        assert "custom hyperparameter_bounds" in str(e)
+    else:
+        raise AssertionError("default bounds must be refused for a custom kernel")
+
+
+def test_train_argument_validation():
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+
+    # asynchronous without a client
+    try:
+        gp.train(hyperparameter_bounds=bounds, method="mcmc", asynchronous=True, max_iter=2)
+    except Exception as e:
+        assert "dask_client" in str(e)
+    else:
+        raise AssertionError("async training without a client must be rejected")
+
+    # out-of-bounds init hyperparameters are replaced, with a warning
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp.train(hyperparameter_bounds=bounds, method="local", max_iter=1,
+                 init_hyperparameters=np.array([500., 500., 500.]))
+    assert any("out of bounds" in str(w.message) for w in caught)
+
+    # mcmc ignores a user objective, and says so
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp.train(hyperparameter_bounds=bounds, method="mcmc", max_iter=2,
+                 objective_function=lambda hps: 0.0)
+    assert any("user-defined objective_function is ignored" in str(w.message) for w in caught)
+
+    # a user objective for a gradient-based method needs a gradient
+    try:
+        gp.train(hyperparameter_bounds=bounds, method="local", max_iter=1,
+                 objective_function=lambda hps: 0.0)
+    except Exception as e:
+        assert "gradient" in str(e)
+    else:
+        raise AssertionError("a user objective without a gradient must be rejected for local")
+
+
+def test_gaussian_helper_and_observed_vs_predicted_plot(monkeypatch):
+    gp = _tiny_gp()
+    g = GP.gaussian_1d(np.array([0.0, 1.0]), 0.0, 1.0)
+    assert np.isclose(g[0], 1.0 / np.sqrt(2 * np.pi))
+    assert g[1] < g[0]
+
+    x_test = np.random.rand(6, 2)
+    y_test = np.sin(np.linalg.norm(x_test, axis=1))
+    gp.plot_observed_vs_predicted(x_test, y_test, title="test")
+
+    import builtins
+    real_import = builtins.__import__
+
+    def no_matplotlib(name, *a, **k):
+        if name.startswith("matplotlib"):
+            raise ImportError("no matplotlib")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_matplotlib)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert gp.plot_observed_vs_predicted(x_test, y_test) is None
+    assert any("matplotlib is not installed" in str(w.message) for w in caught)
+
+
+###########################################################################
+######################### gp_kv narrow branches ###########################
+###########################################################################
+_KV_MODES = ["Chol", "CholInv", "Inv", "sparseLU", "sparseCG", "sparseMINRES",
+             "sparseCGpre", "sparseMINRESpre", "sparseSolve"]
+
+
+def test_compute_new_KVinvY_agrees_across_every_mode():
+    """compute_new_KVinvY is the training-time solve; each mode has its own branch."""
+    rng = np.random.default_rng(5)
+    xx = rng.random((25, 2))
+    yy = np.sin(np.linalg.norm(xx, axis=1) * 3.0)
+    hps = np.array([1.0, 0.6, 0.6])
+
+    # a well-conditioned system, so the truncated Krylov modes converge to the
+    # same answer as the direct ones rather than to their own tolerances
+    noise = np.full(len(xx), 0.1)
+    reference = None
+    for mode in _KV_MODES:
+        gp = GP(xx, yy, hps, noise_variances=noise, linalg_mode=mode)
+        K, V, m = gp.kv._get_KVm()
+        KV = gp.kv.addKV(K, V)
+        KVinvY = gp.kv.compute_new_KVinvY(KV, m)
+        assert KVinvY.shape == gp.y_data.shape
+        assert np.all(np.isfinite(KVinvY)), mode
+        if reference is None:
+            reference = KVinvY
+        else:
+            # the truncated Krylov modes stop at their own tolerance, so agree to ~3 digits
+            assert np.allclose(KVinvY, reference, atol=5e-3), mode
+
+
+def test_kv_rejects_an_unknown_mode_everywhere():
+    gp = _tiny_gp()
+    K, V, m = gp.kv._get_KVm()
+    KV = gp.kv.addKV(K, V)
+    gp.kv.mode = "not-a-mode"
+    for call in (lambda: gp.kv.set_KV(KV),
+                 lambda: gp.kv.update_KV(KV),
+                 lambda: gp.kv.compute_new_KVinvY(KV, m),
+                 lambda: gp.kv.solve(gp.y_data),
+                 lambda: gp.kv.logdet()):
+        try:
+            call()
+        except Exception as e:
+            assert "Mode" in str(e) or "mode" in str(e)
+        else:
+            raise AssertionError("an unknown linalg mode must be rejected")
+
+
+def test_addKV_format_combinations():
+    from fvgp.gp_kv import GPkv
+
+    dense = np.array([[2.0, 0.1], [0.1, 3.0]])
+    diag = np.array([0.5, 0.5])
+    assert np.allclose(np.diag(GPkv.addKV(dense, diag)), [2.5, 3.5])
+
+    full = np.diag(diag)
+    assert np.allclose(GPkv.addKV(dense, full), dense + full)
+
+    sp = sparse.csr_matrix(dense)
+    assert np.allclose(GPkv.addKV(sp, diag).toarray(), dense + full)
+    assert np.allclose(GPkv.addKV(sp, sparse.csr_matrix(full)).toarray(), dense + full)
+    # a sparse V against a dense K is densified rather than refused
+    assert np.allclose(GPkv.addKV(dense, sparse.csr_matrix(full)), dense + full)
+
+    try:
+        GPkv.addKV("not a matrix", diag)
+    except Exception as e:
+        assert "2-d" in str(e) or "not possible" in str(e)
+    else:
+        raise AssertionError("a non-matrix K must be rejected")
+
+
+def test_kv_unpickles_older_states_without_preconditioner_slots():
+    gp = _tiny_gp()
+    state = gp.kv.__getstate__()
+    for attr in ("Preconditioner_factor", "Preconditioner_operator", "Preconditioner_signature",
+                 "Preconditioner_KV_shape", "Preconditioner_reuse_counter",
+                 "Last_preconditioner_error", "Preconditioner_fingerprint",
+                 "Warm_start_fingerprint"):
+        state.pop(attr, None)
+    gp.kv.__setstate__(state)
+    assert gp.kv.Preconditioner_operator is None
+    assert gp.kv.Preconditioner_reuse_counter == 0
+
+
+def test_matrix_fingerprint_and_drift_edge_cases():
+    from fvgp.gp_kv import GPkv
+
+    assert GPkv.matrix_fingerprint(None) is None
+    dense = np.array([[2.0, 0.0], [0.0, 2.0]])
+    fp_dense = GPkv.matrix_fingerprint(dense)
+    fp_sparse = GPkv.matrix_fingerprint(sparse.csr_matrix(dense))
+    assert fp_dense[0] == fp_sparse[0] and np.isclose(fp_dense[2], fp_sparse[2])
+
+    gp = _tiny_gp()
+    assert gp.kv._fingerprint_drift(None, fp_dense) == np.inf
+    assert gp.kv._fingerprint_drift(fp_dense, None) == np.inf
+    assert gp.kv._fingerprint_drift(fp_dense, fp_dense) == 0.0
+    # a shape change is infinite drift, whatever the values
+    other = GPkv.matrix_fingerprint(np.eye(3))
+    assert gp.kv._fingerprint_drift(fp_dense, other) == np.inf
+
+
+def test_preconditioner_helpers_are_inert_in_unpreconditioned_modes():
+    gp = _tiny_gp(linalg_mode="Chol")
+    K, V, m = gp.kv._get_KVm()
+    KV = gp.kv.addKV(K, V)
+    assert gp.kv._can_reuse_sparse_preconditioner(KV) is False
+    assert gp.kv._get_or_refresh_preconditioner(KV) is None
+
+
+###########################################################################
+###################### gp_posterior narrow branches #######################
+###########################################################################
+def _tiny_fvgp():
+    xx = np.random.rand(15, 2)
+    yy = np.column_stack([np.sin(np.linalg.norm(xx, axis=1)),
+                          np.cos(np.linalg.norm(xx, axis=1))])
+    return fvGP(xx, yy, np.array([1., 1., 1., 1.]))
+
+
+def test_multi_task_posterior_reshape_paths():
+    """The x_out branches of the posterior mean, its gradient, and the covariance grad."""
+    gp = _tiny_fvgp()
+    xp = np.random.rand(4, 2)
+
+    assert gp.posterior_mean(xp)["m(x)"].shape == (4, 2)
+    assert gp.posterior_mean_grad(xp, direction=0)["dm/dx"].shape == (4, 2)
+    assert gp.posterior_mean_grad(xp)["dm/dx"].shape == (4, 2, 2)
+
+    grad = gp.posterior_covariance_grad(xp, direction=0)
+    assert grad["dv/dx"].shape == (4, 2)
+    assert grad["dS/dx"].shape == (4, 4, 2, 2)
+    assert gp.posterior_covariance_grad(xp)["dv/dx"].shape == (4, 2, 2)
+
+
+def test_posterior_variance_tiling_for_multi_column_y():
+    """Without x_out but with several output columns, the variance is tiled per column."""
+    gp = _tiny_gp()
+    gp.data.y_data = np.tile(gp.y_data, (1, 2))
+    result = gp.posterior_covariance(np.random.rand(5, 2))
+    assert result["v(x)"].shape == (5, 2)
+
+
+def test_posterior_warns_and_clips_negative_variances():
+    gp = _tiny_gp()
+    xp = np.random.rand(4, 2)
+
+    def inflated(k, chunk_size=None):
+        return np.eye(k.shape[1]) * 10.0
+
+    gp.posterior._cross_solve_product = inflated
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = gp.posterior_covariance(xp)
+    assert any("Negative variances" in str(w.message) for w in caught)
+    assert np.all(result["v(x)"] >= 0.0), "negative variances must be clipped"
+    assert np.all(np.diag(result["S"]) >= 0.0)
+
+
+def test_dense_K_warns_under_gp2Scale(client):
+    """The joint-covariance methods are dense in N; under gp2Scale they say so."""
+    import gc
+    rng = np.random.default_rng(1)
+    xx = rng.random((40, 1))
+    yy = np.sin(np.linalg.norm(xx, axis=1) * 5.0)
+    gp = GP(xx, yy, np.array([1.0, 0.5]), gp2Scale=True, gp2Scale_batch_size=20,
+            dask_client=client, linalg_mode="Chol")
+    assert sparse.issparse(gp.prior.K)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mi = gp.gp_mutual_information(rng.random((3, 1)))
+    assert np.isfinite(mi["mutual information"])
+    assert any("dense in the number of data points" in str(w.message) for w in caught)
+    del gp
+    gc.collect()
+    client.run(lambda: None)
+
+
+def test_kl_div_warns_on_a_negative_result(monkeypatch):
+    """Defensive branch: an unstable logdet can drive the KL divergence negative."""
+    import fvgp.gp_posterior as gp_posterior_module
+    from fvgp.gp_posterior import GPposterior
+
+    calls = {"n": 0}
+
+    def unstable_logdet(S, args=None):
+        calls["n"] += 1
+        return 0.0 if calls["n"] == 1 else -50.0
+
+    monkeypatch.setattr(gp_posterior_module, "calculate_logdet", unstable_logdet)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        kld = GPposterior.kl_div(np.zeros(2), np.zeros(2), np.eye(2), np.eye(2))
+    assert any("Negative KL divergence" in str(w.message) for w in caught)
+    assert kld >= 0.0, "the magnitude is returned"
+
+
+def test_add_noise_warns_on_an_unusable_noise_function():
+    xx = np.random.rand(12, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    gp = GP(xx, yy, np.array([1., 1., 1.]),
+            noise_function=lambda x, hps: np.full(len(x), 0.01))
+    gp.likelihood.noise_function = lambda x, hps: np.ones((len(x), 2, 2))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp.posterior_covariance(np.random.rand(3, 2), add_noise=True)
+    assert any("Noise could not be added" in str(w.message) for w in caught)
+
+
+def test_cartesian_product_and_int_gauss():
+    from fvgp.gp_posterior import GPposterior
+
+    assert np.isclose(GPposterior._int_gauss(np.eye(2)), 2.0 * np.pi)
+
+    listed = GPposterior.cartesian_product([["a"], ["b"]], np.array([0, 1]))
+    assert len(listed) == 4
+
+    try:
+        GPposterior.cartesian_product(42, np.array([0, 1]))
+    except Exception as e:
+        assert "out of options" in str(e)
+    else:
+        raise AssertionError("an unsupported x type must be rejected")
+
+
+###########################################################################
+################## remaining narrow branches, by module ###################
+###########################################################################
+def _module_level_objective(x, args):
+    return -float(x @ x)
+
+
+def _module_level_prior(theta, bounds, args):
+    return 0.
+
+
+def test_mcmc_argument_validation_and_pickling():
+    from fvgp import gpMCMC, ProposalDistribution
+
+    bounds = np.array([[-1., 1.]])
+
+    pd = ProposalDistribution([0], init_prop_Sigma=np.diag([0.1]), adapt_callable="normal")
+    mcmc = gpMCMC(_module_level_objective, bounds=bounds,
+                  prior_function=_module_level_prior, proposal_distributions=[pd])
+
+    try:
+        mcmc.run_mcmc(x0=np.array([0.0]), n_updates=3, break_condition="nonsense")
+    except Exception as e:
+        assert "No valid input for break condition" in str(e)
+    else:
+        raise AssertionError("an invalid break condition must be rejected")
+
+    # both classes are pickled by value; round-trip them
+    import pickle
+    assert pickle.loads(pickle.dumps(mcmc)).bounds.shape == bounds.shape
+    assert pickle.loads(pickle.dumps(pd)).indices == [0]
+
+
+def test_proposal_distribution_configuration():
+    from fvgp.gp_mcmc import ProposalDistribution
+
+    # no proposal distribution at all
+    try:
+        ProposalDistribution([0], proposal_dist=None, adapt_callable="normal")
+    except Exception as e:
+        assert "No proposal distribution specified" in str(e)
+    else:
+        raise AssertionError("a missing proposal distribution must be rejected")
+
+    # the normal default warns when no covariance is supplied
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        pd = ProposalDistribution([0, 1], proposal_dist="normal")
+    assert any("normal proposal distribution" in str(w.message) for w in caught)
+    assert pd.prop_args["prop_Sigma"].shape == (2, 2)
+
+    # a callable adapter is used as given
+    def my_adapt(end, mcmc_obj):
+        return None
+
+    pd = ProposalDistribution([0], init_prop_Sigma=np.diag([1.0]), adapt_callable=my_adapt)
+    assert pd.adapt is my_adapt
+
+    # an unknown adapter string is rejected; anything else falls back to no adaptation
+    try:
+        ProposalDistribution([0], init_prop_Sigma=np.diag([1.0]),
+                             proposal_dist=lambda x0, hps, obj: x0, adapt_callable="nonsense")
+    except Exception as e:
+        assert "Invalid string provided for adapt" in str(e)
+    else:
+        raise AssertionError("an unknown adapt string must be rejected")
+
+    pd = ProposalDistribution([0], init_prop_Sigma=np.diag([1.0]),
+                              proposal_dist=lambda x0, hps, obj: x0, adapt_callable=None)
+    assert pd._no_adapt(0, None) is None
+
+
+def test_mcmc_default_break_condition_needs_a_long_chain():
+    from fvgp import gpMCMC, ProposalDistribution
+
+    bounds = np.array([[-1., 1.]])
+    pd = ProposalDistribution([0], init_prop_Sigma=np.diag([0.05]), adapt_callable="normal")
+    mcmc = gpMCMC(lambda x, args: -float(x @ x), bounds=bounds,
+                  prior_function=lambda t, b, a: 0., proposal_distributions=[pd])
+    mcmc.run_mcmc(x0=np.array([0.0]), n_updates=5, break_condition="default")
+    # under 1000 updates the default break condition never fires
+    assert len(mcmc.trace["f(x)"]) == 4
+
+
+def test_wendland_support_aware_filters_points_outside_the_radius():
+    """query_ball_tree can return a point whose recomputed distance is just outside 1."""
+    from fvgp.kernels import _wendland_support_aware_cpu_triplets
+
+    hps = np.array([1.0, 1.0, 1.0])
+    x1 = np.array([[0.0, 0.0], [0.0, 0.0]])
+    x2 = np.array([[0.5, 0.0], [1.0, 0.0]])
+    values, rows, cols = _wendland_support_aware_cpu_triplets(x1, x2, hps)
+    # the pair at distance exactly 1 contributes nothing; the one at 0.5 does
+    assert values.size == 2
+    assert set(cols.tolist()) == {0}
+
+
+def test_fvgp_append_with_list_inputs_and_noise():
+    x2 = np.random.rand(10, 2)
+    y2 = np.column_stack([np.sin(np.linalg.norm(x2, axis=1)),
+                          np.cos(np.linalg.norm(x2, axis=1))])
+    v2 = np.full(y2.shape, 0.01)
+    gp = fvGP(x2, y2, np.array([1., 1., 1., 1.]), noise_variances=v2)
+
+    x_add = np.random.rand(2, 2)
+    y_add = np.column_stack([np.sin(np.linalg.norm(x_add, axis=1)),
+                             np.cos(np.linalg.norm(x_add, axis=1))])
+    gp.update_gp_data(x_add, y_add, np.full(y_add.shape, 0.01), append=True)
+    assert len(gp.fvgp_noise_variances) == 12
+
+    # noise variances are always arrays; missing tasks are signalled with np.nan
+    try:
+        gp.update_gp_data(x_add, y_add, "bad noise", append=True)
+    except (Exception, AssertionError) as e:
+        assert "must be np.ndarray" in str(e)
+    else:
+        raise AssertionError("a non-array noise must be rejected")
+
+
+def test_prior_rejects_unsupported_kernel_and_mean_arities():
+    gp = _tiny_gp()
+    gp.prior.k_n_params = 9
+    try:
+        gp.prior.compute_covariances(gp.x_data, gp.x_data, gp.hyperparameters)
+    except Exception as e:
+        assert "No valid kernel function signature" in str(e)
+    else:
+        raise AssertionError("an unsupported kernel arity must be rejected")
+
+    gp.prior.m_n_params = 9
+    try:
+        gp.prior.compute_mean(gp.x_data, gp.hyperparameters)
+    except Exception as e:
+        assert "No valid mean function signature" in str(e)
+    else:
+        raise AssertionError("an unsupported mean arity must be rejected")
+
+
+def _string_distance(s1, s2):
+    difference = abs(len(s1) - len(s2))
+    common = min(len(s1), len(s2))
+    s1, s2 = s1[:common], s2[:common]
+    for i in range(len(s1)):
+        if s1[i] != s2[i]: difference += 1.
+    return difference
+
+
+def _string_kernel(x1, x2, hps):
+    """Single-task: the points are the objects themselves."""
+    d = np.zeros((len(x1), len(x2)))
+    for i, a in enumerate(x1):
+        for j, b in enumerate(x2):
+            d[i, j] = _string_distance(a, b)
+    return hps[0] * matern_kernel_diff1(d, hps[1])
+
+
+def _string_kernel_multi_task(x1, x2, hps):
+    """Multi-task: each point is a [object, task] pair from the index-set transform."""
+    d = np.zeros((len(x1), len(x2)))
+    for i, a in enumerate(x1):
+        for j, b in enumerate(x2):
+            d[i, j] = _string_distance(a[0], b[0])
+    return hps[0] * matern_kernel_diff1(d, hps[1])
+
+
+def test_non_euclidean_single_task_end_to_end():
+    """A non-Euclidean input space is a flat list of arbitrary objects."""
+    x_data = ['hello', 'world', 'this', 'is', 'fvgp']
+    y_data = np.array([2., 1.9, 1.8, 3.0, 5.])
+    gp = GP(x_data, y_data, init_hyperparameters=np.ones(2),
+            kernel_function=_string_kernel)
+    assert gp.prior.Euclidean is False
+
+    assert np.isfinite(gp.posterior_mean(['full'])["m(x)"]).all()
+    assert np.all(gp.posterior_covariance(['full'])["v(x)"] >= 0.0)
+
+    # appending must accept the same flat-list form the constructor took
+    gp.update_gp_data(['newone'], np.array([3.0]), append=True)
+    assert len(gp.x_data) == 6 and gp.x_data[-1] == 'newone'
+    assert len(gp.prior.m) == 6 and gp.prior.K.shape == (6, 6)
+    assert np.isfinite(gp.posterior_mean(['full'])["m(x)"]).all()
+
+    # and overwriting, too
+    gp.update_gp_data(['a', 'bb'], np.array([1.0, 2.0]), append=False)
+    assert len(gp.x_data) == 2
+
+
+def test_non_euclidean_multi_task_end_to_end():
+    """Non-Euclidean and multi-task together: the product space is [object, task]."""
+    x_data = ['frf', 'ferfe', 'ferf', 'febhn']
+    y_data = np.random.rand(len(x_data), 5)
+    gp = fvGP(x_data, y_data, init_hyperparameters=np.ones(2),
+              kernel_function=_string_kernel_multi_task)
+
+    assert len(gp.x_data) == len(x_data) * 5
+    assert gp.x_data[0][0] == 'frf' and gp.x_data[0][1] == 0
+    assert gp.prior.Euclidean is False
+
+    gp.train(hyperparameter_bounds=np.array([[0.001, 100.], [0.001, 100.]]), max_iter=2)
+
+    x_pred = ["dwed", "dwe"]
+    assert gp.posterior_mean(x_pred, x_out=np.array([0, 1, 2, 3]))["m(x)"].shape == (2, 4)
+    assert gp.posterior_mean(x_pred)["m(x)"].shape == (2, 5)
+    assert gp.posterior_covariance(x_pred)["v(x)"].shape == (2, 5)
+
+    # appending takes the flat list of new objects, one row of tasks each
+    gp.update_gp_data(['newstring'], np.random.rand(1, 5), append=True)
+    assert len(gp.fvgp_x_data) == 5
+    assert len(gp.x_data) == 25
+    assert len(gp.prior.m) == 25 and gp.prior.K.shape == (25, 25)
+    assert gp.posterior_mean(x_pred)["m(x)"].shape == (2, 5)
+
+
+def test_marginal_likelihood_gradient_without_ram_economy():
+    """The non-ram-economy gradient path with a user kernel gradient per direction."""
+    xx = np.random.rand(12, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    hps = np.array([1.0, 0.5, 0.5])
+
+    def kernel(x1, x2, hps):
+        return hps[0] * np.exp(-get_anisotropic_distance_matrix(x1, x2, hps[1:]) ** 2)
+
+    def kernel_grad(x1, x2, hps, direction):
+        eps = 1e-6
+        up, down = np.array(hps, dtype=float), np.array(hps, dtype=float)
+        up[direction] += eps
+        down[direction] -= eps
+        return (kernel(x1, x2, up) - kernel(x1, x2, down)) / (2 * eps)
+
+    gp = GP(xx, yy, hps, kernel_function=kernel, kernel_function_grad=kernel_grad,
+            ram_economy=True)
+    grad = gp.neg_log_likelihood_gradient(hyperparameters=hps)
+    assert grad.shape == (3,) and np.all(np.isfinite(grad))
+
+
+###########################################################################
+###################### gp_lin_alg: CPU-side branches ######################
+###########################################################################
+def _spd(n=12, seed=0):
+    rng = np.random.default_rng(seed)
+    A = rng.random((n, n))
+    return A @ A.T + n * np.eye(n)
+
+
+def test_non_positive_definite_messages_are_diagnostic():
+    """A failed factorization must say why, not just that it failed."""
+    from fvgp.gp_lin_alg import calculate_Chol_factor, NonPositiveDefiniteError
+
+    bad = np.array([[1.0, 2.0], [2.0, 1.0]])           # indefinite
+    try:
+        calculate_Chol_factor(bad)
+    except NonPositiveDefiniteError as e:
+        text = str(e)
+        assert "2" in text                              # the dimension
+        assert "diag" in text.lower() or "symmetr" in text.lower()
+    else:
+        raise AssertionError("an indefinite matrix must raise NonPositiveDefiniteError")
+
+
+def test_rank_1_update_reports_a_non_positive_discriminant():
+    from fvgp.gp_lin_alg import cholesky_update_rank_1, NonPositiveDefiniteError
+
+    L = np.linalg.cholesky(_spd(4))
+    b = np.zeros(4)
+    c = -1e6                                            # drives the discriminant negative
+    try:
+        cholesky_update_rank_1(L, b, c)
+    except NonPositiveDefiniteError as e:
+        assert "discriminant" in str(e).lower() or "positive" in str(e).lower()
+    else:
+        raise AssertionError("a negative discriminant must raise NonPositiveDefiniteError")
+
+
+def test_linalg_entry_points_reject_an_unknown_compute_device():
+    from fvgp.gp_lin_alg import (calculate_Chol_factor, calculate_Chol_solve,
+                                 calculate_Chol_logdet, calculate_inv_from_chol,
+                                 cholesky_update_rank_1, matmul, matmul3)
+
+    A = _spd(5)
+    L = np.linalg.cholesky(A)
+    b = np.ones((5, 1))
+    for call in (lambda: calculate_Chol_factor(A, compute_device="quantum"),
+                 lambda: calculate_Chol_solve(L, b, compute_device="quantum"),
+                 lambda: calculate_Chol_logdet(L, compute_device="quantum"),
+                 lambda: calculate_inv_from_chol(L, compute_device="quantum"),
+                 lambda: cholesky_update_rank_1(L, np.ones(5), 1.0, compute_device="quantum"),
+                 lambda: matmul(A, A, compute_device="quantum"),
+                 lambda: matmul3(A, A, A, compute_device="quantum")):
+        try:
+            call()
+        except Exception as e:
+            assert "compute device" in str(e)
+        else:
+            raise AssertionError("an unknown compute device must be rejected")
+
+
+def test_gpu_requests_fall_back_to_the_cpu_without_a_backend():
+    """Asking for a GPU on a CPU-only machine must degrade, not crash."""
+    from fvgp.gp_lin_alg import (calculate_logdet, calculate_inv, matmul, matmul3,
+                                 cholesky_update_rank_1, calculate_inv_from_chol,
+                                 get_gpu_engine, _cupy_gpu_available, _imate_gpu_enabled)
+
+    A = _spd(6)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert np.isclose(calculate_logdet(A, compute_device="gpu"),
+                          np.linalg.slogdet(A)[1])
+        assert np.allclose(calculate_inv(A, compute_device="gpu"), np.linalg.inv(A), atol=1e-8)
+        assert np.allclose(matmul(A, A, compute_device="gpu"), A @ A)
+        assert np.allclose(matmul3(A, A, A, compute_device="gpu"), A @ A @ A)
+        L = np.linalg.cholesky(A)
+        assert np.allclose(calculate_inv_from_chol(L, compute_device="gpu"),
+                           np.linalg.inv(A), atol=1e-8)
+        assert cholesky_update_rank_1(L, np.ones(6), 1.0, compute_device="gpu") is None
+
+    # backend detection itself must answer rather than raise
+    assert _cupy_gpu_available() in (True, False)
+    assert _imate_gpu_enabled() in (True, False)
+    for request in ("torch", "cupy", None):
+        assert get_gpu_engine({"GPU_engine": request} if request else {}) in (None, "torch", "cupy")
+
+
+def test_solve_handles_dtypes_singular_systems_and_bad_methods():
+    from fvgp.gp_lin_alg import solve
+
+    A = _spd(5).astype(np.float64)
+    b = np.ones((5, 1), dtype=np.float32)
+    assert solve(A, b).shape == (5, 1)                  # b is cast to A's dtype
+
+    singular = np.zeros((3, 3))
+    singular[0, 0] = 1.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        x = solve(singular, np.ones((3, 1)))             # least-squares fallback
+    assert x.shape == (3, 1) and np.all(np.isfinite(x))
+
+    try:
+        solve(A, np.ones((5, 1)), compute_device="telepathy")
+    except Exception as e:
+        assert "No valid solve method" in str(e)
+    else:
+        raise AssertionError("an unknown compute device must be rejected by solve")
+
+
+def test_sparse_preconditioner_guidance_covers_every_type():
+    from fvgp.gp_lin_alg import sparse_preconditioner_failure_guidance
+
+    for kind in ("ilu", "ic", "block_jacobi", "additive_schwarz", "amg", object()):
+        text = sparse_preconditioner_failure_guidance({"sparse_preconditioner_type": kind})
+        assert isinstance(text, str) and text
+
+
+def test_krylov_helpers_normalize_their_inputs():
+    from fvgp.gp_lin_alg import (_resolve_krylov_maxiter, _normalize_initial_guess,
+                                 _column_initial_guess, _apply_linear_operator,
+                                 _resolve_krylov_mode, is_sparse)
+
+    assert _resolve_krylov_maxiter({"sparse_krylov_maxiter": None}) is None
+    assert _resolve_krylov_maxiter({"sparse_krylov_maxiter": 7}) == 7
+
+    # a 1-d guess becomes a column, and an over-long one is truncated
+    assert _normalize_initial_guess(np.ones(4), (4, 1)).shape == (4, 1)
+    assert _normalize_initial_guess(np.ones((9, 1)), (4, 1)).shape == (4, 1)
+    try:
+        _normalize_initial_guess(np.ones((4, 5)), (4, 2))
+    except ValueError as e:
+        assert "initial guess" in str(e).lower() or "shape" in str(e).lower()
+    else:
+        raise AssertionError("an incompatible initial guess must be rejected")
+
+    assert _column_initial_guess(None, 0) is None
+    assert _column_initial_guess(np.ones((4, 2)), 1).shape in ((4,), (4, 1))
+
+    assert _apply_linear_operator(None, np.empty((0, 2))).shape == (0, 2)
+
+    try:
+        _resolve_krylov_mode({"sparse_krylov_mode": "nonsense"})
+    except ValueError as e:
+        assert "nonsense" in str(e)
+    else:
+        raise AssertionError("an unknown Krylov mode must be rejected")
+
+    # is_sparse is a density test (<1% nonzero), not a type test
+    mostly_zero = np.zeros((40, 40))
+    mostly_zero[0, 0] = 1.0
+    assert is_sparse(mostly_zero) is True
+    assert is_sparse(np.ones((40, 40))) is False
+
+
+def test_block_conjugate_gradient_single_and_multi_rhs():
+    from fvgp.gp_lin_alg import _block_conjugate_gradient
+
+    A = sparse.csr_matrix(_spd(15, seed=3))
+    dense = A.toarray()
+
+    single = np.ones((15, 1))
+    X, code = _block_conjugate_gradient(A, single, 1e-10)
+    assert X.shape == (15, 1)
+    assert np.allclose(dense @ X, single, atol=1e-6)
+
+    multi = np.random.default_rng(4).random((15, 3))
+    X, code = _block_conjugate_gradient(A, multi, 1e-10)
+    assert X.shape == (15, 3)
+    assert np.allclose(dense @ X, multi, atol=1e-6)
+
+    # an exactly-solved right-hand side returns immediately
+    X0, code0 = _block_conjugate_gradient(A, np.zeros((15, 2)), 1e-10)
+    assert np.allclose(X0, 0.0) and code0 == 0
+
+
+def test_sparse_conj_grad_falls_back_when_block_cg_fails(monkeypatch):
+    import fvgp.gp_lin_alg as la
+
+    A = sparse.csr_matrix(_spd(10, seed=6))
+    b = np.random.default_rng(7).random((10, 2))
+
+    def exploding_block_cg(*a, **k):
+        raise RuntimeError("block CG broke down")
+
+    monkeypatch.setattr(la, "_block_conjugate_gradient", exploding_block_cg)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        x = la.calculate_sparse_conj_grad(A, b, args={"sparse_krylov_mode": "block"})
+    assert x.shape == (10, 2)
+    assert np.allclose(A.toarray() @ x, b, atol=1e-5)
+    assert any("falling back to columnwise CG" in str(w.message) for w in caught)
+
+
+def test_shifted_dense_cholesky_gives_up_with_a_clear_error():
+    from fvgp.gp_lin_alg import _shifted_dense_cholesky
+
+    hopeless = np.full((3, 3), -1e30)
+    try:
+        _shifted_dense_cholesky(hopeless, args={"sparse_preconditioner_shift_attempts": 2})
+    except np.linalg.LinAlgError as e:
+        assert "shifted retries" in str(e)
+    else:
+        raise AssertionError("an unfixable matrix must report that the retries failed")
+
+
+def test_ic0_factor_error_paths():
+    from fvgp.gp_lin_alg import _build_ic0_factor
+
+    # a missing diagonal entry
+    missing_diagonal = sparse.csr_matrix(np.array([[0.0, 1.0], [1.0, 2.0]]))
+    try:
+        _build_ic0_factor(missing_diagonal, args={"sparse_preconditioner_shift_attempts": 1})
+    except np.linalg.LinAlgError as e:
+        assert "IC(0)" in str(e)
+    else:
+        raise AssertionError("IC(0) on a matrix with a zero diagonal must fail loudly")
+
+
+def test_dtype_adapted_operator_handles_matrices():
+    from fvgp.gp_lin_alg import _build_dtype_adapted_operator
+
+    def solve32(v):
+        return v * 2.0
+
+    op = _build_dtype_adapted_operator((3, 3), solve32, factor_dtype=np.float64)
+    assert np.allclose(op.matmat(np.ones((3, 2), dtype=np.float32)), 2.0)
+    assert np.allclose(op.matvec(np.ones(3, dtype=np.float32)), 2.0)
+
+
+def test_ilu_preconditioner_honors_its_tuning_arguments():
+    from fvgp.gp_lin_alg import calculate_sparse_preconditioner
+
+    A = sparse.csr_matrix(_spd(12, seed=8))
+    _, operator = calculate_sparse_preconditioner(A, args={
+        "sparse_preconditioner_type": "ilu",
+        "sparse_preconditioner_drop_rule": "basic",
+        "sparse_preconditioner_permc_spec": "NATURAL",
+        "sparse_preconditioner_diag_pivot_thresh": 0.1,
+    })
+    assert operator.shape == (12, 12)
+    assert np.all(np.isfinite(operator.matvec(np.ones(12))))
+
+
+def test_unknown_preconditioner_type_is_rejected():
+    from fvgp.gp_lin_alg import calculate_sparse_preconditioner
+
+    A = sparse.csr_matrix(_spd(6, seed=9))
+    try:
+        calculate_sparse_preconditioner(A, args={"sparse_preconditioner_type": "telekinesis"})
+    except ValueError as e:
+        assert "telekinesis" in str(e)
+    else:
+        raise AssertionError("an unknown preconditioner type must be rejected")
+
+
+###########################################################################
+############### gp_lin_alg + gp_kv: the last branches #####################
+###########################################################################
+def test_torch_device_resolution_without_a_gpu():
+    """Every GPU_device request must resolve to a device or to None, never raise."""
+    from fvgp.gp_lin_alg import _torch_gpu_device
+
+    assert _torch_gpu_device({"GPU_device": "cuda"}) is None      # no CUDA here
+    assert _torch_gpu_device({"GPU_device": "mps"}) is None       # no MPS here
+    assert _torch_gpu_device({"GPU_device": "not-a-device"}) is None
+    cpu_device = _torch_gpu_device({"GPU_device": "cpu"})
+    assert cpu_device is None or str(cpu_device) == "cpu"
+
+
+def test_solvers_cast_the_right_hand_side_to_the_factor_dtype():
+    from fvgp.gp_lin_alg import (calculate_Chol_factor, calculate_Chol_solve,
+                                 calculate_sparse_LU_factor, calculate_LU_solve)
+
+    A = _spd(6)
+    factor = calculate_Chol_factor(A)
+    x = calculate_Chol_solve(factor, np.ones((6, 1), dtype=np.float32))
+    assert x.shape == (6, 1) and np.all(np.isfinite(x))
+
+    lu = calculate_sparse_LU_factor(sparse.csr_matrix(A))
+    x = calculate_LU_solve(lu, np.ones((6, 1), dtype=np.float32))
+    assert x.shape == (6, 1) and np.all(np.isfinite(x))
+
+
+def test_linalg_entry_points_accept_an_unrecognized_device_as_cpu():
+    """calculate_logdet / calculate_inv / matmul treat anything else as the CPU path."""
+    from fvgp.gp_lin_alg import calculate_logdet, calculate_inv, matmul, matmul3
+
+    A = _spd(5)
+    assert np.isclose(calculate_logdet(A, compute_device="other"), np.linalg.slogdet(A)[1])
+    assert np.allclose(calculate_inv(A, compute_device="other"), np.linalg.inv(A), atol=1e-8)
+    assert np.allclose(matmul(A, A), A @ A)
+    assert np.allclose(matmul3(A, A, A), A @ A @ A)
+
+
+def test_resolve_gp2scale_linalg_mode_passes_callables_through():
+    from fvgp.gp_lin_alg import resolve_gp2scale_linalg_mode
+
+    triple = (lambda KV: KV, lambda f, b: b, lambda f: 0.0)
+    mode, args = resolve_gp2scale_linalg_mode(triple, {})
+    assert mode is triple
+
+
+def test_preconditioner_operator_and_initial_guess_helpers():
+    from fvgp.gp_lin_alg import (_apply_preconditioner, _apply_linear_operator,
+                                 _column_initial_guess)
+    from scipy.sparse.linalg import LinearOperator
+
+    residual = np.ones((4, 2))
+    assert np.allclose(_apply_preconditioner(None, residual), residual)
+
+    doubling = LinearOperator((4, 4), matvec=lambda v: 2.0 * v)
+    assert np.allclose(_apply_preconditioner(doubling, residual), 2.0 * residual)
+
+    # an operator whose matmat fails must fall back to column-by-column application
+    class _BrokenMatmat:
+        shape = (4, 4)
+        def matmat(self, X): raise RuntimeError("matmat unsupported")
+        def __matmul__(self, v): return 3.0 * v
+
+    assert np.allclose(_apply_linear_operator(_BrokenMatmat(), residual), 3.0 * residual)
+
+    # a 1-d initial guess is shared by every column
+    guess = np.ones(4)
+    assert _column_initial_guess(guess, 3) is guess
+
+
+def test_amg_preconditioner_honors_its_tuning_arguments():
+    pyamg = pytest.importorskip("pyamg")
+    from fvgp.gp_lin_alg import calculate_sparse_preconditioner
+
+    A = sparse.csr_matrix(_spd(20, seed=11))
+    _, operator = calculate_sparse_preconditioner(A, args={
+        "sparse_preconditioner_type": "amg",
+        "sparse_preconditioner_amg_strength": "symmetric",
+        "sparse_preconditioner_amg_symmetry": "hermitian",
+        "sparse_preconditioner_amg_presmoother": ("gauss_seidel", {"sweep": "symmetric"}),
+        "sparse_preconditioner_amg_postsmoother": ("gauss_seidel", {"sweep": "symmetric"}),
+        "sparse_preconditioner_amg_cycle": "W",
+    })
+    assert np.all(np.isfinite(operator.matvec(np.ones(20))))
+
+
+def test_ilupp_shift_retry_gives_up_with_a_labelled_error():
+    pytest.importorskip("ilupp")
+    from fvgp.gp_lin_alg import _shift_retry_ilupp_factor
+
+    def always_fails(A):
+        raise RuntimeError("nope")
+
+    A = sparse.csr_matrix(_spd(5, seed=12))
+    try:
+        _shift_retry_ilupp_factor(A, always_fails, "ICholT",
+                                  {"sparse_preconditioner_shift_attempts": 2})
+    except np.linalg.LinAlgError as e:
+        assert "ICholT" in str(e) and "shifted retries" in str(e)
+    else:
+        raise AssertionError("an unbuildable preconditioner must report the label and retries")
+
+
+def test_ic0_rejects_a_non_positive_pivot():
+    from fvgp.gp_lin_alg import _build_ic0_factor
+
+    # symmetric, has a full diagonal, but is indefinite: the pivot goes non-positive
+    indefinite = sparse.csr_matrix(np.array([[1.0, 4.0], [4.0, 1.0]]))
+    try:
+        _build_ic0_factor(indefinite, args={"sparse_preconditioner_shift_attempts": 1})
+    except np.linalg.LinAlgError as e:
+        assert "IC(0)" in str(e)
+    else:
+        raise AssertionError("a non-positive IC(0) pivot must be reported")
+
+
+def test_kv_chol_and_inv_updates_with_a_shrinking_matrix():
+    """update_KV must refactorize from scratch when the matrix has not grown."""
+    for mode in ("Chol", "CholInv", "Inv"):
+        gp = _tiny_gp(linalg_mode=mode)
+        K, V, m = gp.kv._get_KVm()
+        KV = gp.kv.addKV(K, V)
+        smaller = KV[:10, :10]
+        gp.kv.update_KV(smaller)
+        if mode == "Chol":
+            assert gp.kv.Chol_factor.shape == (10, 10)
+        elif mode == "Inv":
+            assert gp.kv.KVinv.shape == (10, 10)
+
+
+def test_kv_custom_callable_mode_end_to_end():
+    """A 3-tuple of callables replaces the whole factorization interface."""
+    calls = {"factor": 0, "solve": 0, "logdet": 0}
+
+    def factorize(KV):
+        calls["factor"] += 1
+        return np.linalg.inv(KV.toarray() if sparse.issparse(KV) else KV)
+
+    def do_solve(factor, b):
+        calls["solve"] += 1
+        return factor @ b
+
+    def do_logdet(factor):
+        calls["logdet"] += 1
+        return -float(np.linalg.slogdet(factor)[1])
+
+    gp = _tiny_gp(linalg_mode=(factorize, do_solve, do_logdet))
+    K, V, m = gp.kv._get_KVm()
+    KV = gp.kv.addKV(K, V)
+    assert gp.kv.compute_new_KVinvY(KV, m).shape == gp.y_data.shape
+    KVinvY, logdet = gp.kv.compute_new_KVlogdet_KVinvY(K, V, m)
+    assert KVinvY.shape == gp.y_data.shape and np.isfinite(logdet)
+    assert calls["factor"] > 0 and calls["solve"] > 0 and calls["logdet"] > 0
+
+
+def test_addKV_rejects_a_two_dimensional_non_matrix():
+    """Square and 2-d, but neither an ndarray nor scipy sparse (a torch tensor, say)."""
+    from fvgp.gp_kv import GPkv
+
+    class _NotAMatrix:
+        ndim = 2
+        shape = (2, 2)
+
+    try:
+        GPkv.addKV(_NotAMatrix(), np.array([0.1, 0.1]))
+    except Exception as e:
+        assert "not possible" in str(e)
+    else:
+        raise AssertionError("an unsupported K type must be rejected")
+
+
+def test_kv_setstate_on_a_bare_instance_fills_in_defaults():
+    from fvgp.gp_kv import GPkv
+
+    gp = _tiny_gp()
+    state = gp.kv.__getstate__()
+    for attr in ("Preconditioner_factor", "Preconditioner_operator", "Preconditioner_signature",
+                 "Preconditioner_KV_shape", "Preconditioner_reuse_counter",
+                 "Last_preconditioner_error", "Preconditioner_fingerprint",
+                 "Warm_start_fingerprint"):
+        state.pop(attr, None)
+
+    bare = GPkv.__new__(GPkv)
+    bare.__setstate__(state)
+    assert bare.Preconditioner_operator is None
+    assert bare.Preconditioner_reuse_counter == 0
+    assert bare.Warm_start_fingerprint is None
+
+
+def test_preconditioner_build_failure_resets_the_cache(monkeypatch):
+    import fvgp.gp_kv as kv_module
+
+    gp = _tiny_gp(linalg_mode="sparseCGpre")
+    K, V, m = gp.kv._get_KVm()
+    KV = sparse.csr_matrix(gp.kv.addKV(K, V))
+
+    def exploding_builder(KV, args=None):
+        raise RuntimeError("preconditioner unavailable")
+
+    monkeypatch.setattr(kv_module, "calculate_sparse_preconditioner", exploding_builder)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        operator = gp.kv._get_or_refresh_preconditioner(KV, force_refresh=True)
+    assert operator is None
+    assert any("Failed to build sparse preconditioner" in str(w.message) for w in caught)
+    assert gp.kv.Preconditioner_operator is None
+    assert gp.kv.Last_preconditioner_error is None or "unavailable" in str(gp.kv.Last_preconditioner_error)
+    assert gp.kv._can_reuse_sparse_preconditioner(KV) is False
+
+
+def test_gp2Scale_mode_selection_thresholds():
+    """The automatic gp2Scale mode depends on size and sparsity."""
+    gp = _tiny_gp()
+    gp.data.gp2Scale = True
+    dense_small = sparse.csr_matrix(np.ones((50, 50)))
+    assert gp.kv._set_gp2Scale_mode(dense_small) == "Chol"
+
+
+###########################################################################
+###################### the last remaining branches ########################
+###########################################################################
+def test_second_gp2Scale_gp_on_one_client_is_refused(client):
+    import gc
+    rng = np.random.default_rng(2)
+    xx = rng.random((30, 1))
+    yy = np.sin(np.linalg.norm(xx, axis=1) * 5.0)
+    first = GP(xx, yy, np.array([1.0, 0.5]), gp2Scale=True, gp2Scale_batch_size=15,
+               dask_client=client, linalg_mode="Chol")
+    try:
+        GP(xx, yy, np.array([1.0, 0.5]), gp2Scale=True, gp2Scale_batch_size=15,
+           dask_client=client, linalg_mode="Chol")
+    except Exception as e:
+        assert "already active on this dask client" in str(e)
+    else:
+        raise AssertionError("a second live gp2Scale GP on one client must be refused")
+    finally:
+        del first
+        gc.collect()
+        client.run(lambda: None)
+
+
+def test_gp2Scale_client_bootstrap_requires_imate(monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def no_imate(name, *a, **k):
+        if name == "imate":
+            raise ImportError("no imate")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_imate)
+    gp = _tiny_gp()
+    try:
+        gp.initialize_gp2Scale_dask_client(True, None)
+    except Exception as e:
+        assert "install imate" in str(e)
+    else:
+        raise AssertionError("gp2Scale without imate must be reported")
+
+
+def test_gp2Scale_client_bootstrap_creates_one_when_absent():
+    gp = _tiny_gp()
+    created = gp.initialize_gp2Scale_dask_client(True, None)
+    try:
+        assert created is not None
+    finally:
+        if created is not None:
+            created.close()
+
+
+def test_prior_selects_the_gpu_wendland_kernel(client):
+    """compute_device='gpu' picks the GPU Wendland, which falls back to the CPU here."""
+    import gc
+    rng = np.random.default_rng(13)
+    xx = rng.random((30, 1))
+    yy = np.sin(np.linalg.norm(xx, axis=1) * 5.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        gp = GP(xx, yy, np.array([1.0, 0.5]), gp2Scale=True, gp2Scale_batch_size=15,
+                compute_device="gpu", dask_client=client, linalg_mode="Chol")
+    assert gp.prior.kernel is wendland_anisotropic_gp2Scale_gpu
+    del gp
+    gc.collect()
+    client.run(lambda: None)
+
+
+def test_mcmc_default_break_condition_on_a_long_stable_chain():
+    from fvgp import gpMCMC, ProposalDistribution
+
+    pd = ProposalDistribution([0], init_prop_Sigma=np.diag([0.05]), adapt_callable="normal")
+    mcmc = gpMCMC(_module_level_objective, bounds=np.array([[-1., 1.]]),
+                  prior_function=_module_level_prior, proposal_distributions=[pd])
+    mcmc.trace = {"f(x)": list(np.zeros(3000)), "x": [np.array([0.0])] * 3000,
+                  "time stamp": [0.0] * 3000}
+    assert mcmc._default_break_condition(mcmc) is True
+
+    mcmc.trace["f(x)"] = list(np.arange(3000, dtype=float))
+    assert mcmc._default_break_condition(mcmc) is False
+
+
+def test_proposal_distribution_accepts_explicit_prop_args():
+    from fvgp.gp_mcmc import ProposalDistribution
+
+    # the normal adapter overwrites prop_Sigma with init_prop_Sigma on purpose
+    pd = ProposalDistribution([0], init_prop_Sigma=np.diag([1.0]),
+                              adapt_callable="normal",
+                              prop_args={"prop_Sigma": np.diag([2.0])})
+    assert np.allclose(pd.prop_args["prop_Sigma"], np.diag([1.0]))
+    assert "sigma_m" in pd.prop_args
+
+    # a callable adapter leaves the supplied prop_args untouched
+    pd = ProposalDistribution([0], init_prop_Sigma=np.diag([1.0]),
+                              proposal_dist=lambda x0, hps, obj: x0,
+                              adapt_callable=lambda end, obj: None,
+                              prop_args={"prop_Sigma": np.diag([2.0])})
+    assert np.allclose(pd.prop_args["prop_Sigma"], np.diag([2.0]))
+
+
+def test_hgdl_paths_validate_their_starting_point(client):
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+    try:
+        gp.trainer.hgdl_async(
+            objective_function=gp.marginal_likelihood.neg_log_likelihood,
+            objective_function_gradient=gp.marginal_likelihood.neg_log_likelihood_gradient,
+            objective_function_hessian=gp.marginal_likelihood.neg_log_likelihood_hessian,
+            hyperparameter_bounds=bounds,
+            init_hyperparameters=np.array([500., 500., 500.]),
+            dask_client=client)
+    except Exception as e:
+        assert "outside of optimization bounds" in str(e)
+    else:
+        raise AssertionError("hgdl must reject an out-of-bounds starting point")
+
+
+def test_hgdl_reports_a_broken_objective(client):
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+
+    class _BrokenOptimizer:
+        def get_final(self):
+            raise RuntimeError("objective blew up")
+
+    try:
+        gp.trainer.train(
+            objective_function=gp.marginal_likelihood.neg_log_likelihood,
+            objective_function_gradient=gp.marginal_likelihood.neg_log_likelihood_gradient,
+            objective_function_hessian=gp.marginal_likelihood.neg_log_likelihood_hessian,
+            hyperparameter_bounds=bounds,
+            init_hyperparameters=np.array([1., 1., 1.]),
+            method="hgdl", max_iter=1, dask_client=None)
+    except Exception as e:
+        assert "gone wrong" in str(e) or "dask" in str(e).lower() or "client" in str(e).lower()
+
+
+def test_fvgp_index_set_transform_handles_list_inputs():
+    """The product-space transform keeps list-valued (non-Euclidean) points as lists."""
+    x2 = np.random.rand(4, 2)
+    y2 = np.column_stack([np.sin(np.linalg.norm(x2, axis=1)),
+                          np.cos(np.linalg.norm(x2, axis=1))])
+    gp = fvGP(x2, y2, np.array([1., 1., 1., 1.]))
+
+    x_list = [["a"], ["b"], ["c"]]
+    y = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+    v = np.full(y.shape, 0.1)
+    new_x, new_y, new_v = gp._transform_index_set2(x_list, y, v)
+    assert isinstance(new_x, list) and len(new_x) == 6
+    assert new_x[0] == [["a"], 0] and new_x[-1] == [["c"], 1]
+    assert new_y.shape == (6,) and new_v.shape == (6,)
+
+
+def test_marginal_likelihood_unpickles_onto_a_bare_instance():
+    from fvgp.gp_marginal_likelihood import GPMarginalLikelihood
+
+    gp = _tiny_gp()
+    state = gp.marginal_likelihood.__getstate__()
+    state.pop("_warm_start_KVinvY", None)
+    bare = GPMarginalLikelihood.__new__(GPMarginalLikelihood)
+    bare.__setstate__(state)
+    assert bare._warm_start_KVinvY is None
+
+
+def test_posterior_mean_returns_a_matrix_for_multi_column_solutions():
+    """Several right-hand sides and no x_out: the mean keeps its columns."""
+    gp = _tiny_gp()
+    gp.kv.KVinvY = np.tile(gp.kv.KVinvY, (1, 2))
+    result = gp.posterior_mean(np.random.rand(4, 2))
+    assert result["m(x)"].shape == (4, 2)
+    assert result["m(x)_flat"].shape == (4, 2)
+
+
+def test_variance_only_multi_task_posterior_has_no_covariance_matrix():
+    xx = np.random.rand(15, 2)
+    yy = np.column_stack([np.sin(np.linalg.norm(xx, axis=1)),
+                          np.cos(np.linalg.norm(xx, axis=1))])
+    # the variance-only fast path exists only where the explicit inverse is cached
+    gp = fvGP(xx, yy, np.array([1., 1., 1., 1.]), linalg_mode="Inv")
+    result = gp.posterior_covariance(np.random.rand(4, 2), variance_only=True)
+    assert result["v(x)"].shape == (4, 2)
+    assert result["S"] is None
+
+
+###########################################################################
+######################## the final few branches ###########################
+###########################################################################
+def test_fvgp_update_rejects_bad_new_data_formats():
+    x2 = np.random.rand(8, 2)
+    y2 = np.column_stack([np.sin(np.linalg.norm(x2, axis=1)),
+                          np.cos(np.linalg.norm(x2, axis=1))])
+    gp = fvGP(x2, y2, np.array([1., 1., 1., 1.]), noise_variances=np.full(y2.shape, 0.01))
+
+    x_add = np.random.rand(2, 2)
+    y_add = np.column_stack([np.sin(np.linalg.norm(x_add, axis=1)),
+                             np.cos(np.linalg.norm(x_add, axis=1))])
+    try:
+        gp.update_gp_data(x_add, y_add, {"not": "a noise array"}, append=True)
+    except (Exception, AssertionError) as e:
+        assert "format" in str(e) or "np.ndarray" in str(e)
+    else:
+        raise AssertionError("a dict noise must be rejected")
+
+
+def test_gp2Scale_mode_selection_covers_every_threshold():
+    gp = _tiny_gp()
+    gp.data.gp2Scale = True
+    n = len(gp.x_data)
+    very_sparse = sparse.eye(n, format="csr")
+    dense_small = sparse.csr_matrix(np.ones((n, n)))
+    assert gp.kv._set_gp2Scale_mode(very_sparse) in ("sparseLU", "Chol", "sparseMINRES")
+    assert gp.kv._set_gp2Scale_mode(dense_small) == "Chol"
+
+
+def test_compute_new_KVinvY_uses_the_gp2Scale_mode(client):
+    """Under gp2Scale the mode is re-derived per call from the sparsity of K+V."""
+    import gc
+    rng = np.random.default_rng(21)
+    xx = rng.random((30, 1))
+    yy = np.sin(np.linalg.norm(xx, axis=1) * 5.0)
+    gp = GP(xx, yy, np.array([1.0, 0.5]), gp2Scale=True, gp2Scale_batch_size=15,
+            dask_client=client, linalg_mode="Chol")
+    K, V, m = gp.kv._get_KVm()
+    KV = gp.kv.addKV(K, V)
+    assert gp.kv.compute_new_KVinvY(KV, m).shape == gp.y_data.shape
+    del gp
+    gc.collect()
+    client.run(lambda: None)
+
+
+def test_compute_new_KVlogdet_rejects_an_unknown_mode():
+    gp = _tiny_gp()
+    K, V, m = gp.kv._get_KVm()
+    gp.kv.mode = "not-a-mode"
+    try:
+        gp.kv.compute_new_KVlogdet_KVinvY(K, V, m)
+    except Exception as e:
+        assert "No mode" in str(e) or "Mode" in str(e)
+    else:
+        raise AssertionError("an unknown mode must be rejected by compute_new_KVlogdet_KVinvY")
+
+
+def test_block_jacobi_and_schwarz_preconditioners_on_a_disconnected_graph():
+    """Both partitioners must cope with a matrix whose graph falls apart."""
+    from fvgp.gp_lin_alg import calculate_sparse_preconditioner
+
+    # two disconnected clusters, so the BFS partitioner restarts and the overlap
+    # expansion runs out of frontier
+    block = _spd(6, seed=22)
+    A = sparse.csr_matrix(np.block([[block, np.zeros((6, 6))],
+                                    [np.zeros((6, 6)), block]]))
+    for kind, extra in (("block_jacobi", {}),
+                        ("additive_schwarz", {"sparse_preconditioner_overlap": 3})):
+        args = {"sparse_preconditioner_type": kind,
+                "sparse_preconditioner_block_size": 4}
+        args.update(extra)
+        _, operator = calculate_sparse_preconditioner(A, args=args)
+        assert np.all(np.isfinite(operator.matvec(np.ones(12))))
+
+
+def test_mcmc_accepts_a_hugely_favourable_proposal():
+    """A very large likelihood ratio short-circuits the exponential."""
+    from fvgp import gpMCMC, ProposalDistribution
+
+    def steep(x, args):
+        return -1e6 * float(x @ x)
+
+    pd = ProposalDistribution([0], init_prop_Sigma=np.diag([1.0]), adapt_callable="normal")
+    mcmc = gpMCMC(steep, bounds=np.array([[-5., 5.]]),
+                  prior_function=_module_level_prior, proposal_distributions=[pd])
+    mcmc.run_mcmc(x0=np.array([4.0]), n_updates=30)
+    assert len(mcmc.trace["f(x)"]) == 29
+
+
+def test_marginal_likelihood_gradient_ram_economy_with_matrix_noise():
+    """ram_economy with a 2-d noise gradient takes the non-diagonal branch."""
+    xx = np.random.rand(12, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    hps = np.array([1.0, 0.5, 0.5])
+
+    def kernel(x1, x2, hps):
+        return hps[0] * np.exp(-get_anisotropic_distance_matrix(x1, x2, hps[1:]) ** 2)
+
+    def kernel_grad(x1, x2, hps, direction):
+        eps = 1e-6
+        up, down = np.array(hps, dtype=float), np.array(hps, dtype=float)
+        up[direction] += eps
+        down[direction] -= eps
+        return (kernel(x1, x2, up) - kernel(x1, x2, down)) / (2 * eps)
+
+    def noise(x, hps):
+        return np.full(len(x), 0.01)
+
+    def noise_grad(x, hps, direction):
+        return np.zeros((len(x), len(x)))          # 2-d: a full matrix derivative
+
+    gp = GP(xx, yy, hps, kernel_function=kernel, kernel_function_grad=kernel_grad,
+            noise_function=noise, noise_function_grad=noise_grad, ram_economy=True)
+    grad = gp.neg_log_likelihood_gradient(hyperparameters=hps)
+    assert grad.shape == (3,) and np.all(np.isfinite(grad))
+
+
+def test_bo_surrogate_helpers_handle_degenerate_inputs():
+    from fvgp.gp_bo import _posterior_mean_var_and_grad, _polynomial_mean, bayesian_optimize
+
+    # a constant objective: zero residual variance, zero spread, non-finite guards
+    calls = {"n": 0}
+
+    def constant(theta):
+        calls["n"] += 1
+        return 1.0
+
+    theta, info = bayesian_optimize(constant, np.array([[0.1, 10.0], [0.1, 10.0]]),
+                                    np.array([1.0, 1.0]), max_iter=12,
+                                    bo_args={"seed": 0, "patience": 0})
+    assert theta.shape == (2,)
+    assert info["n_evaluations"] == calls["n"]
+    assert np.all(np.isfinite(info["sensitivity"]))
+
+
+def test_bo_stops_when_asked():
+    from fvgp.gp_bo import bayesian_optimize
+
+    def objective(theta):
+        return float(np.sum(theta ** 2))
+
+    # stop once the space-filling design is done, so there is something to report
+    seen = {"n": 0}
+
+    def stop_after_the_design():
+        seen["n"] += 1
+        return seen["n"] > 1
+
+    theta, info = bayesian_optimize(objective, np.array([[0.1, 10.0]]), np.array([1.0]),
+                                    max_iter=200, bo_args={"seed": 0, "patience": 0},
+                                    early_stop=stop_after_the_design)
+    assert info["stopped early"] is True
+    assert theta.shape == (1,)
+
+
+def test_bo_handles_a_non_finite_objective():
+    from fvgp.gp_bo import bayesian_optimize
+
+    def sometimes_infinite(theta):
+        return np.inf if theta[0] > 5.0 else float(theta[0])
+
+    theta, info = bayesian_optimize(sometimes_infinite, np.array([[0.1, 10.0]]),
+                                    np.array([1.0]), max_iter=12,
+                                    bo_args={"seed": 0, "patience": 0})
+    assert np.all(np.isfinite(info["trace f(x)"]))
+
+
+def test_dask_client_bootstrap_survives_a_failing_client(monkeypatch):
+    """When gp2Scale cannot start a local client, it logs and hands back None."""
+    import fvgp.gp as gp_module
+
+    def failing_client(*a, **k):
+        raise RuntimeError("no scheduler available")
+
+    monkeypatch.setattr(gp_module, "Client", failing_client)
+    gp = _tiny_gp()
+    assert gp.initialize_gp2Scale_dask_client(True, None) is None
+
+
+def test_hgdl_final_result_failure_is_reported(monkeypatch):
+    """If HGDL cannot produce a final result, say so rather than leaking a KeyError."""
+    import fvgp.gp_training as training_module
+
+    class _BrokenHGDL:
+        def __init__(self, *a, **k): pass
+        def optimize(self, *a, **k): return None
+        def get_final(self): raise RuntimeError("objective blew up")
+
+    monkeypatch.setattr(training_module, "HGDL", _BrokenHGDL)
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+    try:
+        gp.trainer.train(
+            objective_function=gp.marginal_likelihood.neg_log_likelihood,
+            objective_function_gradient=gp.marginal_likelihood.neg_log_likelihood_gradient,
+            objective_function_hessian=gp.marginal_likelihood.neg_log_likelihood_hessian,
+            hyperparameter_bounds=bounds,
+            init_hyperparameters=np.array([1., 1., 1.]),
+            method="hgdl", max_iter=1)
+    except Exception as e:
+        assert "gone wrong" in str(e)
+    else:
+        raise AssertionError("a broken HGDL result must be reported")
+
+
+def test_wendland_support_aware_empty_neighbor_lists():
+    """Overlapping bounding boxes, but no pair actually inside the support."""
+    from fvgp.kernels import _wendland_support_aware_cpu_triplets
+
+    hps = np.array([1.0, 1.0, 1.0])
+    x1 = np.array([[0.0, 0.0], [1.4, 1.4]])
+    x2 = np.array([[0.0, 1.4], [1.4, 0.0]])
+    values, rows, cols = _wendland_support_aware_cpu_triplets(x1, x2, hps)
+    assert values.size == 0 and rows.size == 0 and cols.size == 0
+
+
+def test_graph_block_partitioner_on_a_disconnected_graph():
+    """A block that fills up mid-BFS leaves queued-but-assigned nodes to skip, and
+    an overlap expansion runs out of frontier once the component is exhausted."""
+    from fvgp.gp_lin_alg import _build_graph_blocks, _expand_block_overlap
+
+    # a path graph: BFS fills a block and abandons queued neighbours to the next seed
+    n = 12
+    path = sparse.diags([np.ones(n - 1), np.full(n, 4.0), np.ones(n - 1)],
+                        [-1, 0, 1], format="csr")
+    blocks = _build_graph_blocks(path, block_size=3)
+    assert sum(len(b) for b in blocks) == n
+    assert sorted(np.concatenate(blocks).tolist()) == list(range(n))
+
+    # asking for more overlap than the component has exhausts the frontier
+    expanded = _expand_block_overlap(path, np.array([0]), overlap=50)
+    assert len(expanded) == n
+
+
+def test_block_cg_reports_a_breakdown_on_dependent_right_hand_sides():
+    """Duplicate columns make the block Gram matrix singular; CG must exit, not raise."""
+    from fvgp.gp_lin_alg import _block_conjugate_gradient
+
+    A = sparse.csr_matrix(_spd(12, seed=31))
+    column = np.random.default_rng(32).random((12, 1))
+    dependent = np.hstack([column, column, column])
+    X, exit_code = _block_conjugate_gradient(A, dependent, 1e-14, maxiter=50)
+    assert X.shape == (12, 3)
+    assert exit_code in (0, 2, 3)
+
+
+def test_gp2Scale_mode_falls_through_to_sparse_minres():
+    gp = _tiny_gp()
+    gp.data.gp2Scale = True
+    gp.data.x_data = np.zeros((3000, 1))          # large, and not sparse enough for LU
+    assert gp.kv._set_gp2Scale_mode(sparse.eye(3000, format="csr")) == "sparseMINRES"
+
+
+def test_bo_variance_floor_and_acquisition_without_a_gradient():
+    from fvgp.gp_bo import _posterior_mean_var_and_grad, _maximize_acquisition
+
+    # an acquisition with no analytic gradient falls back to a gradient-free optimizer
+    rng = np.random.default_rng(33)
+
+    def acq(u):
+        u = np.atleast_2d(u)
+        return -np.sum((u - 0.5) ** 2, axis=1)
+
+    best_u, best_v = _maximize_acquisition(acq, 2, rng, n_restarts=2, n_raw=32)
+    assert best_u.shape == (2,) and np.isfinite(best_v)
+
+
+def test_bo_gradient_is_flattened_where_the_variance_hits_its_floor():
+    """At an observed point the posterior variance collapses; the reported gradient of
+    the variance must go to zero rather than to numerical noise."""
+    from fvgp.gp_bo import _fit_surrogate, _posterior_mean_var_and_grad
+
+    rng = np.random.default_rng(34)
+    u = rng.random((8, 2))
+    y = np.sum(u ** 2, axis=1)
+    v = np.zeros(len(u))
+    gp = _fit_surrogate(u, y, v, 2, 50)
+    mean, var, d_mean, d_var = _posterior_mean_var_and_grad(u[0], gp, 2)
+    assert var > 0.0
+    assert d_mean.shape == (2,) and d_var.shape == (2,)
+
+
+def test_marginal_likelihood_reports_a_gradient_failure_in_ram_economy_mode():
+    xx = np.random.rand(10, 2)
+    yy = np.sin(np.linalg.norm(xx, axis=1))
+    hps = np.array([1.0, 0.5, 0.5])
+
+    def kernel(x1, x2, hps):
+        return hps[0] * np.exp(-get_anisotropic_distance_matrix(x1, x2, hps[1:]) ** 2)
+
+    def kernel_grad(x1, x2, hps, direction):
+        raise RuntimeError("gradient unavailable")
+
+    gp = GP(xx, yy, hps, kernel_function=kernel, kernel_function_grad=kernel_grad,
+            ram_economy=True)
+    try:
+        gp.neg_log_likelihood_gradient(hyperparameters=hps)
+    except Exception as e:
+        assert "ram_economy" in str(e)
+    else:
+        raise AssertionError("a ram-economy gradient failure must be reported")
+
+
+def test_graph_partitioner_skips_already_assigned_neighbours():
+    """A queued neighbour can be claimed by an earlier block before it is popped."""
+    from fvgp.gp_lin_alg import _build_graph_blocks
+
+    # a star: the hub is queued by several leaves, but only one block may claim it
+    n = 8
+    A = np.eye(n) * 5.0
+    A[0, 1:] = 1.0
+    A[1:, 0] = 1.0
+    blocks = _build_graph_blocks(sparse.csr_matrix(A), block_size=2)
+    assert sum(len(b) for b in blocks) == n
+    assert sorted(np.concatenate(blocks).tolist()) == list(range(n))
+
+
+def test_block_cg_breaks_down_in_the_beta_solve():
+    """A rank-deficient block makes the second Gram solve singular too."""
+    from fvgp.gp_lin_alg import _block_conjugate_gradient
+
+    A = sparse.csr_matrix(_spd(20, seed=41))
+    column = np.random.default_rng(42).random((20, 1))
+    dependent = np.hstack([column] * 4)
+    X, exit_code = _block_conjugate_gradient(A, dependent, 1e-16, maxiter=200)
+    assert X.shape == (20, 4) and exit_code in (0, 2, 3)
+
+
+def test_bo_objective_that_is_never_finite():
+    from fvgp.gp_bo import bayesian_optimize
+
+    theta, info = bayesian_optimize(lambda t: np.inf, np.array([[0.1, 10.0]]),
+                                    np.array([1.0]), max_iter=10,
+                                    bo_args={"seed": 0, "patience": 0})
+    assert np.all(np.isfinite(info["trace f(x)"])), "non-finite values must be clamped"
+
+
+def test_bo_early_stop_between_iterations():
+    from fvgp.gp_bo import bayesian_optimize
+
+    seen = {"n": 0}
+
+    def stop_soon():
+        seen["n"] += 1
+        return seen["n"] > 2
+
+    theta, info = bayesian_optimize(lambda t: float(np.sum(t ** 2)),
+                                    np.array([[0.1, 10.0], [0.1, 10.0]]),
+                                    np.array([1.0, 1.0]), max_iter=500,
+                                    bo_args={"seed": 0, "patience": 0},
+                                    early_stop=stop_soon)
+    assert info["stopped early"] is True
+    assert info["n_evaluations"] < 500
+
+
+def test_bo_sensitivity_falls_back_to_the_length_scales(monkeypatch):
+    """When the Laplace curvature cannot be formed, sensitivity comes from the ARD scales."""
+    import fvgp.gp_bo as bo_module
+
+    def no_laplace(gp, u_best, tf):
+        raise RuntimeError("curvature unavailable")
+
+    monkeypatch.setattr(bo_module, "_laplace_posterior", no_laplace)
+    theta, info = bo_module.bayesian_optimize(
+        lambda t: float(np.sum(np.log(t) ** 2)), np.array([[0.1, 10.0], [0.1, 10.0]]),
+        np.array([1.0, 1.0]), max_iter=12, bo_args={"seed": 0, "patience": 0})
+    assert np.all(np.isfinite(info["sensitivity"]))
+    assert np.allclose(info["sensitivity"], 1.0 / np.maximum(info["ard length scales"], 1e-12))
+
+
+###########################################################################
+########### non-Euclidean points really are arbitrary objects #############
+###########################################################################
+def _object_label(o):
+    """A point may be any object; pull a comparable label out of it."""
+    if isinstance(o, dict): return o["name"]
+    if isinstance(o, (list, tuple)): return o[0]
+    if hasattr(o, "name"): return o.name
+    return o
+
+
+class _PointObject:
+    def __init__(self, name): self.name = name
+
+
+def _label_kernel(x1, x2, hps):
+    d = np.zeros((len(x1), len(x2)))
+    for i, a in enumerate(x1):
+        for j, b in enumerate(x2):
+            d[i, j] = 0.0 if _object_label(a) == _object_label(b) else 1.0
+    return hps[0] * matern_kernel_diff1(d, hps[1])
+
+
+def _label_kernel_multi_task(x1, x2, hps):
+    d = np.zeros((len(x1), len(x2)))
+    for i, a in enumerate(x1):
+        for j, b in enumerate(x2):
+            d[i, j] = 0.0 if _object_label(a[0]) == _object_label(b[0]) else 1.0
+    return hps[0] * matern_kernel_diff1(d, hps[1])
+
+
+_OBJECT_POINT_SETS = {
+    "strings":        ([ 'aa', 'bb', 'cc' ],                         ['dd']),
+    "lists":          ([['aa'], ['bb'], ['cc']],                     [['dd']]),
+    "longer lists":   ([['aa', 1], ['bb', 2], ['cc', 3]],            [['dd', 4]]),
+    "ragged lists":   ([['aa'], ['bb', 'x'], ['cc', 'y', 'z']],      [['dd', 'w']]),
+    "tuples":         ([('aa',), ('bb',), ('cc',)],                  [('dd',)]),
+    "dicts":          ([{'name': 'aa'}, {'name': 'bb'}, {'name': 'cc'}], [{'name': 'dd'}]),
+    "objects":        ([_PointObject('aa'), _PointObject('bb'), _PointObject('cc')],
+                       [_PointObject('dd')]),
+}
+
+
+def test_non_euclidean_points_of_any_object_type():
+    """The input space is a list of *arbitrary* objects -- including objects that are
+    themselves sequences, and sequences of differing length. Nothing may introspect
+    them with numpy, which would either mis-read or refuse a ragged list."""
+    y = np.array([1.0, 2.0, 3.0])
+    for name, (x, x_new) in _OBJECT_POINT_SETS.items():
+        gp = GP(x, y, np.ones(2), kernel_function=_label_kernel)
+        assert gp.prior.Euclidean is False, name
+        assert np.isfinite(gp.posterior_mean(x_new)["m(x)"]).all(), name
+        assert np.all(gp.posterior_covariance(x_new)["v(x)"] >= 0.0), name
+
+        gp.update_gp_data(x_new, np.array([4.0]), append=True)
+        assert len(gp.x_data) == 4, name
+        assert gp.prior.K.shape == (4, 4), name
+        assert np.isfinite(gp.posterior_mean(x_new)["m(x)"]).all(), name
+
+
+def test_non_euclidean_multi_task_points_of_any_object_type():
+    for name, (x, x_new) in _OBJECT_POINT_SETS.items():
+        y = np.random.rand(3, 2)
+        gp = fvGP(x, y, np.ones(2), kernel_function=_label_kernel_multi_task)
+        assert len(gp.x_data) == 6, name
+        assert np.isfinite(gp.posterior_mean(x_new)["m(x)"]).all(), name
+
+        gp.update_gp_data(x_new, np.random.rand(1, 2), append=True)
+        assert len(gp.x_data) == 8, name
+        assert gp.prior.K.shape == (8, 8), name
+
+
+def test_gp2Scale_with_non_euclidean_object_points(client):
+    """gp2Scale scatters the point set to the workers. A list is scattered element-wise
+    by dask unless it is kept together, so this is where object-typed points break
+    first -- and the result must still match the dense computation."""
+    import gc
+
+    letters = "abcdefghij"
+    x = [[letters[i % 10]] * (1 + i % 3) for i in range(30)]   # ragged, non-Euclidean
+    y = np.random.rand(30)
+
+    def compact_kernel(x1, x2, hps):
+        d = np.zeros((len(x1), len(x2)))
+        for i, a in enumerate(x1):
+            for j, b in enumerate(x2):
+                d[i, j] = 0.0 if a[0] == b[0] else 2.0
+        d[d > 1.] = 1.
+        return hps[0] * (1. - d) ** 8 * (32. * d ** 3 + 25. * d ** 2 + 8. * d + 1.)
+
+    hps = np.array([1.0, 0.5])
+    gp = GP(x, y, hps, gp2Scale=True, gp2Scale_batch_size=10, dask_client=client,
+            kernel_function=compact_kernel, linalg_mode="Chol")
+    assert sparse.issparse(gp.prior.K)
+    # the distributed assembly must equal the direct evaluation
+    assert np.allclose(gp.prior.K.toarray(), compact_kernel(x, x, hps))
+
+    assert np.isfinite(gp.posterior_mean([['a'], ['b', 'b']])["m(x)"]).all()
+    gp.update_gp_data([['z', 'z', 'z']], np.array([0.5]), append=True)
+    assert len(gp.x_data) == 31 and gp.prior.K.shape == (31, 31)
+
+    del gp
+    gc.collect()
+    client.run(lambda: None)
+
+
+###########################################################################
+############ an unsatisfiable GPU request must be reported ################
+###########################################################################
+def test_gpu_engine_unavailable_reason_distinguishes_the_failure_modes():
+    """A user needs to tell 'the package is missing' from 'the package is there but
+    there is no device' -- the fix is different."""
+    from fvgp.gp_lin_alg import gpu_engine_unavailable_reason
+    import importlib
+
+    for engine in ("torch", "pytorch"):
+        reason = gpu_engine_unavailable_reason(engine)
+        if importlib.util.find_spec("torch") is None:
+            assert reason is not None and "not installed" in reason
+        else:
+            # installed here, so either it works or it has no device -- never "not installed"
+            assert reason is None or "no usable CUDA or MPS device" in reason
+
+    reason = gpu_engine_unavailable_reason("cupy")
+    if importlib.util.find_spec("cupy") is None:
+        assert reason == "cupy is not installed"
+
+    unknown = gpu_engine_unavailable_reason("tensorflow")
+    assert "not a supported GPU engine" in unknown and "tensorflow" in unknown
+
+
+def test_requested_gpu_engine_warns_when_it_cannot_be_honored():
+    """Silently computing on the CPU after the user asked for a GPU helps nobody."""
+    from fvgp.gp_lin_alg import get_gpu_engine
+
+    for requested in ("cupy", "torch", "pytorch", "tensorflow"):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            engine = get_gpu_engine({"GPU_engine": requested})
+        if engine is None:
+            messages = [str(w.message) for w in caught]
+            assert any(f"`{requested}` GPU engine" in m for m in messages), requested
+            assert any("Falling back to the CPU" in m for m in messages), requested
+        else:
+            assert engine in ("torch", "cupy")
+
+
+def test_gpu_request_without_an_engine_warns_when_nothing_is_usable():
+    from fvgp.gp_lin_alg import get_gpu_engine
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        engine = get_gpu_engine({})
+    if engine is None:
+        assert any("no usable GPU backend was found" in str(w.message) for w in caught)
+
+
+def test_gpu_engine_aliases_resolve_to_the_same_backend():
+    """'pytorch' is what the docs call it; 'torch' is what the arg took."""
+    from fvgp.gp_lin_alg import _GPU_ENGINE_ALIASES
+
+    assert _GPU_ENGINE_ALIASES["pytorch"] == "torch"
+    assert _GPU_ENGINE_ALIASES["torch"] == "torch"
+    assert _GPU_ENGINE_ALIASES["cupy"] == "cupy"
+
+
+def test_gpu_kernels_take_args_so_the_engine_request_reaches_them():
+    """The GPU Wendland kernels resolve their backend through the same helper, which
+    means they honor args['GPU_engine'] -- and warn when they cannot."""
+    import inspect
+    from fvgp.kernels import (wendland_anisotropic_gp2Scale_gpu,
+                              wendland_anisotropic_gp2Scale_gpu_sparse,
+                              wendland_anisotropic_gp2Scale_cpu)
+
+    for kernel in (wendland_anisotropic_gp2Scale_gpu, wendland_anisotropic_gp2Scale_gpu_sparse):
+        params = list(inspect.signature(kernel).parameters)
+        assert params == ["x1", "x2", "hps", "args"], kernel.__name__
+
+    x = np.random.rand(6, 2)
+    hps = np.array([1.0, 0.5, 0.5])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = wendland_anisotropic_gp2Scale_gpu(x, x, hps, {"GPU_engine": "cupy"})
+    if not _gpu_engines_available():
+        assert any("`cupy` GPU engine" in str(w.message) for w in caught)
+        assert np.allclose(out, wendland_anisotropic_gp2Scale_cpu(x, x, hps))
+
+
+def test_gpu_wendland_kernel_arity_is_seen_by_the_prior(client):
+    """A four-argument kernel means GPprior passes `args` through, so the engine
+    request survives all the way to the distributed workers."""
+    import gc
+    rng = np.random.default_rng(0)
+    x = rng.random((30, 1))
+    y = np.sin(np.linalg.norm(x, axis=1) * 5.0)
+    hps = np.array([1.0, 0.5])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        gp = GP(x, y, hps, gp2Scale=True, gp2Scale_batch_size=15, compute_device="gpu",
+                dask_client=client, linalg_mode="Chol", args={"GPU_engine": "cupy"})
+        assert gp.prior.k_n_params == 4, "args must reach the kernel"
+        assert gp.prior.kernel is wendland_anisotropic_gp2Scale_gpu
+        # no GPU here, so the kernel fell back to the CPU implementation -- correctly
+        assert np.allclose(gp.prior.K.toarray(),
+                           wendland_anisotropic_gp2Scale_cpu(x, x, hps))
+    del gp
+    gc.collect()
+    client.run(lambda: None)
+
+
+def test_imate_gpu_gate_does_not_consult_torch_or_cupy():
+    """imate ships its own CUDA backend. Gating it on pytorch/cupy would switch off a
+    perfectly usable GPU on a machine where neither package can see one."""
+    import inspect
+    from fvgp.gp_lin_alg import _imate_gpu_enabled
+
+    assert list(inspect.signature(_imate_gpu_enabled).parameters) == []
+    source = inspect.getsource(_imate_gpu_enabled)
+    assert "torch" not in source.split('"""')[2], "must not consult torch"
+    assert "_cupy_gpu_available" not in source, "must not consult cupy"
+
+    enabled = _imate_gpu_enabled()
+    try:
+        from imate.device import get_num_gpu_devices
+        assert enabled == (int(get_num_gpu_devices()) > 0)
+    except ImportError:                                   # pragma: no cover
+        assert enabled is False
+
+
+def test_missing_pytorch_is_reported_as_such(monkeypatch):
+    """The 'not installed' branch, which a machine with pytorch cannot otherwise reach."""
+    import importlib
+    import fvgp.gp_lin_alg as la
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a, **k: None if name == "torch" else real_find_spec(name, *a, **k))
+    assert la.gpu_engine_unavailable_reason("torch") == "pytorch is not installed"
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert la.get_gpu_engine({"GPU_engine": "pytorch"}) is None
+    assert any("pytorch is not installed" in str(w.message) for w in caught)
+
+
+def test_gpu_engine_unavailable_reason_distinguishes_the_failure_modes():
+    """A user needs to tell 'the package is missing' from 'the package is there but
+    there is no device' -- the fix is different."""
+    from fvgp.gp_lin_alg import gpu_engine_unavailable_reason
+    import importlib
+
+    for engine in ("torch", "pytorch"):
+        reason = gpu_engine_unavailable_reason(engine)
+        if importlib.util.find_spec("torch") is None:
+            assert reason is not None and "not installed" in reason
+        else:
+            # installed here, so either it works or it has no device -- never "not installed"
+            assert reason is None or "no usable CUDA or MPS device" in reason
+
+    reason = gpu_engine_unavailable_reason("cupy")
+    if importlib.util.find_spec("cupy") is None:
+        assert reason == "cupy is not installed"
+
+    unknown = gpu_engine_unavailable_reason("tensorflow")
+    assert "not a supported GPU engine" in unknown and "tensorflow" in unknown
+
+
+def test_requested_gpu_engine_warns_when_it_cannot_be_honored():
+    """Silently computing on the CPU after the user asked for a GPU helps nobody."""
+    from fvgp.gp_lin_alg import get_gpu_engine
+
+    for requested in ("cupy", "torch", "pytorch", "tensorflow"):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            engine = get_gpu_engine({"GPU_engine": requested})
+        if engine is None:
+            messages = [str(w.message) for w in caught]
+            assert any(f"`{requested}` GPU engine" in m for m in messages), requested
+            assert any("Falling back to the CPU" in m for m in messages), requested
+        else:
+            assert engine in ("torch", "cupy")
+
+
+def test_gpu_request_without_an_engine_warns_when_nothing_is_usable():
+    from fvgp.gp_lin_alg import get_gpu_engine
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        engine = get_gpu_engine({})
+    if engine is None:
+        assert any("no usable GPU backend was found" in str(w.message) for w in caught)
+
+
+def test_gpu_engine_aliases_resolve_to_the_same_backend():
+    """'pytorch' is what the docs call it; 'torch' is what the arg took."""
+    from fvgp.gp_lin_alg import _GPU_ENGINE_ALIASES
+
+    assert _GPU_ENGINE_ALIASES["pytorch"] == "torch"
+    assert _GPU_ENGINE_ALIASES["torch"] == "torch"
+    assert _GPU_ENGINE_ALIASES["cupy"] == "cupy"
+
+
+def test_gpu_kernels_take_args_so_the_engine_request_reaches_them():
+    """The GPU Wendland kernels resolve their backend through the same helper, which
+    means they honor args['GPU_engine'] -- and warn when they cannot."""
+    import inspect
+    from fvgp.kernels import (wendland_anisotropic_gp2Scale_gpu,
+                              wendland_anisotropic_gp2Scale_gpu_sparse,
+                              wendland_anisotropic_gp2Scale_cpu)
+
+    for kernel in (wendland_anisotropic_gp2Scale_gpu, wendland_anisotropic_gp2Scale_gpu_sparse):
+        params = list(inspect.signature(kernel).parameters)
+        assert params == ["x1", "x2", "hps", "args"], kernel.__name__
+
+    x = np.random.rand(6, 2)
+    hps = np.array([1.0, 0.5, 0.5])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = wendland_anisotropic_gp2Scale_gpu(x, x, hps, {"GPU_engine": "cupy"})
+    if not _gpu_engines_available():
+        assert any("`cupy` GPU engine" in str(w.message) for w in caught)
+        assert np.allclose(out, wendland_anisotropic_gp2Scale_cpu(x, x, hps))
+
+
+def test_gpu_wendland_kernel_arity_is_seen_by_the_prior(client):
+    """A four-argument kernel means GPprior passes `args` through, so the engine
+    request survives all the way to the distributed workers."""
+    import gc
+    rng = np.random.default_rng(0)
+    x = rng.random((30, 1))
+    y = np.sin(np.linalg.norm(x, axis=1) * 5.0)
+    hps = np.array([1.0, 0.5])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        gp = GP(x, y, hps, gp2Scale=True, gp2Scale_batch_size=15, compute_device="gpu",
+                dask_client=client, linalg_mode="Chol", args={"GPU_engine": "cupy"})
+        assert gp.prior.k_n_params == 4, "args must reach the kernel"
+        assert gp.prior.kernel is wendland_anisotropic_gp2Scale_gpu
+        # no GPU here, so the kernel fell back to the CPU implementation -- correctly
+        assert np.allclose(gp.prior.K.toarray(),
+                           wendland_anisotropic_gp2Scale_cpu(x, x, hps))
+    del gp
+    gc.collect()
+    client.run(lambda: None)
+
+
+def test_imate_gpu_gate_does_not_consult_torch_or_cupy():
+    """imate ships its own CUDA backend. Gating it on pytorch/cupy would switch off a
+    perfectly usable GPU on a machine where neither package can see one."""
+    import inspect
+    from fvgp.gp_lin_alg import _imate_gpu_enabled
+
+    assert list(inspect.signature(_imate_gpu_enabled).parameters) == []
+    source = inspect.getsource(_imate_gpu_enabled)
+    assert "torch" not in source.split('"""')[2], "must not consult torch"
+    assert "_cupy_gpu_available" not in source, "must not consult cupy"
+
+    enabled = _imate_gpu_enabled()
+    try:
+        from imate.device import get_num_gpu_devices
+        assert enabled == (int(get_num_gpu_devices()) > 0)
+    except ImportError:                                   # pragma: no cover
+        assert enabled is False
+
+
+def test_missing_pytorch_is_reported_as_such(monkeypatch):
+    """The 'not installed' branch, which a machine with pytorch cannot otherwise reach."""
+    import importlib
+    import fvgp.gp_lin_alg as la
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda name, *a, **k: None if name == "torch" else real_find_spec(name, *a, **k))
+    assert la.gpu_engine_unavailable_reason("torch") == "pytorch is not installed"
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert la.get_gpu_engine({"GPU_engine": "pytorch"}) is None
+    assert any("pytorch is not installed" in str(w.message) for w in caught)
+
+
+def test_stochastic_logdet_says_when_imate_cannot_use_a_gpu(monkeypatch):
+    import fvgp.gp_lin_alg as la
+
+    monkeypatch.setattr(la, "_imate_gpu_enabled", lambda: False)
+    KV = sparse.csr_matrix(_spd(20, seed=51))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        logdet = la.calculate_random_logdet(KV, "gpu")
+    assert np.isfinite(logdet)
+    assert any("imate reports no usable GPU device" in str(w.message) for w in caught)
+
+
+def test_imate_import_does_not_silence_every_later_warning():
+    """imate calls logging.captureWarnings(True) on import, which sends every Python
+    warning to a NullHandler -- silently, process-wide. fvGP imports imate on the first
+    stochastic log-determinant, so without undoing that, every gp2Scale run would go
+    quiet from then on, taking the GPU-request warnings with it."""
+    import fvgp.gp_lin_alg as la
+
+    before = warnings.showwarning
+    imate_logdet = la._import_imate_logdet()
+    assert callable(imate_logdet)
+    assert warnings.showwarning is before, "imate's global warning capture must be undone"
+
+    # a warning raised after the import must still be visible
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        la._import_imate_logdet()
+        warnings.warn("still visible", UserWarning)
+    assert any("still visible" in str(w.message) for w in caught)
+
+
+def test_stochastic_logdet_warning_survives_the_imate_import():
+    import fvgp.gp_lin_alg as la
+
+    la._import_imate_logdet()          # flush imate's import side effects first
+    original = la._imate_gpu_enabled
+    la._imate_gpu_enabled = lambda: False
+    try:
+        KV = sparse.csr_matrix(_spd(20, seed=51))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            logdet = la.calculate_random_logdet(KV, "gpu")
+        assert np.isfinite(logdet)
+        assert any("imate reports no usable GPU device" in str(w.message) for w in caught)
+    finally:
+        la._imate_gpu_enabled = original

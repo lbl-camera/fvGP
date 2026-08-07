@@ -173,7 +173,8 @@ class GPMarginalLikelihood:
         assert np.ndim(y_mean) == 2, "y minus mean must be 2-d"
         assert y_mean.shape == KVinvY.shape, "(y-m).shape != KVinvY.shape in log_likelihood"+str(y_mean.shape)+" ,"+str(KVinvY.shape)
         if np.ndim(y_mean) == 2: l1 = np.sum(y_mean * KVinvY)/y_mean.shape[1]
-        else: l1 = np.sum(y_mean * KVinvY)
+        # y_mean is y_data - m[:, None] and so always 2-d; kept for safety
+        else: l1 = np.sum(y_mean * KVinvY)  # pragma: no cover - defensive
         L = -0.5 * (l1 + KVlogdet + n * np.log(2.0 * np.pi))
         return L
 

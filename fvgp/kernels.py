@@ -6,6 +6,12 @@ import scipy.sparse as sparse
 from scipy.spatial import cKDTree
 from scipy.spatial.distance import cdist
 
+# One source of truth for which GPU backend is active: gp_lin_alg honors
+# args["GPU_engine"]/args["GPU_device"] and warns when a request cannot be met.
+# Private aliases keep these out of `from .kernels import *`.
+from .gp_lin_alg import (get_gpu_engine as _get_gpu_engine,
+                         _torch_gpu_device as _get_torch_gpu_device)
+
 
 def squared_exponential_kernel(distance, length):
     """
@@ -530,7 +536,7 @@ def _get_distance_matrix_gpu(x1, x2, device, hps):  # pragma: no cover
     return torch.sqrt(d)
 
 
-def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps):  # pragma: no cover
+def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps, args=None):  # pragma: no cover
     """
     Function for the anisotropic Wendland kernel computed on the GPU.
     Picks the first usable GPU backend (torch CUDA or MPS, else cupy); falls back
@@ -545,15 +551,18 @@ def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps):  # pragma: no cover
         Numpy array of shape (V x D).
     hps : np.ndarray
         Array of hyperparameters. For this kernel we need D + 1 hyperparameters.
+    args : dict, optional
+        The GP's ``args``; ``args["GPU_engine"]`` ("torch"/"pytorch" or "cupy") and
+        ``args["GPU_device"]`` select the backend. An unsatisfiable request warns.
 
     Return
     ------
     Covariance matrix : np.ndarray
     """
-    engine = _get_default_gpu_engine()
+    engine = _get_gpu_engine(args)
     if engine == "torch":
         import torch
-        device = _get_torch_gpu_device()
+        device = _get_torch_gpu_device(args)
         x1_dev = torch.as_tensor(x1, device=device, dtype=torch.float32)
         x2_dev = torch.as_tensor(x2, device=device, dtype=torch.float32)
         hps_dev = torch.as_tensor(hps, device=device, dtype=torch.float32)
@@ -580,44 +589,6 @@ def wendland_anisotropic_gp2Scale_gpu(x1, x2, hps):  # pragma: no cover
         stacklevel=2,
     )
     return wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
-
-
-# --------------------------------------------------------------------------
-# GPU backend selection
-# --------------------------------------------------------------------------
-
-def _get_torch_gpu_device():  # pragma: no cover
-    if importlib.util.find_spec("torch") is None:
-        return None
-    import torch
-
-    if torch.cuda.is_available():
-        device_index = torch.cuda.current_device() if torch.cuda.device_count() > 0 else 0
-        return torch.device(f"cuda:{device_index}")
-
-    mps_backend = getattr(torch.backends, "mps", None)
-    if mps_backend is not None and torch.backends.mps.is_available():
-        return torch.device("mps")
-
-    return None
-
-
-def _cupy_gpu_available():  # pragma: no cover
-    if importlib.util.find_spec("cupy") is None:
-        return False
-    try:
-        import cupy as cp
-        return cp.cuda.runtime.getDeviceCount() > 0
-    except Exception:
-        return False
-
-
-def _get_default_gpu_engine():  # pragma: no cover
-    if _get_torch_gpu_device() is not None:
-        return "torch"
-    if _cupy_gpu_available():
-        return "cupy"
-    return None
 
 
 # --------------------------------------------------------------------------
@@ -721,7 +692,8 @@ def _wendland_support_aware_cpu_triplets(x1, x2, hps):
     diff = z2[cols] - z1[rows]
     dist_sq = np.sum(diff * diff, axis=1)
     inside_mask = dist_sq <= 1.0
-    if not np.all(inside_mask):
+    # query_ball_tree already bounds the radius, so this only guards a floating-point edge
+    if not np.all(inside_mask):  # pragma: no cover - defensive
         rows = rows[inside_mask]
         cols = cols[inside_mask]
         dist_sq = dist_sq[inside_mask]
@@ -766,7 +738,7 @@ def wendland_anisotropic_gp2Scale_cpu_sparse(x1, x2, hps):
     return sparse.coo_matrix((values, (rows, cols)), shape=(len(x1), len(x2)))
 
 
-def _wendland_support_aware_gpu_triplets(x1, x2, hps):  # pragma: no cover
+def _wendland_support_aware_gpu_triplets(x1, x2, hps, args=None):  # pragma: no cover
     """
     Output-sensitive COO triplets for the anisotropic Wendland gp2Scale kernel
     with GPU-backed distance/polynomial evaluation when a usable GPU backend is
@@ -799,10 +771,10 @@ def _wendland_support_aware_gpu_triplets(x1, x2, hps):  # pragma: no cover
         )
 
     diff = z2[cols] - z1[rows]
-    engine = _get_default_gpu_engine()
+    engine = _get_gpu_engine(args)
     if engine == "torch":
         import torch
-        device = _get_torch_gpu_device()
+        device = _get_torch_gpu_device(args)
         diff_dev = torch.as_tensor(diff, device=device, dtype=torch.float32)
         dist_sq_dev = torch.sum(diff_dev * diff_dev, dim=1)
         inside_mask = (dist_sq_dev <= 1.0).detach().cpu().numpy()
@@ -852,7 +824,7 @@ def _wendland_support_aware_gpu_triplets(x1, x2, hps):  # pragma: no cover
     return values, rows, cols
 
 
-def wendland_anisotropic_gp2Scale_gpu_sparse(x1, x2, hps):  # pragma: no cover
+def wendland_anisotropic_gp2Scale_gpu_sparse(x1, x2, hps, args=None):  # pragma: no cover
     """
     GPU-backed support-aware anisotropic Wendland kernel for gp2Scale.
 
@@ -862,7 +834,7 @@ def wendland_anisotropic_gp2Scale_gpu_sparse(x1, x2, hps):  # pragma: no cover
     sparse variant with a UserWarning otherwise.
     """
     _warn_gp2scale_sparse_kernel_sorting()
-    values, rows, cols = _wendland_support_aware_gpu_triplets(x1, x2, hps)
+    values, rows, cols = _wendland_support_aware_gpu_triplets(x1, x2, hps, args)
     if values.size == 0:
         return _empty_gp2scale_sparse_block(x1, x2)
     return sparse.coo_matrix((values, (rows, cols)), shape=(len(x1), len(x2)))

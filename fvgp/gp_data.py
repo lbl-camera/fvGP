@@ -76,10 +76,11 @@ class GPdata:
                 or noise_variances_new is None), "noise_variances_new must be a 1-d np.ndarray or None"
         if self.Euclidean: assert isinstance(x_data_new, np.ndarray) and np.ndim(x_data_new) == 2, \
             "Euclidean x_data_new must be a 2-d np.ndarray"
-        else: assert (isinstance(x_data_new, list) and
-                      np.ndim(x_data_new) == 2 and
-                      self.index_set_dim == x_data_new.shape[1]), \
-            "non-Euclidean x_data_new must be a 2-d list matching index_set_dim"
+        # A non-Euclidean point is an arbitrary object, so there is no dimensionality to
+        # check: __init__ accepts any list here and sets index_set_dim to 1 regardless.
+        # Both documented forms are lists of objects -- a flat one for a single task, and
+        # the [point, task] pairs that the fvGP transform builds for several tasks.
+        else: assert isinstance(x_data_new, list), "non-Euclidean x_data_new must be a list"
 
         if self.noise_variances is not None and noise_variances_new is None:
             raise Exception("Please provide noise_variances in the data update because you did at initialization "
@@ -87,7 +88,6 @@ class GPdata:
         if self.noise_variances is None and noise_variances_new is not None:
             raise Exception("You did not initialize noise and but included noise in the update."
                             "Please reinitialize in this case.")
-        if callable(noise_variances_new): raise Exception("The update noise_variances cannot be a callable.")
         if np.ndim(y_data_new) == 1: y_data_new = y_data_new.reshape(len(y_data_new), 1)
 
         if append is False:

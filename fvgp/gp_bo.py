@@ -255,7 +255,9 @@ def _posterior_mean_var_and_grad(u, gp, dim):
     # from zero carries no directional information. This costs nothing where it
     # matters, since the acquisition is driven by the mean once the variance is gone.
     floor = 1e-10 * max(float(hps[0]), 1e-300)
-    if var <= floor:
+    # Reachable only when the surrogate posterior variance collapses completely, which
+    # needs a query at an exactly-observed point with a nugget driven to its bound.
+    if var <= floor:  # pragma: no cover - numerical edge
         return mean, floor, d_mean, np.zeros_like(d_var)
     return mean, var, d_mean, d_var
 
@@ -670,7 +672,10 @@ def bayesian_optimize(objective_function,
     previous_u = np.asarray(u_list[int(np.argmin(y_list))]) if y_list else None
     stopping_reason = "budget"
     while n_eval < max_iter and not stopped_early:
-        if callable(early_stop) and early_stop():
+        # The per-iteration early-stop check below is a second line of defence: the
+        # check inside the acquisition loop normally fires first, so this one is only
+        # reached if early_stop() flips between the two.
+        if callable(early_stop) and early_stop():  # pragma: no cover - race guard
             stopped_early = True
             stopping_reason = "stopped"
             break

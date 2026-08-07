@@ -171,7 +171,9 @@ class GPposterior:
                     "m(x)": posterior_mean_re,
                     "m(x)_flat": np.squeeze(posterior_mean),
                     "x_pred": x_pred}
-        elif KVinvY.shape[1] > 1 and isinstance(x_out, np.ndarray):
+        # unreachable: the order='F' reshape above already fails for a multi-column
+        # KVinvY combined with x_out, since the flat product space has one column
+        elif KVinvY.shape[1] > 1 and isinstance(x_out, np.ndarray):  # pragma: no cover - defensive
             raise Exception("KVinvY.shape[1] > 1 and isinstance(x_out, np.ndarray)=True")
         else:
             return {"x": x_orig,

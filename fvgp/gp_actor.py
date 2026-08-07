@@ -31,7 +31,9 @@ class _MCMCActor:
 
         def _callback(mcmc_obj):
             trace = mcmc_obj.trace
-            if not trace["f(x)"]:
+            if not trace["f(x)"]:  # pragma: no cover - defensive
+                # gpMCMC calls this only after appending both x and f(x), so the trace is
+                # never empty here. Kept in case that ordering ever changes.
                 return
             xs = np.asarray(trace["x"])
             fxs = np.asarray(trace["f(x)"])

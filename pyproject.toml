@@ -6,16 +6,21 @@ build-backend = "hatchling.build"
 name = "fvgp"
 dependencies = [
     "wheel",
-    "scipy ~= 1.16.0",
-    "numpy ~= 2.2.6",
-    "dask ~= 2025.5.1",
-    "distributed ~= 2025.5.1",
-    "hgdl ~= 2.3.1",
+    # Ranges, not `~=` pins: fvGP supports Python 3.10 through 3.14, and no single
+    # scipy/numpy release covers that span. scipy 1.16 requires >=3.11 and has no cp314
+    # wheel, while scipy 1.18 requires >=3.12 -- a `~=` pin therefore makes both ends of
+    # the Python range uninstallable. With ranges, pip resolves per interpreter:
+    # 3.10 gets scipy 1.15/numpy 2.2, 3.14 gets scipy 1.18/numpy 2.5.
+    "scipy >= 1.13",
+    "numpy >= 2.1",
+    "dask >= 2024.1",
+    "distributed >= 2024.1",
+    "hgdl >= 2.2.3",
     "loguru",
 ]
 # imate
 # pytorch
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 authors = [
     { name = "Marcus Michael Noack", email = "MarcusNoack@lbl.gov" },
     { name = "Ronald J. Pandolfi", email = "ronpandolfi@lbl.gov" },
@@ -33,15 +38,23 @@ classifiers = [
     'Intended Audience :: Developers',
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Programming Language :: Python :: 3",
+    'Programming Language :: Python :: 3.10',
     'Programming Language :: Python :: 3.11',
     'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+    'Programming Language :: Python :: 3.14',
     "Natural Language :: English",
 ]
 dynamic = ["version"]
 
 [project.optional-dependencies]
 docs = ['sphinx', 'pydata-sphinx-theme>=0.15', 'myst-parser', 'myst-nb', 'sphinx-design', 'sphinx-copybutton', 'jupytext']
-tests = ['pytest', 'codecov', 'pytest-cov', 'torch', 'imate', 'pyamg', 'ilupp']
+# `pyamg` has no cp314 wheel and `ilupp` publishes only ancient Windows wheels, so both
+# build from source outside their wheel coverage. The suite skips the preconditioner
+# tests that need them rather than failing, so a build failure costs coverage, not a
+# green run -- see the `preconditioners` extra to install them deliberately.
+tests = ['pytest', 'codecov', 'pytest-cov', 'torch', 'imate']
+preconditioners = ['pyamg', 'ilupp']
 plotting = ['matplotlib', 'plotly', 'notebook']
 
 [project.urls]
@@ -68,6 +81,22 @@ exclude = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["fvgp"]
+
+[tool.coverage.run]
+source = ["fvgp"]
+omit = [
+    # Extension module for distributional regression, contributed separately and
+    # carrying its own partial test (test_ggmp). It is not part of the GP core and
+    # its coverage is tracked separately rather than diluting the package number.
+    "fvgp/ggmp.py",
+]
+
+[tool.coverage.report]
+exclude_also = [
+    # GPU backends: these branches need a CUDA/MPS torch or cupy, which no CPU CI
+    # runner has. They are marked at the source with `# pragma: no cover - needs a GPU`.
+    "pragma: no cover",
+]
 
 [tool.black]
 include = '\.pyi?$'

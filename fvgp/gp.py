@@ -86,8 +86,16 @@ class GP:
         array of positions, the hyperparameters argument
         is a 1d array of length D+1 for the default kernel and of a different
         length for user-defined kernels.
-        The default is a stationary anisotropic kernel
-        (:py:meth:`fvgp.GP.default_kernel`) which performs automatic relevance determination (ARD).
+        The default is a stationary anisotropic Matern kernel of first-order
+        differentiability, which performs automatic relevance determination (ARD)
+        through one length scale per input dimension.
+        If ``gp2Scale`` is enabled, the default changes to a compactly supported anisotropic
+        Wendland kernel instead -- compact support is what makes the covariance matrix sparse.
+        Which one is used depends on ``compute_device``:
+        :py:func:`fvgp.kernels.wendland_anisotropic_gp2Scale_cpu` or
+        :py:func:`fvgp.kernels.wendland_anisotropic_gp2Scale_gpu`.
+        See :py:mod:`fvgp.kernels` for those, their support-aware sparse variants, and the
+        other built-in kernels.
         The output is a matrix, an N1 x N2 numpy array.
         This callable receives the full hyperparameter vector but must only use
         the indices reserved for the kernel (disjoint from mean and noise indices).
@@ -461,6 +469,10 @@ class GP:
             raise Exception("'init_hyperparameters' not provided and could not be calculated. Please provide them ")
 
         if compute_device == 'gpu':
+            # A blanket check only: whether a *specific* engine request can be honored is
+            # decided where that engine is actually used (gp_lin_alg.get_gpu_engine and
+            # the GPU kernels), because not every GPU path goes through pytorch or cupy --
+            # imate's stochastic log-determinant has its own CUDA backend.
             if not importlib.util.find_spec("torch") and not importlib.util.find_spec("cupy"):
                 warnings.warn("You have specified the 'gpu' as your compute device. You need to install pytorch or cupy"
                               " manually for this to work.")
@@ -2129,7 +2141,8 @@ class GP:
         """
         if gp2Scale:
             try:
-                from imate import logdet as imate_logdet
+                from .gp_lin_alg import _import_imate_logdet
+                _import_imate_logdet()
             except:
                 raise Exception(
                     "You have activated `gp2Scale`. You need to install imate"

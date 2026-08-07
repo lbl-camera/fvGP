@@ -5,7 +5,7 @@ __email__ = 'MarcusNoack@lbl.gov'
 
 try:
     from ._version import __version__
-except (ImportError, ModuleNotFoundError) as ex:
+except (ImportError, ModuleNotFoundError) as ex:  # pragma: no cover - needs an uninstalled source tree
     raise RuntimeError('Running fvgp from source code requires installation. If you would like an editable source '
                        'install, use "pip install -e ." to perform and editable installation.') from ex
 

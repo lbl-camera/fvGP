@@ -49,7 +49,7 @@ class GPprior:
                     kernel = wendland_anisotropic_gp2Scale_cpu
                 elif self.compute_device == "gpu":
                     kernel = wendland_anisotropic_gp2Scale_gpu
-            if not self.compute_workers:
+            if not self.compute_workers:  # pragma: no cover - needs a worker-less client
                 logger.debug("No workers available")
 
 
@@ -60,7 +60,7 @@ class GPprior:
             self.k_n_params = len(inspect.signature(kernel).parameters)
         elif kernel is None:
             self.kernel = self._default_kernel
-        else:
+        else:  # pragma: no cover - GP/fvGP assert a callable-or-None kernel first
             raise Exception("No valid kernel function specified")
         self.d_kernel_dx = self._d_kernel_dx
         if callable(kernel_grad):
@@ -186,9 +186,11 @@ class GPprior:
         if self.gp2Scale:
             # Every caller of this method hands over the current training set, so the
             # persistent scatter is the right one to slice -- but only reuse it when the
-            # shapes actually agree, in case a caller ever does otherwise.
+            # lengths agree, in case a caller ever does otherwise. Compare with len() and
+            # not np.shape(): a non-Euclidean point is an arbitrary object, and asking
+            # numpy for the shape of a list of ragged objects raises.
             future = self.x_data_scatter_future
-            if future is not None and np.shape(x) != np.shape(self.x_data): future = None
+            if future is not None and len(x) != len(self.x_data): future = None
             K = self._gp2Scale_covariance(x, x, hyperparameters, symmetric=True, x1_future=future)
         else:
             K = self.compute_covariances(x, x, hyperparameters)
@@ -248,7 +250,10 @@ class GPprior:
         return m, K
 
     def _update_prior(self, x_old, x_new, hyperparameters):
-        if self._default_mean: m = self.compute_mean(np.vstack([x_old, x_new]), hyperparameters)
+        # self.x_data is already the appended dataset here -- GPdata.update runs before
+        # augment_state_data -- so use it rather than rebuilding it. np.vstack cannot
+        # concatenate the plain lists a non-Euclidean input space is made of.
+        if self._default_mean: m = self.compute_mean(self.x_data, hyperparameters)
         else: m = self._update_mean(x_new, hyperparameters)
         K = self._update_prior_covariance_matrix(x_old, x_new, hyperparameters)
         assert np.ndim(m) == 1, "updated mean must be 1-d"
@@ -302,6 +307,13 @@ class GPprior:
         up is a de-duplication we never wanted, since each copy is released with the
         object that made it.
         """
+        # A non-Euclidean point set is a plain list, and dask scatters a list
+        # *element-wise*, handing back a list of futures rather than one future for the
+        # whole set. Wrapping it in a single-element list and taking that one future
+        # keeps the point set together, which is what the workers slice.
+        if isinstance(x, list):
+            return self.client.scatter([x], workers=self.compute_workers, broadcast=True,
+                                       direct=True, hash=False)[0]
         return self.client.scatter(x, workers=self.compute_workers, broadcast=True,
                                    direct=True, hash=False)
 
@@ -322,7 +334,8 @@ class GPprior:
         if symmetric:
             # One broadcast copy, sliced on both axes -- the assembler relies on this to
             # schedule only the upper triangle.
-            assert x2 is x1 or np.shape(x2) == np.shape(x1), "symmetric requires x1 == x2"
+            # len(), not np.shape(): non-Euclidean points are arbitrary objects
+            assert x2 is x1 or len(x2) == len(x1), "symmetric requires x1 == x2"
             x2_future, own2 = x1_future, False
         else:
             own2 = x2_future is None

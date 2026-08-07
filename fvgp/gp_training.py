@@ -346,11 +346,11 @@ class GPtraining:
             Proxy with ``get_latest()`` and ``stop()`` methods.
         """
 
-        def prior_function(theta, bounds, args):
+        def prior_function(theta, bounds, args):  # pragma: no cover - runs on a dask worker
             if self._in_bounds(theta, bounds): return 0.
             else: return -np.inf
 
-        def likelihood_func(hps, args):
+        def likelihood_func(hps, args):  # pragma: no cover - runs on a dask worker
             return objective_function(hps)
 
         if mcmc_prior is not None: prior_function = mcmc_prior

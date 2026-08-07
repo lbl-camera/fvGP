@@ -84,10 +84,18 @@ class fvGP(GP):
         The input ``x1`` is a N1 x Di+1 array of positions, ``x2`` is a N2 x Di+1
         array of positions, the hyperparameters argument
         is a 1d array of length N depending on how many hyperparameters are initialized.
-        The default is a stationary anisotropic kernel
-        (:py:meth:`fvgp.GP.default_kernel`) which performs automatic relevance determination (ARD). The task
+        The default is a stationary anisotropic Matern kernel of first-order
+        differentiability, which performs automatic relevance determination (ARD)
+        through one length scale per input dimension. The task
         direction is simply considered an additional dimension. This kernel should only be used for tests and in the
         simplest of cases.
+        If ``gp2Scale`` is enabled, the default changes to a compactly supported anisotropic
+        Wendland kernel instead -- compact support is what makes the covariance matrix sparse.
+        Which one is used depends on ``compute_device``:
+        :py:func:`fvgp.kernels.wendland_anisotropic_gp2Scale_cpu` or
+        :py:func:`fvgp.kernels.wendland_anisotropic_gp2Scale_gpu`.
+        See :py:mod:`fvgp.kernels` for those, their support-aware sparse variants, and the
+        other built-in kernels.
         The output is a matrix, an N1 x N2 numpy array.
         This callable receives the full hyperparameter vector but must only use
         the indices reserved for the kernel (disjoint from mean and noise indices).
@@ -530,7 +538,7 @@ class fvGP(GP):
             It is possible that not every entry in ``x_new``
             has all corresponding tasks available. In that case ``y_new`` may contain np.nan entries.
         noise_variances_new : np.ndarray, optional
-            A numpy array or list defining the uncertainties/noise in the
+            A numpy array defining the uncertainties/noise in the
             ``y_data`` in form of a point-wise variance. Shape (V, No).
             If ``y_data`` has np.nan entries, the corresponding
             ``noise_variances`` have to be np.nan.
@@ -552,18 +560,17 @@ class fvGP(GP):
         assert len(x_new) == len(y_new), "updated x and y do not have the same lengths."
         if append:
             if noise_variances_new is not None:
-                assert isinstance(noise_variances_new, np.ndarray) or isinstance(noise_variances_new, list), \
-                    "noise_variances_new must be np.ndarray or list"
-                if isinstance(noise_variances_new, np.ndarray): fvgp_noise_variances = (
-                    np.vstack([self.fvgp_noise_variances, noise_variances_new]))
-                elif isinstance(noise_variances_new, list): fvgp_noise_variances = (
-                    self.fvgp_noise_variances + noise_variances_new)
-                else: raise Exception("noise_variances_new not given in an allowed format")
+                assert isinstance(noise_variances_new, np.ndarray), \
+                    "noise_variances_new must be np.ndarray"
+                fvgp_noise_variances = np.vstack([self.fvgp_noise_variances, noise_variances_new])
             else: fvgp_noise_variances = None
 
             if isinstance(x_new, np.ndarray): fvgp_x_data = np.vstack([self.fvgp_x_data, x_new])
+            # a list x_new is a non-Euclidean multi-task input space
             elif isinstance(x_new, list): fvgp_x_data = self.fvgp_x_data + x_new
-            else: raise Exception("x_new not given in an allowed format")
+            # unreachable: the assert above already requires an np.ndarray or a list
+            else: raise Exception(  # pragma: no cover - defensive
+                "x_new not given in an allowed format")
 
             fvgp_y_data = np.vstack([self.fvgp_y_data, y_new])
         else:

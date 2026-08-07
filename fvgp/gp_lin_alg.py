@@ -89,13 +89,13 @@ def _torch_gpu_device(args=None):
             return requested_device if mps_backend is not None and torch.backends.mps.is_available() else None
         return requested_device
 
-    if torch.cuda.is_available():
+    if torch.cuda.is_available():  # pragma: no cover - needs a GPU
         device_index = int(args.get("GPU_device_index",
                                     torch.cuda.current_device() if torch.cuda.device_count() > 0 else 0))
         return torch.device(f"cuda:{device_index}")
 
     mps_backend = getattr(torch.backends, "mps", None)
-    if mps_backend is not None and torch.backends.mps.is_available():
+    if mps_backend is not None and torch.backends.mps.is_available():  # pragma: no cover - needs a GPU
         return torch.device("mps")
 
     return None
@@ -105,6 +105,11 @@ def _cupy_gpu_available():
     """Return ``True`` if cupy is importable and a CUDA device is visible."""
     if importlib.util.find_spec("cupy") is None:
         return False
+    return _cupy_device_count_positive()  # pragma: no cover - needs cupy installed
+
+
+def _cupy_device_count_positive():  # pragma: no cover - needs cupy installed
+    """Split out so the cupy-only body can be excluded without hiding the guard above."""
     try:
         import cupy as cp
         return cp.cuda.runtime.getDeviceCount() > 0
@@ -112,34 +117,83 @@ def _cupy_gpu_available():
         return False
 
 
+#: accepted spellings of the two supported GPU engines
+_GPU_ENGINE_ALIASES = {"torch": "torch", "pytorch": "torch", "cupy": "cupy"}
+
+
+def gpu_engine_unavailable_reason(engine, args=None):
+    """Why ``engine`` cannot be used right now, or ``None`` if it can.
+
+    Separates the two failure modes a user needs to tell apart: the package is not
+    installed at all, versus it is installed but exposes no usable device.
+    """
+    args = _normalize_args(args)
+    canonical = _GPU_ENGINE_ALIASES.get(str(engine).lower())
+    if canonical is None:
+        return (f"`{engine}` is not a supported GPU engine; "
+                f"choose `torch` (pytorch) or `cupy`")
+    if canonical == "torch":
+        if importlib.util.find_spec("torch") is None:
+            return "pytorch is not installed"
+        if _torch_gpu_device(args) is None:
+            return "pytorch is installed but exposes no usable CUDA or MPS device"
+        return None  # pragma: no cover - needs a GPU
+    if importlib.util.find_spec("cupy") is None:
+        return "cupy is not installed"
+    if not _cupy_gpu_available():  # pragma: no cover - needs cupy installed
+        return "cupy is installed but exposes no usable CUDA device"
+    return None  # pragma: no cover - needs a GPU
+
+
 def get_gpu_engine(args):
     """Return the active GPU engine name (``"torch"``, ``"cupy"``, or ``None``).
 
-    Unlike a simple package-presence check, this also verifies that the
-    selected backend has a usable GPU available; otherwise returns ``None``.
+    Unlike a simple package-presence check, this also verifies that the selected
+    backend has a usable GPU available; otherwise returns ``None``.
+
+    Every GPU code path in fvGP resolves its backend here, so reaching this function
+    already means a GPU was asked for. A ``None`` result is therefore always a request
+    that could not be honored, and always warrants a warning saying why -- silently
+    computing on the CPU after the user asked for a GPU is the one outcome that helps
+    nobody. ``args["GPU_engine"]`` accepts ``"torch"`` (or ``"pytorch"``) and ``"cupy"``.
     """
     args = _normalize_args(args)
     if "GPU_engine" in args:
-        preferred_engine = str(args["GPU_engine"]).lower()
-        if preferred_engine == "torch":
-            return "torch" if _torch_gpu_device(args) is not None else None
-        if preferred_engine == "cupy":
-            return "cupy" if _cupy_gpu_available() else None
+        requested = args["GPU_engine"]
+        reason = gpu_engine_unavailable_reason(requested, args)
+        if reason is None:  # pragma: no cover - needs a GPU
+            return _GPU_ENGINE_ALIASES[str(requested).lower()]
+        warnings.warn(
+            f"You requested the `{requested}` GPU engine, but {reason}. "
+            f"Falling back to the CPU.",
+            stacklevel=2)
         return None
-    if _torch_gpu_device(args) is not None:
+
+    if _torch_gpu_device(args) is not None:  # pragma: no cover - needs a GPU
         return "torch"
-    if _cupy_gpu_available():
+    if _cupy_gpu_available():  # pragma: no cover - needs a GPU
         return "cupy"
+    warnings.warn(
+        "A GPU was requested (compute_device='gpu') but no usable GPU backend was "
+        "found. Install pytorch (with CUDA or MPS) or cupy, or select one explicitly "
+        "with args['GPU_engine']. Falling back to the CPU.",
+        stacklevel=2)
     return None
 
 
-def _imate_gpu_enabled(args=None):
-    """imate's GPU backend works through cupy (or torch CUDA); gate accordingly."""
-    args = _normalize_args(args)
-    if _cupy_gpu_available():
-        return True
-    device = _torch_gpu_device(args)
-    return device is not None and device.type == "cuda"
+def _imate_gpu_enabled():
+    """Whether imate can use a GPU for the stochastic log-determinant.
+
+    imate ships its own CUDA backend. It does not go through pytorch or cupy, so neither
+    ``args["GPU_engine"]`` nor whether those packages are installed has any bearing here
+    -- gating on them would disable imate's GPU on a machine that has a perfectly good
+    one. Ask imate itself.
+    """
+    try:
+        from imate.device import get_num_gpu_devices
+        return int(get_num_gpu_devices()) > 0
+    except Exception:  # pragma: no cover - imate without a CUDA build
+        return False
 
 
 # --------------------------------------------------------------------------
@@ -493,7 +547,9 @@ def _build_graph_blocks(KV, block_size):
 
         while queue and len(block) < block_size:
             node = queue.popleft()
-            if assigned[node]:
+            # a queued node can be claimed by an earlier block before it is popped;
+            # BFS order makes that hard to force deterministically in a test
+            if assigned[node]:  # pragma: no cover - depends on BFS ordering
                 continue
             assigned[node] = True
             block.append(node)
@@ -808,7 +864,7 @@ def _build_amg_preconditioner(KV, args=None):
     args = _normalize_args(args)
     try:
         import pyamg
-    except ImportError as exc:
+    except ImportError as exc:  # pragma: no cover - pyamg is a declared test dependency
         raise ImportError("pyamg is required for sparse_preconditioner_type='amg'") from exc
 
     A = _as_symmetric_csr(KV)
@@ -856,7 +912,8 @@ def calculate_sparse_preconditioner(KV, args=None):
         "amg": _build_amg_preconditioner,
     }
 
-    if preconditioner_type not in builders:
+    # _normalize_sparse_preconditioner_type rejects unknown names before this point
+    if preconditioner_type not in builders:  # pragma: no cover - defensive
         raise ValueError(
             "Unknown sparse preconditioner type "
             f"{preconditioner_type!r}. Expected one of {sorted(builders)}."
@@ -1008,13 +1065,34 @@ def _block_conjugate_gradient(KV, vec, cg_tol, x0=None, M=None, maxiter=None):
         G_new = R.T @ Z
         try:
             beta = np.linalg.solve(G, G_new)
-        except np.linalg.LinAlgError:
+        # a rank-deficient block usually breaks down in the alpha solve above first
+        except np.linalg.LinAlgError:  # pragma: no cover - numerical breakdown
             last_exit_code = 3
             break
         P = Z + P @ beta
         G = G_new
 
     return X, last_exit_code
+
+
+def _import_imate_logdet():
+    """Import imate's ``logdet``, undoing the global warning capture it installs.
+
+    Importing imate calls ``logging.captureWarnings(True)``, which redirects every
+    Python warning to the ``py.warnings`` logger -- and that logger gets a
+    ``NullHandler``, so from that moment on warnings are silently discarded
+    process-wide. Not just fvGP's: numpy's, scipy's, everything. Since fvGP imports
+    imate on the first stochastic log-determinant, every gp2Scale training run would
+    otherwise go quiet, including the GPU-request warnings right above.
+
+    Only a change imate actually made is undone, and it is restored to whatever was in
+    place before, so a caller who set up their own ``showwarning`` keeps it.
+    """
+    showwarning_before = warnings.showwarning
+    from imate import logdet as imate_logdet
+    if warnings.showwarning is not showwarning_before:
+        warnings.showwarning = showwarning_before
+    return imate_logdet
 
 
 def calculate_random_logdet(KV, compute_device, args=None, info_out=None):
@@ -1044,9 +1122,14 @@ def calculate_random_logdet(KV, compute_device, args=None, info_out=None):
     args = _normalize_args(args)
     assert sparse.issparse(KV), "KV must be sparse for stochastic logdet"
     logger.debug("calculate_random_logdet")
-    from imate import logdet as imate_logdet
+    imate_logdet = _import_imate_logdet()
     st = time.time()
-    gpu = compute_device == "gpu" and _imate_gpu_enabled(args)
+    gpu = compute_device == "gpu" and _imate_gpu_enabled()
+    if compute_device == "gpu" and not gpu:
+        warnings.warn(
+            "A GPU was requested for the stochastic log-determinant, but imate reports "
+            "no usable GPU device. Computing on the CPU.",
+            stacklevel=2)
 
     lanczos_degree = 20
     error_rtol = 0.01
