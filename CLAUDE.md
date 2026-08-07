@@ -17,8 +17,13 @@ pytest tests/test_fvgp.py::test_single_task_init_basic
 # Skip the slow distributed test while iterating
 pytest tests/ -q --deselect tests/test_fvgp.py::test_gp2Scale
 
-# Run tests with coverage
-pytest tests --cov=./ --cov-report=xml
+# Run tests with coverage (the package is at 100%; ggmp.py is omitted in pyproject)
+pytest tests --cov=fvgp --cov-report=term-missing
+
+# Optional compiled preconditioner backends (pyamg, ilupp). Not in [tests]: ilupp has no
+# Linux wheels and pyamg none for 3.14, so both build from source. Their tests skip when
+# absent, which costs coverage but not a green run.
+pip install -e ".[preconditioners]"
 
 # Lint
 flake8 fvgp tests
@@ -30,6 +35,14 @@ make docs
 There is no `setup.py` (build backend is hatchling + hatch-vcs, version written to [fvgp/_version.py](fvgp/_version.py)), so the `test`, `coverage`, `install`, and `dist` Makefile targets and `tox.ini` are stale — only `make docs` / `make lint` work. Use `pytest` and `hatch build` directly.
 
 There is no `conftest.py`: [tests/test_fvgp.py](tests/test_fvgp.py) imports the `client` / `loop` / `cluster_fixture` fixtures from `distributed.utils_test` at module level, so any test taking a `client` argument spins up a real local Dask cluster.
+
+**Coverage is 100% and worth keeping there.** `[tool.coverage]` in `pyproject.toml` omits `ggmp.py`. Two things to know before adding code:
+- Anything that runs **on a dask worker** (the `gp_actor` classes, the `gp2Scale_covariance` worker functions) is not measured there. Test it in-process by calling it directly — they are all plain classes and plain functions over plain arrays.
+- Use `--cov=fvgp`, not a dotted module target like `--cov=fvgp.gp2Scale_covariance`. The dotted form corrupts numpy's `_NoValue` sentinel on some setups and makes `ndarray.max()` raise `TypeError` inside scipy, which looks like a code bug and is not.
+
+`# pragma: no cover` is used for what genuinely cannot run on a CPU-only runner — GPU backends, branches unreachable behind an earlier assert, numerical breakdowns that cannot be forced. Each one carries its reason on the same line.
+
+**Python 3.10–3.14** are supported and all five are in CI. Dependencies are declared as ranges, not `~=` pins, because no single scipy/numpy release spans that range; pip resolves per interpreter (3.10 → scipy 1.13 / dask 2024.1 via hgdl 2.2.3; 3.11+ → the 2025-era stack). Note **hgdl `~=`-pins the whole scientific stack**, so it, not fvGP, decides which versions a given Python gets.
 
 ## Architecture
 
@@ -118,7 +131,7 @@ Row-wise is the choice when host assembly, not kernel evaluation, is the bottlen
 - `GPprior.x_data_scatter_future` is the single persistent dask scatter of the current `x_data`. Scattered once at `GPprior.__init__`.
 - `GPdata` does NOT scatter — it's pure-Python data only.
 - The prior covariance reads `self.x_data_scatter_future` directly; **no scatter per call**, so training stays dask-quiet. The append path additionally scatters `x_new`, and the posterior path `x_pred`; both release what they created, in a `finally`.
-- **All scatters go through `GPprior._scatter`, which passes `hash=False`.** Dask otherwise keys scattered data by a content hash, so scattering the same array twice — a new GP on the same data, a second prediction at the same points — lands on one key, and the first copy's release races the second scatter inside the scheduler. The tasks then come back as `CancelledError`/`KeyError`. A unique key per scatter removes that collision at the source; `_harvest` in [gp2Scale_covariance.py](fvgp/gp2Scale_covariance.py) additionally raises on an exception result rather than letting it reach the assembly.
+- **All scatters go through `GPprior._scatter`, which does two non-obvious things.** It passes `hash=False`: dask otherwise keys scattered data by a content hash, so scattering the same array twice — a new GP on the same data, a second prediction at the same points — lands on one key, and the first copy's release races the second scatter inside the scheduler, returning `CancelledError`/`KeyError` from the tasks. And it wraps a **list** in a one-element list before scattering, taking `[0]` of the result: `client.scatter(a_list)` scatters *element-wise* and returns a list of futures, not one future for the point set. Without that, gp2Scale on a non-Euclidean input space silently hands the workers the wrong thing. `_harvest` in [gp2Scale_covariance.py](fvgp/gp2Scale_covariance.py) additionally raises on an exception result rather than letting it reach the assembly.
 - On data changes, `augment_state_data` / `update_state_data` refresh the persistent scatter by **overwriting** it (no explicit `release()`); the old future loses its only Python ref and is cleaned up via `__del__`.
 
 **Cross-instance race guard:** [gp.py:14-21](fvgp/gp.py#L14-L21) defines `_GP_INSTANCES_PER_CLIENT`, a `WeakValueDictionary` keyed by `dask_client.id`. `GP.__init__` ([gp.py:285-303](fvgp/gp.py#L285-L303)) raises with a descriptive remediation message if you try to construct a second gp2Scale `GP` on a client that already has a live one — that pattern reliably triggers `FutureCancelledError`/`KeyError` from the scheduler. To reuse a client for a sequence of GPs:
@@ -143,9 +156,32 @@ Both default off so existing behavior is preserved.
 
 **Both are gated to `method='mcmc'` during training.** `GP.train` (sync path) wraps the call in `sequential_linalg_state(self.args, method)` from [gp_kv.py](fvgp/gp_kv.py#L30), which temporarily forces `sparse_krylov_warm_start=False` and `sparse_preconditioner_refresh_interval=1` for every other method, warning if that overrides an explicit user setting and restoring it afterwards. Rationale: both mechanisms carry state between likelihood evaluations and are only sound when successive evaluations are close. For a non-local method the leftover residual of a stale-seeded truncated solve makes the likelihood *order-dependent* — a bias, not zero-mean noise, which is exactly what a Bayesian optimizer's noise model cannot absorb. `_SEQUENTIAL_STATE_METHODS` / `_SEQUENTIAL_STATE_DEFAULTS` at the top of `gp_kv.py` hold the policy; the finer per-evaluation checks are `GPkv._validated_warm_start` and `GPkv._can_reuse_sparse_preconditioner`, which discard cached state whenever K+V has actually drifted, whatever the method.
 
+### GPU backends and `compute_device="gpu"`
+
+Not every GPU path goes through the same library, which is the thing to keep straight:
+
+- **The dense linear algebra and the GPU Wendland kernels** use pytorch or cupy. Every one of them resolves its backend through `gp_lin_alg.get_gpu_engine(args)` — the single source of truth, honoring `args["GPU_engine"]` (`"torch"`/`"pytorch"`/`"cupy"`) and `args["GPU_device"]`. Reaching that function already means a GPU was asked for, so a `None` result is always an unmet request and always warns, naming the cause via `gpu_engine_unavailable_reason`: *not installed* versus *installed but no usable device*. `kernels.py` no longer keeps its own detector; it imports the same helper under a private alias, and the GPU Wendland kernels take an optional `args` (making them 4-argument, which is how `GPprior` knows to pass `args` through to the workers).
+- **imate's stochastic log-determinant** has its own CUDA backend and reaches a GPU through neither pytorch nor cupy. `_imate_gpu_enabled()` asks imate (`imate.device.get_num_gpu_devices()`); gating it on torch/cupy disables a working GPU on any machine with a CPU-only pytorch build. Do not "unify" this with `get_gpu_engine`.
+
+**Importing imate silences all warnings.** It calls `logging.captureWarnings(True)`, routing every Python warning to the `py.warnings` logger, which has a `NullHandler` — so warnings vanish process-wide, fvGP's and numpy's alike. Always import it through `gp_lin_alg._import_imate_logdet()`, which restores the previous `showwarning` and only if imate changed it.
+
+Under gp2Scale the kernel runs on dask workers, so a warning raised inside it never reaches the client. The request is still honored; only the message is lost.
+
+### Preconditioner logging
+
+`calculate_sparse_preconditioner` logs `"<type> preconditioner construction in progress ..."` and a compute time carrying `n` and `K+V nnz`, matching the solvers it feeds so a gp2Scale debug log reads as one timeline. `GPkv._get_or_refresh_preconditioner` logs reuse in the same phrasing — without it, a cached preconditioner's missing construction time looks like one that never ran. Application cost is inside the CG/MINRES timings, not broken out.
+
 ### Customization API
 
 Kernels, mean functions, and noise models are all plain Python callables with standardized signatures. Users pass them as arguments to `GP`/`fvGP` constructors. The full hyperparameter vector is shared across kernel, mean, and noise callables, but each callable must only read its reserved index range. Kernel gradients can be user-supplied or computed via finite differences.
+
+### Non-Euclidean input spaces
+
+`x_data` may be a **list of arbitrary objects** instead of an array — strings, dicts, custom classes, or lists. `GPdata` then sets `Euclidean=False` and `index_set_dim = input_set_dim = 1` regardless of what the objects are, and a user kernel is mandatory. Multi-task works too: `fvGP`'s index-set transform turns the list into `[point, task]` pairs, and the kernel sees those (`a[0]` is the object, `a[1]` the task).
+
+The rule that keeps this working: **never ask numpy about the input set.** `np.ndim`/`np.shape` silently *reinterpret* a list of equal-length lists as a 2-d array and **raise** on a ragged one, so both are wrong for a space whose points are opaque objects. Use `len()`, or `isinstance(x, list)`. Three separate bugs came from breaking this rule — the update assertion, the gp2Scale scatter-reuse guard, and `_update_prior`'s `np.vstack`.
+
+`posterior_mean_grad` / `d_kernel_dx` are the exception and are dense-in-N by construction: they do `np.array(x1)[:, direction] += eps`, which cannot work for object points. Derivatives with respect to a string are not meaningful, so that is correct-by-construction rather than a gap.
 
 ### Information-theoretic methods
 
@@ -158,6 +194,8 @@ Kernels, mean functions, and noise models are all plain Python callables with st
 
 ## Dependencies
 
-Core: `numpy`, `scipy`, `dask`, `distributed`, `hgdl`, `loguru`
+Core: `numpy`, `scipy`, `dask`, `distributed`, `hgdl`, `loguru` — declared as **ranges**, not `~=` pins, so pip can resolve across Python 3.10–3.14 (see Commands).
 
-Optional GPU backend: `torch` or `cupy` (selected via `compute_device` parameter)
+`imate` is required for gp2Scale (the stochastic log-determinant) but is not a declared core dependency; `GP.__init__` raises a pointed message when it is missing. It lives in the `tests` extra.
+
+Optional GPU backend: `torch` or `cupy` (selected via `compute_device`, refined by `args["GPU_engine"]`). Optional compiled preconditioners: `pyamg`, `ilupp` (the `preconditioners` extra).

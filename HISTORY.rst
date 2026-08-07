@@ -192,6 +192,65 @@ New features
   gp2Scale training remains synchronous whatever the method, since it already owns the
   Dask client for the covariance.
 
+* gp2Scale assembles every distributed covariance through one primitive, and lets you
+  choose how the work is cut across the cluster. ``distributed_covariance`` in the new
+  ``fvgp/gp2Scale_covariance.py`` serves the prior covariance, the blocks an append adds,
+  and the posterior's cross-covariance; they differ only in whether the two point sets
+  are the same. Previously the first two were near-duplicate functions and the posterior
+  had no distributed path at all -- it evaluated ``k(x_data, x_pred)`` on the client as a
+  single dense (N x n_pred) array, which is the one thing gp2Scale exists to avoid. That
+  cross-covariance is now distributed and stays sparse, so ``posterior_mean`` never
+  materializes it. ``posterior_covariance`` cannot escape a dense solve, since KV^-1 is
+  dense whatever KV is, and instead chunks over prediction points to cap the intermediate
+  at (N x chunk).
+
+  The new ``gp2Scale_distribution`` chooses between ``"blockwise"`` -- the default and the
+  historical behavior, mapping (row block, column block) pairs and scheduling only the
+  upper triangle when symmetric, so the cluster does half the kernel evaluations -- and
+  ``"rowwise"``, where each worker returns a finished CSR row strip. Row-wise moves the
+  COO-to-CSR sort onto the workers and reduces host assembly to a concatenation with no
+  global COO and no mirroring, at the cost of doubling the kernel evaluations, since
+  symmetry cannot then be exploited. It is the choice when host assembly rather than
+  kernel evaluation is the bottleneck. Measured at N=6000 on two workers with a
+  dense-evaluated kernel, block-wise is still ahead (0.84 s against 1.28 s): row-wise
+  earns its keep on host memory and assembly at scale, not on a small problem.
+
+  Assembly is faster either way. The per-block mask that keeps the upper triangle of a
+  diagonal block was a Python list comprehension over every nonzero -- 97.6 ms against
+  0.34 ms vectorized, on 1.1M nonzeros, once per diagonal block per likelihood
+  evaluation. Empty blocks are skipped instead of shipped, indices are int32 wherever the
+  matrix allows, and a block and its mirror are written into a single preallocation
+  rather than two ``np.hstack`` passes over everything.
+
+* A requested GPU engine is honored wherever that engine is used, and a request that
+  cannot be met now says why instead of quietly computing on the CPU.
+  ``args["GPU_engine"]`` accepts ``"torch"`` (or ``"pytorch"``) and ``"cupy"``, and
+  ``gp_lin_alg.get_gpu_engine`` -- which every GPU path resolves through -- distinguishes
+  the two failure modes a user has to fix differently: "cupy is not installed" against
+  "pytorch is installed but exposes no usable CUDA or MPS device". ``kernels.py`` kept a
+  second, private backend detector that took no ``args`` and so ignored the request
+  entirely; it resolves through the same helper now, and the GPU Wendland kernels take an
+  optional ``args`` so the choice reaches the dask workers.
+
+* Preconditioner construction is logged and timed like the solvers it feeds. Every type
+  reports ``"<type> preconditioner construction in progress ..."`` and a compute time
+  carrying the problem size (``n``, ``K+V nnz``), so the cost can be judged against the
+  solve it buys -- which is the actual question when tuning
+  ``sparse_preconditioner_max_matrix_drift``. A *reused* preconditioner says so too,
+  phrased with the same leading type name: without that line its missing construction
+  time reads as a preconditioner that never ran, and one grep now shows the whole story
+  of builds and reuses. Application cost is not broken out separately; it happens inside
+  the CG/MINRES iterations and is already inside their reported time.
+
+* fvGP supports Python 3.10 through 3.14, and CI tests all five. The obstacle was never
+  the code but the ``~=`` dependency pins: ``scipy ~= 1.16.0`` requires Python >= 3.11
+  and had no cp314 wheel, so no single pin can span the range. The dependencies are
+  ranges now and pip resolves per interpreter -- 3.10 lands on scipy 1.13 / dask 2024.1
+  through hgdl 2.2.3, while 3.11 and up get the 2025-era stack. ``pyamg`` and ``ilupp``
+  moved to a ``preconditioners`` extra: ilupp publishes no Linux wheels at all and pyamg
+  none for 3.14, so both build from source, and the suite skips the tests that need them
+  rather than failing.
+
 Bug fixes
 ~~~~~~~~~
 
@@ -231,6 +290,54 @@ Bug fixes
   a caller who asked for ``"S"`` directly. (The ``"S"`` returned by
   ``joint_gp_prior`` is a separate, flat, and correct array.)
 
+* Every data update on a non-Euclidean GP raised ``AttributeError``. ``GPdata.update``
+  asserted ``x_data_new.shape[1]`` on what is by definition a list, so evaluating the
+  assertion's own condition threw before any update logic ran -- and only because
+  assertions were enabled, which makes ``python -O`` the one way the feature worked. The
+  same assertion also demanded a 2-d list of width ``index_set_dim``, contradicting
+  ``__init__``, which accepts any list and sets ``index_set_dim`` to 1 regardless. Both
+  documented forms were rejected: the flat single-task list the examples use, and the
+  ``[point, task]`` pairs the fvGP index-set transform builds itself. A non-Euclidean
+  point is an arbitrary object, so there is no dimensionality to check, and the assertion
+  now checks only that it is a list.
+
+  ``GPprior._update_prior`` separately rebuilt the full input set with ``np.vstack``,
+  which cannot concatenate lists. It uses ``self.x_data``, already the appended set at
+  that point, which is also one fewer array build on every Euclidean append.
+
+* gp2Scale never worked on a non-Euclidean input space. ``client.scatter`` on a list
+  scatters it *element-wise* and hands back a list of futures rather than one future for
+  the point set, so the workers received something other than the data they meant to
+  slice. Point sets are now scattered as a single object. Object-typed points are
+  regression-tested across strings, lists, lists of differing length, tuples, dicts and
+  custom classes -- a point that is itself a sequence is where numpy-based introspection
+  of the input set goes wrong, silently for a uniform list and by raising for a ragged
+  one.
+
+* A four-argument, ``args``-taking kernel raised ``TypeError`` on the gp2Scale workers.
+  The distributed workers called ``kernel(x1, x2, hps)`` unconditionally, while the
+  signature is supported everywhere else in fvGP. The worker now dispatches on arity the
+  same way ``GPprior.compute_covariances`` does.
+
+* imate's GPU was gated on pytorch and cupy. imate ships its own CUDA backend and reaches
+  a GPU through neither, so the check disabled a perfectly usable GPU on any machine
+  where those two packages happen not to see one -- which is every machine with a
+  CPU-only pytorch build. The stochastic log-determinant now asks imate itself, and says
+  so when a GPU was requested and imate reports none.
+
+* Importing imate silenced every subsequent warning, process-wide. imate calls
+  ``logging.captureWarnings(True)`` on import, which redirects warnings to the
+  ``py.warnings`` logger; that logger gets a ``NullHandler``, so they are discarded --
+  not only fvGP's, but numpy's and scipy's too. fvGP imports imate on the first
+  stochastic log-determinant, so every gp2Scale training run went quiet from that point
+  on. The import now restores whatever ``showwarning`` was in place, and only if imate
+  actually changed it, so a caller's own handler survives.
+
+* ``fvGP.update_gp_data`` no longer accepts list-valued noise variances, a relic from
+  before missing tasks were signalled with ``np.nan``. The index-set transform reads
+  noise as ``noise_variances[j, i]``, which a list cannot do, so that branch could never
+  have worked; it now fails at the argument check with a clear message instead.
+
 Documentation
 ~~~~~~~~~~~~~
 
@@ -238,6 +345,14 @@ Documentation
   indexing and the shapes of ``v(x)``/``S`` against ``v_flat``/``S_flat``. Previously
   the docstring said only ``Solution : dict``, which is much of why the layout above
   could be wrong without anyone noticing.
+
+* The ``kernel_function`` docstrings in ``GP`` and ``fvGP`` now state what the default
+  is under gp2Scale -- a compactly supported anisotropic Wendland kernel, chosen by
+  ``compute_device`` -- and point at ``fvgp.kernels`` for those, their support-aware
+  sparse variants, and the rest. They also no longer reference ``fvgp.GP.default_kernel``,
+  which does not exist; the default is described for what it is, a stationary anisotropic
+  Matern kernel of first-order differentiability with one length scale per input
+  dimension.
 
 Internal
 ~~~~~~~~
@@ -247,3 +362,16 @@ Internal
   evaluations for *every* training method, so they never belonged with Bayesian
   optimization; ``gp_kv`` already owns the per-evaluation staleness checks they pair
   with. Import path only -- no behavior change.
+
+* Test coverage of the package is 100% (224 tests), up from 80%. ``ggmp.py`` is omitted
+  through a new ``[tool.coverage]`` section in ``pyproject.toml``, which is what
+  ``CLAUDE.md`` already claimed was happening. Three groups of code had never been
+  measured for structural reasons rather than neglect: the ``gp_actor`` classes and the
+  gp2Scale worker functions only ever run on dask workers, where coverage is not
+  collected, and are now driven in-process, which is a sharper test as well as a
+  measurable one; ``gp_lin_alg``'s CPU-side error paths and message builders had no tests
+  at all; and nothing had ever updated a non-Euclidean GP, which is how the bugs above
+  survived. Seventeen ``# pragma: no cover`` markers cover what genuinely cannot run on a
+  CPU-only runner -- GPU backends, branches unreachable behind an earlier assertion, and
+  numerical breakdowns that cannot be forced deterministically -- each carrying its
+  reason.
