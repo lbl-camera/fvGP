@@ -1,15 +1,9 @@
 import numpy as np
 import inspect
-import dask.distributed as distributed
 import warnings
-import itertools
-import time
-import scipy.sparse as sparse
 from .kernels import *
-from functools import partial
-from scipy.sparse import block_array
+from .gp2Scale_covariance import distributed_covariance, stack_augmented_covariance
 from loguru import logger
-from scipy.sparse import coo_matrix, vstack
 warnings.simplefilter("once", UserWarning)
 
 
@@ -22,13 +16,18 @@ class GPprior:
                  kernel_grad=None,
                  prior_mean_function_grad=None,
                  gp2Scale_batch_size=10000,
+                 gp2Scale_distribution="blockwise",
                  ):
 
         self.kernel_function = kernel
         self.prior_mean_function = prior_mean_function
         self.batch_size = gp2Scale_batch_size
+        self.gp2Scale_distribution = gp2Scale_distribution
         self.data = data
         self.trainer = trainer
+
+        assert gp2Scale_distribution in ("blockwise", "rowwise"), \
+            "gp2Scale_distribution must be `blockwise` or `rowwise`"
 
         assert callable(kernel) or kernel is None, "kernel must be callable or None"
         assert callable(prior_mean_function) or prior_mean_function is None, \
@@ -94,8 +93,7 @@ class GPprior:
 
         self.x_data_scatter_future = None
         if self.gp2Scale and self.client is not None:
-            self.x_data_scatter_future = self.client.scatter(
-                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
+            self.x_data_scatter_future = self._scatter(self.x_data)
 
         self.m, self.K = self._compute_prior(self.x_data, self.hyperparameters)
         logger.debug("Prior successfully initialized.")
@@ -164,19 +162,18 @@ class GPprior:
             # Python ref and is cleaned up via __del__.  This is race-free within a
             # single GP's lifetime; do NOT churn many GP instances back-to-back without
             # a `del gp; gc.collect(); client.run(lambda: None)` between them.
-            self.x_data_scatter_future = self.client.scatter(
-                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
+            self.x_data_scatter_future = self._scatter(self.x_data)
         logger.debug("Prior mean and covariance updated after data augmentation.")
 
     def update_state_data(self):
         """
-        This is for the case that the data has changed, but not just been augmented. For example, in an online learning setting where old data points are replaced by new ones.
+        This is for the case that the data has changed, but not just been augmented. 
+        For example, in an online learning setting where old data points are replaced by new ones.
         """
         if self.gp2Scale and self.client is not None:
             # Full data change: refresh the persistent scatter before rebuilding K.
             # Overwrite (no explicit release); the old future is GC'd at a quiet moment.
-            self.x_data_scatter_future = self.client.scatter(
-                self.x_data, workers=self.compute_workers, broadcast=True, direct=True)
+            self.x_data_scatter_future = self._scatter(self.x_data)
         self.m, self.K = self._compute_prior(self.x_data, self.hyperparameters)
         logger.debug("Prior mean and covariance updated after data change.")
 
@@ -186,9 +183,30 @@ class GPprior:
 
     def compute_prior_covariance_matrix(self, x, hyperparameters):
         """computes the prior covariance matrix from the kernel"""
-        if self.gp2Scale: K = self._compute_prior_covariance_gp2Scale(x, hyperparameters)
-        else: K = self.compute_covariances(x, x, hyperparameters)
+        if self.gp2Scale:
+            # Every caller of this method hands over the current training set, so the
+            # persistent scatter is the right one to slice -- but only reuse it when the
+            # shapes actually agree, in case a caller ever does otherwise.
+            future = self.x_data_scatter_future
+            if future is not None and np.shape(x) != np.shape(self.x_data): future = None
+            K = self._gp2Scale_covariance(x, x, hyperparameters, symmetric=True, x1_future=future)
+        else:
+            K = self.compute_covariances(x, x, hyperparameters)
         return K
+
+    def compute_data_cross_covariance(self, x_pred, hyperparameters):
+        """computes k(x_data, x_pred), the cross-covariance the posterior needs.
+
+        Under gp2Scale this is the one covariance the posterior cannot simply evaluate on
+        the client: it has as many rows as there are data points.  It goes through the
+        same distributed assembler as the prior and comes back sparse, so a posterior
+        mean never materializes an (N x n_pred) dense array.  Below one batch of data
+        there is nothing to gain from the cluster, so the kernel is called directly.
+        """
+        if self.gp2Scale and self.client is not None and len(self.x_data) > self.batch_size:
+            return self._gp2Scale_covariance(self.x_data, x_pred, hyperparameters,
+                                             x1_future=self.x_data_scatter_future)
+        return self.compute_covariances(self.x_data, x_pred, hyperparameters)
 
     def compute_covariances(self, x1, x2, hps):
         """computes the covariances via k(x,x')"""
@@ -240,7 +258,19 @@ class GPprior:
     def _update_prior_covariance_matrix(self, x_old, x_new, hyperparameters):
         """This updated K based on new data"""
         if self.gp2Scale:
-            K = self._update_prior_covariance_gp2Scale(x_old, x_new, hyperparameters)
+            # self.x_data_scatter_future still holds x_old at this point; augment_state_data
+            # refreshes it to the full dataset only after this call returns.  The x_new
+            # scatter is ours, so it is ours to release.
+            x_new_future = self._scatter(x_new)
+            try:
+                B = self._gp2Scale_covariance(x_old, x_new, hyperparameters,
+                                              x1_future=self.x_data_scatter_future,
+                                              x2_future=x_new_future)
+                D = self._gp2Scale_covariance(x_new, x_new, hyperparameters,
+                                              symmetric=True, x1_future=x_new_future)
+            finally:
+                x_new_future.release()
+            K = stack_augmented_covariance(self.K, B, D)
         else:
             k = self.compute_covariances(x_old, x_new, hyperparameters)
             kk = self.compute_covariances(x_new, x_new, hyperparameters)
@@ -259,142 +289,58 @@ class GPprior:
             raise Exception("Prior mean in wrong format")
         return m
 
-    @staticmethod
-    def _ranges(N, nb):
-        """ splits a range(N) into nb chunks defined by chunk_start, chunk_end """
-        if nb == 0: nb = 1
-        step = N / nb
-        return [(round(step * i), round(step * (i + 1))) for i in range(nb)]
+    def _scatter(self, x):
+        """Broadcast a point set to the compute workers, under a key of its own.
 
-    def _compute_prior_covariance_gp2Scale(self, x_data, hyperparameters):
-        """computes the covariance matrix from the kernel on HPC in sparse format"""
-        st = time.time()
-        point_number = len(x_data)
-        num_batches = point_number // self.batch_size
-        NUM_RANGES = num_batches
-        logger.debug("client id: {}", self.client.id)
-
-        ranges = self._ranges(len(x_data), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
-        ranges_ij = list(
-            itertools.product(ranges, ranges))  # all i/j ranges as ((i_start, i_end), (j_start, j_end)) pairs of tuples
-        ranges_ij = [range_ij for range_ij in ranges_ij if range_ij[0][0] <= range_ij[1][0]]  # filter lower diagonal
-        logger.debug("        gp2Scale covariance matrix init done after {} seconds.", time.time() - st)
-
-        results = list(map(self._harvest_result, distributed.as_completed(self.client.map(
-            partial(kernel_function,
-                    hyperparameters=hyperparameters,
-                    kernel=self.kernel),
-            ranges_ij,
-            [self.x_data_scatter_future] * len(ranges_ij),
-            [self.x_data_scatter_future] * len(ranges_ij)),
-            with_results=True)))
-
-
-        logger.debug("        gp2Scale covariance matrix result written after {} seconds.", time.time() - st)
-
-        # reshape the result set into COO components
-        data, i_s, j_s = map(np.hstack, zip(*results))
-        logger.debug("        gp2Scale covariance matrix result stacked after {} seconds.", time.time() - st)
-        del results
-        # mirror across diagonal
-        diagonal_mask = i_s != j_s
-        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
-            np.hstack([i_s, j_s[diagonal_mask]]), \
-            np.hstack([j_s, i_s[diagonal_mask]])
-        K = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_data), len(x_data)))
-        del data
-        logger.debug("        gp2Scale covariance matrix assembled after {} seconds.", time.time() - st)
-        #K = self._coo_to_csr_chunked(i_s, j_s, data, (len(data), len(data)), int(len(data)/2))
-        K = K.tocsr()
-        logger.debug("        gp2Scale covariance matrix in CSR after {} seconds.", time.time() - st)
-        logger.debug("        gp2Scale covariance matrix sparsity = {}.", float(K.nnz) / float(K.shape[0] ** 2))
-        return K
-
-    @staticmethod
-    def _coo_to_csr_chunked(row, col, data, shape, chunk_size):  #pragma: no cover
-        n_rows = shape[0]
-        chunks = []
-        for start in range(0, n_rows, chunk_size):
-            end = min(start + chunk_size, n_rows)
-            mask = (row >= start) & (row < end)
-            r = row[mask] - start  # Normalize to chunk
-            c = col[mask]
-            d = data[mask]
-            coo_chunk = coo_matrix((d, (r, c)), shape=(end - start, shape[1]))
-            csr_chunk = coo_chunk.tocsr()
-            chunks.append(csr_chunk)
-        return vstack(chunks, format='csr')
-
-    def _update_prior_covariance_gp2Scale(self, x_old, x_new, hyperparameters):
-        """computes the covariance matrix from the kernel on HPC in sparse format.
-
-        Uses self.x_data_scatter_future for the x_old side (pre-augment scatter, still
-        valid at entry) and a fresh local scatter for x_new.  Only x_new's local future
-        is released here; the persistent self.x_data_scatter_future is refreshed by
-        augment_state_data after this call.
+        ``hash=False`` is what makes the key unique.  By default dask keys scattered data
+        by a hash of its content, so scattering the same array twice -- a new GP on the
+        same data, a second prediction at the same points, a re-scatter after an append
+        that did not change x -- lands on one key.  The first copy's release then
+        schedules a ``_dec_ref`` that races the second scatter inside the scheduler, and
+        the tasks depending on it come back as ``KeyError`` or ``CancelledError``.  A
+        unique key per scatter removes the collision at its source; the only thing given
+        up is a de-duplication we never wanted, since each copy is released with the
+        object that made it.
         """
-        x_new_scatter_future = self.client.scatter(
-            x_new, workers=self.compute_workers, broadcast=True, direct=True)
-        x_old_scatter_future = self.x_data_scatter_future
+        return self.client.scatter(x, workers=self.compute_workers, broadcast=True,
+                                   direct=True, hash=False)
 
-        point_number = len(x_old)
-        num_batches = point_number // self.batch_size
-        NUM_RANGES = num_batches
-        ranges_data = self._ranges(len(x_old), NUM_RANGES)  # the chunk ranges, as (start, end) tuples
-        num_batches2 = len(x_new) // self.batch_size
-        ranges_input = self._ranges(len(x_new), num_batches2)
-        ranges_ij = list(itertools.product(ranges_data, ranges_input))
+    def _gp2Scale_covariance(self, x1, x2, hyperparameters, symmetric=False,
+                             x1_future=None, x2_future=None):
+        """The single distributed kernel evaluation, shared by prior, append and posterior.
 
-        # K = np.block([[self.K, B],
-        #               [B,      C]])
-        # Calculate B
+        Owns nothing but scatter lifetime: a future passed in belongs to the caller and is
+        left alone (this is how the persistent ``x_data_scatter_future`` survives), while
+        any future created here is released before returning.  The scheduling and assembly
+        live in :py:mod:`fvgp.gp2Scale_covariance`.
+        """
+        if self.client is None:
+            raise Exception("gp2Scale needs a dask client to compute covariances.")
 
-        results = list(map(self._harvest_result,
-                           distributed.as_completed(self.client.map(
-                               partial(kernel_function_update,
-                                       hyperparameters=hyperparameters,
-                                       kernel=self.kernel),
-                               ranges_ij,
-                               [x_old_scatter_future] * len(ranges_ij),
-                               [x_new_scatter_future] * len(ranges_ij)),
-                               with_results=True)))
+        own1 = x1_future is None
+        if own1: x1_future = self._scatter(x1)
+        if symmetric:
+            # One broadcast copy, sliced on both axes -- the assembler relies on this to
+            # schedule only the upper triangle.
+            assert x2 is x1 or np.shape(x2) == np.shape(x1), "symmetric requires x1 == x2"
+            x2_future, own2 = x1_future, False
+        else:
+            own2 = x2_future is None
+            if own2: x2_future = self._scatter(x2)
 
-        data, i_s, j_s = map(np.hstack, zip(*results))
-        B = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_old), len(x_new)))
-
-        # mirror across diagonal
-        ranges_ij2 = list(itertools.product(ranges_input, ranges_input))
-        ranges_ij2 = [range_ij2 for range_ij2 in ranges_ij2 if
-                      range_ij2[0][0] <= range_ij2[1][0]]  # filter lower diagonal
-
-        results = list(map(self._harvest_result,
-                           distributed.as_completed(self.client.map(
-                               partial(kernel_function,
-                                       hyperparameters=hyperparameters,
-                                       kernel=self.kernel),
-                               ranges_ij2,
-                               [x_new_scatter_future] * len(ranges_ij2),
-                               [x_new_scatter_future] * len(ranges_ij2)),
-                               with_results=True)))
-        data, i_s, j_s = map(np.hstack, zip(*results))
-        diagonal_mask = i_s != j_s
-        data, i_s, j_s = np.hstack([data, data[diagonal_mask]]), \
-            np.hstack([i_s, j_s[diagonal_mask]]), \
-            np.hstack([j_s, i_s[diagonal_mask]])
-        D = sparse.coo_matrix((data, (i_s, j_s)), shape=(len(x_new), len(x_new)))
-
-        res = block_array([[self.K, B],
-                           [B.transpose(), D]])
-
-        x_new_scatter_future.release()
-
-        return res
-
-    @staticmethod
-    def _harvest_result(future_result):
-        future, result = future_result
-        future.release()
-        return result
+        try:
+            return distributed_covariance(
+                self.client, self.kernel, hyperparameters,
+                x1_future=x1_future, n1=len(x1),
+                x2_future=x2_future, n2=len(x2),
+                batch_size=self.batch_size,
+                symmetric=symmetric,
+                distribution=self.gp2Scale_distribution,
+                k_n_params=self.k_n_params,
+                args=self.args)
+        finally:
+            if own1: x1_future.release()
+            if own2: x2_future.release()
 
     ####################################################
     ####################################################
@@ -508,6 +454,7 @@ class GPprior:
             m_n_params=self.m_n_params,
             k_n_params=self.k_n_params,
             batch_size=self.batch_size,
+            gp2Scale_distribution=self.gp2Scale_distribution,
             data=self.data,
             trainer=self.trainer,
             kernel=self.kernel,
@@ -524,49 +471,3 @@ class GPprior:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
-
-
-########################################################
-########################################################
-########################################################
-def kernel_function(range_ij, x1_future, x2_future, hyperparameters, kernel):
-    """
-    Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the
-    covariance matrix being calculated.
-    Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
-    """
-
-    hps = hyperparameters
-    range_i, range_j = range_ij
-    x1 = x1_future[range_i[0]:range_i[1]]
-    x2 = x2_future[range_j[0]:range_j[1]]
-    k = kernel(x1, x2, hps)
-    k_sparse = sparse.coo_matrix(k)
-
-    data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
-
-    # mask lower triangular values when current chunk spans diagonal
-    if range_i[0] == range_j[0]:
-        mask = [row <= col for (row, col) in zip(rows, cols)]
-        return data[mask], rows[mask], cols[mask]
-    else:
-        return data, rows, cols
-
-
-def kernel_function_update(range_ij, x1_future, x2_future, hyperparameters, kernel):
-    """
-    Essentially, parameters other than range_ij are static across calls. range_ij defines the region of the
-    covariance matrix being calculated.
-    Rather than return a sparse array in local coordinates, we can return the COO components in global coordinates.
-    """
-
-    hps = hyperparameters
-    range_i, range_j = range_ij
-    x1 = x1_future[range_i[0]:range_i[1]]
-    x2 = x2_future[range_j[0]:range_j[1]]
-    k = kernel(x1, x2, hps)
-    k_sparse = sparse.coo_matrix(k)
-
-    data, rows, cols = k_sparse.data, k_sparse.row + range_i[0], k_sparse.col + range_j[0]
-
-    return data, rows, cols

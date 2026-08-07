@@ -156,6 +156,16 @@ class GP:
         The default is False.
     gp2Scale_batch_size : int, optional
         Matrix batch size for distributed computing in gp2Scale. The default is 10000.
+    gp2Scale_distribution : str, optional
+        How the covariance computation is cut across the workers in gp2Scale.
+        ``"blockwise"`` (default) sends (row block, column block) pairs and, for the
+        symmetric prior covariance, schedules only the upper triangle, so the cluster
+        performs half the kernel evaluations and the host mirrors the result.
+        ``"rowwise"`` sends whole row strips and has each worker return a finished sparse
+        strip, so the assembly is a concatenation rather than a global re-sort on the
+        host. Row-wise cannot exploit symmetry and so doubles the kernel evaluations, but
+        it removes the host as a bottleneck and lowers its peak memory considerably; it is
+        the better choice when assembly, not kernel evaluation, dominates the run time.
     dask_client : dask.distributed.Client, optional
         A dask client for gp2Scale, asynchronous training,a nd certain linear algebra operations.
         On HPC architecture, this client is provided by the job script. Please have a look at the examples.
@@ -377,6 +387,7 @@ class GP:
         gp2Scale=False,
         dask_client=None,
         gp2Scale_batch_size=10000,
+        gp2Scale_distribution="blockwise",
         linalg_mode=None,
         ram_economy=False,
         args=None
@@ -468,6 +479,7 @@ class GP:
                              kernel_grad=kernel_function_grad,
                              prior_mean_function_grad=prior_mean_function_grad,
                              gp2Scale_batch_size=gp2Scale_batch_size,
+                             gp2Scale_distribution=gp2Scale_distribution,
                              )
         ########################################
         ###init likelihood instance [tier 3]####

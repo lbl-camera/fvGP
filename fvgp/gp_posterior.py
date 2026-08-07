@@ -1,6 +1,7 @@
 import numpy as np
 import warnings
 from loguru import logger
+from scipy.sparse import issparse
 from .gp_lin_alg import *
 
 
@@ -20,7 +21,12 @@ class GPposterior:
         self.noise_function_available = callable(self.likelihood.noise_function)
 
     def compute_covariances(self, x1, x2, hps):
+        """Direct, dense kernel evaluation. For the small (n_pred x n_pred) blocks."""
         return self.prior.compute_covariances(x1, x2, hps)
+
+    def cross_covariance(self, x_pred, hps):
+        """k(x_data, x_pred). Distributed and sparse under gp2Scale, dense otherwise."""
+        return self.prior.compute_data_cross_covariance(x_pred, hps)
 
     def compute_mean(self, x, hps):
         return self.prior.compute_mean(x, hps)
@@ -86,6 +92,48 @@ class GPposterior:
     @property
     def m(self):
         return self.prior.m
+
+    @property
+    def gp2Scale(self):
+        return self.data.gp2Scale
+
+    @staticmethod
+    def _dense(matrix):
+        """A dense view of a covariance block that may have arrived sparse from gp2Scale."""
+        return matrix.toarray() if issparse(matrix) else matrix
+
+    def _dense_K(self):
+        """K as a dense array, for the methods that build a joint (N + n_pred)^2 matrix.
+
+        Those methods are dense in N by construction, so under gp2Scale they are only
+        usable on small problems and the user should know that the sparsity they asked
+        for is being thrown away here.
+        """
+        if not issparse(self.K): return self.K
+        warnings.warn(
+            "This method assembles a joint covariance over data and prediction points, "
+            "which is dense in the number of data points. Under gp2Scale that discards "
+            "the sparse representation and costs O(N^2) memory; it is only usable on "
+            "small problems. Consider posterior_covariance instead.")
+        return self.K.toarray()
+
+    def _cross_solve_product(self, k, chunk_size=None):
+        """``k.T @ KV^-1 @ k``, evaluated in column chunks.
+
+        The solve is dense whatever ``k`` is -- ``KV^-1`` is dense even when ``KV`` is not
+        -- so chunking over prediction points is what keeps the intermediate at
+        (N x chunk) rather than (N x n_pred). ``k`` itself stays sparse throughout under
+        gp2Scale; only the chunk handed to the solver is densified.
+        """
+        n_pred = k.shape[1]
+        if chunk_size is None: chunk_size = n_pred if not self.gp2Scale else self.prior.batch_size
+        chunk_size = max(1, min(int(chunk_size), n_pred))
+        product = np.empty((n_pred, n_pred))
+        for start in range(0, n_pred, chunk_size):
+            end = min(start + chunk_size, n_pred)
+            solved = self.KVsolve(self._dense(k[:, start:end]))
+            product[:, start:end] = np.asarray(k.T @ solved)
+        return product
     ##########################################################
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
@@ -104,8 +152,10 @@ class GPposterior:
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.compute_covariances(x_data, x_pred, hyperparameters)
-        A = k.T @ KVinvY
+        # Sparse under gp2Scale, and it stays sparse: the product with KVinvY is the whole
+        # use of k here, so the posterior mean never materializes an (N x n_pred) array.
+        k = self.cross_covariance(x_pred, hyperparameters)
+        A = np.asarray(k.T @ KVinvY)
         prior_mean = self.compute_mean(x_pred, hyperparameters)
         posterior_mean = prior_mean[:, None] + A
         if isinstance(x_out, np.ndarray): posterior_mean_re = posterior_mean.reshape(len(x_orig), len(x_out), order='F')
@@ -175,26 +225,23 @@ class GPposterior:
 
     ###########################################################################
     def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
-        x_data = self.x_data.copy()
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
         if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
 
-        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
+        k = self.cross_covariance(x_pred, self.hyperparameters)
         kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters)
 
-        if self.KVinv is not None:
-            if variance_only and self.y_data.shape[1] == 1:
-                S = None
-                v = np.diag(kk) - np.einsum('ij,jk,ki->i', k.T,
-                                            self.KVinv, k, optimize=True)
-            else:
-                S = kk - (k.T @ self.KVsolve(k))
-                v = np.array(np.diag(S))
+        if self.KVinv is not None and variance_only and self.y_data.shape[1] == 1:
+            # The explicit-inverse modes are dense in N anyway, so densifying k costs
+            # nothing here, and the einsum gets the variances without ever forming S.
+            k_dense = self._dense(k)
+            S = None
+            v = np.diag(kk) - np.einsum('ij,jk,ki->i', k_dense.T,
+                                        self.KVinv, k_dense, optimize=True)
         else:
-            k_cov_prod = self.KVsolve(k)
-            S = kk - (k_cov_prod.T @ k)
+            S = kk - self._cross_solve_product(k)
             v = np.array(np.diag(S))
         if np.any(v < -0.0001):
             warnings.warn(
@@ -284,7 +331,7 @@ class GPposterior:
     ###########################################################################
     def joint_gp_prior(self, x_pred, x_out=None):
         x_data, K, prior_mean_vec = (self.x_data.copy(),
-                                     self.K.copy() + (np.identity(len(self.K)) * 1e-9),
+                                     self._dense_K() + (np.identity(len(self.x_data)) * 1e-9),
                                      self.m.copy())
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
@@ -306,7 +353,7 @@ class GPposterior:
     ###########################################################################
     def joint_gp_prior_grad(self, x_pred, direction, x_out=None):
         x_data, K, prior_mean_vec = (self.x_data.copy(),
-                                     self.K.copy() + (np.identity(len(self.K)) * 1e-9),
+                                     self._dense_K() + (np.identity(len(self.x_data)) * 1e-9),
                                      self.m.copy())
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
@@ -413,7 +460,7 @@ class GPposterior:
 
     ###########################################################################
     def gp_mutual_information(self, x_pred, x_out=None, add_noise=False):
-        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
+        x_data, K = self.x_data.copy(), self._dense_K() + (np.identity(len(self.x_data)) * 1e-9)
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
@@ -429,7 +476,7 @@ class GPposterior:
 
     ###########################################################################
     def gp_total_correlation(self, x_pred, x_out=None, add_noise=False):
-        x_data, K = self.x_data.copy(), self.K.copy() + (np.identity(len(self.K)) * 1e-9)
+        x_data, K = self.x_data.copy(), self._dense_K() + (np.identity(len(self.x_data)) * 1e-9)
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
