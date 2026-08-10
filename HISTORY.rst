@@ -222,6 +222,36 @@ New features
   matrix allows, and a block and its mirror are written into a single preallocation
   rather than two ``np.hstack`` passes over everything.
 
+* gp2Scale no longer shreds a thin covariance into near-empty tasks. Both distributions
+  chunked the *row* axis by ``gp2Scale_batch_size`` however narrow the other axis was, so a
+  posterior at 2 prediction points with a batch size of 10 became 1000 dask tasks of 20
+  entries: 1.8 s for a 10 000 x 2 result that takes 0.83 ms in a single kernel call, a
+  factor of 2171. Every append had the same shape -- ``k(x_old, x_new)`` with 5 new points
+  is N x 5. Two things let it through: the posterior gated on ``len(x_data) > batch_size``,
+  a *row count* that is true for any real dataset whatever the column count, and the append
+  path had no gate at all.
+
+  ``gp2Scale_batch_size`` is now read as the per-task RAM budget it already implies --
+  ``B x B`` entries block-wise, ``N x B`` row-wise -- and that budget decides both whether
+  to distribute and how to cut. Anything that fits in one task is computed in a single
+  kernel call instead of being scheduled; ``k(x_new, x_new)`` and ``k(x_pred, x_pred)`` fall
+  out of this automatically.
+
+  Note that the two budgets are **not comparable numbers**: at ``B = 10000`` and N = 1e6
+  they are 0.8 GB and 80 GB. The same setting can therefore leave a computation local under
+  one distribution and distribute it under the other, which is deliberate -- each mode gets
+  the memory its own user declared, and no single budget can serve both without
+  over-committing one of them.
+
+* Cross-covariances are always computed in strips, whatever ``gp2Scale_distribution`` says.
+  The posterior's ``k(x_data, x_pred)`` and the ``k(x_old, x_new)`` block of an append are
+  tall and thin, and blocking a tall thin matrix multiplies the task count without reducing
+  per-task memory -- the long axis has to be traversed either way. The short axis is split
+  into strips as wide as the budget allows, each task spanning the long axis: at N = 1e8
+  with 8 prediction points and a strip width of 4, two tasks of 1e8 x 4.
+  ``gp2Scale_distribution`` now governs only the symmetric case, the prior and
+  ``k(x_new, x_new)``.
+
 * ``gp2Scale_batch_size`` is a maximum with a remainder, not a target to divide around.
   It used to cut ``n`` into ``n // batch_size`` *equal* chunks, which made the setting a
   lower bound: 19 999 points at a batch size of 15 000 came out as one 19 999-wide chunk,

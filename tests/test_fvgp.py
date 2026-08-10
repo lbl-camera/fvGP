@@ -3090,11 +3090,17 @@ def test_gp2Scale_posterior_matches_dense(client):
     del dense
     gc.collect()
 
+    from fvgp.gp2Scale_covariance import should_distribute
+
     for distribution in ("blockwise", "rowwise"):
-        # batch_size below len(x) is what puts the cross-covariance on the cluster
-        scaled = GP(x, y, hps, gp2Scale=True, gp2Scale_batch_size=40,
+        # batch_size has to be small enough that the 120 x 17 cross-covariance exceeds one
+        # task's RAM budget; otherwise it is computed on the client and this stops testing
+        # the distributed path at all
+        scaled = GP(x, y, hps, gp2Scale=True, gp2Scale_batch_size=10,
                     gp2Scale_distribution=distribution, dask_client=client,
                     linalg_mode="Chol")
+        assert should_distribute(len(x), len(x_pred_local), 10, distribution), \
+            f"{distribution}: this test must exercise the distributed cross-covariance"
         assert sparse.issparse(scaled.prior.compute_data_cross_covariance(x_pred_local, hps))
         assert np.allclose(scaled.posterior_mean(x_pred_local)["m(x)"], reference_mean)
         post = scaled.posterior_covariance(x_pred_local)
@@ -5994,3 +6000,163 @@ def test_a_reused_preconditioner_says_so_instead_of_going_quiet():
     assert "ilu preconditioner reused (2 consecutive reuses)" in text
     # build and reuse lines share the word, so one grep shows the whole story
     assert sum("preconditioner" in line for line in sink) >= 4
+
+
+###########################################################################
+########## task sizing: the RAM budget gp2Scale_batch_size implies ########
+###########################################################################
+def test_task_budget_is_per_distribution():
+    """`B` is not the same physical quantity in the two modes: a B x B block against an
+    N x B strip. At B=10000 and N=1e6 that is 0.8 GB against 80 GB."""
+    from fvgp.gp2Scale_covariance import task_budget
+
+    assert task_budget(1_000_000, 10000, "blockwise") == 10000 * 10000
+    assert task_budget(1_000_000, 10000, "rowwise") == 1_000_000 * 10000
+    # the row-wise budget scales with the dataset, the block-wise one does not
+    assert task_budget(2_000_000, 10, "rowwise") == 2 * task_budget(1_000_000, 10, "rowwise")
+    assert task_budget(2_000_000, 10, "blockwise") == task_budget(1_000_000, 10, "blockwise")
+    assert task_budget(100, 0, "blockwise") == 1, "a zero batch size must not divide by zero"
+
+
+def test_should_distribute_only_above_the_budget():
+    from fvgp.gp2Scale_covariance import should_distribute, task_budget
+
+    B, n1 = 10, 10000
+    budget = task_budget(n1, B, "rowwise")                       # 100 000 entries
+    assert should_distribute(n1, budget // n1, B, "rowwise") is False       # exactly at
+    assert should_distribute(n1, budget // n1 + 1, B, "rowwise") is True    # just over
+
+    # the reported cases: both are trivially small against the row-wise budget
+    assert should_distribute(10000, 2, 10, "rowwise") is False    # posterior, 2 points
+    assert should_distribute(10000, 5, 10, "rowwise") is False    # append, 5 points
+    assert should_distribute(5, 5, 10, "rowwise") is False        # k(x_new, x_new)
+    assert should_distribute(5, 5, 10, "blockwise") is False
+
+
+def test_cross_covariance_strip_width_from_the_budget():
+    """A strip spans the long axis, so its width is what the budget buys -- and it can
+    never be narrower than 1, even when the budget cannot afford a single column."""
+    from fvgp.gp2Scale_covariance import strip_width, task_budget, ranges
+
+    # N=1e8, 8 prediction points, strip width 4 -> two tasks of 1e8 x 4
+    n1, n2, B = 100_000_000, 8, 4
+    w = strip_width(n1, n2, task_budget(n1, B, "rowwise"))
+    assert w == 4
+    assert [e - s for s, e in ranges(n2, w)] == [4, 4]
+
+    # block-wise with a small B cannot afford even one full column; clamps to 1
+    assert strip_width(10000, 2, task_budget(10000, 10, "blockwise")) == 1
+    # a realistic block-wise setting lands exactly on budget
+    assert strip_width(1_000_000, 500, task_budget(1_000_000, 10000, "blockwise")) == 100
+    # never wider than the axis being split
+    assert strip_width(10, 3, 10**9) == 3
+
+
+def test_column_strip_worker_and_assembly():
+    from fvgp.gp2Scale_covariance import col_strip_csc, assemble_col_strips
+
+    x = np.sort(np.random.rand(40, 1), axis=0)
+    xp = np.random.rand(6, 1)
+    hps = np.array([1.0, 0.4])
+
+    calls = []
+
+    def recording_kernel(x1, x2, hps):
+        calls.append((len(x1), len(x2)))
+        return wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
+
+    start, strip = col_strip_csc((2, 5), x, xp, hps, recording_kernel, 3, None, 40, np.int32)
+    assert calls == [(40, 3)], "a column strip spans every row in one call"
+    assert start == 2 and strip.shape == (40, 3) and strip.format == "csc"
+    assert np.allclose(strip.toarray(), wendland_anisotropic_gp2Scale_cpu(x, xp[2:5], hps))
+
+    harvest = [col_strip_csc(r, x, xp, hps, wendland_anisotropic_gp2Scale_cpu,
+                             3, None, 40, np.int32) for r in ((0, 3), (3, 6))]
+    K = assemble_col_strips(iter(harvest), 40, 6)
+    assert K.format == "csr"
+    assert np.allclose(K.toarray(), wendland_anisotropic_gp2Scale_cpu(x, xp, hps))
+    assert assemble_col_strips(iter([]), 4, 9).shape == (4, 9)
+
+
+def test_empty_column_strip():
+    from fvgp.gp2Scale_covariance import col_strip_csc
+
+    x = np.random.rand(20, 1)
+    far = np.random.rand(4, 1) + 50.0            # nothing within the Wendland support
+    start, strip = col_strip_csc((0, 4), x, far, np.array([1.0, 0.1]),
+                                 wendland_anisotropic_gp2Scale_cpu, 3, None, 20, np.int32)
+    assert start == 0 and strip.shape == (20, 4) and strip.nnz == 0
+
+
+def test_wide_cross_covariance_strips_along_rows(client):
+    """When the short axis is the *rows* -- k(x_pred, x_data) rather than the usual
+    orientation -- the strips run the other way."""
+    from fvgp.gp2Scale_covariance import distributed_covariance
+
+    rng = np.random.default_rng(17)
+    xp = rng.random((9, 1))
+    x = np.sort(rng.random((60, 1)), axis=0)
+    hps = np.array([1.0, 0.3])
+    f1 = client.scatter(xp, broadcast=True, direct=True, hash=False)
+    f2 = client.scatter(x, broadcast=True, direct=True, hash=False)
+
+    K = distributed_covariance(client, wendland_anisotropic_gp2Scale_cpu, hps,
+                               x1_future=f1, n1=9, x2_future=f2, n2=60,
+                               batch_size=3, symmetric=False, distribution="rowwise")
+    assert K.shape == (9, 60)
+    assert np.allclose(K.toarray(), wendland_anisotropic_gp2Scale_cpu(xp, x, hps))
+    f1.release(); f2.release()
+
+
+def test_cross_covariance_is_striped_under_both_distributions(client):
+    """A cross-covariance is tall and thin, so it is always split into strips -- blocking
+    it would multiply tasks without reducing per-task memory. Both settings must
+    therefore agree exactly."""
+    from fvgp.gp2Scale_covariance import distributed_covariance
+
+    rng = np.random.default_rng(5)
+    x = np.sort(rng.random((60, 1)), axis=0)
+    xp = rng.random((9, 1))
+    hps = np.array([1.0, 0.3])
+    f1 = client.scatter(x, broadcast=True, direct=True, hash=False)
+    f2 = client.scatter(xp, broadcast=True, direct=True, hash=False)
+
+    reference = wendland_anisotropic_gp2Scale_cpu(x, xp, hps)
+    results = {}
+    for dist in ("blockwise", "rowwise"):
+        K = distributed_covariance(client, wendland_anisotropic_gp2Scale_cpu, hps,
+                                   x1_future=f1, n1=60, x2_future=f2, n2=9,
+                                   batch_size=3, symmetric=False, distribution=dist)
+        assert np.allclose(K.toarray(), reference), dist
+        results[dist] = K
+    assert abs(results["blockwise"] - results["rowwise"]).max() == 0.0
+    f1.release(); f2.release()
+
+
+def test_small_cross_covariances_never_reach_the_cluster(client, monkeypatch):
+    """The reported pathology: a 10 000 x 2 posterior and a 5-point append used to become
+    1000 dask tasks of 20 entries. Neither may touch the cluster now."""
+    import gc
+    import fvgp.gp_prior as prior_module
+
+    def must_not_be_called(*a, **k):     # pragma: no cover - the point is that it is not
+        raise AssertionError("this shape must not be distributed")
+
+    rng = np.random.default_rng(9)
+    x = rng.random((2000, 1))
+    y = np.sin(np.linalg.norm(x, axis=1) * 5.0)
+    gp = GP(x, y, np.array([1.0, 0.5]), gp2Scale=True, gp2Scale_batch_size=10,
+            gp2Scale_distribution="rowwise", dask_client=client, linalg_mode="Chol")
+
+    monkeypatch.setattr(prior_module, "distributed_covariance", must_not_be_called)
+
+    k = gp.prior.compute_data_cross_covariance(rng.random((2, 1)), gp.hyperparameters)
+    assert sparse.issparse(k) and k.shape == (2000, 2)
+
+    x_add = rng.random((5, 1))
+    gp.update_gp_data(x_add, np.sin(np.linalg.norm(x_add, axis=1) * 5.0), append=True)
+    assert gp.prior.K.shape == (2005, 2005) and sparse.issparse(gp.prior.K)
+
+    del gp
+    gc.collect()
+    client.run(lambda: None)

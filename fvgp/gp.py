@@ -181,6 +181,25 @@ class GP:
         Row-wise also produces far fewer tasks -- ``N / gp2Scale_batch_size`` against
         roughly ``(N / gp2Scale_batch_size)^2 / 2`` for block-wise -- so on a large
         cluster it usually wants a smaller value than block-wise would.
+
+        These two meanings are **not comparable numbers**. At ``gp2Scale_batch_size=10000``
+        and N=1e6, block-wise sanctions 0.8 GB per task and row-wise 80 GB, so the same
+        setting can leave a computation local under one distribution and distribute it
+        under the other. That is deliberate -- each mode gets the memory its own user
+        actually declared.
+
+        The budget also decides **whether to distribute at all**: anything that fits in one
+        task is computed in a single kernel call instead, because scheduling costs more
+        than the work. A 10 000 x 2 cross-covariance takes 0.83 ms directly against 1.8 s
+        spread over 1000 dask tasks. That local call happens on the client, so it can hold
+        up to one task's budget in client memory -- worth remembering under ``"rowwise"``,
+        where the budget grows with N.
+
+        Cross-covariances -- the posterior's ``k(x_data, x_pred)`` and the ``k(x_old,
+        x_new)`` block of an append -- are **always cut into strips**, whatever
+        ``gp2Scale_distribution`` says, with the strip width taken from the budget above.
+        Blocking a tall thin matrix multiplies the task count without reducing per-task
+        memory, since the long axis has to be traversed either way.
     gp2Scale_distribution : str, optional
         How the covariance computation is cut across the workers in gp2Scale.
         ``"blockwise"`` (default) sends (row block, column block) pairs and, for the

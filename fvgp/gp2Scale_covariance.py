@@ -61,6 +61,49 @@ def ranges(n, batch_size):
     return [(start, min(start + batch_size, n)) for start in range(0, n, batch_size)]
 
 
+def task_budget(n1, batch_size, distribution):
+    """Entries one task is meant to hold, as ``gp2Scale_batch_size`` already implies.
+
+    The user's ``B`` is not the same physical quantity in the two distributions, and this
+    is where that becomes explicit:
+
+    * ``"blockwise"`` -- a task is a ``B x B`` block, so ``B * B`` entries.
+    * ``"rowwise"``   -- a task is a strip spanning the data, so ``N * B`` entries.
+
+    At ``B = 10000`` and N = 1e6 those are 0.8 GB and 80 GB respectively: the same number
+    sanctions 100x different memory depending on the mode. Two users who wrote the same
+    ``B`` have not asked for the same thing, which is why the same problem can be
+    distributed under one mode and computed locally under the other. Deriving the budget
+    per mode is the point -- it respects what each user actually declared.
+    """
+    batch_size = max(1, int(batch_size))
+    if distribution == "blockwise":
+        return batch_size * batch_size
+    return n1 * batch_size
+
+
+def should_distribute(n1, n2, batch_size, distribution):
+    """Whether a covariance of this shape is worth sending to the cluster at all.
+
+    A result that fits inside one task's RAM budget is cheaper to compute in a single
+    kernel call than to schedule: a 10 000 x 2 cross-covariance took 0.83 ms directly
+    against 1.8 s spread over 1000 dask tasks of 20 entries each.
+    """
+    return n1 * n2 > task_budget(n1, batch_size, distribution)
+
+
+def strip_width(long_axis, short_axis, budget):
+    """Width of a cross-covariance strip: as wide as the budget allows, at least 1.
+
+    A strip spans the long axis, so it can never hold fewer than ``long_axis`` entries --
+    when the budget is smaller than that (a small ``B`` under ``"blockwise"``) the width
+    clamps to 1 and the strip necessarily exceeds the nominal budget. No chunking can do
+    better; the alternative is blocking, which multiplies the task count without reducing
+    per-task memory, because the long axis has to be traversed either way.
+    """
+    return int(max(1, min(short_axis, budget // max(long_axis, 1))))
+
+
 def index_dtype_for(n1, n2):
     """int32 indices whenever the matrix is small enough for them.
 
@@ -156,6 +199,25 @@ def row_strip_csr(range_i, x1, x2, hyperparameters, kernel,
 
 
 
+def col_strip_csc(range_j, x1, x2, hyperparameters, kernel,
+                  k_n_params, args, n1, index_dtype):
+    """One finished CSC column strip, tagged with its first column index.
+
+    The mirror image of :py:func:`row_strip_csr`, for a covariance that is tall and thin:
+    ``k(x1, x2[j_start:j_end])`` in a single kernel call spanning every row. Returned as
+    **CSC** on purpose -- ``scipy.sparse`` concatenates CSC along columns (and CSR along
+    rows) by splicing ``indptr``, and falls back to rebuilding through COO otherwise.
+    """
+    j_start, j_end = range_j
+    k = evaluate_kernel(kernel, x1, x2[j_start:j_end], hyperparameters, k_n_params, args)
+    data, rows, cols = block_to_coo(k, index_dtype)
+
+    shape = (n1, j_end - j_start)
+    if data.size == 0:
+        return j_start, sparse.csc_matrix(shape)
+    return j_start, sparse.coo_matrix((data, (rows, cols)), shape=shape).tocsc()
+
+
 ##########################################################################
 ###################### host-side assembly ################################
 ##########################################################################
@@ -233,6 +295,18 @@ def assemble_row_strips(harvest, n1, n2):
     return sparse.vstack([strips[key] for key in sorted(strips)], format="csr")
 
 
+def assemble_col_strips(harvest, n1, n2):
+    """Assemble finished CSC column strips in column order, returning CSR.
+
+    ``hstack`` of CSC blocks is the fast path (an ``indptr`` splice); the single
+    conversion to CSR at the end is what every caller expects back.
+    """
+    strips = dict(harvest)
+    if not strips:
+        return sparse.csr_matrix((n1, n2))
+    return sparse.hstack([strips[key] for key in sorted(strips)], format="csc").tocsr()
+
+
 ##########################################################################
 ###################### the single entry point ############################
 ##########################################################################
@@ -297,7 +371,14 @@ def distributed_covariance(client, kernel, hyperparameters,
     logger.debug("gp2Scale covariance ({}, symmetric={}) on client {}",
                  distribution, symmetric, client.id)
 
-    if distribution == "blockwise":
+    # Shape decides the strategy; `batch_size` decides the size. A symmetric covariance --
+    # the prior, and k(x_new, x_new) on an append -- is computed the way the user asked
+    # for. A cross-covariance is tall or thin, and is always cut into strips whatever
+    # `distribution` says: blocking it would multiply the task count without reducing
+    # per-task memory, since the long axis has to be traversed either way.
+    strategy = distribution if symmetric else "stripwise"
+
+    if strategy == "blockwise":
         row_ranges = ranges(n1, batch_size)
         col_ranges = row_ranges if symmetric else ranges(n2, batch_size)
         tasks = list(itertools.product(row_ranges, col_ranges))
@@ -307,12 +388,30 @@ def distributed_covariance(client, kernel, hyperparameters,
                          hyperparameters=hyperparameters, kernel=kernel,
                          k_n_params=k_n_params, args=args,
                          symmetric=symmetric, index_dtype=index_dtype)
-    else:
+    elif strategy == "rowwise":
         tasks = ranges(n1, batch_size)
         worker = partial(row_strip_csr,
                          hyperparameters=hyperparameters, kernel=kernel,
                          k_n_params=k_n_params, args=args, n2=n2,
                          index_dtype=index_dtype)
+    else:
+        # split the short axis; each task spans the long one, as wide as the budget allows
+        budget = task_budget(n1, batch_size, distribution)
+        if n2 <= n1:
+            width = strip_width(n1, n2, budget)
+            tasks = ranges(n2, width)
+            worker = partial(col_strip_csc,
+                             hyperparameters=hyperparameters, kernel=kernel,
+                             k_n_params=k_n_params, args=args, n1=n1,
+                             index_dtype=index_dtype)
+        else:
+            width = strip_width(n2, n1, budget)
+            tasks = ranges(n1, width)
+            worker = partial(row_strip_csr,
+                             hyperparameters=hyperparameters, kernel=kernel,
+                             k_n_params=k_n_params, args=args, n2=n2,
+                             index_dtype=index_dtype)
+        strategy = "colstrips" if n2 <= n1 else "rowwise"
 
     logger.debug("        gp2Scale covariance init done after {} seconds ({} tasks).",
                  time.time() - st, len(tasks))
@@ -320,8 +419,10 @@ def distributed_covariance(client, kernel, hyperparameters,
     futures = client.map(worker, tasks, [x1_future] * len(tasks), [x2_future] * len(tasks))
     harvest = map(_harvest, distributed.as_completed(futures, with_results=True))
 
-    if distribution == "blockwise":
+    if strategy == "blockwise":
         K = assemble_triplets(harvest, n1, n2, symmetric, index_dtype)
+    elif strategy == "colstrips":
+        K = assemble_col_strips(harvest, n1, n2)
     else:
         K = assemble_row_strips(harvest, n1, n2)
 

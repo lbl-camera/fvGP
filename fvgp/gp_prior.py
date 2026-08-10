@@ -2,7 +2,8 @@ import numpy as np
 import inspect
 import warnings
 from .kernels import *
-from .gp2Scale_covariance import distributed_covariance, stack_augmented_covariance
+from .gp2Scale_covariance import (distributed_covariance, stack_augmented_covariance,
+                                  should_distribute, _as_csr)
 from loguru import logger
 warnings.simplefilter("once", UserWarning)
 
@@ -205,7 +206,10 @@ class GPprior:
         mean never materializes an (N x n_pred) dense array.  Below one batch of data
         there is nothing to gain from the cluster, so the kernel is called directly.
         """
-        if self.gp2Scale and self.client is not None and len(self.x_data) > self.batch_size:
+        if self.gp2Scale and self.client is not None:
+            # _gp2Scale_covariance decides for itself whether this shape is worth
+            # distributing; it used to be gated here on len(x_data) > batch_size, a row
+            # count, which is true for any real dataset however few columns are asked for.
             return self._gp2Scale_covariance(self.x_data, x_pred, hyperparameters,
                                              x1_future=self.x_data_scatter_future)
         return self.compute_covariances(self.x_data, x_pred, hyperparameters)
@@ -328,6 +332,16 @@ class GPprior:
         """
         if self.client is None:
             raise Exception("gp2Scale needs a dask client to compute covariances.")
+
+        # Below one task's RAM budget there is nothing to distribute: scheduling costs
+        # more than the kernel call. Measured, a 10 000 x 2 cross-covariance took 0.83 ms
+        # in one call against 1.8 s spread over 1000 dask tasks of 20 entries each.
+        # `_as_csr` because everything downstream assumes gp2Scale's K is sparse --
+        # GPkv._set_gp2Scale_mode reads KV.nnz, which a dense array does not have. A
+        # support-aware kernel already returns sparse and passes straight through.
+        if not should_distribute(len(x1), len(x2), self.batch_size,
+                                 self.gp2Scale_distribution):
+            return _as_csr(self.compute_covariances(x1, x2, hyperparameters))
 
         own1 = x1_future is None
         if own1: x1_future = self._scatter(x1)
