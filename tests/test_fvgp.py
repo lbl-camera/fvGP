@@ -2153,6 +2153,44 @@ def test_bo_early_stopping_on_ei_tolerance():
     assert info["n_evaluations"] < 60
 
 
+def test_bo_warns_when_it_returns_the_warm_start():
+    """Nothing beating the starting point is a legitimate answer, but it must be said.
+
+    It is otherwise indistinguishable from a run that silently did nothing, which is
+    exactly the confusion this warning exists to prevent.
+    """
+    from fvgp.gp_bo import bayesian_optimize
+
+    init = np.array([1., 1.])
+
+    # minimum sits exactly on the warm start, so no other point can beat it
+    def objective(t):
+        return float(np.sum((np.asarray(t) - init) ** 2))
+
+    bounds = np.array([[1e-2, 1e2]] * 2)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        theta, info = bayesian_optimize(objective, bounds, init, max_iter=20,
+                                        bo_args={"seed": 0})
+    assert np.allclose(theta, init)
+    msgs = [str(w.message) for w in caught if "started from" in str(w.message)]
+    assert len(msgs) == 1
+    assert "method='local'" in msgs[0] and "method='mcmc'" in msgs[0]
+    assert f"{info['n_evaluations']} evaluated points" in msgs[0]
+    assert info["stopping reason"] in msgs[0]
+
+    # a run that genuinely improves must stay silent
+    def improving(t):
+        return float(np.sum((np.log(np.asarray(t)) - 1.0) ** 2))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        theta2, _ = bayesian_optimize(improving, bounds, init, max_iter=20,
+                                      bo_args={"seed": 0})
+    assert not np.allclose(theta2, init)
+    assert not any("started from" in str(w.message) for w in caught)
+
+
 def test_train_async_bo(client):
     """Async BO training: submit, poll, apply, stop."""
     my_gp = GP(x_data, y_data, init_hyperparameters=np.array([1., 1., 1., 1., 1., 1.]),

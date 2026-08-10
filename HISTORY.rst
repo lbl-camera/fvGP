@@ -11,6 +11,20 @@ Unreleased
 New features
 ~~~~~~~~~~~~
 
+* ``method='bo'`` now warns when it returns the hyperparameters it started from.
+  Nothing beating the warm start is a legitimate answer, but it is indistinguishable
+  from a run that silently did nothing, and a user who sees unchanged hyperparameters
+  after an expensive training run has no way to tell which happened.
+
+  The warning reports how many points were evaluated and why the run stopped, and says
+  what to do about it. The usual cause is the ridge every marginal likelihood has, along
+  which the signal variance and the length scales trade off together: a space-filling
+  design cannot land on a curve of that shape, and an axis-aligned ARD surrogate reads
+  every one-at-a-time probe along it as "this coordinate does not matter", so it cannot
+  follow it either. Both failure modes worsen quickly with the hyperparameter count.
+  ``method='local'`` and ``method='mcmc'`` follow such a ridge directly and are the
+  better choice whenever the likelihood is cheap enough to evaluate many times.
+
 * Synchronous ``train()`` no longer accepts hyperparameters that made the model worse.
   The new ``accept_only_if_improved`` (default ``True``) compares the log marginal
   likelihood before and after and, on a regression, restores the previous

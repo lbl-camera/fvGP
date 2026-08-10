@@ -801,6 +801,26 @@ def bayesian_optimize(objective_function,
             pass
     theta_best = np.asarray(theta_list[best_idx], dtype=float)
 
+    # Returning the incoming hyperparameters is a legitimate answer -- nothing evaluated
+    # beat them -- but it is indistinguishable from a run that silently did nothing, and
+    # a user who sees unchanged hyperparameters has no way to tell which happened. Index
+    # 0 is the warm start (it overwrites the first design point above), so this is exact
+    # rather than a comparison of floats that have been through the transform twice.
+    if len(y_list) > 1 and best_idx == 0:
+        warnings.warn(
+            f"method='bo' returned the hyperparameters it started from: none of the "
+            f"{len(y_list)} evaluated points improved on them (stopping reason: "
+            f"'{stopping_reason}'). A marginal likelihood typically has a narrow ridge "
+            f"along which the signal variance and the length scales trade off together; "
+            f"a space-filling design cannot land on such a ridge and an axis-aligned "
+            f"surrogate cannot follow it, and both get rapidly worse as the number of "
+            f"hyperparameters grows (here {dim}). Consider method='local' or "
+            f"method='mcmc', which follow a ridge directly and are the better choice "
+            f"whenever the likelihood is cheap enough to evaluate many times, or reduce "
+            f"the number of hyperparameters. If the stopping reason above is "
+            f"'converged', the run also ended before the budget was spent -- raise "
+            f"bo_args['patience'] to let it continue.")
+
     # The surrogate carries two things worth handing back for free, with no further
     # likelihood evaluations: a sensitivity ranking and an approximate theta-posterior.
     #
