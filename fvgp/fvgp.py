@@ -212,7 +212,7 @@ class fvGP(GP):
         it removes the host as a bottleneck and lowers its peak memory considerably; it is
         the better choice when assembly, not kernel evaluation, dominates the run time.
     dask_client : dask.distributed.Client, optional
-        A dask client for gp2Scale, asynchronous training,a nd certain linear algebra operations.
+        A dask client for gp2Scale, asynchronous training, and certain linear algebra operations.
         On HPC architecture, this client is provided by the job script. Please have a look at the examples.
         A local client is used as the default.
     linalg_mode : str, optional
