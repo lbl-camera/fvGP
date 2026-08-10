@@ -797,7 +797,8 @@ class GP:
               constraints=(),
               dask_client=None,
               info=False,
-              asynchronous=False):
+              asynchronous=False,
+              accept_only_if_improved=True):
 
         """
         This function finds the maximum of the log marginal likelihood and therefore trains the GP (synchronously).
@@ -963,6 +964,24 @@ class GP:
             For ``bo`` the polled state is the best hyperparameters found so far, so the GP
             stays usable while the remaining expensive likelihood evaluations continue on a
             worker.
+        accept_only_if_improved : bool, optional
+            Keep the current hyperparameters when training returns worse ones. Default True.
+            Applies to synchronous training with ``method`` in ``'local'``, ``'hgdl'``,
+            ``'adam'``, or a user callable -- optimizers that can, and for ``'local'``
+            routinely do, return a point worse than the one they started from, since a
+            failed :py:func:`scipy.optimize.minimize` run is accepted regardless of its
+            ``success`` flag. On rejection the GP is restored to its previous
+            hyperparameters, those are returned, and a warning says by how much the
+            proposal fell short.
+
+            Deliberately inactive elsewhere. ``'global'`` needs no guard --
+            ``differential_evolution`` is elitist and is given the incumbent as ``x0``.
+            ``'mcmc'`` returns a posterior median, a summary rather than an optimum, and
+            guarding fvGP's default method would quietly turn repeated ``train()`` calls
+            into no-ops. ``'bo'`` returns a noise-aware recommendation that can be worse in
+            observed value on purpose. A user-supplied ``objective_function`` is exempt too,
+            because the marginal likelihood is then the wrong thing to judge by. Asynchronous
+            training is unaffected; see :py:meth:`update_hyperparameters`.
 
         Returns
         -------
@@ -1060,6 +1079,15 @@ class GP:
 
         # Warm starts and preconditioner reuse are only sound when successive
         # evaluations are close, which is true for mcmc and nothing else here.
+        # Guard only the methods that can actually hand back a worse point than they were
+        # given. See the `accept_only_if_improved` docstring entry for why the others are
+        # left alone. Reading the likelihood here is free -- with no argument it reports the
+        # cached KVinvY/logdet_KV of the hyperparameters already in force.
+        guarded = (accept_only_if_improved and not asynchronous and not user_provided_obj and
+                   (callable(method) or method in ("local", "hgdl", "adam")))
+        incumbent = self.hyperparameters.copy() if guarded else None
+        ll_incumbent = self.log_likelihood() if guarded else None
+
         if not asynchronous:
           with sequential_linalg_state(self.args, method):
             hyperparameters = self.trainer.train(
@@ -1082,6 +1110,9 @@ class GP:
                 dask_client=dask_client,
                 info=info)
             self.set_hyperparameters(hyperparameters)
+            if guarded:
+                hyperparameters = self._reject_if_not_improved(
+                    method, hyperparameters, incumbent, ll_incumbent)
             return hyperparameters
         else:
           # in force while the objective is serialized, since that freezes the
@@ -1108,6 +1139,33 @@ class GP:
                 info=info,
             )
             return opt_obj
+
+    ##################################################################################
+    def _reject_if_not_improved(self, method, hyperparameters, incumbent, ll_incumbent):
+        """Roll back to `incumbent` when training moved the likelihood the wrong way.
+
+        Called with the trained hyperparameters already in force, so `log_likelihood()`
+        reads their cached factorization rather than recomputing one. Only the rollback
+        costs anything: one further `set_hyperparameters`.
+        """
+        ll_new = self.log_likelihood()
+        # In the sparse modes the log-determinant is a stochastic-Lanczos estimate, so the
+        # likelihood is a noisy observation and a strict `<` near the optimum would reject
+        # good proposals about as often as bad ones. Both evaluations carry that noise;
+        # the variance of the difference is taken as twice the one we can measure, which
+        # is the reading for the point currently in force. Exact modes report None and the
+        # comparison stays strict.
+        variance = self.marginal_likelihood.log_likelihood_variance()
+        tolerance = 0.0 if variance is None else 3.0 * np.sqrt(2.0 * variance)
+        if ll_new >= ll_incumbent - tolerance:
+            return hyperparameters
+        warnings.warn(
+            f"Training with method=`{method}` returned hyperparameters with a lower log "
+            f"marginal likelihood ({ll_new} vs. {ll_incumbent}); they were rejected and the "
+            "previous hyperparameters kept. Pass `accept_only_if_improved=False` to "
+            "accept them anyway.")
+        self.set_hyperparameters(incumbent)
+        return incumbent
 
     ##################################################################################
     @staticmethod

@@ -3990,6 +3990,131 @@ def test_train_argument_validation():
         raise AssertionError("a user objective without a gradient must be rejected for local")
 
 
+def test_accept_only_if_improved_rejects_a_regression(monkeypatch):
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+    gp.set_hyperparameters(np.array([1., 1., 1.]))
+    incumbent = gp.hyperparameters.copy()
+    ll_incumbent = gp.log_likelihood()
+
+    # a "trainer" that hands back a point far worse than the one it was given
+    bad = np.array([9.9, 0.011, 9.9])
+    assert gp.log_likelihood(bad) < ll_incumbent
+    gp.set_hyperparameters(incumbent)
+    monkeypatch.setattr(gp.trainer, "train", lambda *a, **kw: bad.copy())
+
+    # the rollback is the only added cost: two set_hyperparameters here, one when accepting
+    calls = {"n": 0}
+    real_set = gp.set_hyperparameters
+
+    def _counting_set(hps):
+        calls["n"] += 1
+        return real_set(hps)
+
+    monkeypatch.setattr(gp, "set_hyperparameters", _counting_set)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        returned = gp.train(hyperparameter_bounds=bounds, method="local", max_iter=1)
+    assert calls["n"] == 2
+    assert np.allclose(returned, incumbent)
+    assert np.allclose(gp.hyperparameters, incumbent)
+    assert np.isclose(gp.log_likelihood(), ll_incumbent)
+    rejections = [str(w.message) for w in caught if "rejected" in str(w.message)]
+    assert len(rejections) == 1
+    assert "local" in rejections[0]
+    assert str(ll_incumbent) in rejections[0]
+
+    # the same regression is accepted once the flag is off
+    calls["n"] = 0
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        returned = gp.train(hyperparameter_bounds=bounds, method="local", max_iter=1,
+                            accept_only_if_improved=False)
+    assert calls["n"] == 1
+    assert np.allclose(returned, bad)
+    assert np.allclose(gp.hyperparameters, bad)
+    assert not any("rejected" in str(w.message) for w in caught)
+
+
+def test_accept_only_if_improved_accepts_an_improvement():
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+    gp.set_hyperparameters(np.array([5., 0.05, 0.05]))
+    before = gp.hyperparameters.copy()
+    ll_before = gp.log_likelihood()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        returned = gp.train(hyperparameter_bounds=bounds, method="local", max_iter=20)
+    assert not np.allclose(returned, before)
+    assert np.allclose(gp.hyperparameters, returned)
+    assert gp.log_likelihood() >= ll_before
+    assert not any("rejected" in str(w.message) for w in caught)
+
+
+def test_accept_only_if_improved_is_inactive_where_it_should_be(monkeypatch):
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+    bad = np.array([9.9, 0.011, 9.9])
+
+    # mcmc returns a posterior summary, bo a noise-aware recommendation: both exempt
+    for method in ("mcmc", "bo"):
+        gp = _tiny_gp()
+        gp.set_hyperparameters(np.array([1., 1., 1.]))
+        monkeypatch.setattr(gp.trainer, "train", lambda *a, **kw: bad.copy())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            returned = gp.train(hyperparameter_bounds=bounds, method=method, max_iter=2)
+        assert np.allclose(returned, bad)
+        assert np.allclose(gp.hyperparameters, bad)
+
+    # a user objective is judged by its own criterion, not the marginal likelihood
+    gp = _tiny_gp()
+    gp.set_hyperparameters(np.array([1., 1., 1.]))
+    monkeypatch.setattr(gp.trainer, "train", lambda *a, **kw: bad.copy())
+    returned = gp.train(hyperparameter_bounds=bounds, method="local", max_iter=1,
+                        objective_function=lambda hps: 0.0,
+                        objective_function_gradient=lambda hps: np.zeros(3))
+    assert np.allclose(returned, bad)
+    assert np.allclose(gp.hyperparameters, bad)
+
+
+def test_accept_only_if_improved_tolerates_estimator_noise(monkeypatch):
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+    gp.set_hyperparameters(np.array([1., 1., 1.]))
+    incumbent = gp.hyperparameters.copy()
+
+    # a proposal a hair worse than the incumbent
+    ll = {"n": 0}
+    ll_incumbent = gp.log_likelihood()
+
+    def _slightly_worse(hyperparameters=None):
+        ll["n"] += 1
+        return ll_incumbent if ll["n"] == 1 else ll_incumbent - 0.5
+
+    monkeypatch.setattr(gp.marginal_likelihood, "log_likelihood", _slightly_worse)
+    monkeypatch.setattr(gp.trainer, "train", lambda *a, **kw: np.array([2., 2., 2.]))
+
+    # a stochastic log-determinant that wobbles by more than the drop: accept
+    monkeypatch.setattr(gp.marginal_likelihood, "log_likelihood_variance", lambda: 1.0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        returned = gp.train(hyperparameter_bounds=bounds, method="local", max_iter=1)
+    assert np.allclose(returned, np.array([2., 2., 2.]))
+    assert not any("rejected" in str(w.message) for w in caught)
+
+    # the same drop in an exact mode, where the likelihood is deterministic: reject
+    ll["n"] = 0
+    gp.set_hyperparameters(incumbent)
+    monkeypatch.setattr(gp.marginal_likelihood, "log_likelihood_variance", lambda: None)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        returned = gp.train(hyperparameter_bounds=bounds, method="local", max_iter=1)
+    assert np.allclose(returned, incumbent)
+    assert any("rejected" in str(w.message) for w in caught)
+
+
 def test_gaussian_helper_and_observed_vs_predicted_plot(monkeypatch):
     gp = _tiny_gp()
     g = GP.gaussian_1d(np.array([0.0, 1.0]), 0.0, 1.0)

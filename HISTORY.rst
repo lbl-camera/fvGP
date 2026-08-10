@@ -11,6 +11,25 @@ Unreleased
 New features
 ~~~~~~~~~~~~
 
+* Synchronous ``train()`` no longer accepts hyperparameters that made the model worse.
+  The new ``accept_only_if_improved`` (default ``True``) compares the log marginal
+  likelihood before and after and, on a regression, restores the previous
+  hyperparameters, returns them, and warns with both values. This closes a real gap for
+  ``method='local'``, which took :py:func:`scipy.optimize.minimize`'s point regardless
+  of its ``success`` flag, and covers ``hgdl``, ``adam`` and user callables alongside it.
+
+  Deliberately narrow. ``global`` needs no guard, being elitist and started from the
+  incumbent. ``mcmc`` returns a posterior median -- a summary, not an optimum -- and
+  guarding fvGP's default method would quietly turn repeated ``train()`` calls into
+  no-ops. ``bo`` returns a noise-aware recommendation that can be worse in observed
+  value on purpose. A user-supplied ``objective_function`` is exempt because the
+  marginal likelihood is then the wrong criterion, and asynchronous training is
+  untouched. Where the log-determinant is a stochastic-Lanczos estimate the comparison
+  is given a tolerance from ``log_likelihood_variance()``, so a noisy likelihood does
+  not reject good proposals near the optimum. The check itself is free -- reading the
+  likelihood with no argument uses the cached factorization -- and only a rejection
+  costs anything.
+
 * ``train(method='bo')`` trains the hyperparameters by Bayesian optimization, joining
   ``global``, ``local``, ``hgdl``, ``mcmc`` and ``adam``. It is the method for an
   outer marginal likelihood that is expensive, noisy, and effectively gradient-free --
