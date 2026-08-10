@@ -3220,14 +3220,56 @@ def test_row_strip_csr_full_and_empty():
     x = np.sort(np.random.rand(30, 1), axis=0)
     hps = np.array([1.0, 0.4])
     start, strip = row_strip_csr((10, 20), x, x, hps, wendland_anisotropic_gp2Scale_cpu,
-                                 3, None, 30, 7, np.int32)
+                                 3, None, 30, np.int32)
     assert start == 10 and strip.shape == (10, 30)
     assert np.allclose(strip.toarray(), wendland_anisotropic_gp2Scale_cpu(x[10:20], x, hps))
 
     far = np.random.rand(30, 1) + 50.0
     start, empty = row_strip_csr((0, 30), x, far, np.array([1.0, 0.1]),
-                                 wendland_anisotropic_gp2Scale_cpu, 3, None, 30, 7, np.int32)
+                                 wendland_anisotropic_gp2Scale_cpu, 3, None, 30, np.int32)
     assert start == 0 and empty.shape == (30, 30) and empty.nnz == 0
+
+
+def test_batch_size_is_a_maximum_with_a_remainder():
+    """`gp2Scale_batch_size` bounds a chunk; it is not a target to divide evenly around.
+    100 000 points at 15 000 is six chunks of 15 000 and one of 10 000 -- not seven
+    equal chunks of 14 285, and certainly not one oversized chunk."""
+    from fvgp.gp2Scale_covariance import ranges
+    from collections import Counter
+
+    assert Counter(e - s for s, e in ranges(100000, 15000)) == {15000: 6, 10000: 1}
+    assert Counter(e - s for s, e in ranges(100000, 10000)) == {10000: 10}
+    assert Counter(e - s for s, e in ranges(25000, 10000)) == {10000: 2, 5000: 1}
+    # fewer points than one chunk is a single short chunk
+    assert ranges(9000, 10000) == [(0, 9000)]
+    # and the old failure mode: this must not become one 19 999-wide chunk
+    assert max(e - s for s, e in ranges(19999, 15000)) == 15000
+
+    for n, b in ((1, 10), (10, 1), (12345, 1000), (100000, 15000)):
+        chunks = ranges(n, b)
+        assert sum(e - s for s, e in chunks) == n, (n, b)
+        assert max(e - s for s, e in chunks) <= b, (n, b)
+        assert chunks[0][0] == 0 and chunks[-1][1] == n
+        assert all(chunks[i][1] == chunks[i + 1][0] for i in range(len(chunks) - 1))
+
+
+def test_row_strip_is_computed_in_one_call_over_the_whole_row():
+    """Row-wise means the kernel sees the entire row at once -- no column chunking."""
+    from fvgp.gp2Scale_covariance import row_strip_csr
+
+    calls = []
+
+    def recording_kernel(x1, x2, hps):
+        calls.append((len(x1), len(x2)))
+        return wendland_anisotropic_gp2Scale_cpu(x1, x2, hps)
+
+    x = np.sort(np.random.rand(50, 1), axis=0)
+    hps = np.array([1.0, 0.5])
+    start, strip = row_strip_csr((10, 20), x, x, hps, recording_kernel, 3, None, 50, np.int32)
+
+    assert calls == [(10, 50)], f"expected one full-row call, got {calls}"
+    assert start == 10 and strip.shape == (10, 50)
+    assert np.allclose(strip.toarray(), wendland_anisotropic_gp2Scale_cpu(x[10:20], x, hps))
 
 
 def test_assemblers_handle_nothing_to_assemble():

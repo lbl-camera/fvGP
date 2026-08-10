@@ -222,6 +222,32 @@ New features
   matrix allows, and a block and its mirror are written into a single preallocation
   rather than two ``np.hstack`` passes over everything.
 
+* ``gp2Scale_batch_size`` is a maximum with a remainder, not a target to divide around.
+  It used to cut ``n`` into ``n // batch_size`` *equal* chunks, which made the setting a
+  lower bound: 19 999 points at a batch size of 15 000 came out as one 19 999-wide chunk,
+  a 3.2 GB dense block from a number that reads like a promise of 15 000. Every chunk is
+  now exactly ``batch_size`` except the last along each axis -- 100 000 points at 15 000
+  give six chunks of 15 000 and one of 10 000 -- so peak memory per worker follows the
+  number the user set.
+
+* ``gp2Scale_distribution="rowwise"`` is now genuinely row-wise: one kernel call per
+  strip against *every* column, where it previously walked the strip in column chunks and
+  so was block-wise work under a different task shape. ``gp2Scale_batch_size`` is the
+  **strip width** in this mode, and that is documented now -- it was not before.
+
+  Handing the kernel a whole row is the point of the mode. A support-aware kernel prunes
+  an entire row in one neighbor search, and a kernel that vectorizes or offloads gets one
+  large call instead of many small ones. Measured at N=6000 on two workers, this flips the
+  comparison for the kernels the mode exists for: with the support-aware sparse Wendland,
+  row-wise now beats block-wise (0.171 s against 0.193 s) despite doing twice the nominal
+  work, where with a dense kernel block-wise still leads (0.85 s against 1.39 s).
+
+  The cost is that a dense kernel materializes ``strip_width x N`` on the worker, so the
+  strip width is what bounds worker memory -- 8 GB at N=100 000 and a 10 000-wide strip.
+  Row-wise also produces ``N / strip_width`` tasks against block-wise's
+  ``(N / batch_size)^2 / 2``, so it usually wants a smaller batch size on a large cluster.
+  Both are now in the ``gp2Scale_batch_size`` docstring.
+
 * A requested GPU engine is honored wherever that engine is used, and a request that
   cannot be met now says why instead of quietly computing on the CPU.
   ``args["GPU_engine"]`` accepts ``"torch"`` (or ``"pytorch"``) and ``"cupy"``, and

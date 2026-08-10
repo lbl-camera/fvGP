@@ -15,12 +15,19 @@ Two ways of cutting the work across the cluster are available, chosen with
     mirrors the result.  This is the historical behavior and remains the default.
 
 ``"rowwise"``
-    Tasks are row strips, and each worker returns a *finished* CSR strip.  The COO-to-CSR
-    sort therefore happens in parallel on the workers, and host assembly is a plain
-    ``vstack`` -- a concatenation of ``data``/``indices`` with an offset ``indptr``, with
-    no global COO and no mirroring.  Symmetry cannot be exploited, so the cluster does
-    twice the kernel evaluations; in exchange the host stops being the bottleneck and its
-    peak memory drops to the finished matrix plus one strip.
+    Tasks are row strips: one kernel call per strip against *every* column, returning a
+    finished CSR strip.  The COO-to-CSR sort therefore happens in parallel on the
+    workers, and host assembly is a plain ``vstack`` -- a concatenation of
+    ``data``/``indices`` with an offset ``indptr``, with no global COO and no mirroring.
+    Symmetry cannot be exploited, so the cluster does twice the kernel evaluations; in
+    exchange the host stops being the bottleneck and its peak memory drops to the
+    finished matrix plus one strip.
+
+    Giving the kernel a whole row at once is the point: a support-aware kernel prunes an
+    entire row in one pass, and a kernel that vectorizes or offloads gets one large call
+    rather than many small ones.  The cost is that a *dense* kernel materializes
+    ``strip_width x n2`` values on the worker, so ``batch_size`` -- the strip width here
+    -- is what bounds worker memory.
 
 Callers own their scatter futures.  Nothing here scatters or releases, which keeps the
 scatter-lifecycle rules in :py:class:`fvgp.gp_prior.GPprior` where they are documented.
@@ -38,16 +45,20 @@ from loguru import logger
 _DISTRIBUTIONS = ("blockwise", "rowwise")
 
 
-def ranges(N, nb):
-    """Split ``range(N)`` into ``nb`` chunks given as ``(start, end)`` tuples."""
-    if nb == 0: nb = 1
-    step = N / nb
-    return [(round(step * i), round(step * (i + 1))) for i in range(nb)]
+def ranges(n, batch_size):
+    """Split ``range(n)`` into ``(start, end)`` chunks of at most ``batch_size``.
 
+    ``batch_size`` is a maximum, not a target: every chunk is exactly ``batch_size``
+    except the last, which carries the remainder. 100 000 points at 15 000 give six
+    chunks of 15 000 and one of 10 000.
 
-def num_blocks(n, batch_size):
-    """Number of chunks ``n`` points are cut into at ``batch_size`` points per chunk."""
-    return max(1, n // batch_size)
+    This used to divide ``n`` into ``n // batch_size`` *equal* chunks, which made
+    ``batch_size`` a lower bound instead -- 19 999 points at 15 000 came out as a single
+    19 999-wide chunk, a 3.2 GB dense block from a setting that reads like a promise of
+    15 000. Peak memory per worker now follows the number the user actually set.
+    """
+    batch_size = max(1, int(batch_size))
+    return [(start, min(start + batch_size, n)) for start in range(0, n, batch_size)]
 
 
 def index_dtype_for(n1, n2):
@@ -117,34 +128,32 @@ def block_triplets(range_ij, x1, x2, hyperparameters, kernel,
 
 
 def row_strip_csr(range_i, x1, x2, hyperparameters, kernel,
-                  k_n_params, args, n2, col_batch_size, index_dtype):
+                  k_n_params, args, n2, index_dtype):
     """One finished CSR row strip, tagged with its first row index.
 
-    The strip is evaluated in column chunks so peak worker memory stays at a single dense
-    block, and converted to CSR here so the sort is done by the workers in parallel
-    rather than by the host on the assembled whole.
+    A strip is the whole row: ``k(x1[i_start:i_end], x2)`` in a single kernel call
+    against every column, which is what makes this row-wise rather than block-wise with
+    a different task shape. The kernel therefore sees one ``(strip_width x n2)`` call and
+    can use the full row -- a support-aware kernel prunes the whole row at once, and a
+    kernel with its own vectorization or GPU offload gets one large call instead of
+    ``n2 / strip_width`` small ones.
+
+    The price is peak worker memory: a *dense* kernel materializes
+    ``strip_width x n2`` values here. ``gp2Scale_batch_size`` is the strip width, and is
+    the dial for that -- see the note in :py:func:`distributed_covariance`.
+
+    Converted to CSR here so the sort happens on the workers in parallel rather than on
+    the host over the assembled whole.
     """
     i_start, i_end = range_i
-    x1_block = x1[i_start:i_end]
-    data_parts, row_parts, col_parts = [], [], []
-
-    for j_start, j_end in ranges(n2, num_blocks(n2, col_batch_size)):
-        k = evaluate_kernel(kernel, x1_block, x2[j_start:j_end],
-                            hyperparameters, k_n_params, args)
-        data, rows, cols = block_to_coo(k, index_dtype)
-        if data.size == 0: continue
-        data_parts.append(data)
-        row_parts.append(rows)
-        col_parts.append(cols + index_dtype(j_start))
+    k = evaluate_kernel(kernel, x1[i_start:i_end], x2, hyperparameters, k_n_params, args)
+    data, rows, cols = block_to_coo(k, index_dtype)
 
     shape = (i_end - i_start, n2)
-    if not data_parts:
+    if data.size == 0:
         return i_start, sparse.csr_matrix(shape)
+    return i_start, sparse.coo_matrix((data, (rows, cols)), shape=shape).tocsr()
 
-    strip = sparse.coo_matrix((np.concatenate(data_parts),
-                               (np.concatenate(row_parts), np.concatenate(col_parts))),
-                              shape=shape)
-    return i_start, strip.tocsr()
 
 
 ##########################################################################
@@ -247,7 +256,20 @@ def distributed_covariance(client, kernel, hyperparameters,
     n1, n2 : int
         Number of points behind each future; the shape of the result.
     batch_size : int
-        Target points per chunk along each axis.
+        Maximum points per chunk, not a target: every chunk is exactly ``batch_size``
+        except the last along each axis, which carries the remainder.
+
+        Its meaning differs by distribution. For ``"blockwise"`` it is the side of a
+        square block, so a worker evaluates ``batch_size x batch_size``. For
+        ``"rowwise"`` it is the **strip width**: a worker evaluates
+        ``batch_size x n2``, the whole row at once. A dense kernel therefore allocates
+        ``batch_size * n2`` values per row-wise task, which is the number to size against
+        worker memory -- at n2 = 100 000 and a strip width of 10 000 that is 8 GB in
+        float64. Sparse (support-aware) kernels never materialize it.
+
+        Row-wise also produces far fewer tasks -- ``n1 / batch_size`` against
+        ``(n1 / batch_size)^2 / 2`` for block-wise -- so on a large cluster it usually
+        wants a smaller ``batch_size`` than block-wise would.
     symmetric : bool
         Whether the result is ``k(x, x)``, which lets ``"blockwise"`` schedule only the
         upper triangle.
@@ -276,8 +298,8 @@ def distributed_covariance(client, kernel, hyperparameters,
                  distribution, symmetric, client.id)
 
     if distribution == "blockwise":
-        row_ranges = ranges(n1, num_blocks(n1, batch_size))
-        col_ranges = row_ranges if symmetric else ranges(n2, num_blocks(n2, batch_size))
+        row_ranges = ranges(n1, batch_size)
+        col_ranges = row_ranges if symmetric else ranges(n2, batch_size)
         tasks = list(itertools.product(row_ranges, col_ranges))
         # filter the lower triangle; the host mirrors instead
         if symmetric: tasks = [task for task in tasks if task[0][0] <= task[1][0]]
@@ -286,11 +308,11 @@ def distributed_covariance(client, kernel, hyperparameters,
                          k_n_params=k_n_params, args=args,
                          symmetric=symmetric, index_dtype=index_dtype)
     else:
-        tasks = ranges(n1, num_blocks(n1, batch_size))
+        tasks = ranges(n1, batch_size)
         worker = partial(row_strip_csr,
                          hyperparameters=hyperparameters, kernel=kernel,
                          k_n_params=k_n_params, args=args, n2=n2,
-                         col_batch_size=batch_size, index_dtype=index_dtype)
+                         index_dtype=index_dtype)
 
     logger.debug("        gp2Scale covariance init done after {} seconds ({} tasks).",
                  time.time() - st, len(tasks))

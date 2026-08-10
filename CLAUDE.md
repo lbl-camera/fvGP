@@ -120,7 +120,15 @@ Two ways of cutting the work, via `GP(..., gp2Scale_distribution=...)`:
 | | tasks | kernel evaluations | host assembly |
 |---|---|---|---|
 | `"blockwise"` (default) | (row block, col block) pairs, upper triangle only when symmetric | half | global COO + mirror, one preallocation |
-| `"rowwise"` | row strips; workers return finished CSR | double (no symmetry) | `vstack` of strips — concatenation only |
+| `"rowwise"` | row strips; **one kernel call per strip over all columns**; workers return finished CSR | double (no symmetry) | `vstack` of strips — concatenation only |
+
+`gp2Scale_batch_size` sizes both, but means different things: for block-wise it is the side of a square block (`batch_size × batch_size` per worker call), for row-wise it is the **strip width** (`batch_size × N` per worker call). It is a **maximum with a remainder** — every chunk is exactly `batch_size` except the last along each axis. 100 000 at 15 000 → six chunks of 15 000 and one of 10 000.
+
+Two consequences worth knowing before recommending row-wise:
+- A **dense** kernel allocates `batch_size × N` per row-wise task — 8 GB at N=100 000 and a 10 000 strip. That allocation, not the block count, is what bounds worker memory.
+- Row-wise makes `N/batch_size` tasks against block-wise's `(N/batch_size)²/2`, so it can starve a large cluster; it usually wants a *smaller* `batch_size` than block-wise.
+
+Whether row-wise wins depends on the kernel, not the assembly. Measured at N=6000 on 2 workers: with a dense kernel block-wise is ahead (0.85 s vs 1.39 s — row-wise pays 2× evaluations for nothing), but with the **support-aware sparse** kernel row-wise wins (0.171 s vs 0.193 s), because a whole row lets it prune in a single neighbor search.
 
 Row-wise is the choice when host assembly, not kernel evaluation, is the bottleneck; it also caps host peak memory at the finished matrix plus one strip.
 

@@ -163,15 +163,33 @@ class fvGP(GP):
         The default kernel will use the specified device to compute covariances.
         The default is False.
     gp2Scale_batch_size : int, optional
-        Matrix batch size for distributed computing in gp2Scale. The default is 10000.
+        How finely the covariance is cut up for distributed computing in gp2Scale.
+        The default is 10000. It is a **maximum, not a target**: every chunk is exactly
+        this size except the last along each axis, which carries the remainder -- 100000
+        points at 15000 give six chunks of 15000 and one of 10000.
+
+        What it sizes depends on ``gp2Scale_distribution``. For ``"blockwise"`` it is the
+        side of a square block, so a worker evaluates
+        ``gp2Scale_batch_size x gp2Scale_batch_size``. For ``"rowwise"`` it is the
+        **strip width**: a worker evaluates ``gp2Scale_batch_size x N``, the whole row at
+        once. With a dense kernel that allocation is what bounds worker memory, so pick
+        it against the memory a worker has -- at N=100000 a strip width of 10000 is 8 GB
+        in float64. Compactly supported kernels that return a sparse block
+        (:py:func:`fvgp.kernels.wendland_anisotropic_gp2Scale_cpu_sparse`) never
+        materialize it.
+
+        Row-wise also produces far fewer tasks -- ``N / gp2Scale_batch_size`` against
+        roughly ``(N / gp2Scale_batch_size)^2 / 2`` for block-wise -- so on a large
+        cluster it usually wants a smaller value than block-wise would.
     gp2Scale_distribution : str, optional
         How the covariance computation is cut across the workers in gp2Scale.
         ``"blockwise"`` (default) sends (row block, column block) pairs and, for the
         symmetric prior covariance, schedules only the upper triangle, so the cluster
         performs half the kernel evaluations and the host mirrors the result.
-        ``"rowwise"`` sends whole row strips and has each worker return a finished sparse
-        strip, so the assembly is a concatenation rather than a global re-sort on the
-        host. Row-wise cannot exploit symmetry and so doubles the kernel evaluations, but
+        ``"rowwise"`` sends whole row strips -- one kernel call per strip against every
+        column, ``gp2Scale_batch_size`` rows wide -- and has each worker return a
+        finished sparse strip, so the assembly is a concatenation rather than a global
+        re-sort on the host. Row-wise cannot exploit symmetry and so doubles the kernel evaluations, but
         it removes the host as a bottleneck and lowers its peak memory considerably; it is
         the better choice when assembly, not kernel evaluation, dominates the run time.
     dask_client : dask.distributed.Client, optional
