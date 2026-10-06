@@ -225,16 +225,16 @@ def test_single_task_init_basic():
 
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), compute_device = 'cpu')
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
-            noise_function=noise, compute_device = 'cpu', ram_economy=True)
+            noise_function=noise, compute_device = 'cpu', gradient_per_direction=True)
     my_gp1 = GP(x_data, np.column_stack([y_data, y_data+1.]), init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
-            noise_function=noise, compute_device = 'cpu', ram_economy=True)
+            noise_function=noise, compute_device = 'cpu', gradient_per_direction=True)
 
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
-            noise_function=noise, compute_device = 'cpu', ram_economy=True)
+            noise_function=noise, compute_device = 'cpu', gradient_per_direction=True)
 
     my_gp1.marginal_likelihood.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]), kernel_function = kernel,
-            noise_function=noise, prior_mean_function = prior_mean, compute_device = 'cpu', ram_economy=False)
+            noise_function=noise, prior_mean_function = prior_mean, compute_device = 'cpu', gradient_per_direction=False)
     my_gp1.marginal_likelihood.neg_log_likelihood_hessian(hyperparameters=my_gp1.hyperparameters)
     my_gp1 = GP(x_data, y_data)
     my_gp1 = GP(x_data, y_data, init_hyperparameters = np.array([1, 1, 1, 1, 1, 1]))
@@ -351,7 +351,7 @@ def test_single_task_init_basic():
 
 def test_single_task_init_advanced():
     my_gp2 = GP(x_data,y_data,np.array([1, 1, 1, 1, 1, 1]),noise_variances=np.zeros(y_data.shape) + 0.01,
-        compute_device="cpu", linalg_mode = "CholInv", ram_economy = True)
+        compute_device="cpu", linalg_mode = "CholInv", gradient_per_direction=True)
 
 
 def test_linalg_modes():
@@ -500,7 +500,7 @@ def test_train_basic(client):
 
 def test_train_hgdl(client):
     my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]), noise_variances=np.zeros(y_data.shape) + 0.01,
-        compute_device="cpu", linalg_mode = "CholInv", ram_economy = True)
+        compute_device="cpu", linalg_mode = "CholInv", gradient_per_direction=True)
 
 
     my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
@@ -509,7 +509,7 @@ def test_train_hgdl(client):
 
 def test_train_hgdl_async(client):
     my_gp2 = GP(x_data,y_data,init_hyperparameters = np.array([1., 1., 1., 1., 1., 1.]),noise_variances=np.zeros(y_data.shape) + 0.01,
-        compute_device="cpu", linalg_mode = "CholInv", ram_economy = True)
+        compute_device="cpu", linalg_mode = "CholInv", gradient_per_direction=True)
 
     opt_obj = my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             max_iter = 50, dask_client=client, method = "hgdl", asynchronous=True)
@@ -3639,8 +3639,8 @@ def test_gp_likelihood_branches():
     else:
         raise AssertionError("noise_variances plus noise_function must be rejected")
 
-    # ram_economy picks the economical default noise gradient
-    econ = _tiny_gp(ram_economy=True)
+    # gradient_per_direction picks the economical default noise gradient
+    econ = _tiny_gp(gradient_per_direction=True)
     assert np.allclose(econ.likelihood.calculate_V_grad(xx, np.array([1., 1., 1.]), 0),
                        np.zeros(len(xx)))
     assert econ.likelihood.gp2Scale is False
@@ -4636,7 +4636,7 @@ def test_marginal_likelihood_gradient_without_ram_economy():
         return (kernel(x1, x2, up) - kernel(x1, x2, down)) / (2 * eps)
 
     gp = GP(xx, yy, hps, kernel_function=kernel, kernel_function_grad=kernel_grad,
-            ram_economy=True)
+            gradient_per_direction=True)
     grad = gp.neg_log_likelihood_gradient(hyperparameters=hps)
     assert grad.shape == (3,) and np.all(np.isfinite(grad))
 
@@ -5389,8 +5389,8 @@ def test_mcmc_accepts_a_hugely_favourable_proposal():
     assert len(mcmc.trace["f(x)"]) == 29
 
 
-def test_marginal_likelihood_gradient_ram_economy_with_matrix_noise():
-    """ram_economy with a 2-d noise gradient takes the non-diagonal branch."""
+def test_marginal_likelihood_gradient_per_direction_with_matrix_noise():
+    """gradient_per_direction with a 2-d noise gradient takes the non-diagonal branch."""
     xx = np.random.rand(12, 2)
     yy = np.sin(np.linalg.norm(xx, axis=1))
     hps = np.array([1.0, 0.5, 0.5])
@@ -5412,7 +5412,7 @@ def test_marginal_likelihood_gradient_ram_economy_with_matrix_noise():
         return np.zeros((len(x), len(x)))          # 2-d: a full matrix derivative
 
     gp = GP(xx, yy, hps, kernel_function=kernel, kernel_function_grad=kernel_grad,
-            noise_function=noise, noise_function_grad=noise_grad, ram_economy=True)
+            noise_function=noise, noise_function_grad=noise_grad, gradient_per_direction=True)
     grad = gp.neg_log_likelihood_gradient(hyperparameters=hps)
     assert grad.shape == (3,) and np.all(np.isfinite(grad))
 
@@ -5594,11 +5594,11 @@ def test_marginal_likelihood_reports_a_gradient_failure_in_ram_economy_mode():
         raise RuntimeError("gradient unavailable")
 
     gp = GP(xx, yy, hps, kernel_function=kernel, kernel_function_grad=kernel_grad,
-            ram_economy=True)
+            gradient_per_direction=True)
     try:
         gp.neg_log_likelihood_gradient(hyperparameters=hps)
     except Exception as e:
-        assert "ram_economy" in str(e)
+        assert "gradient_per_direction" in str(e)
     else:
         raise AssertionError("a ram-economy gradient failure must be reported")
 

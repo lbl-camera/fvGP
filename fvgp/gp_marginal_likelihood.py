@@ -268,7 +268,7 @@ class GPMarginalLikelihood:
             except Exception as e:
                 raise Exception(
                     "The gradient evaluation dK/dh + dNoise/dh was not successful. "
-                    "That normally means the combination of ram_economy and definition "
+                    "That normally means the combination of gradient_per_direction and definition "
                     "of the gradient function is wrong.") from e
             KV = np.array([KV, ] * len(hyperparameters))
             a = solve(KV, dK_dH, compute_device=self.compute_device)
@@ -285,7 +285,7 @@ class GPMarginalLikelihood:
                 try:
                     noise_der = self.calculate_V_grad(self.x_data, hyperparameters, direction=i)
                     assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 1, \
-                        "noise gradient in ram_economy mode must be 1-d (diagonal) or 2-d (full matrix)"
+                        "noise gradient in gradient_per_direction mode must be 1-d (diagonal) or 2-d (full matrix)"
                     if np.ndim(noise_der) == 1:
                         dK_dH = self.dk_dh(
                             self.x_data, self.x_data, hyperparameters, direction=i) + np.diag(noise_der)
@@ -295,7 +295,7 @@ class GPMarginalLikelihood:
                 except Exception as e:
                     raise Exception(
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "
-                        "That normally means the combination of ram_economy and definition of "
+                        "That normally means the combination of gradient_per_direction and definition of "
                         "the gradient function is wrong.") from e
                 matr = solve(KV, dK_dH, compute_device=self.compute_device)
             if dL_dHm[i] == 0.0:

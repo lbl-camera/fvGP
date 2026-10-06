@@ -106,10 +106,10 @@ class GP:
         ``x2`` (a N2 x D array of positions) and
         ``hyperparameters`` (a 1d array of length D+1 for the default kernel).
         The default is an analytical gradient for the default kernel or a finite difference calculation otherwise.
-        If ``ram_economy`` is True, the function's input is x1, x2, hyperparameters (numpy array), and a direction (int).
+        If ``gradient_per_direction`` is True, the function's input is x1, x2, hyperparameters (numpy array), and a direction (int).
         The output is a numpy array of shape (len(hps) x N).
-        If ``ram_economy`` is ``False``, the function's input is x1, x2, and hyperparameters.
-        The output is a numpy array of shape (len(hyperparameters) x N1 x N2). See ``ram_economy``.
+        If ``gradient_per_direction`` is ``False``, the function's input is x1, x2, and hyperparameters.
+        The output is a numpy array of shape (len(hyperparameters) x N1 x N2). See ``gradient_per_direction``.
     prior_mean_function : Callable, optional
         A function f(x, hyperparameters, [args]) that evaluates the prior mean at a set of input position.
         It accepts as input
@@ -151,7 +151,7 @@ class GP:
         zeros are returned since the default noise function does not depend on
         hyperparameters, or, if ``noise_function`` is provided but no noise function gradient,
         a finite-difference approximation will be used.
-        The same rules regarding ``ram_economy`` as for the kernel definition apply here.
+        The same rules regarding ``gradient_per_direction`` as for the kernel definition apply here.
         That means the function will have an additional ``direction`` parameter.
     gp2Scale: bool, optional
         Turns on gp2Scale. This will distribute the covariance computations across multiple workers.
@@ -279,16 +279,16 @@ class GP:
           (or the matrix itself if no factorization is needed).
         * ``f_solve(obj, b)`` — solves the linear system and returns the solution vector.
         * ``f_logdet(obj)`` — returns the log-determinant as a scalar.
-    ram_economy : bool, optional
+    gradient_per_direction : bool, optional
         Only of interest if the gradient and/or Hessian of the log marginal likelihood is/are used for the training.
         If True, components of the derivative of the log marginal likelihood are
         calculated sequentially, leading to a slow-down
         but much less RAM usage. If the derivative of the kernel (and noise function) with
         respect to the hyperparameters (kernel_function_grad) is
-        going to be provided, it has to be tailored: for ``ram_economy=True`` it should be
+        going to be provided, it has to be tailored: for ``gradient_per_direction=True`` it should be
         of the form f(x, hyperparameters, direction)
         and return a 2d numpy array of shape len(x1) x len(x2).
-        If ``ram_economy=False``, the function should be of the form f(x, hyperparameters)
+        If ``gradient_per_direction=False``, the function should be of the form f(x, hyperparameters)
         and return a numpy array of shape
         H x len(x1) x len(x2), where H is the number of hyperparameters.
         CAUTION: This array will be stored and is very large.
@@ -434,7 +434,7 @@ class GP:
         gp2Scale_batch_size=10000,
         gp2Scale_distribution="blockwise",
         linalg_mode=None,
-        ram_economy=False,
+        gradient_per_direction=False,
         args=None
     ):
 
@@ -483,7 +483,7 @@ class GP:
         self.data = GPdata(x_data, y_data,
                            args=args,
                            noise_variances=noise_variances,
-                           ram_economy=ram_economy,
+                           ram_economy=gradient_per_direction,
                            gp2Scale=gp2Scale,
                            compute_device=compute_device,
                            dask_client=dask_client)

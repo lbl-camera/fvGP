@@ -95,7 +95,7 @@ class GGMP:
             Default is 5.
         gp_init_kwargs : dict, optional
             Extra keyword arguments forwarded to :class:`GP` at construction time
-            (e.g. ``ram_economy``, ``compute_device``).
+            (e.g. ``gradient_per_direction``, ``compute_device``).
         gp_device_ids : list of int, str, or None, optional
             GPU device IDs for multi-GPU evaluation.  Pass ``"auto"`` to use all
             detected GPUs.  Ignored when no GPU backend is available.
@@ -266,10 +266,10 @@ class GGMP:
             return kwargs
 
         gp_kwargs = _normalize_gp_kwargs(gp_kwargs)
-        # fvGP's default gradient path (`ram_economy=False`) can allocate extremely large
+        # fvGP's default gradient path (`gradient_per_direction=False`) can allocate extremely large
         # intermediate arrays (O(d * N^2)) during neg_log_likelihood_gradient for large N.
-        # Default to `ram_economy=True` unless the caller explicitly overrides it.
-        gp_kwargs.setdefault("ram_economy", True)
+        # Default to `gradient_per_direction=True` unless the caller explicitly overrides it.
+        gp_kwargs.setdefault("gradient_per_direction", True)
         self._gp_kwargs_supported = getattr(self, "_gp_kwargs_supported", None)
         self._gpu_engine = None
         self._effective_gp_device_ids = None
