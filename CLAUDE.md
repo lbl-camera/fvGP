@@ -42,7 +42,7 @@ There is no `conftest.py`: [tests/test_fvgp.py](tests/test_fvgp.py) imports the 
 
 `# pragma: no cover` is used for what genuinely cannot run on a CPU-only runner — GPU backends, branches unreachable behind an earlier assert, numerical breakdowns that cannot be forced. Each one carries its reason on the same line.
 
-**Python 3.10–3.14** are supported and all five are in CI. Dependencies are declared as ranges, not `~=` pins, because no single scipy/numpy release spans that range; pip resolves per interpreter (3.10 → scipy 1.13 / dask 2024.1 via hgdl 2.2.3; 3.11+ → the 2025-era stack). Note **hgdl `~=`-pins the whole scientific stack**, so it, not fvGP, decides which versions a given Python gets.
+**Python 3.10–3.14** are supported and all five are in CI. Dependencies are declared as ranges, not `~=` pins, because no single scipy/numpy release spans that range; pip resolves per interpreter. hgdl (since 2.4) declares the same ranges, so it no longer decides the stack. fvGP pins **hgdl `~= 2.4.2`** (≥ 2.4.2, < 2.5) because `GPtraining` passes HGDL's `info` argument, which 2.4.2 introduced.
 
 ## Architecture
 

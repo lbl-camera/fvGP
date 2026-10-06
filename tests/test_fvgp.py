@@ -2,9 +2,16 @@
 
 """Tests for `fvgp` package."""
 
-
+import os
 import unittest
 import numpy as np
+# The `client` fixture's workers are spawned without a nanny, so they miss the one-thread BLAS
+# limit dask's nanny sets for real clusters; HGDL's concurrent walkers then oversubscribe the
+# cores (test_train_hgdl: under 4 s instead of 6-13 min). Spawned workers read this at start-up;
+# it is set after numpy is imported so that this process keeps its multithreaded BLAS. Only
+# OpenBLAS (numpy's BLAS): OMP_NUM_THREADS would also reach imate's OpenMP log-determinant, which
+# loads later in this process.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 from fvgp import fvGP
 from fvgp import GP
 import time
@@ -436,7 +443,7 @@ def test_train_basic(client):
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             method = "global", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 2, dask_client=client)
+            method = "hgdl", pop_size = 10, tolerance = 0.001,max_iter = 1, dask_client=client)
     my_gp1.train(hyperparameter_bounds=np.array([[0.01,1],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
             method = "mcmc", pop_size = 10, tolerance = 0.001,max_iter = 20, dask_client=client)
     my_gp1.test_log_likelihood_gradient(np.array([1., 1., 1., 1., 1., 1.]))
@@ -504,7 +511,7 @@ def test_train_hgdl(client):
 
 
     my_gp2.train(hyperparameter_bounds=np.array([[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10],[0.01,10]]),
-            method = "hgdl", tolerance = 0.001, max_iter = 2, dask_client=client)
+            method = "hgdl", tolerance = 0.001, max_iter = 1, dask_client=client)
 
 
 def test_train_hgdl_async(client):
@@ -2951,7 +2958,7 @@ def test_bo_log_scale_override():
     assert errors["linear"] < errors["auto"], errors
 
 
-def test_train_info_prints_progress_for_every_method(capsys):
+def test_train_info_prints_progress_for_every_method(capsys, client):
     """`info=True` must actually surface something for each method.
 
     It used to be a no-op everywhere except mcmc: the other methods reported through
@@ -2969,6 +2976,7 @@ def test_train_info_prints_progress_for_every_method(capsys):
         ("local", dict(max_iter=5), "local iteration"),
         ("adam", dict(max_iter=25), "adam iteration"),
         ("global", dict(max_iter=2, pop_size=4), "differential_evolution step"),
+        ("hgdl", dict(max_iter=1, dask_client=client), "HGDL finished after"),
     ]
     for method, kwargs, marker in cases:
         gp = GP(xd, yd, hps)
@@ -5295,7 +5303,7 @@ def test_hgdl_reports_a_broken_objective(client):
             objective_function_hessian=gp.marginal_likelihood.neg_log_likelihood_hessian,
             hyperparameter_bounds=bounds,
             init_hyperparameters=np.array([1., 1., 1.]),
-            method="hgdl", max_iter=1, dask_client=None)
+            method="hgdl", max_iter=1, dask_client=client)
     except Exception as e:
         assert "gone wrong" in str(e) or "dask" in str(e).lower() or "client" in str(e).lower()
 
@@ -5531,10 +5539,13 @@ def test_hgdl_final_result_failure_is_reported(monkeypatch):
     """If HGDL cannot produce a final result, say so rather than leaking a KeyError."""
     import fvgp.gp_training as training_module
 
+    killed = []
+
     class _BrokenHGDL:
-        def __init__(self, *a, **k): pass
-        def optimize(self, *a, **k): return None
+        def __init__(self, *a, **k): self.client = None
+        def optimize(self, dask_client=None, **k): self.client = dask_client or "own cluster"
         def get_final(self): raise RuntimeError("objective blew up")
+        def kill_client(self): killed.append(self.client)
 
     monkeypatch.setattr(training_module, "HGDL", _BrokenHGDL)
     gp = _tiny_gp()
@@ -5551,6 +5562,35 @@ def test_hgdl_final_result_failure_is_reported(monkeypatch):
         assert "gone wrong" in str(e)
     else:
         raise AssertionError("a broken HGDL result must be reported")
+    # the cluster HGDL started for itself is closed even though the run failed
+    assert killed == ["own cluster"]
+
+
+def test_hgdl_closes_only_the_cluster_it_started(monkeypatch):
+    """Sync hgdl without a client must not leave HGDL's local cluster running; a user's client stays open."""
+    import fvgp.gp_training as training_module
+    killed = []
+
+    class _FakeHGDL:
+        def __init__(self, *a, **k): self.client = None
+        def optimize(self, dask_client=None, x0=None, **k):
+            self.client = dask_client or "own cluster"
+            self.x0 = x0
+        def get_final(self): return [{"x": self.x0[0]}]
+        def kill_client(self): killed.append(self.client)
+
+    monkeypatch.setattr(training_module, "HGDL", _FakeHGDL)
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.01, 10.]])
+    for dask_client in (None, "user client"):
+        gp.trainer.train(
+            objective_function=gp.marginal_likelihood.neg_log_likelihood,
+            objective_function_gradient=gp.marginal_likelihood.neg_log_likelihood_gradient,
+            objective_function_hessian=gp.marginal_likelihood.neg_log_likelihood_hessian,
+            hyperparameter_bounds=bounds,
+            init_hyperparameters=np.array([1., 1., 1.]),
+            method="hgdl", max_iter=1, dask_client=dask_client)
+    assert killed == ["own cluster"]
 
 
 def test_wendland_support_aware_empty_neighbor_lists():

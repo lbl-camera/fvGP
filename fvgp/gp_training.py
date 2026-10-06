@@ -135,13 +135,19 @@ class GPtraining:
                            local_optimizer=local_optimizer,
                            global_optimizer=global_optimizer,
                            num_epochs=max_iter,
-                           constraints=constraints)
+                           constraints=constraints,
+                           info=info)
 
-            opt_obj.optimize(dask_client=dask_client, x0=init_hyperparameters.reshape(1, -1))
             try:
-                hyperparameters = opt_obj.get_final()[0]["x"]
-            except Exception as ex:
-                raise Exception("Something has gone wrong with the objective function evaluation.") from ex
+                opt_obj.optimize(dask_client=dask_client, x0=init_hyperparameters.reshape(1, -1))
+                try:
+                    hyperparameters = opt_obj.get_final()[0]["x"]
+                except Exception as ex:
+                    raise Exception("Something has gone wrong with the objective function evaluation.") from ex
+            finally:
+                # without a client HGDL starts its own local cluster; close it, a user's client stays open
+                if dask_client is None and opt_obj.client is not None:
+                    opt_obj.kill_client()
 
         elif method == "mcmc":
             logger.debug("MCMC started in fvGP")
@@ -236,6 +242,7 @@ class GPtraining:
                 local_optimizer=local_optimizer,
                 global_optimizer=global_optimizer,
                 constraints=constraints,
+                info=info,
                 dask_client=dask_client,
             )
         elif method == 'mcmc':
@@ -281,6 +288,7 @@ class GPtraining:
                    local_optimizer="L-BFGS-B",
                    global_optimizer="genetic",
                    constraints=(),
+                   info=False,
                    dask_client=None):
         """
         This function asynchronously finds the maximum of the log marginal likelihood and therefore trains the GP.
@@ -300,6 +308,7 @@ class GPtraining:
             constraints,
             local_optimizer,
             global_optimizer,
+            info,
             dask_client)
         return opt_obj
 
@@ -553,6 +562,7 @@ class GPtraining:
                                        constraints,
                                        local_optimizer,
                                        global_optimizer,
+                                       info,
                                        dask_client):
 
         logger.debug("fvGP hyperparameter tuning in progress. Old hyperparameters: {}", starting_hps)
@@ -566,7 +576,8 @@ class GPtraining:
                        local_optimizer=local_optimizer,
                        global_optimizer=global_optimizer,
                        num_epochs=max_iter,
-                       constraints=constraints)
+                       constraints=constraints,
+                       info=info)
 
         logger.debug("HGDL successfully initialized. Calling optimize()")
         opt_obj.optimize(dask_client=dask_client, x0=np.array(starting_hps).reshape(1, -1))

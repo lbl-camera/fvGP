@@ -950,7 +950,9 @@ class GP:
             - ``local`` : the objective at every iteration.
             - ``global`` : ``scipy``'s own ``differential_evolution`` progress line per
               step.
-            - ``hgdl`` : nothing; use the ``hgdl`` logger.
+            - ``hgdl`` : one line per walker whose result is accepted as a new point,
+              with the walkers finished out of the total, the number of points found and
+              the current best point, plus a final line when the run ends.
 
             This prints. It is separate from the ``logger``, which fvGP disables at
             import (``logger.disable('fvgp')``) and which you can re-enable for the much
