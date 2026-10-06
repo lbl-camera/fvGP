@@ -4378,16 +4378,64 @@ def test_kl_div_warns_on_a_negative_result(monkeypatch):
     assert kld >= 0.0, "the magnitude is returned"
 
 
-def test_add_noise_warns_on_an_unusable_noise_function():
+def test_add_noise_rejects_an_unusable_noise_function():
     xx = np.random.rand(12, 2)
     yy = np.sin(np.linalg.norm(xx, axis=1))
     gp = GP(xx, yy, np.array([1., 1., 1.]),
             noise_function=lambda x, hps: np.full(len(x), 0.01))
     gp.likelihood.noise_function = lambda x, hps: np.ones((len(x), 2, 2))
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    try:
         gp.posterior_covariance(np.random.rand(3, 2), add_noise=True)
-    assert any("Noise could not be added" in str(w.message) for w in caught)
+    except Exception as e:
+        assert "Wrong noise format" in str(e)
+    else:
+        raise AssertionError("a 3-d noise array must not be silently dropped")
+
+
+def test_measured_noise_at_prediction_points():
+    """Measured variances belong to the data points; elsewhere the noise is their mean.
+
+    The data used to be recognized by length alone, so a test set as large as the
+    training set received the measured variances position by position.
+    """
+    np.random.seed(0)
+    xx = np.random.rand(10, 1)
+    yy = np.sin(5 * xx[:, 0])
+    hps = np.array([1., 0.3])
+
+    def added(gp, x_pred):
+        bare = gp.posterior_covariance(x_pred)["v(x)"]
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            noisy = gp.posterior_covariance(x_pred, add_noise=True)["v(x)"]
+        return noisy - bare, [str(w.message) for w in caught]
+
+    nv = np.linspace(0.001, 0.1, 10)
+    gp = GP(xx, yy, hps, noise_variances=nv)
+    # as many prediction points as data points, but different points: the mean, with a warning
+    noise, msgs = added(gp, np.random.rand(10, 1))
+    assert np.allclose(noise, nv.mean())
+    assert any("heteroscedastic" in m for m in msgs)
+    # the data points themselves, even as a copy: their own measured variances, no warning
+    noise, msgs = added(gp, xx.copy())
+    assert np.allclose(noise, nv)
+    assert not any("heteroscedastic" in m for m in msgs)
+
+    # homoscedastic measured noise: the constant is exact, so no warning
+    gp = GP(xx, yy, hps, noise_variances=np.full(10, 0.02))
+    noise, msgs = added(gp, np.random.rand(3, 1))
+    assert np.allclose(noise, 0.02)
+    assert not any("heteroscedastic" in m for m in msgs)
+
+    # non-Euclidean points are recognized by identity, without numpy
+    x_data = ['hello', 'world', 'this', 'is', 'fvgp']
+    gp = GP(x_data, np.array([2., 1.9, 1.8, 3.0, 5.]), init_hyperparameters=np.ones(2),
+            kernel_function=_string_kernel, noise_variances=np.linspace(0.01, 0.05, 5))
+    assert np.allclose(gp.likelihood.calculate_V(list(x_data), gp.hyperparameters), gp.noise_variances)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        other = gp.likelihood.calculate_V(['a', 'b', 'c', 'd', 'e'], gp.hyperparameters)
+    assert np.allclose(other, 0.03)
 
 
 def test_cartesian_product_and_int_gauss():

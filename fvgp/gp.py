@@ -1449,6 +1449,9 @@ class GP:
             Default = False. This is only relevant if the inverse of the covariance matrix is stored (linalg_mode == 'CholInv' or linalg_mode == 'Inv').
         add_noise : bool, optional
             If True the noise variances will be added to the posterior variances. Default = False.
+            With a ``noise_function`` that is its value at ``x_pred``. With measured ``noise_variances``
+            it is the measured variance at the data points themselves and ``mean(noise_variances)``
+            anywhere else; the mean is exact for constant noise and an estimate (with a warning) otherwise.
 
         Returns
         -------

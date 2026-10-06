@@ -18,7 +18,6 @@ class GPposterior:
         self.likelihood = likelihood
         self.data = data
         self.trainer = trainer
-        self.noise_function_available = callable(self.likelihood.noise_function)
 
     def compute_covariances(self, x1, x2, hps):
         """Direct, dense kernel evaluation. For the small (n_pred x n_pred) blocks."""
@@ -552,20 +551,16 @@ class GPposterior:
                 }
 
     def add_noise(self, x_pred, v, S):
-        if self.noise_function_available:
-            noise = self.noise_function(x_pred, self.hyperparameters)
-            assert isinstance(noise, np.ndarray), "noise function must return np.ndarray"
-            try:
-                if np.ndim(noise) == 1:
-                    v = v + noise
-                    if S is not None: S = S + np.diag(noise)
-                elif np.ndim(noise) == 2:
-                    v = v + np.diag(noise)
-                    if S is not None: S = S + noise
-                else:
-                    raise Exception("Wrong noise format")
-            except Exception:
-                warnings.warn("Noise could not be added, you did not provide a noise callable at initialization")
+        noise = self.noise_function(x_pred, self.hyperparameters)
+        assert isinstance(noise, np.ndarray), "noise function must return np.ndarray"
+        if np.ndim(noise) == 1:
+            v = v + noise
+            if S is not None: S = S + np.diag(noise)
+        elif np.ndim(noise) == 2:
+            v = v + np.diag(noise)
+            if S is not None: S = S + noise
+        else:
+            raise Exception("Wrong noise format: the noise function must return a 1-d or 2-d array")
         return v, S
 
     ###########################################################################
@@ -611,7 +606,6 @@ class GPposterior:
             likelihood=self.likelihood,
             data=self.data,
             trainer=self.trainer,
-            noise_function_available=self.noise_function_available,
             kv=self.kv
         )
         return state

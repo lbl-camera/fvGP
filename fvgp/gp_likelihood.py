@@ -104,10 +104,26 @@ class GPlikelihood:
         return noise
 
     def _measured_noise_function(self, x, hyperparameters):
-        if len(x) == len(self.noise_variances):
+        if self._is_x_data(x):
             return self.noise_variances
-        else:
-            return np.zeros((len(x))) + np.mean(self.noise_variances)
+        # measured noise says nothing about other points; a constant is exact only if the noise was
+        if not np.all(self.noise_variances == self.noise_variances[0]):
+            warnings.warn(
+                "Noise at points other than the data is estimated as mean(noise_variances) "
+                "because the measured noise is heteroscedastic and there is no noise model. "
+                "Quantities that add noise (posterior_covariance(add_noise=True), picp, nlpd, crps, ...) "
+                "depend on that estimate; provide a noise_function to model the noise instead.",
+                stacklevel=2)
+        return np.zeros((len(x))) + np.mean(self.noise_variances)
+
+    def _is_x_data(self, x):
+        # by content, not length: prediction points can coincide in number with the data
+        x_data = self.x_data
+        if x is x_data: return True
+        if len(x) != len(x_data): return False
+        if isinstance(x, np.ndarray) and isinstance(x_data, np.ndarray): return np.array_equal(x, x_data)
+        # non-Euclidean points are opaque objects: compare by identity, never through numpy
+        return all(a is b for a, b in zip(x, x_data))
 
     @staticmethod
     def _default_dnoise_dh(x, hps):
