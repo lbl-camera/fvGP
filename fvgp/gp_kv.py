@@ -109,6 +109,9 @@ class GPkv:
         # recently reused as a warm start, were computed for
         self.Preconditioner_fingerprint = None
         self.Warm_start_fingerprint = None
+        # consecutive training evaluations whose K+V stayed within the drift threshold of the
+        # previous one; a preconditioner is only built once these show it would be reused
+        self.Settled_steps = 0
 
         # Resolve aliases like "sparseCGpre_amg" → mode "sparseCGpre" with
         # args["sparse_preconditioner_type"]="amg".  Writes resolved args back
@@ -284,7 +287,7 @@ class GPkv:
         """
         return float(self.args.get("sparse_preconditioner_max_matrix_drift", 0.1))
 
-    def _validated_warm_start(self, KV, x0):
+    def _validated_warm_start(self, KV, x0, fingerprint=None):
         """Drop a warm start that was computed for a materially different K+V.
 
         The previous solution is only a good starting guess while the operator is
@@ -301,10 +304,26 @@ class GPkv:
             return None
         if self.Warm_start_fingerprint is None:
             return x0
-        if self._fingerprint_drift(self.Warm_start_fingerprint,
-                                   self.matrix_fingerprint(KV)) > self._max_matrix_drift():
+        if fingerprint is None:
+            fingerprint = self.matrix_fingerprint(KV)
+        if self._fingerprint_drift(self.Warm_start_fingerprint, fingerprint) > self._max_matrix_drift():
             logger.debug("Warm start dropped: K+V drifted beyond the reuse threshold.")
             return None
+        return x0
+
+    def _record_evaluation(self, KV, x0):
+        """Bookkeeping at the start of a training evaluation; returns the usable warm start.
+
+        Measures how far K+V moved from the previous evaluation, once, and uses it twice:
+        to drop a stale warm start, and to count how many evaluations in a row have
+        stayed close (``Settled_steps``) -- the evidence :py:meth:`_training_preconditioner`
+        needs before a new preconditioner is worth building.
+        """
+        fingerprint = self.matrix_fingerprint(KV)
+        x0 = self._validated_warm_start(KV, x0, fingerprint)
+        step = self._fingerprint_drift(self.Warm_start_fingerprint, fingerprint)
+        self.Settled_steps = self.Settled_steps + 1 if step <= self._max_matrix_drift() else 0
+        self.Warm_start_fingerprint = fingerprint
         return x0
 
     def _reset_sparse_preconditioner(self):
@@ -365,15 +384,55 @@ class GPkv:
         if self.mode not in self._PRECONDITIONED_MODES:
             return None
         if not force_refresh and self._can_reuse_sparse_preconditioner(KV):
-            self.Preconditioner_reuse_counter += 1
-            # Say so explicitly: otherwise a reuse is indistinguishable in the log from a
-            # build that never happened, and the missing construction time reads as a gap.
-            # Phrased like the construction line in gp_lin_alg so both grep together.
-            logger.debug("{} preconditioner reused ({} consecutive reuses), no construction cost.",
-                         normalize_sparse_preconditioner_type(
-                             self.args.get("sparse_preconditioner_type", "ilu")),
-                         self.Preconditioner_reuse_counter)
-            return self.Preconditioner_operator
+            return self._reuse_preconditioner()
+        return self._build_preconditioner(KV)
+
+    def _training_preconditioner(self, KV):
+        """The preconditioner for one training evaluation, or ``None`` to solve with plain MINRES.
+
+        A preconditioner only pays for its construction once it is reused: rebuilt for every
+        evaluation, even a good one leaves CG slower than unpreconditioned MINRES. So a
+        cached one is reused while it is valid (the drift test in
+        :py:meth:`_can_reuse_sparse_preconditioner`), and a new one is built only when it is
+        likely to be reused -- after ``args["sparse_preconditioner_settle_steps"]`` (default
+        3) consecutive evaluations each stayed within the drift threshold of the previous
+        one. Until then, during an MCMC burn-in or the jumps of a non-local method, the
+        evaluation is solved without one. Under ``refresh_interval=1``, which
+        :py:func:`sequential_linalg_state` imposes on every method but MCMC, a build could
+        never be reused and so never happens.
+
+        ``args["sparse_preconditioner_lazy"]=False`` restores building on every evaluation
+        the cache cannot serve.
+        """
+        if self._can_reuse_sparse_preconditioner(KV):
+            return self._reuse_preconditioner()
+        if not self.args.get("sparse_preconditioner_lazy", True):
+            return self._build_preconditioner(KV)
+        settle_steps = max(1, int(self.args.get("sparse_preconditioner_settle_steps", 3)))
+        if self._preconditioner_refresh_interval() == 1:
+            reason = "refresh interval 1, it could not be reused"
+        elif self.Settled_steps < settle_steps:
+            reason = f"K+V still moving: {self.Settled_steps}/{settle_steps} settled steps"
+        else:
+            return self._build_preconditioner(KV)
+        # phrased like the construction and reuse lines so all three grep together
+        logger.debug("{} preconditioner skipped ({}), solving with MINRES.",
+                     self._preconditioner_type_name(), reason)
+        return None
+
+    def _preconditioner_type_name(self):
+        return normalize_sparse_preconditioner_type(self.args.get("sparse_preconditioner_type", "ilu"))
+
+    def _reuse_preconditioner(self):
+        self.Preconditioner_reuse_counter += 1
+        # Say so explicitly: otherwise a reuse is indistinguishable in the log from a
+        # build that never happened, and the missing construction time reads as a gap.
+        # Phrased like the construction line in gp_lin_alg so both grep together.
+        logger.debug("{} preconditioner reused ({} consecutive reuses), no construction cost.",
+                     self._preconditioner_type_name(), self.Preconditioner_reuse_counter)
+        return self.Preconditioner_operator
+
+    def _build_preconditioner(self, KV):
         factor, operator = self._build_sparse_preconditioner_or_none(KV)
         if operator is None:
             self._reset_sparse_preconditioner()
@@ -514,8 +573,7 @@ class GPkv:
         the previous iteration's KVinvY can substantially cut iteration counts when
         successive hyperparameters are close.
         """
-        x0 = self._validated_warm_start(KV, x0)
-        self.Warm_start_fingerprint = self.matrix_fingerprint(KV)
+        x0 = self._record_evaluation(KV, x0)
         y_mean = self.y_data - m[:, None]
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
@@ -538,14 +596,8 @@ class GPkv:
         elif mode == "sparseMINRES":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             KVinvY = calculate_sparse_minres(KV, y_mean, x0=x0, args=self.args)
-        elif mode == "sparseMINRESpre":
-            if not issparse(KV): KV = sparse.csr_matrix(KV)
-            M = self._get_or_refresh_preconditioner(KV)
-            KVinvY = calculate_sparse_minres(KV, y_mean, M=M, x0=x0, args=self.args)
-        elif mode == "sparseCGpre":
-            if not issparse(KV): KV = sparse.csr_matrix(KV)
-            M = self._get_or_refresh_preconditioner(KV)
-            KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, x0=x0, args=self.args)
+        elif mode in self._PRECONDITIONED_MODES:
+            KVinvY = self._preconditioned_training_solve(KV, y_mean, x0)
         elif mode == "sparseSolve":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             KVinvY = calculate_sparse_solve(KV, y_mean, args=self.args)
@@ -555,6 +607,19 @@ class GPkv:
         else:
             raise Exception(f"No mode: {mode}")
         return KVinvY.reshape(y_mean.shape)
+
+    def _preconditioned_training_solve(self, KV, y_mean, x0):
+        """Solve for one training evaluation in a preconditioned mode.
+
+        CG only with a preconditioner; without one -- skipped by
+        :py:meth:`_training_preconditioner` or failed to build -- both modes use MINRES,
+        the unpreconditioned default, which is the faster choice there.
+        """
+        if not issparse(KV): KV = sparse.csr_matrix(KV)
+        M = self._training_preconditioner(KV)
+        if self.mode == "sparseCGpre" and M is not None:
+            return calculate_sparse_conj_grad(KV, y_mean, M=M, x0=x0, args=self.args)
+        return calculate_sparse_minres(KV, y_mean, M=M, x0=x0, args=self.args)
 
     def _random_logdet(self, KV):
         """Stochastic-Lanczos log-determinant, recording the estimator's own variance.
@@ -579,8 +644,7 @@ class GPkv:
         ``x0`` (optional) is forwarded to iterative solvers as a warm-start.
         """
         KV = self.addKV(K, V)
-        x0 = self._validated_warm_start(KV, x0)
-        self.Warm_start_fingerprint = self.matrix_fingerprint(KV)
+        x0 = self._record_evaluation(KV, x0)
         y_mean = self.y_data - m[:, None]
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
@@ -608,15 +672,9 @@ class GPkv:
             if not issparse(KV): KV = sparse.csr_matrix(KV)
             KVinvY = calculate_sparse_minres(KV, y_mean, x0=x0, args=self.args)
             KVlogdet = self._random_logdet(KV)
-        elif mode == "sparseMINRESpre":
+        elif mode in self._PRECONDITIONED_MODES:
             if not issparse(KV): KV = sparse.csr_matrix(KV)
-            M = self._get_or_refresh_preconditioner(KV)
-            KVinvY = calculate_sparse_minres(KV, y_mean, M=M, x0=x0, args=self.args)
-            KVlogdet = self._random_logdet(KV)
-        elif mode == "sparseCGpre":
-            if not issparse(KV): KV = sparse.csr_matrix(KV)
-            M = self._get_or_refresh_preconditioner(KV)
-            KVinvY = calculate_sparse_conj_grad(KV, y_mean, M=M, x0=x0, args=self.args)
+            KVinvY = self._preconditioned_training_solve(KV, y_mean, x0)
             KVlogdet = self._random_logdet(KV)
         elif mode == "sparseSolve":
             if not issparse(KV): KV = sparse.csr_matrix(KV)
@@ -744,6 +802,7 @@ class GPkv:
             last_logdet_info=self.last_logdet_info,
             Preconditioner_fingerprint=self.Preconditioner_fingerprint,
             Warm_start_fingerprint=self.Warm_start_fingerprint,
+            Settled_steps=self.Settled_steps,
             logdet_KV=self.logdet_KV
         )
         return state
@@ -760,6 +819,7 @@ class GPkv:
             ("Last_preconditioner_error", None),
             ("Preconditioner_fingerprint", None),
             ("Warm_start_fingerprint", None),
+            ("Settled_steps", 0),
         ):
             if attr not in self.__dict__:
                 setattr(self, attr, default)

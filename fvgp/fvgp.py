@@ -351,6 +351,15 @@ class fvGP(GP):
         - "sparse_preconditioner_refresh_interval" : int; default = None (no cap) —
           optional hard cap on consecutive reuses, applied on top of the drift test
           above. ``set_KV`` always force-refreshes.
+        - "sparse_preconditioner_lazy" : True/False; default = True — during training,
+          build a new preconditioner only when it is likely to be reused (see
+          "sparse_preconditioner_settle_steps"), and otherwise solve that evaluation with
+          plain MINRES. Rebuilt for every evaluation, even a good preconditioner is slower
+          than MINRES without one. False builds whenever the cached one is stale.
+        - "sparse_preconditioner_settle_steps" : int; default = 3 — consecutive training
+          evaluations, each within "sparse_preconditioner_max_matrix_drift" of the previous
+          one, required before a new preconditioner is built. Separate from the drift test
+          above, which compares K+V with the matrix the cached preconditioner was built for.
         - "sparse_preconditioner_block_size" : int — block size for block_jacobi
           and additive_schwarz partitions
         - "sparse_preconditioner_schwarz_overlap" : int — overlap layers for
@@ -383,6 +392,11 @@ class fvGP(GP):
           the cached factor is kept until K+V has actually drifted past
           ``sparse_preconditioner_max_matrix_drift``. Reach for
           ``sparse_preconditioner_refresh_interval`` only to impose an extra hard cap.
+        - During training a preconditioner is built lazily: while the hyperparameters
+          still jump (an MCMC burn-in, or any method other than ``mcmc``, which cannot
+          reuse one), evaluations are solved with unpreconditioned MINRES and nothing is
+          built. Once ``sparse_preconditioner_settle_steps`` evaluations in a row stay
+          close, one is built and reused for as long as the drift test allows.
           ``sparse_krylov_warm_start`` is a separate opt-in and is honored only for
           ``train(method='mcmc')``, whose steps are small enough for the previous solution
           to be a good starting guess; the other methods sample non-locally, where a warm

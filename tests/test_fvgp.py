@@ -1901,11 +1901,96 @@ def test_kv_mode_alias_resolution_at_init():
     assert gp.data.args.get("sparse_preconditioner_type") == "amg"
 
 
+def test_training_builds_a_preconditioner_only_once_it_would_be_reused(monkeypatch):
+    """During training a preconditioner is built only after K+V has settled.
+
+    Rebuilt for every evaluation even a good preconditioner leaves CG slower than plain
+    MINRES, so while the hyperparameters still jump (MCMC burn-in, non-local methods)
+    the evaluation is solved with MINRES and nothing is built.
+    """
+    import fvgp.gp_kv as kv_module
+    calls = []
+    for name in ("calculate_sparse_preconditioner", "calculate_sparse_minres", "calculate_sparse_conj_grad"):
+        original = getattr(kv_module, name)
+        def spy(*a, _name=name, _original=original, **k):
+            calls.append(_name)
+            return _original(*a, **k)
+        monkeypatch.setattr(kv_module, name, spy)
+
+    def evaluate(gp, scale):
+        hps = np.array([1.0, 0.4, 0.4]) * scale
+        K = gp.prior.compute_prior_covariance_matrix(gp.x_data, hps)
+        V = gp.likelihood.calculate_V(gp.x_data, hps)
+        m = gp.prior.compute_mean(gp.x_data, hps)
+        calls.clear()
+        KVinvY = gp.kv.compute_new_KVinvY(gp.kv.addKV(K, V), m)
+        assert KVinvY.shape == gp.y_data.shape
+        return list(calls)
+
+    built = ["calculate_sparse_preconditioner", "calculate_sparse_conj_grad"]
+    # chains start away from the initial hyperparameters (scale 1), where the preconditioner
+    # set_KV built at init is still valid and would rightly be reused
+    gp, _ = _make_test_gp("sparseCGpre")
+    # a moving chain: every step is a jump, so nothing is built and MINRES solves
+    for scale in (2.0, 4.0, 2.0, 4.0):
+        assert evaluate(gp, scale) == ["calculate_sparse_minres"]
+        assert gp.kv.Settled_steps == 0
+    # the chain settles: three small steps in a row, then exactly one build
+    for i, scale in enumerate((4.001, 4.002, 4.003)):
+        assert evaluate(gp, scale) == (built if i == 2 else ["calculate_sparse_minres"])
+    assert gp.kv.Settled_steps == 3
+    # ... which is reused while K+V stays close to the matrix it was built for
+    for scale in (4.004, 4.005):
+        assert evaluate(gp, scale) == ["calculate_sparse_conj_grad"]
+    # a jump makes it stale and resets the count: back to MINRES, no build
+    assert evaluate(gp, 2.0) == ["calculate_sparse_minres"]
+    assert gp.kv.Settled_steps == 0
+
+    # refresh interval 1 (every training method but mcmc): a build could never be reused
+    gp, _ = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_refresh_interval": 1})
+    for scale in (1.0, 1.001, 1.002, 1.003, 1.004):
+        assert evaluate(gp, scale) == ["calculate_sparse_minres"]
+    assert gp.kv.Settled_steps == 4
+
+    # lazy=False restores building on every evaluation the cache cannot serve
+    gp, _ = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_lazy": False})
+    for scale in (2.0, 4.0):
+        assert evaluate(gp, scale) == built
+
+    # sparseMINRESpre: the settle count is configurable, and it uses MINRES either way
+    gp, _ = _make_test_gp("sparseMINRESpre", args={"sparse_preconditioner_settle_steps": 1})
+    assert evaluate(gp, 2.0) == ["calculate_sparse_minres"]
+    assert evaluate(gp, 2.001) == ["calculate_sparse_preconditioner", "calculate_sparse_minres"]
+
+
+def test_training_preconditioner_logs_a_skipped_build():
+    """A skipped build says why, phrased like the build and reuse lines."""
+    from loguru import logger
+    messages = []
+    logger.enable("fvgp")
+    sink = logger.add(lambda m: messages.append(m.record["message"]), level="DEBUG")
+    try:
+        gp, hps = _make_test_gp("sparseCGpre")
+        # away from the initial hyperparameters, whose preconditioner set_KV already built
+        hps = hps * 3.0
+        K = gp.prior.compute_prior_covariance_matrix(gp.x_data, hps)
+        KV = gp.kv.addKV(K, gp.likelihood.calculate_V(gp.x_data, hps))
+        for args in ({}, {"sparse_preconditioner_refresh_interval": 1}):
+            gp.args.update(args)
+            gp.kv.compute_new_KVinvY(KV, gp.prior.compute_mean(gp.x_data, hps))
+    finally:
+        logger.remove(sink)
+        logger.disable("fvgp")
+    skipped = [m for m in messages if "preconditioner skipped" in m]
+    assert any("K+V still moving" in m for m in skipped), skipped
+    assert any("refresh interval 1" in m for m in skipped), skipped
+
+
 def test_compute_new_KVlogdet_matches_baseline():
     """Cached + warm-started compute_new_KVlogdet_KVinvY must equal the
     uncached, cold-start baseline numerically."""
-    # Baseline run — refresh every call, no warm-start
-    gp_base, hps = _make_test_gp("sparseCGpre")
+    # Baseline run — build a preconditioner on every call, no warm-start
+    gp_base, hps = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_lazy": False})
     # Configured run — interval=4, warm-start on
     gp_opt, _ = _make_test_gp("sparseCGpre",
                               args={"sparse_preconditioner_refresh_interval": 4,
@@ -1965,7 +2050,9 @@ def test_preconditioner_build_failure_falls_back():
     # 'amg' will fail if pyamg is missing — exercise the fallback path
     if _importlib_for_tests.util.find_spec("pyamg") is not None:
         pytest.skip("pyamg installed; failure path not exercised")
-    gp, hps = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_type": "amg"})
+    # not lazy: the first training evaluation must attempt the build
+    gp, hps = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_type": "amg",
+                                                 "sparse_preconditioner_lazy": False})
     K, V, m = gp.K, gp.V, gp.prior.m
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -4292,11 +4379,12 @@ def test_kv_unpickles_older_states_without_preconditioner_slots():
     for attr in ("Preconditioner_factor", "Preconditioner_operator", "Preconditioner_signature",
                  "Preconditioner_KV_shape", "Preconditioner_reuse_counter",
                  "Last_preconditioner_error", "Preconditioner_fingerprint",
-                 "Warm_start_fingerprint"):
+                 "Warm_start_fingerprint", "Settled_steps"):
         state.pop(attr, None)
     gp.kv.__setstate__(state)
     assert gp.kv.Preconditioner_operator is None
     assert gp.kv.Preconditioner_reuse_counter == 0
+    assert gp.kv.Settled_steps == 0
 
 
 def test_matrix_fingerprint_and_drift_edge_cases():
