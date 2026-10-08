@@ -2312,6 +2312,32 @@ def test_random_logdet_reports_its_own_variance():
     assert np.isscalar(calculate_random_logdet(A, "cpu", args={}))
 
 
+def test_random_logdet_stops_at_its_target_for_a_negative_logdet():
+    """imate compares its error with error_rtol * mean -- the signed mean -- so a relative
+    target is never met for a negative log-determinant and every call used to run all
+    max_num_samples probes. fvGP passes imate only absolute targets."""
+    from fvgp.gp_lin_alg import calculate_random_logdet
+    pytest.importorskip("imate")
+
+    n = 500
+    A = sparse.random(n, n, density=0.01, random_state=0)
+    KV = ((A + A.T) * 0.05 + sparse.identity(n) * 0.3).tocsr()
+    exact = np.linalg.slogdet(KV.toarray())[1]
+    assert exact < 0.0
+
+    # the default absolute target, 2.0 on log|KV|: met well before the cap
+    info = {}
+    estimate = calculate_random_logdet(KV, "cpu", args={}, info_out=info)
+    assert info["num_samples_used"] < 5000, info
+    assert abs(estimate - exact) < 6.0, (estimate, exact)
+
+    # a user's relative target is honored too, via the pilot run, despite the sign
+    info = {}
+    estimate = calculate_random_logdet(KV, "cpu", args={"random_logdet_error_rtol": 0.01}, info_out=info)
+    assert info["num_samples_used"] < 5000, info
+    assert abs(estimate - exact) < 0.03 * abs(exact), (estimate, exact)
+
+
 def test_log_likelihood_variance_exact_vs_stochastic(client):
     """The likelihood must report noise only when it actually has any."""
     np.random.seed(0)

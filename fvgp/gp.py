@@ -298,7 +298,14 @@ class GP:
         Stochastic-Lanczos logdet (sparse modes):
 
         - "random_logdet_lanczos_degree" : int; default = 20
-        - "random_logdet_error_rtol" : float; default = 0.01
+        - "random_logdet_error_atol" : float; default = 2.0 — target absolute error of
+          log|K+V|, i.e. about 1 in the log marginal likelihood (which contains
+          -1/2 log|K+V|). Sampling stops once it is reached or at
+          "random_logdet_max_num_samples", whichever comes first.
+        - "random_logdet_error_rtol" : float; default = None — target error relative to
+          |log|K+V||. If given, the looser of the two targets applies, and the default
+          error_atol drops to 0. A 1% relative target means a log-likelihood error of
+          about 0.005 * |log|K+V||, which grows with N.
         - "random_logdet_verbose" : True/False; default = False
         - "random_logdet_print_info" : True/False; default = False
         - "random_logdet_lanczos_compute_device" : str; default = "cpu"/"gpu"

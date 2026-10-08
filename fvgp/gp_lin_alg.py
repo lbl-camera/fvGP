@@ -1110,8 +1110,10 @@ def calculate_random_logdet(KV, compute_device, args=None, info_out=None):
     compute_device : str
         ``"cpu"`` or ``"gpu"``.
     args : dict, optional
-        Recognized keys include ``random_logdet_lanczos_degree``,
-        ``random_logdet_error_rtol``, and the probe-count bounds
+        Recognized keys include ``random_logdet_lanczos_degree``, the accuracy targets
+        ``random_logdet_error_atol`` (default 2.0 on log|KV|, i.e. about 1 in the log
+        marginal likelihood, when neither target is given) and ``random_logdet_error_rtol``
+        (relative to |log|KV||; the looser of the two applies), and the probe-count bounds
         ``random_logdet_min_num_samples`` / ``random_logdet_max_num_samples``. The probe
         count is the fidelity dial of this estimator: its noise falls as 1/sqrt(t) while
         its cost grows as t.
@@ -1137,21 +1139,41 @@ def calculate_random_logdet(KV, compute_device, args=None, info_out=None):
             stacklevel=2)
 
     lanczos_degree = 20
-    error_rtol = 0.01
     verbose = False
     print_info = False
 
     if "random_logdet_lanczos_degree" in args: lanczos_degree = args["random_logdet_lanczos_degree"]
-    if "random_logdet_error_rtol" in args: error_rtol = args["random_logdet_error_rtol"]
     if "random_logdet_verbose" in args: verbose = args["random_logdet_verbose"]
     if "random_logdet_print_info" in args: print_info = args["random_logdet_print_info"]
 
     min_num_samples = args.get("random_logdet_min_num_samples", 10)
     max_num_samples = args.get("random_logdet_max_num_samples", 5000)
+    error_atol = args.get("random_logdet_error_atol", None)
+    error_rtol = args.get("random_logdet_error_rtol", None)
+    # The default target is absolute: the log-determinant enters the log marginal likelihood
+    # as -1/2 log|KV|, and what training needs is that likelihood to be accurate to about 1,
+    # whatever the size or sign of log|KV|. A 1% relative target, the old default, meant a
+    # likelihood noise of 10-25 at N=8000, growing with N, which MCMC cannot work with.
+    if error_atol is None and error_rtol is None: error_atol = 2.0
+    error_atol = 0.0 if error_atol is None else float(error_atol)
+
+    # A relative target is never passed to imate: it stops sampling once its error is below
+    # max(error_atol, error_rtol * mean) -- the signed mean, not |mean| (imate <= 0.29.11,
+    # convergence_tools.cpp) -- so for a negative log-determinant, the common case, a
+    # relative target can never be met and every call ran all max_num_samples probes. A
+    # short pilot run estimates |log det| instead and converts the relative target into an
+    # absolute one. The pilot only sets the stopping threshold; the returned value comes
+    # from the full run. Unnecessary when the probe count is fixed.
+    if error_rtol and max_num_samples > min_num_samples:
+        pilot = imate_logdet(KV, method='slq', min_num_samples=min_num_samples,
+                             max_num_samples=min_num_samples, lanczos_degree=lanczos_degree,
+                             gpu=gpu, plot=False, verbose=False, orthogonalize=0)
+        error_atol = max(error_atol, float(error_rtol) * abs(float(pilot)))
 
     logdet, info_slq = imate_logdet(KV, method='slq', min_num_samples=min_num_samples,
                                     max_num_samples=max_num_samples,
-                                    lanczos_degree=lanczos_degree, error_rtol=error_rtol, gpu=gpu,
+                                    lanczos_degree=lanczos_degree, error_atol=error_atol,
+                                    error_rtol=0.0, gpu=gpu,
                                     return_info=True, plot=False, verbose=verbose, orthogonalize=0)
     logger.debug("Stochastic Lanczos logdet() compute time: {} seconds", time.time() - st)
     if print_info: logger.debug(info_slq)
