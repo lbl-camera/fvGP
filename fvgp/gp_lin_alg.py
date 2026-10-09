@@ -1111,9 +1111,9 @@ def calculate_random_logdet(KV, compute_device, args=None, info_out=None):
         ``"cpu"`` or ``"gpu"``.
     args : dict, optional
         Recognized keys include ``random_logdet_lanczos_degree``, the accuracy targets
-        ``random_logdet_error_atol`` (default 2.0 on log|KV|, i.e. about 1 in the log
-        marginal likelihood, when neither target is given) and ``random_logdet_error_rtol``
-        (relative to |log|KV||; the looser of the two applies), and the probe-count bounds
+        ``random_logdet_error_rtol`` (relative to |log|KV||; default 0.01 when neither target
+        is given) and ``random_logdet_error_atol`` (absolute; the looser of the two applies),
+        and the probe-count bounds
         ``random_logdet_min_num_samples`` / ``random_logdet_max_num_samples``. The probe
         count is the fidelity dial of this estimator: its noise falls as 1/sqrt(t) while
         its cost grows as t.
@@ -1150,11 +1150,9 @@ def calculate_random_logdet(KV, compute_device, args=None, info_out=None):
     max_num_samples = args.get("random_logdet_max_num_samples", 5000)
     error_atol = args.get("random_logdet_error_atol", None)
     error_rtol = args.get("random_logdet_error_rtol", None)
-    # The default target is absolute: the log-determinant enters the log marginal likelihood
-    # as -1/2 log|KV|, and what training needs is that likelihood to be accurate to about 1,
-    # whatever the size or sign of log|KV|. A 1% relative target, the old default, meant a
-    # likelihood noise of 10-25 at N=8000, growing with N, which MCMC cannot work with.
-    if error_atol is None and error_rtol is None: error_atol = 2.0
+    # The default target is relative, 1%: the magnitude of log|KV|, and with it of the
+    # likelihood, varies too strongly across problems for one absolute target to fit them all.
+    if error_atol is None and error_rtol is None: error_rtol = 0.01
     error_atol = 0.0 if error_atol is None else float(error_atol)
 
     # A relative target is never passed to imate: it stops sampling once its error is below

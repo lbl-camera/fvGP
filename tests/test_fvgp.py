@@ -2412,17 +2412,17 @@ def test_random_logdet_stops_at_its_target_for_a_negative_logdet():
     exact = np.linalg.slogdet(KV.toarray())[1]
     assert exact < 0.0
 
-    # the default absolute target, 2.0 on log|KV|: met well before the cap
+    # the default 1% relative target is met well before the cap, via the pilot run
     info = {}
     estimate = calculate_random_logdet(KV, "cpu", args={}, info_out=info)
     assert info["num_samples_used"] < 5000, info
-    assert abs(estimate - exact) < 6.0, (estimate, exact)
-
-    # a user's relative target is honored too, via the pilot run, despite the sign
-    info = {}
-    estimate = calculate_random_logdet(KV, "cpu", args={"random_logdet_error_rtol": 0.01}, info_out=info)
-    assert info["num_samples_used"] < 5000, info
     assert abs(estimate - exact) < 0.03 * abs(exact), (estimate, exact)
+
+    # an absolute target alone is passed straight through
+    info = {}
+    estimate = calculate_random_logdet(KV, "cpu", args={"random_logdet_error_atol": 2.0}, info_out=info)
+    assert info["num_samples_used"] < 5000, info
+    assert abs(estimate - exact) < 6.0, (estimate, exact)
 
 
 def test_log_likelihood_variance_exact_vs_stochastic(client):
