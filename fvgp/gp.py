@@ -812,6 +812,9 @@ class GP:
               mcmc_prior=None,
               mcmc_prop_distrs="normal",
               mcmc_args={},
+              mcmc_burn_in=0.5,
+              mcmc_break_condition="default",
+              mcmc_seed=None,
               bo_args=None,
               local_optimizer="L-BFGS-B",
               global_optimizer="genetic",
@@ -861,7 +864,9 @@ class GP:
             The callable gets a :py:class:`fvgp.GP` instance and has to return a 1d np.ndarray of hyperparameters.
             The default is ``mcmc``.
             If method = ``mcmc`` or default,
-            the attribute :py:attr:`fvgp.GP.mcmc_info` is updated and contains convergence and distribution information.
+            the attribute :py:attr:`fvgp.GP.mcmc_info` is updated and contains convergence and distribution information
+            (see :py:func:`fvgp.gp_mcmc.summarize`). The trained hyperparameters are the median of the chain
+            after burn-in (``mcmc_burn_in``); the proposal adapts toward a 23% acceptance rate.
             For ``hgdl``, please provide a :py:class:`distributed.Client`.
             ``bo`` runs Bayesian optimization over the hyperparameters, using a small
             :py:class:`fvgp.GP` as its own surrogate. It is the method to reach for when the
@@ -877,6 +882,8 @@ class GP:
             Used as termination criterion for local optimizers. Default = 0.0001.
         max_iter : int, optional
             Maximum number of iterations for global and local optimizers. Default = 10000.
+            For ``method='mcmc'`` it is the maximum length of the chain, reached exactly with
+            ``mcmc_break_condition=None``.
             For ``method='bo'`` this is instead a *cap* on the number of objective-function
             evaluations, including the initial design, because each one is an expensive
             likelihood. It is a ceiling rather than a target: the search stops on its own
@@ -892,6 +899,21 @@ class GP:
             See :py:class:`~fvgp.gp_mcmc.ProposalDistribution` in the documentation for more information.
         mcmc_args : dict, optional
             A dictionary of additional arguments for the MCMC sampler. The default is an empty dictionary.
+        mcmc_burn_in : float, optional
+            Fraction of the chain, from its start, left out of the summaries -- among them
+            ``median(x)``, which becomes the trained hyperparameters. Default 0.5.
+        mcmc_break_condition : str or callable or None, optional
+            When the chain ends before ``max_iter``. The default, ``"default"``, is a
+            single-chain convergence heuristic: from 2000 states on, checked every 500, it ends
+            the chain after two passing checks in a row -- every hyperparameter with an
+            effective sample size of at least 100 and a Geweke z-score below 2 on the
+            post-burn-in chain, and some proposal accepted since the last check. ``None``
+            runs exactly ``max_iter`` steps; a callable gets the
+            :py:class:`fvgp.gp_mcmc.gpMCMC` instance after every step and returns True to stop.
+            To check convergence properly, run several chains and compare them with
+            :py:func:`fvgp.gp_mcmc.split_rhat` and :py:func:`fvgp.gp_mcmc.ess`.
+        mcmc_seed : int or np.random.Generator, optional
+            Makes the MCMC reproducible. The default, None, uses the global ``np.random``.
         bo_args : dict, optional
             Settings for ``method='bo'``; ignored otherwise. Recognized keys:
 
@@ -1065,6 +1087,9 @@ class GP:
                 warnings.warn("MCMC always optimizes the log marginal likelihood; "
                               "the user-defined objective_function is ignored.")
             objective_function = self.marginal_likelihood.log_likelihood
+            assert 0. <= mcmc_burn_in < 1., "mcmc_burn_in must be a fraction in [0, 1)"
+            assert mcmc_break_condition is None or mcmc_break_condition == "default" or \
+                callable(mcmc_break_condition), "mcmc_break_condition must be None, 'default' or a callable"
         elif objective_function is None:
             objective_function = self.marginal_likelihood.neg_log_likelihood
         if user_provided_obj and objective_function_gradient is None and method in ('local', 'hgdl'):
@@ -1126,6 +1151,9 @@ class GP:
                 mcmc_prior=mcmc_prior,
                 mcmc_prop_distrs=mcmc_prop_distrs,
                 mcmc_args=mcmc_args,
+                mcmc_burn_in=mcmc_burn_in,
+                mcmc_break_condition=mcmc_break_condition,
+                mcmc_seed=mcmc_seed,
                 bo_args=bo_args,
                 local_optimizer=local_optimizer,
                 global_optimizer=global_optimizer,
@@ -1155,6 +1183,9 @@ class GP:
                 mcmc_prior=mcmc_prior,
                 mcmc_prop_distrs=mcmc_prop_distrs,
                 mcmc_args=mcmc_args,
+                mcmc_burn_in=mcmc_burn_in,
+                mcmc_break_condition=mcmc_break_condition,
+                mcmc_seed=mcmc_seed,
                 bo_args=bo_args,
                 local_optimizer=local_optimizer,
                 global_optimizer=global_optimizer,

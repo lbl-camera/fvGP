@@ -35,6 +35,122 @@ from dask.distributed import get_worker
 #                                                                         #
 
 
+#: The ``"default"`` break condition of :py:meth:`gpMCMC.run_mcmc`, a single-chain heuristic.
+#: It is checked every ``_STOP_CHECK_EVERY`` iterations once the chain has
+#: ``_STOP_MIN_LENGTH`` states, and stops the chain after ``_STOP_CONSECUTIVE`` passing
+#: checks in a row. A check passes when, on the post-burn-in chain, every parameter's
+#: effective sample size is at least ``_STOP_MIN_ESS`` and a Geweke z-score (first 10%
+#: against last 50%) is below ``_STOP_MAX_Z``, and when some proposal was accepted since the
+#: previous check -- a stuck chain looks perfectly stationary and must never count.
+_STOP_MIN_LENGTH = 2000
+_STOP_CHECK_EVERY = 500
+_STOP_CONSECUTIVE = 2
+_STOP_MIN_ESS = 100
+_STOP_MAX_Z = 2.0
+
+
+def _as_chains(chains):
+    """``(n,)``, ``(n, d)`` or ``(m, n, d)`` (or a list of ``(n, d)`` traces) as ``(m, n, d)``."""
+    c = np.asarray(chains, dtype=float)
+    if c.ndim == 1: c = c[None, :, None]
+    elif c.ndim == 2: c = c[None]
+    assert c.ndim == 3, "chains must be (n,), (n, d) or (m, n, d)"
+    return c
+
+
+def ess(chains):
+    """Effective sample size of each parameter of one or several MCMC chains.
+
+    Uses the chain-averaged autocorrelation with Geyer's initial monotone sequence
+    truncation. Autocorrelations are computed by FFT, so the cost is O(n log n).
+
+    Parameters
+    ----------
+    chains : np.ndarray or list
+        One chain, ``(n,)`` or ``(n, d)``, or several of equal length, ``(m, n, d)``.
+
+    Returns
+    -------
+    ess : np.ndarray
+        Shape ``(d,)``; ``nan`` for a parameter that never moved.
+    """
+    c = _as_chains(chains)
+    m, n, d = c.shape
+    x = c - c.mean(axis=1, keepdims=True)
+    var = x.var(axis=1)
+    f = np.fft.rfft(x, 2 * n, axis=1)
+    acov = np.fft.irfft(f * np.conj(f), axis=1)[:, :n] / n
+    with np.errstate(invalid="ignore", divide="ignore"):
+        acf = np.where(var[:, None, :] > 0, acov / var[:, None, :], 0.).mean(axis=0)
+    out = np.full(d, np.nan)
+    for j in range(d):
+        if not np.any(var[:, j] > 0): continue
+        pairs = acf[1:n - 1:2, j] + acf[2:n:2, j]
+        negative = np.flatnonzero(pairs < 0)
+        if len(negative): pairs = pairs[:negative[0]]
+        out[j] = m * n / (1. + 2. * np.minimum.accumulate(pairs).sum())
+    return out
+
+
+def split_rhat(chains):
+    """Split-R̂ of each parameter: every chain is halved and the halves compared.
+
+    Values near 1 (below about 1.01) indicate the chains sample the same distribution.
+
+    Parameters
+    ----------
+    chains : np.ndarray or list
+        Several chains of equal length, ``(m, n, d)``, or a list of ``(n, d)`` traces; a
+        single chain works too, its two halves are compared.
+
+    Returns
+    -------
+    rhat : np.ndarray
+        Shape ``(d,)``; ``nan`` for a parameter that never moved.
+    """
+    c = _as_chains(chains)
+    half = c.shape[1] // 2
+    assert half >= 2, "split_rhat needs chains of at least 4 states"
+    halves = np.concatenate([c[:, :half], c[:, half:2 * half]])
+    W = halves.var(axis=1, ddof=1).mean(axis=0)
+    B = half * halves.mean(axis=1).var(axis=0, ddof=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(W > 0, np.sqrt(((half - 1) / half * W + B / half) / W), np.nan)
+
+
+def summarize(trace, burn_in=0.5):
+    """The summary :py:meth:`gpMCMC.run_mcmc` returns, built from a trace.
+
+    ``mean(x)``, ``median(x)``, ``var(x)`` and ``acceptance rate`` cover the chain after
+    the first ``burn_in`` fraction of its states; everything else covers the whole chain.
+    ``max f(x)`` / ``max x`` are the highest log-likelihood and its state; ``MAP`` / ``MAP x``
+    the highest log posterior (likelihood plus prior) and its state, identical under the
+    default flat prior.
+    """
+    n = min(len(trace["x"]), len(trace["f(x)"]))
+    x = np.asarray(trace["x"][:n])
+    f = np.asarray(trace["f(x)"][:n], dtype=float)
+    log_posterior = np.asarray(trace.get("log posterior", f)[:n], dtype=float)
+    start = min(int(burn_in * n), n - 1)
+    post = x[start:]
+    accepted = np.asarray(trace.get("accepted", [])[start:n], dtype=float)
+    accepted = accepted[np.isfinite(accepted)]
+    arg_max = int(np.argmax(f))
+    arg_map = int(np.argmax(log_posterior))
+    return {"f(x)": list(trace["f(x)"][:n]),
+            "max f(x)": f[arg_max],
+            "max x": x[arg_max],
+            "MAP": log_posterior[arg_map],
+            "MAP x": x[arg_map],
+            "time stamps": list(trace["time stamp"][:n]),
+            "x": x,
+            "burn in": start,
+            "mean(x)": np.mean(post, axis=0),
+            "median(x)": np.median(post, axis=0),
+            "var(x)": np.var(post, axis=0),
+            "acceptance rate": float(np.mean(accepted)) if len(accepted) else np.nan}
+
+
 class gpMCMC:
     """
     This class allows the user to customize an MCMC via user-defined proposal distributions and a prior.
@@ -97,7 +213,9 @@ class gpMCMC:
                  n_updates=10000,
                  info=False,
                  break_condition=None,
-                 run_in_every_iteration=None):
+                 run_in_every_iteration=None,
+                 burn_in=0.5,
+                 rng=None):
         """
         This function runs the mcmc.
 
@@ -107,28 +225,41 @@ class gpMCMC:
         x0 : np.ndarray
             Starting point of the mcmc.
         n_updates: int, optional
-            The log of the likelihood to be sampled.
+            The length of the chain, including ``x0``, unless a break condition ends it
+            earlier. Default 10000.
         info : bool
             Whether to print information about the mcmc iterations.
         break_condition : callable or string or None
-            A break condition that specified when the mcmc is terminated. If None,
-            mcmc will run until ``n_updates`` is reached. If a callable is provided,
-            it will get the mcmc object instance as input: def break(obj).
-            The only allowed string is ``default`` and in that case the mcmc
-            will be terminated if the mean of the position has not changed significantly in the last 200 iterations.
+            When to end the chain before ``n_updates``. ``None`` runs all ``n_updates``.
+            A callable gets the mcmc instance, ``def break(obj)``, after every iteration.
+            ``"default"`` is a single-chain convergence heuristic: checked every 500
+            iterations from 2000 on, it ends the chain after two passing checks in a row,
+            a check passing when, on the post-burn-in chain, every parameter has an
+            effective sample size of at least 100 and a Geweke z-score (first 10% against
+            last 50%) below 2, and some proposal was accepted since the previous check. It
+            is a heuristic; checking convergence properly takes several chains and
+            :py:func:`split_rhat`.
         run_in_every_iteration : callable, optional
             A callable that is executed in every iteration. Form: func(obj). Default no-op.
+        burn_in : float, optional
+            Fraction of the chain, from its start, left out of ``mean(x)``, ``median(x)``,
+            ``var(x)``, ``acceptance rate`` and the ``"default"`` break condition. Default 0.5.
+        rng : int or np.random.Generator, optional
+            Seed or generator for the proposals and the accept step, available to custom
+            proposal callables as ``obj.rng``. The default, None, uses the global ``np.random``.
 
 
         Returns
         -------
         trace information : dict
-            Mean, medians, and variances of the last 1% are presented. All other returns consider the whole trace.
-            The traces ``x`` are all the accepted positions in the MCMC.
+            ``x`` holds the state at every iteration, rejections (repeats) included, which is
+            the MCMC chain; ``f(x)``, ``time stamps`` and the rest are aligned with it, so the
+            same index is the same state. See :py:func:`summarize` for the summary keys.
         """
         start_time = time.time()
         n_updates = max(n_updates, 2)
         assert isinstance(x0, np.ndarray) and np.ndim(x0) == 1, "x0 must be a 1-d np.ndarray"
+        assert 0. <= burn_in < 1., "burn_in must be a fraction in [0, 1)"
 
         #break condition
         if break_condition is None: break_condition = lambda a: False
@@ -137,60 +268,73 @@ class gpMCMC:
         else: raise Exception("No valid input for break condition provided!")
         if run_in_every_iteration is None: run_in_every_iteration = lambda a: False
 
-        self.trace = {"f(x)": [], "x": [], "time stamp": []}
-        # Set up and initialize trace objects
-        self.trace["x"].append(x0)
+        self.rng = np.random if rng is None else (
+            rng if isinstance(rng, np.random.Generator) else np.random.default_rng(rng))
+        for obj in self.proposal_distributions:
+            obj.rng = self.rng
+        self._burn_in = burn_in
+        self._stop_checks_passed = 0
 
         # Initialize Metropolis
         x = x0.copy()
         likelihood = self.log_likelihood_function(x, self.args)
-
         if info: print("Starting likelihood. f(x)= ", likelihood)
         prior = self.prior_function(x, self.bounds, self.args)
+        # every trace starts with x0, so the same index is the same state in all of them
+        self.trace = {"x": [x0], "f(x)": [likelihood], "log posterior": [likelihood + prior],
+                      "accepted": [np.nan], "time stamp": [time.time() - start_time]}
 
         #########################################################
         # Begin main loop
         for i in np.arange(1, n_updates):
+            accepted = 0.
             for obj in self.proposal_distributions:
                 x, prior, likelihood, jt = self._jump(x, obj, prior, likelihood)
                 obj.jump_trace.append(jt)
-                obj.adapt(i, self)
+                accepted += jt
 
             # Update the trace objects
             self.trace["x"].append(x)
             self.trace["f(x)"].append(likelihood)
+            self.trace["log posterior"].append(likelihood + prior)
+            self.trace["accepted"].append(accepted / len(self.proposal_distributions))
             self.trace["time stamp"].append(time.time() - start_time)
+            # adapt only now, so the adaptation window includes the current state
+            for obj in self.proposal_distributions:
+                obj.adapt(i, self)
             run_in_every_iteration(self)
 
             if info and (i % 10) == 0: print("Finished ", i, " out of ", n_updates, " iterations. f(x)= ", likelihood)
             if break_condition(self): break
-
-            # Collect trace objects to return
-            arg_max = np.argmax(self.trace["f(x)"])
-            dist_index = int(len(self.trace["x"]) - (len(self.trace["x"]) / 100))
-            self.mcmc_info = {"f(x)": self.trace["f(x)"],
-                              "max f(x)": self.trace["f(x)"][arg_max],
-                              "MAP": self.trace["f(x)"][arg_max],
-                              "max x": np.asarray(self.trace["x"])[arg_max],
-                              "time stamps": self.trace["time stamp"],
-                              "x": np.asarray(self.trace["x"]),
-                              "mean(x)": np.mean(np.asarray(self.trace["x"])[dist_index:], axis=0),
-                              "median(x)": np.median(np.asarray(self.trace["x"])[dist_index:], axis=0),
-                              "var(x)": np.var(np.asarray(self.trace["x"])[dist_index:], axis=0)}
         # End main loop
+        # once, from the final trace: rebuilt every iteration it made the run time quadratic
+        self.mcmc_info = summarize(self.trace, burn_in)
         return self.mcmc_info
 
     @staticmethod
     def _default_break_condition(obj):
-        loglik = np.asarray(obj.trace["f(x)"])
-        i = len(loglik)
-        W = 100
-        tol = 1e-3
-        if i < 1000: return False
-        stabilized = abs(loglik[-W:].mean() - loglik[-2 * W:-W].mean()) < tol
-        if stabilized:
-            return True
-        else: return False
+        """The ``"default"`` break condition; see :py:meth:`run_mcmc` and ``_STOP_*``."""
+        n = len(obj.trace["x"])
+        if n < _STOP_MIN_LENGTH or n % _STOP_CHECK_EVERY: return False
+        passed = gpMCMC._looks_converged(obj)
+        obj._stop_checks_passed = getattr(obj, "_stop_checks_passed", 0) + 1 if passed else 0
+        return obj._stop_checks_passed >= _STOP_CONSECUTIVE
+
+    @staticmethod
+    def _looks_converged(obj):
+        # a chain that accepted nothing since the last check is stuck, not converged
+        if not any(np.any(np.asarray(p.jump_trace[-_STOP_CHECK_EVERY:]) > 0)
+                   for p in obj.proposal_distributions):
+            return False
+        x = np.asarray(obj.trace["x"])
+        post = x[int(getattr(obj, "_burn_in", 0.5) * len(x)):]
+        n_eff = ess(post)
+        if not np.all(n_eff >= _STOP_MIN_ESS): return False   # also False for nan (never moved)
+        early, late = post[:len(post) // 10], post[len(post) // 2:]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            se = np.sqrt(early.var(axis=0) / ess(early) + late.var(axis=0) / ess(late))
+            z = np.abs(early.mean(axis=0) - late.mean(axis=0)) / se
+        return bool(np.all(z < _STOP_MAX_Z))   # nan fails too
 
     ###############################################################
     def _jump(self, x_old, obj, prior_eval, likelihood):
@@ -211,7 +355,7 @@ class gpMCMC:
             if expo < 50: metr_ratio = np.exp(expo)
             else: metr_ratio = 1.1
             if np.isnan(metr_ratio):  metr_ratio = 0.
-            if metr_ratio > np.random.uniform(0, 1, 1) or obj.auto_accept:
+            if metr_ratio > getattr(self, "rng", np.random).uniform(0, 1) or obj.auto_accept:
                 x = x_star
                 prior_eval = prior_evaluation_x_star
                 likelihood = likelihood_star
@@ -288,6 +432,8 @@ class ProposalDistribution:
         self.ID = ID
         dim = len(indices)
         self.jump_trace = []
+        # set by gpMCMC.run_mcmc: the run's random generator, for custom proposals too
+        self.rng = None
         if proposal_dist == "normal":
             self.proposal_dist = self.normal_proposal_dist
         elif callable(proposal_dist):
@@ -319,7 +465,10 @@ class ProposalDistribution:
     #########################################################
     def normal_proposal_dist(self, x, hps, obj):
         """
-        Default multivariate-normal proposal: draw from N(x, Σ) where Σ is ``obj.prop_args["prop_Sigma"]``.
+        Default multivariate-normal proposal: draw from N(x, sigma_m Σ), with Σ =
+        ``obj.prop_args["prop_Sigma"]`` and the step scale sigma_m =
+        ``obj.prop_args["sigma_m"]`` (1 if absent), which adaptation tunes toward the
+        acceptance rate ``r_opt``.
 
         Parameters
         ----------
@@ -335,10 +484,23 @@ class ProposalDistribution:
         proposal : np.ndarray
             Proposed hyperparameter vector, shape (N,).
         """
-        cov = obj.prop_args["prop_Sigma"]
-        proposal_hps = np.random.multivariate_normal(
-            mean=x, cov=cov, size=1).reshape(len(x))
-        return proposal_hps
+        # sigma_m is what adaptation tunes; without it the step size never reacts to the
+        # acceptance rate (Shaby & Wells propose from N(x, sigma_m * prop_Sigma))
+        prop_Sigma = obj.prop_args["prop_Sigma"]
+        sigma_m = obj.prop_args.get("sigma_m", 1.0)
+        rng = np.random if getattr(obj, "rng", None) is None else obj.rng
+        # factor once per change of prop_Sigma or sigma_m, not on every draw; the cache holds
+        # prop_Sigma itself, so `is` cannot be fooled by a recycled object id
+        cache = getattr(obj, "_proposal_factor", None)
+        if cache is None or cache[0] is not prop_Sigma or cache[1] != sigma_m:
+            try:
+                factor = np.linalg.cholesky(sigma_m * np.atleast_2d(prop_Sigma))
+            except np.linalg.LinAlgError:
+                factor = None   # positive semi-definite only: sample through the SVD instead
+            obj._proposal_factor = cache = (prop_Sigma, sigma_m, factor)
+        if cache[2] is None:
+            return rng.multivariate_normal(mean=x, cov=sigma_m * np.atleast_2d(prop_Sigma))
+        return x + cache[2] @ rng.standard_normal(len(x))
 
     def _adapt(self, end, mcmc_obj):
         K = self.K
@@ -349,14 +511,15 @@ class ProposalDistribution:
             r_opt = self.r_opt
             prop_Sigma = self.prop_args["prop_Sigma"]
             sigma_m = self.prop_args["sigma_m"]
-            jump_trace = self.jump_trace
-            trace = np.asarray(mcmc_obj.trace["x"]).T
-            start = (end - K + 1)
             gamma2 = 1. / ((end / K) + k) ** c_1
             gamma1 = c_0 * gamma2
-            r_hat = np.mean(jump_trace[start: end])
+            # the last K iterations, the current one included (run_mcmc adapts after
+            # appending it); slicing the lists keeps this O(K) rather than O(chain length)
+            r_hat = np.mean(self.jump_trace[-K:])
             sigma_m = np.exp(np.log(sigma_m) + gamma1 * (r_hat - r_opt))
-            if self.adapt_cov: prop_Sigma = prop_Sigma + gamma2 * (np.cov(trace[self.indices, start: end]) - prop_Sigma)
+            if self.adapt_cov:
+                window = np.asarray(mcmc_obj.trace["x"][-K:])[:, self.indices]
+                prop_Sigma = prop_Sigma + gamma2 * (np.atleast_2d(np.cov(window.T)) - prop_Sigma)
             self.prop_args["prop_Sigma"] = prop_Sigma
             self.prop_args["sigma_m"] = sigma_m
 

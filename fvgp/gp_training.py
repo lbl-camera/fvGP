@@ -41,6 +41,9 @@ class GPtraining:
               mcmc_prior=None,
               mcmc_prop_distrs="normal",
               mcmc_args={},
+              mcmc_burn_in=0.5,
+              mcmc_break_condition="default",
+              mcmc_seed=None,
               bo_args=None,
               dask_client=None,
               info=False):
@@ -163,7 +166,9 @@ class GPtraining:
             if mcmc_prior is not None: prior_function = mcmc_prior
 
             myMCMC = gpMCMC(likelihood_func, prior_function=prior_function, proposal_distributions=mcmc_prop_distrs , bounds=hyperparameter_bounds, args=mcmc_args)
-            res = myMCMC.run_mcmc(x0=init_hyperparameters, n_updates=max_iter, info=info, break_condition="default")
+            res = myMCMC.run_mcmc(x0=init_hyperparameters, n_updates=max_iter, info=info,
+                                  break_condition=mcmc_break_condition, burn_in=mcmc_burn_in,
+                                  rng=mcmc_seed)
             hyperparameters = res["median(x)"]
             self.mcmc_info = res
         elif method == "adam":
@@ -218,6 +223,9 @@ class GPtraining:
               mcmc_prior=None,
               mcmc_prop_distrs="normal",
               mcmc_args={},
+              mcmc_burn_in=0.5,
+              mcmc_break_condition="default",
+              mcmc_seed=None,
               bo_args=None,
               info=False):
 
@@ -256,6 +264,9 @@ class GPtraining:
                 info=info,
                 mcmc_args=mcmc_args,
                 dask_client=dask_client,
+                mcmc_burn_in=mcmc_burn_in,
+                mcmc_break_condition=mcmc_break_condition,
+                mcmc_seed=mcmc_seed,
             )
         elif method == 'adam':
             opt_obj = self.adam_async(
@@ -322,7 +333,10 @@ class GPtraining:
                    max_iter,
                    info,
                    mcmc_args,
-                   dask_client=None):
+                   dask_client=None,
+                   mcmc_burn_in=0.5,
+                   mcmc_break_condition="default",
+                   mcmc_seed=None):
         """
         Submit an asynchronous MCMC run to a Dask worker and return an :py:class:`AsyncOptimizer` proxy.
 
@@ -348,6 +362,8 @@ class GPtraining:
             A dictionary of additional arguments for the MCMC sampler. The default is an empty dictionary.
         dask_client : distributed.Client
             Dask client used to host the actor on a worker.
+        mcmc_burn_in, mcmc_break_condition, mcmc_seed :
+            As for :py:meth:`fvgp.GP.train`. The run also ends on ``stop()``.
 
         Returns
         -------
@@ -374,6 +390,9 @@ class GPtraining:
             init_hyperparameters,
             max_iter,
             info,
+            mcmc_burn_in,
+            mcmc_break_condition,
+            mcmc_seed,
             actor=True,
         )
         actor = actor_future.result()

@@ -3540,12 +3540,13 @@ def test_mcmc_actor_runs_and_reports():
     _wait_for_actor(actor)
 
     latest = actor.get_latest()
-    for key in ("f(x)", "max f(x)", "MAP", "max x", "time stamps", "x",
-                "mean(x)", "median(x)", "var(x)"):
+    for key in ("f(x)", "max f(x)", "MAP", "MAP x", "max x", "time stamps", "x",
+                "mean(x)", "median(x)", "var(x)", "acceptance rate", "burn in"):
         assert key in latest, key
-    # the callback fires between the x and f(x) appends, so x may lead by one
-    assert len(latest["x"]) - len(latest["f(x)"]) in (0, 1)
+    # aligned traces: a finished 30-step run, every state with its own likelihood
+    assert len(latest["x"]) == len(latest["f(x)"]) == 30
     assert latest["max f(x)"] == np.max(latest["f(x)"])
+    assert latest["max f(x)"] == log_likelihood(latest["max x"], None)
     assert not actor._running
     actor.stop()
     assert not actor._running
@@ -4648,6 +4649,184 @@ def test_proposal_distribution_configuration():
     assert pd._no_adapt(0, None) is None
 
 
+def _gaussian_target(d=10):
+    """The FVGP_MCMC_FIX.md target: scales spanning ~30x, correlations of 0.98 and -0.9."""
+    sd = np.geomspace(0.1, 3.0, d)
+    C = np.eye(d)
+    if d >= 2: C[0, 1] = C[1, 0] = 0.98
+    if d >= 4: C[2, 3] = C[3, 2] = -0.9
+    precision = np.linalg.inv(C * np.outer(sd, sd))
+    mu = np.linspace(-1., 1., d)
+    loglik = lambda x, args: float(-0.5 * (x - mu) @ precision @ (x - mu))
+    return loglik, mu, sd, np.column_stack([mu - 20 * sd, mu + 20 * sd])
+
+
+def test_mcmc_recovers_a_correlated_gaussian():
+    """The sampler's acceptance criterion from FVGP_MCMC_FIX.md.
+
+    Before the fix the proposal ignored the adapted step scale sigma_m: acceptance 0.68
+    against a 0.234 target, min ESS 197, mean error 0.148 SD.
+    """
+    from fvgp.gp_mcmc import gpMCMC, ess, split_rhat
+    loglik, mu, sd, bounds = _gaussian_target()
+    rng = np.random.default_rng(0)
+    chains, acceptance = [], []
+    for c in range(4):
+        res = gpMCMC(loglik, bounds=bounds).run_mcmc(
+            x0=mu + 3 * sd * rng.standard_normal(len(mu)), n_updates=20000,
+            break_condition=None, rng=100 + c)
+        chains.append(res["x"][res["burn in"]:])
+        acceptance.append(res["acceptance rate"])
+    chains = np.array(chains)
+    assert 0.15 <= np.mean(acceptance) <= 0.35, acceptance
+    assert np.max(split_rhat(chains)) < 1.02
+    assert np.min(ess(chains)) > 500
+    assert np.max(np.abs(chains.reshape(-1, len(mu)).mean(axis=0) - mu) / sd) < 0.1
+
+
+def test_mcmc_trace_summaries_and_reproducibility():
+    from fvgp.gp_mcmc import gpMCMC, summarize
+    loglik, mu, sd, bounds = _gaussian_target(3)
+
+    def run(seed, **kwargs):
+        return gpMCMC(loglik, bounds=bounds).run_mcmc(x0=mu.copy(), n_updates=400, rng=seed, **kwargs)
+
+    res = run(1)
+    # without a break condition the chain has exactly n_updates states
+    x, f = res["x"], res["f(x)"]
+    assert len(x) == len(f) == len(res["time stamps"]) == 400
+    # aligned: f(x)[j] is the likelihood of x[j], so "max x" really has the max likelihood
+    assert all(f[j] == loglik(x[j], None) for j in range(len(x)))
+    assert res["max f(x)"] == loglik(res["max x"], None) == max(f)
+    # summaries cover the chain after burn-in
+    assert res["burn in"] == 200
+    assert np.allclose(res["mean(x)"], x[200:].mean(axis=0))
+    assert np.allclose(res["median(x)"], np.median(x[200:], axis=0))
+    assert np.allclose(run(1, burn_in=0.)["mean(x)"], x.mean(axis=0))
+    # the same seed gives the same chain, another seed another one
+    assert np.array_equal(run(1)["x"], x)
+    assert not np.array_equal(run(2)["x"], x)
+    assert np.array_equal(gpMCMC(loglik, bounds=bounds).run_mcmc(
+        x0=mu.copy(), n_updates=400, rng=np.random.default_rng(1))["x"], x)
+    # a minimal trace (no acceptance or posterior record) still summarizes
+    minimal = summarize({"x": list(x[:10]), "f(x)": f[:10], "time stamp": [0.] * 10})
+    assert np.isnan(minimal["acceptance rate"]) and minimal["MAP"] == minimal["max f(x)"]
+
+
+def test_mcmc_map_includes_the_prior():
+    """'MAP' maximizes likelihood + prior; 'max f(x)' the likelihood alone."""
+    from fvgp.gp_mcmc import gpMCMC
+    bounds = np.array([[-3., 3.]])
+    prior = lambda x, b, a: -50. * float((x[0] - 2.) ** 2) if abs(x[0]) <= 3 else -np.inf
+    res = gpMCMC(lambda x, a: -float(x @ x), bounds=bounds, prior_function=prior).run_mcmc(
+        x0=np.array([1.]), n_updates=500, rng=0)
+    logpost = np.array([-float(x @ x) + prior(x, bounds, None) for x in res["x"]])
+    assert res["MAP"] == pytest.approx(logpost.max())
+    assert res["MAP x"][0] == pytest.approx(res["x"][int(np.argmax(logpost))][0])
+    assert res["MAP x"][0] > res["max x"][0]     # the prior pulls the MAP toward 2
+
+
+def test_mcmc_default_stop_ends_a_converged_chain():
+    from fvgp.gp_mcmc import gpMCMC
+    loglik, mu, sd, bounds = _gaussian_target(2)
+    res = gpMCMC(loglik, bounds=bounds).run_mcmc(x0=mu.copy(), n_updates=50000,
+                                                 break_condition="default", rng=0)
+    n = len(res["x"])
+    assert 2000 <= n < 50000 and n % 500 == 0, n
+
+
+def test_mcmc_run_time_is_linear_in_the_chain_length():
+    """The summary used to be rebuilt every iteration and _adapt converted the whole trace."""
+    from fvgp.gp_mcmc import gpMCMC
+    bounds = np.array([[-5., 5.]] * 4)
+
+    def seconds(n):
+        best = np.inf
+        for _ in range(2):
+            t0 = time.perf_counter()
+            gpMCMC(lambda x, a: -float(x @ x), bounds=bounds).run_mcmc(
+                x0=np.zeros(4), n_updates=n, rng=0)
+            best = min(best, time.perf_counter() - t0)
+        return best
+
+    assert seconds(8000) / seconds(2000) < 5.5
+
+
+def test_mcmc_diagnostics_match_known_values():
+    from fvgp.gp_mcmc import ess, split_rhat
+    rng = np.random.default_rng(0)
+    n = 20000
+    iid = rng.standard_normal((n, 2))
+    assert np.all(np.abs(ess(iid) / n - 1.) < 0.15)
+    phi = 0.9                                   # AR(1): ESS = n (1 - phi) / (1 + phi)
+    ar = np.zeros(n)
+    for t in range(1, n):
+        ar[t] = phi * ar[t - 1] + rng.standard_normal()
+    assert abs(ess(ar)[0] / (n * (1 - phi) / (1 + phi)) - 1.) < 0.3
+    chains = rng.standard_normal((4, 2000, 2))
+    assert np.all(split_rhat(chains) < 1.01)
+    chains[0] += 1.                             # one chain elsewhere
+    assert np.all(split_rhat(chains) > 1.1)
+    assert np.isnan(ess(np.zeros(50))[0]) and np.isnan(split_rhat(np.zeros((2, 50, 1)))[0])
+
+
+def test_mcmc_proposal_edge_cases():
+    from fvgp.gp_mcmc import gpMCMC, ProposalDistribution
+    bounds = np.array([[-5., 5.], [-5., 5.]])
+    loglik = lambda x, a: -float(x @ x)
+    # custom prop_args without sigma_m: the proposal scale defaults to 1
+    pd = ProposalDistribution([0, 1], init_prop_Sigma=np.eye(2) * 0.1,
+                              adapt_callable=lambda end, mcmc: None,
+                              prop_args={"prop_Sigma": np.eye(2) * 0.1})
+    res = gpMCMC(loglik, bounds=bounds, proposal_distributions=[pd]).run_mcmc(
+        x0=np.zeros(2), n_updates=50, rng=0)
+    assert len(res["x"]) == 50 and pd.rng is not None
+    # a singular proposal covariance cannot be Cholesky-factored: sampled through the SVD
+    pd = ProposalDistribution([0, 1], init_prop_Sigma=np.diag([0.1, 0.]),
+                              adapt_callable=lambda end, mcmc: None)
+    res = gpMCMC(loglik, bounds=bounds, proposal_distributions=[pd]).run_mcmc(
+        x0=np.zeros(2), n_updates=50, rng=0)
+    assert pd._proposal_factor[2] is None                 # the Cholesky factorization failed
+    assert np.all(res["x"][:, 1] == 0.) and np.ptp(res["x"][:, 0]) > 0.   # only x[0] moves
+    try:
+        gpMCMC(loglik, bounds=bounds).run_mcmc(x0=np.zeros(2), n_updates=5, burn_in=1.)
+    except AssertionError as e:
+        assert "burn_in" in str(e)
+    else:
+        raise AssertionError("burn_in must be a fraction below 1")
+
+
+def test_mcmc_actor_honors_its_break_condition():
+    from fvgp.gp_actor import _MCMCActor
+    bounds = np.array([[-2., 2.]])
+    prior = lambda t, b, a: 0. if abs(t[0]) <= 2 else -np.inf
+    for condition, expected in ((None, 40), (lambda m: len(m.trace["x"]) >= 7, 7)):
+        actor = _MCMCActor(lambda x, a: -float(x @ x), bounds, prior, "normal", {},
+                           np.array([0.5]), 40, False, 0.5, condition, 0)
+        actor.start()
+        _wait_for_actor(actor)
+        assert len(actor.get_latest()["x"]) == expected
+
+
+def test_train_mcmc_arguments():
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.]] * 3)
+    trained = []
+    for _ in range(2):
+        gp.set_hyperparameters(np.array([1., 1., 1.]))
+        trained.append(gp.train(hyperparameter_bounds=bounds, method="mcmc", max_iter=300,
+                                mcmc_break_condition=None, mcmc_seed=3, mcmc_burn_in=0.2))
+    assert len(gp.mcmc_info["x"]) == 300 and gp.mcmc_info["burn in"] == 60
+    assert np.array_equal(trained[0], trained[1])
+    for bad in ({"mcmc_burn_in": 1.5}, {"mcmc_break_condition": "sometimes"}):
+        try:
+            gp.train(hyperparameter_bounds=bounds, method="mcmc", max_iter=5, **bad)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError(f"{bad} must be rejected")
+
+
 def test_mcmc_default_break_condition_needs_a_long_chain():
     from fvgp import gpMCMC, ProposalDistribution
 
@@ -4656,8 +4835,8 @@ def test_mcmc_default_break_condition_needs_a_long_chain():
     mcmc = gpMCMC(lambda x, args: -float(x @ x), bounds=bounds,
                   prior_function=lambda t, b, a: 0., proposal_distributions=[pd])
     mcmc.run_mcmc(x0=np.array([0.0]), n_updates=5, break_condition="default")
-    # under 1000 updates the default break condition never fires
-    assert len(mcmc.trace["f(x)"]) == 4
+    # under 2000 states the default break condition never fires; x and f(x) both start at x0
+    assert len(mcmc.trace["f(x)"]) == len(mcmc.trace["x"]) == 5
 
 
 def test_wendland_support_aware_filters_points_outside_the_radius():
@@ -5359,12 +5538,29 @@ def test_mcmc_default_break_condition_on_a_long_stable_chain():
     pd = ProposalDistribution([0], init_prop_Sigma=np.diag([0.05]), adapt_callable="normal")
     mcmc = gpMCMC(_module_level_objective, bounds=np.array([[-1., 1.]]),
                   prior_function=_module_level_prior, proposal_distributions=[pd])
-    mcmc.trace = {"f(x)": list(np.zeros(3000)), "x": [np.array([0.0])] * 3000,
-                  "time stamp": [0.0] * 3000}
-    assert mcmc._default_break_condition(mcmc) is True
+    rng = np.random.default_rng(0)
 
-    mcmc.trace["f(x)"] = list(np.arange(3000, dtype=float))
-    assert mcmc._default_break_condition(mcmc) is False
+    def check(xs, accepted=True):
+        n = len(xs)
+        mcmc.trace = {"f(x)": [0.] * n, "x": [np.array([v]) for v in xs], "time stamp": [0.] * n}
+        pd.jump_trace = [1. if accepted else 0.] * n
+        return mcmc._default_break_condition(mcmc)
+
+    # a stuck chain looks perfectly stationary and must never count -- the old rule
+    # stopped exactly such chains
+    mcmc._stop_checks_passed = 0
+    assert not any(check(np.zeros(n), accepted=False) for n in (3000, 3500, 4000, 4500))
+    # a well-mixed chain stops only after two passing checks in a row
+    mcmc._stop_checks_passed = 0
+    assert [check(rng.standard_normal(n)) for n in (3000, 3500)] == [False, True]
+    # a drifting chain does not stop
+    mcmc._stop_checks_passed = 0
+    assert not any(check(np.linspace(0., 5., n) + 0.01 * rng.standard_normal(n))
+                   for n in (3000, 3500, 4000, 4500))
+    # checks run only every 500 states, and never before 2000
+    mcmc._stop_checks_passed = 1
+    assert check(rng.standard_normal(3001)) is False and mcmc._stop_checks_passed == 1
+    assert check(rng.standard_normal(1500)) is False
 
 
 def test_proposal_distribution_accepts_explicit_prop_args():
@@ -5556,7 +5752,7 @@ def test_mcmc_accepts_a_hugely_favourable_proposal():
     mcmc = gpMCMC(steep, bounds=np.array([[-5., 5.]]),
                   prior_function=_module_level_prior, proposal_distributions=[pd])
     mcmc.run_mcmc(x0=np.array([4.0]), n_updates=30)
-    assert len(mcmc.trace["f(x)"]) == 29
+    assert len(mcmc.trace["f(x)"]) == 30
 
 
 def test_marginal_likelihood_gradient_per_direction_with_matrix_noise():

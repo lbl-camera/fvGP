@@ -343,6 +343,34 @@ New features
 Bug fixes
 ~~~~~~~~~
 
+* **The MCMC sampler behind ``train(method='mcmc')``, the default, has been fixed. Trained
+  hyperparameters from ``method='mcmc'`` will change.** Convergence diagnostics on a
+  10-hyperparameter GP found R-hat of 1.07-1.6, effective sample sizes of 18-110 and an
+  acceptance rate of 0.63 against the sampler's own 0.234 target. The causes:
+
+  - The proposal ignored the adapted step scale, so the acceptance-rate adaptation did
+    nothing. It now proposes from ``N(x, sigma_m * prop_Sigma)``. On a correlated 10-D
+    Gaussian, acceptance went from 0.68 to 0.23 and the minimum ESS from 197 to ~950.
+  - The default stopping rule fired at random. It compared two noisy 100-step means
+    of the log-likelihood with a tolerance of 1e-3, and it stopped stuck chains. It is
+    replaced by a single-chain convergence heuristic: from 2000 steps on, checked every
+    500, the chain ends after two passing checks in a row, where every hyperparameter
+    must have an effective sample size of at least 100 and a Geweke z-score below 2, and
+    some proposal must have been accepted since the last check.
+  - The trained hyperparameters were the median of the last 1% of the chain. They are now
+    the median after a burn-in of half the chain (``mcmc_burn_in``).
+  - ``mcmc_info["max x"]`` was the state one step before the best one: the ``x`` and
+    ``f(x)`` traces were misaligned by one. Both now start at ``x0``.
+  - The run time was quadratic in the chain length. 80 000 steps of the Gaussian above
+    take 3 s.
+  - The adaptation window used 9 of its 10 samples.
+
+  New ``train()`` arguments: ``mcmc_burn_in`` (0.5), ``mcmc_break_condition``
+  (``"default"``; ``None`` runs exactly ``max_iter`` steps, or pass a callable) and
+  ``mcmc_seed``. ``mcmc_info`` gains ``"MAP x"`` (``"MAP"`` now includes the prior),
+  ``"acceptance rate"`` and ``"burn in"``. New ``fvgp.gp_mcmc.ess`` and
+  ``fvgp.gp_mcmc.split_rhat`` check convergence across several chains.
+
 * Fixed the BO surrogate provoking fvGP's "Negative variances encountered" warning.
   The cause was the design, not the noise level as such: once the search converges it
   proposes points a whisker apart, and near-duplicate rows make K+V numerically

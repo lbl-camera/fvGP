@@ -15,47 +15,30 @@ class _MCMCActor:
                  args, 
                  x0, 
                  n_updates, 
-                 info):
+                 info,
+                 burn_in=0.5,
+                 break_condition="default",
+                 rng=None):
         from .gp_mcmc import gpMCMC
         self._mcmc = gpMCMC(log_likelihood_function, prior_function=prior_function, proposal_distributions=proposal_distributions , bounds=bounds, args=args)
         self._x0 = x0
         self._n_updates = n_updates
         self._info = info
+        self._burn_in = burn_in
+        self._break_condition = break_condition
+        self._rng = rng
         self._lock = threading.Lock()
-        self._latest = {}
         self._running = False
         self._thread = None
 
     def start(self):
         self._running = True
-
-        def _callback(mcmc_obj):
-            trace = mcmc_obj.trace
-            if not trace["f(x)"]:  # pragma: no cover - defensive
-                # gpMCMC calls this only after appending both x and f(x), so the trace is
-                # never empty here. Kept in case that ordering ever changes.
-                return
-            xs = np.asarray(trace["x"])
-            fxs = np.asarray(trace["f(x)"])
-            arg_max = int(np.argmax(fxs))
-            dist_index = max(0, int(len(xs) - len(xs) / 100))
-            with self._lock:
-                self._latest = {
-                    "f(x)": fxs,
-                    "max f(x)": fxs[arg_max],
-                    "MAP": fxs[arg_max],
-                    "max x": xs[arg_max],
-                    "time stamps": list(trace["time stamp"]),
-                    "x": xs,
-                    "mean(x)": np.mean(xs[dist_index:], axis=0),
-                    "median(x)": np.median(xs[dist_index:], axis=0),
-                    "var(x)": np.var(xs[dist_index:], axis=0),
-                }
+        if self._break_condition == "default": condition = self._mcmc._default_break_condition
+        elif self._break_condition is None: condition = lambda mcmc_obj: False
+        else: condition = self._break_condition
 
         def _break(mcmc_obj):
-            if not self._running:
-                return True
-            return self._mcmc._default_break_condition(mcmc_obj)
+            return not self._running or condition(mcmc_obj)
 
         def _run():
             self._mcmc.run_mcmc(
@@ -63,7 +46,8 @@ class _MCMCActor:
                 n_updates=self._n_updates,
                 info=self._info,
                 break_condition=_break,
-                run_in_every_iteration=_callback,
+                burn_in=self._burn_in,
+                rng=self._rng,
             )
             self._running = False
 
@@ -71,8 +55,19 @@ class _MCMCActor:
         self._thread.start()
 
     def get_latest(self):
+        """The summary of the chain so far (see :py:func:`fvgp.gp_mcmc.summarize`).
+
+        Built here, when polled, rather than in every iteration, which made a long run
+        quadratic. The run thread only appends to the trace lists, so copying them is a
+        consistent snapshot once cut to their common length (summarize does that).
+        """
+        from .gp_mcmc import summarize
+        trace = self._mcmc.trace
+        if not trace:
+            return {}
         with self._lock:
-            return dict(self._latest)
+            snapshot = {key: list(values) for key, values in trace.items()}
+        return summarize(snapshot, self._burn_in)
 
     def stop(self):
         self._running = False
