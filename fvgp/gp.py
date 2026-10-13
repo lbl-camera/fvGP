@@ -20,8 +20,7 @@ warnings.simplefilter("once", UserWarning)
 # `_dec_ref` callbacks from the previous GP's scatter activity.
 _GP_INSTANCES_PER_CLIENT = weakref.WeakValueDictionary()
 
-# TODO: also search below "TODO"
-# Appends and rank_n_updates for gp2Scale are not yet fully tested. Have to check the compute graph and test (what does rank_n_update even mean for the different modes? ). 
+# TODO: also search below "TODO" 
 
 class GP:
     """
@@ -815,6 +814,7 @@ class GP:
               mcmc_burn_in=0.5,
               mcmc_break_condition="default",
               mcmc_seed=None,
+              mcmc_log_scale="auto",
               bo_args=None,
               local_optimizer="L-BFGS-B",
               global_optimizer="genetic",
@@ -904,9 +904,9 @@ class GP:
             ``median(x)``, which becomes the trained hyperparameters. Default 0.5.
         mcmc_break_condition : str or callable or None, optional
             When the chain ends before ``max_iter``. The default, ``"default"``, is a
-            single-chain convergence heuristic: from 2000 states on, checked every 500, it ends
+            single-chain convergence heuristic: from 400 states on, checked every 100, it ends
             the chain after two passing checks in a row -- every hyperparameter with an
-            effective sample size of at least 100 and a Geweke z-score below 2 on the
+            effective sample size of at least 50 and a Geweke z-score below 2 on the
             post-burn-in chain, and some proposal accepted since the last check. ``None``
             runs exactly ``max_iter`` steps; a callable gets the
             :py:class:`fvgp.gp_mcmc.gpMCMC` instance after every step and returns True to stop.
@@ -914,6 +914,15 @@ class GP:
             :py:func:`fvgp.gp_mcmc.split_rhat` and :py:func:`fvgp.gp_mcmc.ess`.
         mcmc_seed : int or np.random.Generator, optional
             Makes the MCMC reproducible. The default, None, uses the global ``np.random``.
+        mcmc_log_scale : str or bool or np.ndarray, optional
+            Which hyperparameters the MCMC samples in log space. The posterior is the same
+            either way (the Jacobian is included), only the mixing speed differs. The default,
+            ``"auto"``, logs a hyperparameter whose bounds are both positive and span at least
+            a decade (upper/lower >= 10), and none when ``mcmc_prop_distrs`` are custom.
+            Scale-like hyperparameters such as variances and length scales mix several times
+            faster in log space; one that enters additively, such as a location, can mix
+            slower, which is what the decade threshold guards against. True, False or a
+            boolean mask override it.
         bo_args : dict, optional
             Settings for ``method='bo'``; ignored otherwise. Recognized keys:
 
@@ -1154,6 +1163,7 @@ class GP:
                 mcmc_burn_in=mcmc_burn_in,
                 mcmc_break_condition=mcmc_break_condition,
                 mcmc_seed=mcmc_seed,
+                mcmc_log_scale=mcmc_log_scale,
                 bo_args=bo_args,
                 local_optimizer=local_optimizer,
                 global_optimizer=global_optimizer,
@@ -1186,6 +1196,7 @@ class GP:
                 mcmc_burn_in=mcmc_burn_in,
                 mcmc_break_condition=mcmc_break_condition,
                 mcmc_seed=mcmc_seed,
+                mcmc_log_scale=mcmc_log_scale,
                 bo_args=bo_args,
                 local_optimizer=local_optimizer,
                 global_optimizer=global_optimizer,

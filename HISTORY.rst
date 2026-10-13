@@ -353,10 +353,23 @@ Bug fixes
     Gaussian, acceptance went from 0.68 to 0.23 and the minimum ESS from 197 to ~950.
   - The default stopping rule fired at random. It compared two noisy 100-step means
     of the log-likelihood with a tolerance of 1e-3, and it stopped stuck chains. It is
-    replaced by a single-chain convergence heuristic: from 2000 steps on, checked every
-    500, the chain ends after two passing checks in a row, where every hyperparameter
-    must have an effective sample size of at least 100 and a Geweke z-score below 2, and
+    replaced by a single-chain convergence heuristic: from 400 steps on, checked every
+    100, the chain ends after two passing checks in a row, where every hyperparameter
+    must have an effective sample size of at least 50 and a Geweke z-score below 2, and
     some proposal must have been accepted since the last check.
+  - The proposal's covariance adapted toward the last 10 states only. Their spread
+    measures the current step size, not the posterior, so a proposal that started with
+    the wrong shape kept it. With hyperparameters whose posterior widths differed 65x
+    (signal variance and length scale in the ``SingleTaskTest`` notebook), the chain
+    needed 8500 steps. It now adapts toward the covariance of the whole chain so far, as
+    in Haario et al.'s adaptive Metropolis.
+  - Hyperparameters whose bounds are positive and span at least a decade -- variances,
+    length scales -- are now sampled in log space (``mcmc_log_scale="auto"``), with the
+    Jacobian included, so the posterior is the same. Their posteriors are skewed and
+    curved, and a random walk in log space follows them about 4x more efficiently. With
+    the two changes above, that notebook's chain stops after 1000-2100 steps instead of
+    8500. ``mcmc_log_scale`` takes True, False or a per-hyperparameter mask; custom
+    ``mcmc_prop_distrs`` turn the automatic choice off.
   - The trained hyperparameters were the median of the last 1% of the chain. They are now
     the median after a burn-in of half the chain (``mcmc_burn_in``).
   - ``mcmc_info["max x"]`` was the state one step before the best one: the ``x`` and

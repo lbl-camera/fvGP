@@ -4732,7 +4732,7 @@ def test_mcmc_default_stop_ends_a_converged_chain():
     res = gpMCMC(loglik, bounds=bounds).run_mcmc(x0=mu.copy(), n_updates=50000,
                                                  break_condition="default", rng=0)
     n = len(res["x"])
-    assert 2000 <= n < 50000 and n % 500 == 0, n
+    assert 400 <= n < 50000 and n % 100 == 0, n
 
 
 def test_mcmc_run_time_is_linear_in_the_chain_length():
@@ -4825,6 +4825,57 @@ def test_train_mcmc_arguments():
             pass
         else:
             raise AssertionError(f"{bad} must be rejected")
+
+
+def test_mcmc_proposal_learns_the_posterior_shape():
+    """The proposal covariance adapts toward the whole chain's covariance.
+
+    Parameters whose posterior widths differ 65x start with equal proposal steps (from the
+    bounds). A window of the last 10 states can only measure the current step size, so the
+    shape stayed wrong: a 2.3-2.9 step ratio after 1000 steps, against 17-24 now.
+    """
+    from fvgp.gp_mcmc import gpMCMC
+    mu, sd = np.array([1.2, 0.056]), np.array([0.8, 0.012])
+    loglik = lambda x, a: float(-0.5 * np.sum(((x - mu) / sd) ** 2))
+    for seed in range(2):
+        mcmc = gpMCMC(loglik, bounds=np.array([[0.01, 10.], [0.01, 10.]]))
+        mcmc.run_mcmc(x0=np.array([0.1, 0.1]), n_updates=1000, break_condition=None, rng=seed)
+        P = mcmc.proposal_distributions[0].prop_args["prop_Sigma"]
+        assert np.sqrt(P[0, 0] / P[1, 1]) > 10.
+
+
+def test_mcmc_log_scale_resolution():
+    from fvgp.gp_mcmc import resolve_log_scale
+    bounds = np.array([[0.01, 10.], [0.1, 0.9], [-1., 1.], [0., 5.]])
+    # auto: strictly positive bounds spanning at least a decade
+    assert list(resolve_log_scale("auto", bounds)) == [True, False, False, False]
+    assert resolve_log_scale("auto", bounds, custom_proposals=True) is None
+    assert resolve_log_scale("auto", bounds[1:]) is None and resolve_log_scale("auto", None) is None
+    assert resolve_log_scale(None, bounds) is None and resolve_log_scale(False, bounds) is None
+    assert list(resolve_log_scale(True, bounds[:2])) == [True, True]
+    assert list(resolve_log_scale([False, True, False, False], bounds)) == [False, True, False, False]
+    for bad in (True, [False, False, True, False]):
+        try:
+            resolve_log_scale(bad, bounds)
+        except AssertionError as e:
+            assert "positive bounds" in str(e)
+        else:
+            raise AssertionError("log space needs strictly positive bounds")
+
+
+def test_mcmc_log_scale_samples_the_same_posterior():
+    """Sampling log(theta) adds the Jacobian, so the posterior over theta is unchanged."""
+    from fvgp.gp_mcmc import gpMCMC
+    loglik = lambda x, a: float(2. * np.log(x[0]) - x[0])     # Gamma(3, 1) on theta
+    bounds = np.array([[0.01, 50.]])
+    for log_scale in (False, True):
+        res = gpMCMC(loglik, bounds=bounds, log_scale=log_scale).run_mcmc(
+            x0=np.array([1.]), n_updates=30000, break_condition=None, rng=0)
+        post = res["x"][res["burn in"]:, 0]
+        assert np.all((res["x"] > 0.01) & (res["x"] < 50.))     # the trace is in theta
+        assert abs(post.mean() - 3.) < 0.15 and abs(post.var() - 3.) < 0.5, (log_scale, post.mean(), post.var())
+        assert abs(res["MAP x"][0] - 2.) < 0.2                  # the mode of Gamma(3, 1)
+        assert res["MAP"] == pytest.approx(max(loglik(x, None) for x in res["x"]))
 
 
 def test_mcmc_default_break_condition_needs_a_long_chain():
@@ -5557,10 +5608,10 @@ def test_mcmc_default_break_condition_on_a_long_stable_chain():
     mcmc._stop_checks_passed = 0
     assert not any(check(np.linspace(0., 5., n) + 0.01 * rng.standard_normal(n))
                    for n in (3000, 3500, 4000, 4500))
-    # checks run only every 500 states, and never before 2000
+    # checks run only every 100 states, and never before 400
     mcmc._stop_checks_passed = 1
     assert check(rng.standard_normal(3001)) is False and mcmc._stop_checks_passed == 1
-    assert check(rng.standard_normal(1500)) is False
+    assert check(rng.standard_normal(300)) is False
 
 
 def test_proposal_distribution_accepts_explicit_prop_args():

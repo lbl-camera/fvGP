@@ -18,9 +18,11 @@ class _MCMCActor:
                  info,
                  burn_in=0.5,
                  break_condition="default",
-                 rng=None):
+                 rng=None,
+                 log_scale=None):
         from .gp_mcmc import gpMCMC
-        self._mcmc = gpMCMC(log_likelihood_function, prior_function=prior_function, proposal_distributions=proposal_distributions , bounds=bounds, args=args)
+        self._mcmc = gpMCMC(log_likelihood_function, prior_function=prior_function, proposal_distributions=proposal_distributions,
+                            bounds=bounds, args=args, log_scale=log_scale)
         self._x0 = x0
         self._n_updates = n_updates
         self._info = info

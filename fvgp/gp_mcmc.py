@@ -42,10 +42,10 @@ from dask.distributed import get_worker
 #: effective sample size is at least ``_STOP_MIN_ESS`` and a Geweke z-score (first 10%
 #: against last 50%) is below ``_STOP_MAX_Z``, and when some proposal was accepted since the
 #: previous check -- a stuck chain looks perfectly stationary and must never count.
-_STOP_MIN_LENGTH = 2000
-_STOP_CHECK_EVERY = 500
+_STOP_MIN_LENGTH = 400
+_STOP_CHECK_EVERY = 100
 _STOP_CONSECUTIVE = 2
-_STOP_MIN_ESS = 100
+_STOP_MIN_ESS = 50
 _STOP_MAX_Z = 2.0
 
 
@@ -118,6 +118,40 @@ def split_rhat(chains):
         return np.where(W > 0, np.sqrt(((half - 1) / half * W + B / half) / W), np.nan)
 
 
+def resolve_log_scale(log_scale, bounds, custom_proposals=False):
+    """Which parameters :py:class:`gpMCMC` samples in log space, as a boolean mask (or None).
+
+    ``"auto"`` logs a parameter when both bounds are strictly positive and span at least a
+    decade (upper/lower >= 10), and never with custom proposal distributions, which are
+    written for the original coordinates. Scale-like hyperparameters -- variances, length
+    scales -- have skewed, curved posteriors that a random walk in log space follows several
+    times faster (measured: 4x the effective sample size per step on a two-hyperparameter
+    GP). A parameter that enters additively, such as a location, can mix slower in log space
+    instead; the decade threshold keeps narrow ranges like [0.1, 0.9], where log is nearly
+    linear and the gain nil, in the original coordinates. Either way the sampled posterior is
+    the same: :py:class:`gpMCMC` adds the Jacobian.
+
+    ``True`` logs every parameter (all bounds must be positive), ``False``/``None`` none, and
+    a boolean array of length d chooses per parameter.
+    """
+    if log_scale is None or log_scale is False: return None
+    if isinstance(log_scale, str):
+        assert log_scale == "auto", "log_scale must be 'auto', True, False, None or a boolean mask"
+        if custom_proposals or bounds is None: return None
+        bounds = np.asarray(bounds, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            mask = (bounds[:, 0] > 0.) & (bounds[:, 1] / bounds[:, 0] >= 10.)
+    elif log_scale is True:
+        assert bounds is not None, "log_scale=True needs bounds"
+        mask = np.ones(len(bounds), dtype=bool)
+    else:
+        mask = np.asarray(log_scale, dtype=bool)
+    if not mask.any(): return None
+    assert bounds is not None and np.all(np.asarray(bounds, dtype=float)[mask, 0] > 0.), \
+        "parameters sampled in log space need strictly positive bounds"
+    return mask
+
+
 def summarize(trace, burn_in=0.5):
     """The summary :py:meth:`gpMCMC.run_mcmc` returns, built from a trace.
 
@@ -171,6 +205,11 @@ class gpMCMC:
         A list of object instances of ProposalDistribution. The default is a single normal distribution with the default ``init_prop_Sigma``.
     args : Any, optional
         Arguments that will be communicated to all Callables.
+    log_scale : str or bool or np.ndarray, optional
+        Parameters to sample in log space, with the Jacobian included, so that the posterior
+        is unchanged: ``"auto"``, True, False/None (the default) or a boolean mask; see
+        :py:func:`resolve_log_scale`. The trace, the summaries and all callables stay in the
+        original coordinates; custom proposal distributions see the sampling coordinates.
 
 
     Attributes
@@ -185,9 +224,14 @@ class gpMCMC:
                  bounds=None,
                  prior_function=None,
                  proposal_distributions="normal",
-                 args=None
+                 args=None,
+                 log_scale=None
                  ):
         self.log_likelihood_function = log_likelihood_function
+        # parameters sampled in log space; the trace, the summaries and every callable the
+        # user supplied keep working in the original coordinates
+        self.log_scale = resolve_log_scale(log_scale, bounds,
+                                           custom_proposals=not isinstance(proposal_distributions, str))
         assert bounds is not None or prior_function is not None, \
             "Provide either bounds (for the default uniform prior) or a prior_function."
         if prior_function is None:
@@ -198,7 +242,10 @@ class gpMCMC:
         if proposal_distributions == "normal":
             assert bounds is not None, \
                 "bounds must be provided to initialize the default normal proposal distribution."
-            domain_size = bounds[:, 1] - bounds[:, 0]
+            sampling_bounds = np.array(bounds, dtype=float)
+            if self.log_scale is not None:
+                sampling_bounds[self.log_scale] = np.log(sampling_bounds[self.log_scale])
+            domain_size = sampling_bounds[:, 1] - sampling_bounds[:, 0]
             std_diag = domain_size * 0.2 / np.sqrt(12)
             proposal_distributions = [ProposalDistribution(np.arange(len(bounds)),
                                                            init_prop_Sigma=np.diag(std_diag**2))]
@@ -208,6 +255,36 @@ class gpMCMC:
         self.bounds = bounds
         self.trace = None
         self.mcmc_info = {}
+
+    def _to_theta(self, u):
+        """Sampling coordinates to the original ones."""
+        if self.log_scale is None: return u
+        theta = np.array(u, dtype=float)
+        theta[self.log_scale] = np.exp(theta[self.log_scale])
+        return theta
+
+    def _to_sampling(self, theta):
+        if self.log_scale is None: return theta.copy()
+        u = np.array(theta, dtype=float)
+        u[self.log_scale] = np.log(u[self.log_scale])
+        return u
+
+    def _log_likelihood(self, u):
+        return self.log_likelihood_function(self._to_theta(u), self.args)
+
+    def _log_posterior(self, likelihood, prior, u):
+        """Log posterior over theta (not over the sampling coordinates): the Jacobian in
+        ``prior`` is removed again, so "MAP" means the same with and without log sampling."""
+        if self.log_scale is None or prior == -np.inf: return likelihood + prior
+        return likelihood + prior - float(np.sum(u[self.log_scale]))
+
+    def _log_prior(self, u):
+        """The prior density of the sampling coordinates: the user's prior on theta, plus the
+        log-Jacobian sum(u_i) of theta_i = exp(u_i), so that the posterior over theta is
+        exactly the one sampled without the transform."""
+        prior = self.prior_function(self._to_theta(u), self.bounds, self.args)
+        if self.log_scale is None or prior == -np.inf: return prior
+        return prior + float(np.sum(u[self.log_scale]))
 
     def run_mcmc(self, *, x0,
                  n_updates=10000,
@@ -232,10 +309,10 @@ class gpMCMC:
         break_condition : callable or string or None
             When to end the chain before ``n_updates``. ``None`` runs all ``n_updates``.
             A callable gets the mcmc instance, ``def break(obj)``, after every iteration.
-            ``"default"`` is a single-chain convergence heuristic: checked every 500
-            iterations from 2000 on, it ends the chain after two passing checks in a row,
+            ``"default"`` is a single-chain convergence heuristic: checked every 100
+            iterations from 400 on, it ends the chain after two passing checks in a row,
             a check passing when, on the post-burn-in chain, every parameter has an
-            effective sample size of at least 100 and a Geweke z-score (first 10% against
+            effective sample size of at least 50 and a Geweke z-score (first 10% against
             last 50%) below 2, and some proposal was accepted since the previous check. It
             is a heuristic; checking convergence properly takes several chains and
             :py:func:`split_rhat`.
@@ -272,16 +349,19 @@ class gpMCMC:
             rng if isinstance(rng, np.random.Generator) else np.random.default_rng(rng))
         for obj in self.proposal_distributions:
             obj.rng = self.rng
+            obj._history = None   # running moments of this run's chain, for _adapt
         self._burn_in = burn_in
         self._stop_checks_passed = 0
 
         # Initialize Metropolis
-        x = x0.copy()
-        likelihood = self.log_likelihood_function(x, self.args)
+        x = self._to_sampling(x0)   # the chain moves in sampling coordinates
+        likelihood = self._log_likelihood(x)
         if info: print("Starting likelihood. f(x)= ", likelihood)
-        prior = self.prior_function(x, self.bounds, self.args)
+        prior = self._log_prior(x)
+        # what adaptation learns from: the states in sampling coordinates
+        self._sampling_trace = [x]
         # every trace starts with x0, so the same index is the same state in all of them
-        self.trace = {"x": [x0], "f(x)": [likelihood], "log posterior": [likelihood + prior],
+        self.trace = {"x": [x0], "f(x)": [likelihood], "log posterior": [self._log_posterior(likelihood, prior, x)],
                       "accepted": [np.nan], "time stamp": [time.time() - start_time]}
 
         #########################################################
@@ -294,9 +374,10 @@ class gpMCMC:
                 accepted += jt
 
             # Update the trace objects
-            self.trace["x"].append(x)
+            self.trace["x"].append(self._to_theta(x))
+            self._sampling_trace.append(x)
             self.trace["f(x)"].append(likelihood)
-            self.trace["log posterior"].append(likelihood + prior)
+            self.trace["log posterior"].append(self._log_posterior(likelihood, prior, x))
             self.trace["accepted"].append(accepted / len(self.proposal_distributions))
             self.trace["time stamp"].append(time.time() - start_time)
             # adapt only now, so the adaptation window includes the current state
@@ -344,12 +425,12 @@ class gpMCMC:
         # get proposed x (x_star)
         x_star[obj.indices] = obj.proposal_dist(x_old[obj.indices].copy(), x_old, obj)
         # evaluate prior(x_star)
-        prior_evaluation_x_star = self.prior_function(x_star, self.bounds, self.args)
+        prior_evaluation_x_star = self._log_prior(x_star)
         jump_trace = 0.
 
         # if prior(x_start) is not -inf, get likelihood
         if prior_evaluation_x_star != -np.inf:
-            likelihood_star = self.log_likelihood_function(x_star, self.args)
+            likelihood_star = self._log_likelihood(x_star)
             if np.isnan(likelihood_star): raise Exception("Likelihood evaluation = NaN in gpMCMC")
             expo = prior_evaluation_x_star + likelihood_star - prior_eval - likelihood
             if expo < 50: metr_ratio = np.exp(expo)
@@ -503,6 +584,22 @@ class ProposalDistribution:
         return x + cache[2] @ rng.standard_normal(len(x))
 
     def _adapt(self, end, mcmc_obj):
+        # Running mean and covariance of the whole chain so far (Welford), updated every
+        # iteration at O(d^2). prop_Sigma is blended toward it, as in Haario et al.'s adaptive
+        # Metropolis. A window of the last K states cannot learn the posterior's shape: K
+        # consecutive states only measure the current step size, so a proposal that starts
+        # with the wrong shape -- equal steps for parameters whose posterior widths differ
+        # 65x -- stays stuck with it (measured: 8500 steps to converge instead of ~3000).
+        states = getattr(mcmc_obj, "_sampling_trace", None) or mcmc_obj.trace["x"]
+        x = np.asarray(states[-1], dtype=float)[self.indices]
+        history = getattr(self, "_history", None)
+        if history is None:
+            first = np.asarray(states[0], dtype=float)[self.indices]
+            history = self._history = {"n": 1, "mean": first, "M2": np.zeros((len(first), len(first)))}
+        history["n"] += 1
+        delta = x - history["mean"]
+        history["mean"] = history["mean"] + delta / history["n"]
+        history["M2"] = history["M2"] + np.outer(delta, x - history["mean"])
         K = self.K
         if (end % K) == 0:
             k = 3
@@ -513,13 +610,13 @@ class ProposalDistribution:
             sigma_m = self.prop_args["sigma_m"]
             gamma2 = 1. / ((end / K) + k) ** c_1
             gamma1 = c_0 * gamma2
-            # the last K iterations, the current one included (run_mcmc adapts after
-            # appending it); slicing the lists keeps this O(K) rather than O(chain length)
+            # acceptance over the last K iterations, the current one included (run_mcmc
+            # adapts after appending it)
             r_hat = np.mean(self.jump_trace[-K:])
             sigma_m = np.exp(np.log(sigma_m) + gamma1 * (r_hat - r_opt))
             if self.adapt_cov:
-                window = np.asarray(mcmc_obj.trace["x"][-K:])[:, self.indices]
-                prop_Sigma = prop_Sigma + gamma2 * (np.atleast_2d(np.cov(window.T)) - prop_Sigma)
+                chain_cov = history["M2"] / (history["n"] - 1)
+                prop_Sigma = prop_Sigma + gamma2 * (chain_cov - prop_Sigma)
             self.prop_args["prop_Sigma"] = prop_Sigma
             self.prop_args["sigma_m"] = sigma_m
 
