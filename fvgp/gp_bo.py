@@ -387,8 +387,10 @@ def _fit_surrogate(u_data, y_data, v_data, dim, train_max_iter):
         # dozen points costs nothing and made a 40-evaluation run 3.7x faster with
         # identical results.
         gp = GP(u_data, y_data, linalg_mode="CholInv", **kwargs)
-        # method='local', never 'bo' -- this is where the recursion stops
-        gp.train(hyperparameter_bounds=bounds, method="local", max_iter=train_max_iter)
+        # method='local', never 'bo' -- this is where the recursion stops. A single run:
+        # each surrogate fit is warm-started from the previous one (`init`), and restarts
+        # would multiply the cost of every BO iteration
+        gp.train(hyperparameter_bounds=bounds, method="local", max_iter=train_max_iter, n_restarts=1)
     gp._bo_mean_function = mean_f
     gp._bo_learned_noise = None if v_data is not None else float(gp.hyperparameters[dim + 1])
     return gp

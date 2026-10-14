@@ -4878,6 +4878,64 @@ def test_mcmc_log_scale_samples_the_same_posterior():
         assert res["MAP"] == pytest.approx(max(loglik(x, None) for x in res["x"]))
 
 
+def test_default_trainer_is_local_with_restarts(monkeypatch):
+    """train() without a method: local optimization from n_restarts starts, keeping the best."""
+    import fvgp.gp_training as training_module
+    starts, results = [], []
+    real_minimize = training_module.minimize
+
+    def spy(fun, x0, **kwargs):
+        starts.append(np.array(x0))
+        res = real_minimize(fun, x0, **kwargs)
+        results.append(float(res["fun"]))
+        return res
+    monkeypatch.setattr(training_module, "minimize", spy)
+
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.], [0.01, 10.], [0.3, 0.9]])
+    first = np.array([1., 1., 0.5])
+    gp.set_hyperparameters(first)
+    trained = gp.train(hyperparameter_bounds=bounds, accept_only_if_improved=False)
+    assert gp.mcmc_info is None                       # it was not the MCMC
+    assert len(starts) == 5 and np.array_equal(starts[0], first)
+    # the best of the five runs is kept
+    assert -gp.log_likelihood() == pytest.approx(min(results), rel=1e-6)
+    assert np.all(trained >= bounds[:, 0]) and np.all(trained <= bounds[:, 1])
+    # random starts are log-uniform where the bounds span a decade: on [0.01, 10] that puts
+    # about half of them below 0.1, where a uniform draw lands 1% of the time
+    starts.clear()
+    np.random.seed(0)
+    gp.train(hyperparameter_bounds=bounds, n_restarts=41, accept_only_if_improved=False)
+    extra = np.array(starts[1:])
+    assert np.mean(extra[:, :2] < 0.1) > 0.25
+    assert np.all((extra[:, 2] >= 0.3) & (extra[:, 2] <= 0.9))   # [0.3, 0.9]: uniform
+    # n_restarts=1: a single run from the starting point
+    starts.clear()
+    gp.set_hyperparameters(first)
+    gp.train(hyperparameter_bounds=bounds, n_restarts=1)
+    assert len(starts) == 1 and np.array_equal(starts[0], first)
+
+
+def test_default_trainer_is_mcmc_where_local_cannot_run(monkeypatch):
+    """Under gp2Scale and for asynchronous training the default stays MCMC, without warning."""
+    import fvgp.gp_training as training_module
+    seen = []
+    monkeypatch.setattr(training_module.GPtraining, "train",
+                        lambda self, **kw: seen.append(kw["method"]) or self.hyperparameters)
+    monkeypatch.setattr(training_module.GPtraining, "train_async",
+                        lambda self, client, **kw: seen.append(kw["method"]))
+    gp = _tiny_gp()
+    bounds = np.array([[0.01, 10.]] * 3)
+    gp.train(hyperparameter_bounds=bounds)
+    gp.train(hyperparameter_bounds=bounds, asynchronous=True, dask_client=object())
+    monkeypatch.setattr(type(gp), "gp2Scale", property(lambda self: True))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp.train(hyperparameter_bounds=bounds)
+    assert seen == ["local", "mcmc", "mcmc"]
+    assert not any("Method switched" in str(w.message) for w in caught)
+
+
 def test_mcmc_default_break_condition_needs_a_long_chain():
     from fvgp import gpMCMC, ProposalDistribution
 

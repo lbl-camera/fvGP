@@ -11,6 +11,21 @@ Unreleased
 New features
 ~~~~~~~~~~~~
 
+* **The default trainer is now local optimization with restarts.** ``train()`` without a
+  ``method`` runs ``local`` (L-BFGS-B) from ``n_restarts=5`` starting points -- the current
+  hyperparameters and four random draws within the bounds -- and keeps the best. Under
+  gp2Scale and with ``asynchronous=True`` the default remains ``mcmc``. On GPs with 2, 9 and
+  11 hyperparameters, with analytic and with finite-difference gradients, this predicted
+  held-out data exactly as well as MCMC (test RMSE 0.0555-0.0563 for every method), 2-4x
+  faster. The restarts are what make it reliable: a single local run stopped on a flat
+  plateau in 17 of 20 trials on the 11-hyperparameter problem, with test errors 6-10x too
+  large. Random starts are drawn log-uniformly for hyperparameters whose bounds are positive
+  and span a decade, which brought those failures down to 7 of 20 per run, about 0.5% for
+  all five. ``method='local'`` gains ``n_restarts`` as well; ``n_restarts=1`` restores the
+  single run. **Default fits change:** they return the maximum-likelihood point instead of
+  the MCMC posterior median, and ``mcmc_info`` is no longer filled. Pass ``method='mcmc'``
+  for hyperparameter uncertainty.
+
 * ``method='bo'`` now warns when it returns the hyperparameters it started from.
   Nothing beating the warm start is a legitimate answer, but it is indistinguishable
   from a run that silently did nothing, and a user who sees unchanged hyperparameters

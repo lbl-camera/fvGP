@@ -45,6 +45,7 @@ class GPtraining:
               mcmc_break_condition="default",
               mcmc_seed=None,
               mcmc_log_scale="auto",
+              n_restarts=5,
               bo_args=None,
               dask_client=None,
               info=False):
@@ -97,33 +98,52 @@ class GPtraining:
             # The parameter must be named `intermediate_result` -- that is how scipy
             # decides to hand over an OptimizeResult, which carries the objective
             # value already computed, so reporting costs no extra evaluations.
-            progress = None
-            if info:
-                def progress(intermediate_result):
-                    _local_state["i"] += 1
-                    print(f"fvGP local iteration {_local_state['i']}: "
-                          f"f(x)= {float(intermediate_result.fun)}")
-                _local_state = {"i": 0}
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                OptimumEvaluation = minimize(
-                    objective_function,
-                    init_hyperparameters,
-                    method=local_optimizer,
-                    jac=objective_function_gradient,
-                    hess=objective_function_hessian,
-                    bounds=hyperparameter_bounds,
-                    tol=tolerance,
-                    callback=progress,
-                    constraints=constraints,
-                    options={"maxiter": max_iter})
+            # A single local run is not reliable: on an 11-hyperparameter GP, 17 of 20 runs
+            # from uniformly drawn starts stopped on a near-flat plateau (large length scales)
+            # with a test error 6-10x too high. So the run is repeated from n_restarts - 1
+            # further starts and the best result kept. They are drawn log-uniformly where the
+            # bounds are positive and span a decade (the MCMC's log-scale rule), uniformly
+            # elsewhere: log-uniform starts cover all scales, and cut those failures to 7 of 20.
+            starts = [np.asarray(init_hyperparameters, dtype=float)]
+            log_scale = resolve_log_scale("auto", hyperparameter_bounds)
+            for _ in range(max(1, int(n_restarts)) - 1):
+                start = np.random.uniform(hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1])
+                if log_scale is not None:
+                    start[log_scale] = np.exp(np.random.uniform(np.log(hyperparameter_bounds[log_scale, 0]),
+                                                                np.log(hyperparameter_bounds[log_scale, 1])))
+                starts.append(start)
+            best = None
+            for k, start in enumerate(starts):
+                progress = None
+                if info:
+                    print(f"fvGP local optimization, start {k + 1} of {len(starts)}")
+                    _local_state = {"i": 0}
 
-            if OptimumEvaluation["success"]:
-                logger.debug(f"fvGP local optimization successfully concluded with result: "
-                             f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
-            else:
-                logger.debug("fvGP local optimization not successful.")
-            hyperparameters = OptimumEvaluation["x"]
+                    def progress(intermediate_result):
+                        _local_state["i"] += 1
+                        print(f"fvGP local iteration {_local_state['i']}: "
+                              f"f(x)= {float(intermediate_result.fun)}")
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    OptimumEvaluation = minimize(
+                        objective_function,
+                        start,
+                        method=local_optimizer,
+                        jac=objective_function_gradient,
+                        hess=objective_function_hessian,
+                        bounds=hyperparameter_bounds,
+                        tol=tolerance,
+                        callback=progress,
+                        constraints=constraints,
+                        options={"maxiter": max_iter})
+                if OptimumEvaluation["success"]:
+                    logger.debug(f"fvGP local optimization successfully concluded with result: "
+                                 f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
+                else:
+                    logger.debug("fvGP local optimization not successful.")
+                if best is None or OptimumEvaluation["fun"] < best["fun"]:
+                    best = OptimumEvaluation
+            hyperparameters = best["x"]
         ############################
         ####hybrid optimization:####
         ############################
