@@ -241,6 +241,10 @@ class GP:
           ``"block_jacobi"``, ``"schwarz"``/``"additive_schwarz"``, or ``"amg"``
           (requires pyamg). The compiled IC options require the optional ``ilupp`` package.
         * ``"sparseMINRESpre"`` — preconditioned MINRES; same preconditioner choices.
+          In both preconditioned modes, training builds a preconditioner only once it is
+          likely to be reused (see ``args["sparse_preconditioner_lazy"]``): until the
+          hyperparameters settle, and whenever building fails, a training evaluation is
+          solved with unpreconditioned MINRES instead.
         * ``"sparseCGpre_<type>"`` / ``"sparseMINRESpre_<type>"`` — shortcut that sets
           ``args["sparse_preconditioner_type"]`` to ``<type>`` (e.g. ``"sparseCGpre_amg"``).
 

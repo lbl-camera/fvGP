@@ -8,8 +8,42 @@ git history and the release tags.
 Unreleased
 ----------
 
+Breaking changes
+~~~~~~~~~~~~~~~~
+
+* The ``GP``/``fvGP`` constructor argument ``ram_economy`` is now
+  ``gradient_per_direction``; passing the old name raises ``TypeError``. The old name
+  described a side effect: what the option actually sets is the contract for a user's
+  ``kernel_function_grad`` and ``noise_function_grad`` -- with it on they take a
+  ``direction`` argument and return one hyperparameter's slice, with it off they return
+  the full ``(H x N1 x N2)`` stack.
+
+Dependencies
+~~~~~~~~~~~~
+
+* Requires ``hgdl ~= 2.4.2`` (at least 2.4.2, below 2.5). ``train(method='hgdl', info=True)``
+  passes ``info`` to HGDL, which 2.4.2 introduced, and now prints a line per accepted
+  walker; before, ``hgdl`` was the one method for which ``info`` printed nothing. hgdl 2.4
+  declares its scientific stack as ranges, so it no longer decides which scipy/numpy a
+  given Python gets, and Python 3.10 stays supported.
+
 New features
 ~~~~~~~~~~~~
+
+* **Preconditioners are built lazily during training.** Rebuilt for every likelihood
+  evaluation, even a good preconditioner leaves CG slower than plain MINRES -- the build
+  only pays off once it is reused. In ``sparseCGpre``/``sparseMINRESpre`` mode, training
+  now solves with unpreconditioned MINRES while the hyperparameters still move (an MCMC
+  burn-in, or any method other than ``mcmc``, which cannot reuse a preconditioner), and
+  builds one only after ``args["sparse_preconditioner_settle_steps"]`` (default 3)
+  evaluations in a row stayed within ``sparse_preconditioner_max_matrix_drift`` of each
+  other; it is then reused for as long as the drift test allows. A preconditioner that
+  fails to build also falls back to MINRES. ``args["sparse_preconditioner_lazy"]=False``
+  restores building on every evaluation the cache cannot serve. Outside training --
+  ``set_hyperparameters`` and the posterior's solves -- nothing changes.
+* ``args["random_logdet_error_atol"]`` sets an absolute accuracy target for the stochastic
+  log-determinant, next to the relative ``random_logdet_error_rtol`` (default 0.01); with
+  both given, the looser one applies.
 
 * **The default trainer is now local optimization with restarts.** ``train()`` without a
   ``method`` runs ``local`` (L-BFGS-B) from ``n_restarts=5`` starting points -- the current
@@ -357,6 +391,29 @@ New features
 
 Bug fixes
 ~~~~~~~~~
+
+* **The stochastic log-determinant ignored its accuracy target when negative.** imate stops
+  sampling once its error is below ``max(error_atol, error_rtol * mean)`` -- the signed
+  mean (still so in imate 0.29.11) -- so for a negative log-determinant, the common case,
+  the 1% relative target was never met and every evaluation ran all 5000 probes. fvGP now
+  passes imate only absolute targets, converting the relative one from a 10-probe pilot
+  run. Negative log-determinants now stop at 1%: at N=8000, 65-99 probes and ~1.6 s instead
+  of 5000 probes and 12-14 s per evaluation. The precision of the estimate now follows
+  ``random_logdet_error_rtol`` as documented, so gp2Scale likelihoods are noisier than
+  before for negative log-determinants; tighten the tolerance if MCMC decisions suffer.
+* **Measured noise was added to unrelated prediction points.** With ``noise_variances``,
+  the measured variances were recognized as "the data" by length alone, so whenever the
+  number of prediction points equaled the number of data points,
+  ``posterior_covariance(add_noise=True)`` -- and with it ``picp``, ``nlpd``, ``crps`` --
+  added them to the prediction points position by position. They are now used only at the
+  data points themselves (compared by content, or by identity for non-Euclidean inputs);
+  elsewhere the noise is ``mean(noise_variances)``, exact for constant noise and an
+  estimate, now with a warning, when the measured noise is heteroscedastic. A noise
+  function returning neither a 1-d nor a 2-d array now raises instead of being silently
+  dropped.
+* ``train(method='hgdl')`` without a ``dask_client`` left the local Dask cluster HGDL
+  starts for itself running after the optimization. fvGP now closes it, also when the
+  optimization raises; a client passed in stays open.
 
 * **The MCMC sampler behind ``train(method='mcmc')``, the default, has been fixed. Trained
   hyperparameters from ``method='mcmc'`` will change.** Convergence diagnostics on a
