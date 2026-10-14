@@ -188,6 +188,10 @@ Not every GPU path goes through the same library, which is the thing to keep str
 
 Under gp2Scale the kernel runs on dask workers, so a warning raised inside it never reaches the client. The request is still honored; only the message is lost.
 
+### Broken preconditioners and CG failures
+
+A preconditioner is never trusted blindly. `calculate_sparse_preconditioner` rejects a factor with any NaN/inf (`_preconditioner_is_finite` inspects every factor type: ilupp `factors()`, SuperLU `L`/`U`, the builders' dicts, pyamg levels) — ilupp's IC(0) breaks down *silently* on smooth, non-diagonally-dominant K+V in random point order. A rejected or failed build means unpreconditioned **MINRES**, in training (`_preconditioned_training_solve`) and in `solve()`. `calculate_sparse_conj_grad` caps CG at `_DEFAULT_CG_MAXITER` (5000), or `_DEFAULT_PRECONDITIONED_CG_MAXITER` (500) with a preconditioner — measured on a random-order 1-D replica, working preconditioners converge in 1–20 iterations (ilu 1, ichol 4, Schwarz/1024 7) and plain CG in ~150–250 — unless an explicit `sparse_cg_maxiter`/`sparse_krylov_maxiter` is set (`None` = scipy's 10 N), aborts at the first non-finite iterate via the callback, and redoes any failed solve — not converged or non-finite, preconditioned or not, single or block — with unpreconditioned MINRES (`_cg_with_minres_fallback`). Reordering, or probing preconditioners with test vectors, was considered and rejected as the fix.
+
 ### Preconditioner logging
 
 `calculate_sparse_preconditioner` logs `"<type> preconditioner construction in progress ..."` and a compute time carrying `n` and `K+V nnz`, matching the solvers it feeds so a gp2Scale debug log reads as one timeline. `GPkv._get_or_refresh_preconditioner` logs reuse in the same phrasing — without it, a cached preconditioner's missing construction time looks like one that never ran. Application cost is inside the CG/MINRES timings, not broken out.

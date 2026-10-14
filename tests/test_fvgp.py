@@ -1600,13 +1600,15 @@ def test_sparse_solvers_multi_column_x0():
 
 
 def test_sparse_solvers_maxiter():
-    """maxiter caps iterations even when tolerance is unmet — should emit a warning."""
+    """maxiter caps CG even when the tolerance is unmet; the solve is then redone with MINRES."""
     A = _make_test_spd_sparse(n=30)
     b = np.random.rand(A.shape[0])
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        calculate_sparse_conj_grad(A, b, args={"sparse_cg_tol": 1e-15, "sparse_cg_maxiter": 1})
-        assert any("CG not successful" in str(w.message) for w in caught)
+        x = calculate_sparse_conj_grad(A, b, args={"sparse_cg_tol": 1e-15, "sparse_cg_maxiter": 1})
+    assert any("not converged within 1 iterations" in str(w.message) and "MINRES" in str(w.message)
+               for w in caught)
+    assert np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b) < 1e-4
 
 
 def test_sparse_conj_grad_legacy_tolerance_keys():
@@ -5289,7 +5291,112 @@ def test_sparse_conj_grad_falls_back_when_block_cg_fails(monkeypatch):
         x = la.calculate_sparse_conj_grad(A, b, args={"sparse_krylov_mode": "block"})
     assert x.shape == (10, 2)
     assert np.allclose(A.toarray() @ x, b, atol=1e-5)
-    assert any("falling back to columnwise CG" in str(w.message) for w in caught)
+    assert any("Block CG failed (RuntimeError: block CG broke down)" in str(w.message) and
+               "MINRES" in str(w.message) for w in caught)
+
+
+def test_a_broken_preconditioner_is_never_used(monkeypatch):
+    """An incomplete factorization can break down without raising (ilupp's IC(0) on a smooth
+    K+V in random point order returns NaN). Such a factor counts as a failed build, and the
+    solve falls back to unpreconditioned MINRES -- in training and outside it."""
+    import fvgp.gp_lin_alg as la
+    import fvgp.gp_kv as kv_module
+    finite = la._preconditioner_is_finite
+    nan_sparse = sparse.csr_matrix(np.array([[1., np.nan], [0., 1.]]))
+
+    class _Ilupp:
+        def __init__(self, m): self.m = m
+        def factors(self): return [self.m]
+
+    class _SuperLU:
+        def __init__(self, L): self.L, self.U = L, sparse.identity(2, format="csr")
+
+    class _Level:
+        def __init__(self, A): self.A = A
+
+    class _AMG:
+        def __init__(self, A): self.levels = [_Level(sparse.identity(2, format="csr")), _Level(A)]
+
+    ok = sparse.identity(2, format="csr")
+    assert finite(None) and finite("ichol0") and finite(3) and finite(np.arange(3)) and finite(object())
+    assert finite({"L": ok, "blocks": [np.arange(2)], "factor": (np.eye(2), True)})
+    assert finite(_Ilupp(ok)) and finite(_SuperLU(ok)) and finite(_AMG(ok))
+    assert not finite(nan_sparse) and not finite(np.array([1., np.inf])) and not finite(float("nan"))
+    assert not finite({"local": [{"factor": (np.array([[np.nan]]), True)}]})
+    assert not finite(_Ilupp(nan_sparse)) and not finite(_SuperLU(nan_sparse)) and not finite(_AMG(nan_sparse))
+
+    # a builder that "succeeds" with a NaN factor
+    def broken_builder(KV, args=None):
+        return _Ilupp(nan_sparse), sparse.linalg.LinearOperator(KV.shape, matvec=lambda v: np.full(len(v), np.nan))
+    monkeypatch.setattr(la, "_build_ilu_preconditioner", broken_builder)
+    try:
+        la.calculate_sparse_preconditioner(_make_test_spd_sparse(n=20), args={"sparse_preconditioner_type": "ilu"})
+    except np.linalg.LinAlgError as e:
+        assert "non-finite" in str(e)
+    else:
+        raise AssertionError("a NaN preconditioner must count as a failed build")
+
+    # end to end: a sparseCGpre GP gets no preconditioner and solves with MINRES
+    calls = []
+    real_minres = kv_module.calculate_sparse_minres
+    monkeypatch.setattr(kv_module, "calculate_sparse_minres",
+                        lambda *a, **k: calls.append("minres") or real_minres(*a, **k))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp, _ = _make_test_gp("sparseCGpre", args={"sparse_preconditioner_type": "ilu"})
+        y = gp.kv.solve(gp.y_data - gp.prior.m[:, None])
+    assert "minres" in calls and np.all(np.isfinite(y))
+    assert any("unpreconditioned MINRES" in str(w.message) and "non-finite" in str(w.message) for w in caught)
+
+
+def test_cg_falls_back_to_minres_and_is_capped(monkeypatch):
+    import fvgp.gp_lin_alg as la
+    A = _make_test_spd_sparse(n=40)
+    b = np.random.default_rng(0).random(A.shape[0])
+
+    # a preconditioner producing NaN: CG stops at the first non-finite iterate, MINRES solves
+    nan_M = sparse.linalg.LinearOperator(A.shape, matvec=lambda v: np.full(len(v), np.nan))
+    iterations = []
+    real_cg = la.cg
+
+    def counting_cg(*a, **k):
+        cb = k["callback"]
+        def counted(xk):
+            iterations.append(1); cb(xk)
+        return real_cg(*a, **{**k, "callback": counted})
+    monkeypatch.setattr(la, "cg", counting_cg)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        x = la.calculate_sparse_conj_grad(A, b, M=nan_M)
+    assert len(iterations) <= 1
+    assert any("CG (preconditioned) failed: non-finite iterate" in str(w.message) for w in caught)
+    assert np.linalg.norm(A @ x[:, 0] - b) / np.linalg.norm(b) < 1e-4
+
+    # default caps: 5000 for plain CG, 500 with a preconditioner; an explicit maxiter --
+    # or None for scipy's default -- wins in both cases
+    seen = []
+    monkeypatch.setattr(la, "cg", lambda *a, **k: seen.append(k["maxiter"]) or real_cg(*a, **k))
+    jacobi = sparse.linalg.LinearOperator(A.shape, matvec=lambda v: v / A.diagonal())
+    for M, args, expected in ((None, {}, 5000), (jacobi, {}, 500), (None, {"sparse_cg_maxiter": 77}, 77),
+                              (jacobi, {"sparse_cg_maxiter": 77}, 77), (None, {"sparse_krylov_maxiter": 33}, 33),
+                              (None, {"sparse_cg_maxiter": None}, None)):
+        seen.clear()
+        la.calculate_sparse_conj_grad(A, b, M=M, args=args)
+        assert seen == [expected], (args, seen)
+
+
+def test_block_cg_failures_fall_back_to_minres(monkeypatch):
+    import fvgp.gp_lin_alg as la
+    A = sparse.csr_matrix(_spd(10, seed=6))
+    b = np.random.default_rng(7).random((10, 2))
+    for failing, message in ((lambda *a, **k: (np.zeros((10, 2)), 3), "exit_code=3"),
+                             (lambda *a, **k: (np.full((10, 2), np.nan), 0), "non-finite solution")):
+        monkeypatch.setattr(la, "_block_conjugate_gradient", failing)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            x = la.calculate_sparse_conj_grad(A, b, args={"sparse_krylov_mode": "block"})
+        assert np.allclose(A.toarray() @ x, b, atol=1e-4)
+        assert any(message in str(w.message) and "MINRES" in str(w.message) for w in caught)
 
 
 def test_shifted_dense_cholesky_gives_up_with_a_clear_error():

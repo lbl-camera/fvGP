@@ -363,7 +363,7 @@ class GPkv:
             self.Last_preconditioner_error = f"{type(exc).__name__}: {exc}"
             warnings.warn(
                 f"Failed to build sparse preconditioner for mode {self.mode}; "
-                f"falling back to the unpreconditioned iterative solve. "
+                f"falling back to unpreconditioned MINRES. "
                 f"Reason: {self.Last_preconditioner_error}. "
                 f"{sparse_preconditioner_failure_guidance(self.args)}"
             )
@@ -749,6 +749,8 @@ class GPkv:
             return calculate_sparse_minres(self.KV, b, M=M, x0=x0, args=self.args)
         elif self.mode == "sparseCGpre":
             M = self._get_or_refresh_preconditioner(self.KV)
+            if M is None:   # the build failed: unpreconditioned MINRES, as in training
+                return calculate_sparse_minres(self.KV, b, x0=x0, args=self.args)
             return calculate_sparse_conj_grad(self.KV, b, M=M, x0=x0, args=self.args)
         elif self.mode == "sparseSolve":
             return calculate_sparse_solve(self.KV, b, args=self.args)

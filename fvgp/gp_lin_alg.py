@@ -887,6 +887,37 @@ def _build_amg_preconditioner(KV, args=None):
     return factor, operator
 
 
+def _preconditioner_is_finite(factor):
+    """Whether every stored number of a preconditioner factor is finite.
+
+    An incomplete factorization can break down without raising: ilupp's IC(0) on a smooth
+    covariance matrix in random point order returns a factor full of NaN, and every CG
+    iteration with it is NaN. Inspected per factor type -- sparse and dense arrays, the
+    dicts of the native IC / block-Jacobi / Schwarz builders, SuperLU's L and U, ilupp's
+    ``factors()``, and the matrices on every pyamg level; anything else counts as finite.
+    """
+    if factor is None or isinstance(factor, (str, bytes, bool)):
+        return True
+    if sparse.issparse(factor):
+        return bool(np.all(np.isfinite(factor.data)))
+    if isinstance(factor, np.ndarray):
+        return not np.issubdtype(factor.dtype, np.number) or bool(np.all(np.isfinite(factor)))
+    if isinstance(factor, (int, float, np.number)):
+        return bool(np.isfinite(factor))
+    if isinstance(factor, dict):
+        return all(_preconditioner_is_finite(value) for value in factor.values())
+    if isinstance(factor, (list, tuple)):
+        return all(_preconditioner_is_finite(value) for value in factor)
+    if callable(getattr(factor, "factors", None)):                      # ilupp
+        return _preconditioner_is_finite(list(factor.factors()))
+    if hasattr(factor, "L") and hasattr(factor, "U"):                   # scipy SuperLU (spilu)
+        return _preconditioner_is_finite([factor.L, factor.U])
+    if hasattr(factor, "levels"):                                       # pyamg multilevel solver
+        return _preconditioner_is_finite([getattr(level, name) for level in factor.levels
+                                          for name in ("A", "P", "R") if hasattr(level, name)])
+    return True
+
+
 def calculate_sparse_preconditioner(KV, args=None):
     """Return ``(factor, operator)`` for the requested sparse preconditioner.
 
@@ -921,6 +952,13 @@ def calculate_sparse_preconditioner(KV, args=None):
         )
 
     factor, operator = builders[preconditioner_type](KV, args=args)
+    if not _preconditioner_is_finite(factor):
+        # a factorization that broke down silently; callers treat this as a failed build
+        # and solve without a preconditioner, with MINRES
+        raise np.linalg.LinAlgError(
+            f"{preconditioner_type} preconditioner contains non-finite values: the incomplete "
+            f"factorization broke down (common for an incomplete Cholesky of a smooth, "
+            f"non-diagonally-dominant K+V)")
     if isinstance(factor, dict):
         factor.setdefault("type", preconditioner_type)
     # Same shape of message as the solvers it feeds, so a gp2Scale debug log reads as one
@@ -1230,6 +1268,46 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
     return res
 
 
+#: CG iteration caps unless ``sparse_cg_maxiter`` / ``sparse_krylov_maxiter`` is given (scipy's
+#: own default, 10 N, means a million iterations at N = 100 000). Plain CG on an
+#: ill-conditioned K+V legitimately needs hundreds to a few thousand; a working
+#: preconditioner gets there in tens (1-20 measured), so one that needs hundreds is not
+#: working and CG gives up early, in favor of the MINRES fallback.
+_DEFAULT_CG_MAXITER = 5000
+_DEFAULT_PRECONDITIONED_CG_MAXITER = 500
+
+
+class _NonFiniteIterate(Exception):
+    pass
+
+
+def _raise_if_not_finite(xk):
+    if not np.all(np.isfinite(xk)):
+        raise _NonFiniteIterate
+
+
+def _cg_with_minres_fallback(KV, rhs, M, cg_tol, x0, maxiter, args, label="CG"):
+    """One CG solve; on any failure, the same system with unpreconditioned MINRES.
+
+    Failure is a non-zero exit code (not converged within ``maxiter``), or a non-finite
+    iterate or result, which ends the CG run at the iteration it appears instead of
+    letting it run on NaN to ``maxiter``.
+    """
+    try:
+        x, exit_code = cg(KV, rhs, M=M, rtol=cg_tol, x0=x0, maxiter=maxiter,
+                          callback=_raise_if_not_finite)
+        reason = None if exit_code == 0 else f"not converged within {maxiter} iterations (exit_code={exit_code})"
+        if reason is None and not np.all(np.isfinite(x)):  # pragma: no cover - the callback sees every iterate
+            reason = "non-finite solution"
+    except _NonFiniteIterate:
+        reason = "non-finite iterate"
+    if reason is None:
+        return x
+    warnings.warn(f"{label}{' (preconditioned)' if M is not None else ''} failed: {reason}. "
+                  f"Falling back to unpreconditioned MINRES.")
+    return calculate_sparse_minres(KV, rhs, x0=x0, M=None, args=args)[:, 0]
+
+
 def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
     """Solve the sparse SPD system ``KV x = vec`` with conjugate gradients.
 
@@ -1238,6 +1316,11 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
     selected by ``args["sparse_block_krylov"]`` or
     ``args["sparse_krylov_mode"]``.  ``x0`` is reshaped / zero-padded to match
     ``vec`` before each per-column solve.
+
+    Capped at 5000 iterations, or 500 with a preconditioner, unless a maximum is given;
+    pass ``sparse_cg_maxiter=None`` for scipy's default. A CG solve that fails -- not
+    converged, or a non-finite iterate, as a broken preconditioner produces -- is redone
+    with unpreconditioned MINRES, with a warning.
     """
     args = _normalize_args(args)
     assert sparse.issparse(KV), "KV must be sparse for CG"
@@ -1256,6 +1339,8 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
         cg_tol = args["sparse_minres_tol"]
     krylov_mode = _resolve_krylov_mode(args)
     maxiter = _resolve_krylov_maxiter(args, solver_key="sparse_cg_maxiter")
+    if "sparse_cg_maxiter" not in args and "sparse_krylov_maxiter" not in args:
+        maxiter = _DEFAULT_CG_MAXITER if M is None else _DEFAULT_PRECONDITIONED_CG_MAXITER
     vec = _normalize_rhs(vec)
     x0 = _normalize_initial_guess(x0, vec.shape)
 
@@ -1263,7 +1348,6 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
         block_size = int(args.get("sparse_krylov_block_size", vec.shape[1]))
         block_size = max(1, min(block_size, vec.shape[1]))
         res = np.zeros(vec.shape)
-        exit_codes = []
         for start in range(0, vec.shape[1], block_size):
             stop = min(start + block_size, vec.shape[1])
             block_x0 = None if x0 is None else x0[:, start:stop]
@@ -1276,27 +1360,17 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
                     M=M,
                     maxiter=maxiter,
                 )
+                reason = None if exit_code == 0 else f"exit_code={exit_code}"
+                if reason is None and not np.all(np.isfinite(block_solution)):
+                    reason = "non-finite solution"
             except Exception as exc:
-                warnings.warn(
-                    "Block CG failed; falling back to columnwise CG for this RHS block: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-                block_solution = np.zeros((KV.shape[0], stop - start))
-                exit_code = 4
-                for block_index, rhs_index in enumerate(range(start, stop)):
-                    initial_guess = _column_initial_guess(x0, rhs_index)
-                    block_solution[:, block_index], _ = cg(
-                        KV,
-                        vec[:, rhs_index],
-                        M=M,
-                        rtol=cg_tol,
-                        x0=initial_guess,
-                        maxiter=maxiter,
-                    )
+                reason = f"{type(exc).__name__}: {exc}"
+            if reason is not None:
+                warnings.warn(f"Block CG failed ({reason}); falling back to unpreconditioned "
+                              f"MINRES for this RHS block.")
+                block_solution = calculate_sparse_minres(KV, vec[:, start:stop], x0=block_x0,
+                                                         M=None, args=args)
             res[:, start:stop] = block_solution
-            exit_codes.append(exit_code)
-        if any(code != 0 for code in exit_codes):
-            warnings.warn(f"Block CG not fully successful (exit_codes={exit_codes})")
         logger.debug("CG compute time: {} seconds.", time.time() - st)
         assert np.ndim(res) == 2, "CG result must be 2-d"
         return res
@@ -1304,8 +1378,7 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
     res = np.zeros(vec.shape)
     for i in range(vec.shape[1]):
         initial_guess = _column_initial_guess(x0, i)
-        res[:, i], exit_code = cg(KV, vec[:, i], M=M, rtol=cg_tol, x0=initial_guess, maxiter=maxiter)
-        if exit_code != 0: warnings.warn(f"CG not successful (exit_code={exit_code})")
+        res[:, i] = _cg_with_minres_fallback(KV, vec[:, i], M, cg_tol, initial_guess, maxiter, args)
     logger.debug("CG compute time: {} seconds.", time.time() - st)
     assert np.ndim(res) == 2, "CG result must be 2-d"
     return res

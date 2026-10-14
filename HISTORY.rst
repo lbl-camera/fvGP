@@ -392,6 +392,20 @@ New features
 Bug fixes
 ~~~~~~~~~
 
+* **A broken preconditioner made CG run on NaN, apparently forever.** An incomplete
+  factorization can break down without raising: ``ilupp``'s IC(0) on a smooth covariance
+  matrix (here ~470 strongly correlated neighbors per row) in random point order returns a
+  factor that is NaN almost everywhere, and fvGP logged the build as a success. CG then
+  produced NaN on every iteration, with no iteration cap -- scipy's default is 10 N, a
+  million iterations at N = 100 000 -- which on a gp2Scale run looked like a stalled solve.
+  Now a preconditioner containing NaN or inf counts as a failed build; any CG solve that
+  fails -- not converged, or a non-finite iterate, caught at the first one -- is redone
+  with unpreconditioned MINRES, with a warning; a ``sparseCGpre`` solve without a
+  preconditioner uses MINRES, as training already did; and CG is capped at 5000 iterations,
+  500 with a preconditioner -- a working one converges in tens -- unless
+  ``sparse_cg_maxiter`` / ``sparse_krylov_maxiter`` says otherwise. (For 1-D data,
+  sorting the points makes IC(0) the exact Cholesky factor: one CG iteration.)
+
 * **The stochastic log-determinant ignored its accuracy target when negative.** imate stops
   sampling once its error is below ``max(error_atol, error_rtol * mean)`` -- the signed
   mean (still so in imate 0.29.11) -- so for a negative log-determinant, the common case,
