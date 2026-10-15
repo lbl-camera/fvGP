@@ -87,7 +87,9 @@ Gotchas:
 
 **The default (`method=None`) is `local` with `n_restarts=5`**, resolved in `GP.train`; `mcmc` under gp2Scale or `asynchronous=True` (no "Method switched" warning then). Measured on 9- and 11-hyperparameter GPs (analytic and finite-difference gradients): every non-failed optimum, local or MCMC or global, predicted held-out data identically (RMSE 0.0555–0.0563), restarts were 2–4× faster than MCMC, and the danger is a *single* local run, which stopped on a flat large-length-scale plateau in 17/20 runs from uniform starts (test error 6–10× worse). Restart starts are therefore drawn log-uniformly where `resolve_log_scale("auto", bounds)` says so (7/20 failures, so ~0.5% for all five). The first start is the current/init hyperparameters. BO's inner surrogate fit pins `n_restarts=1`: it is warm-started from the previous fit, and restarts would multiply every BO iteration.
 
-- Async is supported for `hgdl`, `mcmc`, `adam`, `bo` and needs a `dask_client`; everything else warns and falls back to sync.
+- Async is supported for `hgdl`, `mcmc`, `adam`, `bo` and needs a `dask_client`; everything else warns and falls back to sync. `hgdl` is the asynchronous counterpart of multi-start `local`.
+- `hgdl` gets `info` passed through (needs hgdl ≥ 2.4.2). Synchronous `hgdl` without a `dask_client` lets HGDL start its own local cluster; `GPtraining.train` closes it (`kill_client()`) in a `finally`, never a user's client.
+- Known open issue: `method='adam'` ignores the hyperparameter bounds (returned values outside them in the gpCAM example notebooks).
 - gp2Scale trains synchronously and only allows `mcmc` or `bo` (other methods are silently switched to `mcmc`).
 - `mcmc` ignores a user `objective_function` (it always maximizes the log marginal likelihood). A user objective with `local`/`hgdl` must come with a gradient.
 - Diagnostics land on read-only `GP` properties: `mcmc_info` after `mcmc`, `bo_info` after a sync `bo` run.
@@ -202,6 +204,8 @@ The CG and MINRES lines say how each solve starts: `"CG solve in progress (warm 
 
 Kernels, mean functions, and noise models are all plain Python callables with standardized signatures. Users pass them as arguments to `GP`/`fvGP` constructors. The full hyperparameter vector is shared across kernel, mean, and noise callables, but each callable must only read its reserved index range. Kernel gradients can be user-supplied or computed via finite differences.
 
+`gradient_per_direction` (constructor; named `ram_economy` before 4.9 — the old name is a `TypeError`, gpCAM maps it in old pickles) sets the contract for `kernel_function_grad`/`noise_function_grad`: True → `f(x1, x2, hps, direction)` returning one hyperparameter's `(N1 x N2)` slice; False → the full `(H x N1 x N2)` stack. Internally it is still stored as `GPdata.ram_economy`.
+
 ### Non-Euclidean input spaces
 
 `x_data` may be a **list of arbitrary objects** instead of an array — strings, dicts, custom classes, or lists. `GPdata` then sets `Euclidean=False` and `index_set_dim = input_set_dim = 1` regardless of what the objects are, and a user kernel is mandatory. Multi-task works too: `fvGP`'s index-set transform turns the list into `[point, task]` pairs, and the kernel sees those (`a[0]` is the object, `a[1]` the task).
@@ -214,6 +218,8 @@ The rule that keeps this working: **never ask numpy about the input set.** `np.n
 
 `GP` exposes `gp_entropy()`, `gp_mutual_information()`, `gp_kl_div()`, and predictive metrics (`rmse`, `nlpd`, `crps`, `r2`, `picp`), all computed via `GPposterior`.
 
+`add_noise=True` (and the metrics built on it) uses `GPlikelihood.calculate_V(x_pred)`. With measured `noise_variances` and no noise function, `_measured_noise_function` returns the per-point variances only when `x_pred` *is* the data (`_is_x_data`: same object, equal array, or identical objects for non-Euclidean lists — never by length, which once handed a same-size test set the data's variances positionally); elsewhere `mean(noise_variances)`, with a warning if the measured noise is heteroscedastic. A malformed noise array raises in `GPposterior.add_noise`.
+
 ### Extension modules
 
 - **[ggmp.py](fvgp/ggmp.py)** — `GGMP` (Gaussian GP for Gaussian Mixture data): fits K GMM components per station, each backed by its own `GP`; intended for distributional regression. Written by Vardaan Tekriwal. Excluded from the test suite (`# pragma: no cover`).
@@ -221,7 +227,7 @@ The rule that keeps this working: **never ask numpy about the input set.** `np.n
 
 ## Dependencies
 
-Core: `numpy`, `scipy`, `dask`, `distributed`, `hgdl`, `loguru` — declared as **ranges**, not `~=` pins, so pip can resolve across Python 3.10–3.14 (see Commands).
+Core: `numpy`, `scipy`, `dask`, `distributed`, `loguru` — declared as **ranges**, not `~=` pins, so pip can resolve across Python 3.10–3.14 (see Commands) — and `hgdl ~= 2.4.2` (≥ 2.4.2 for HGDL's `info`; hgdl 2.4 itself declares the stack as ranges, so the pin does not decide scipy/numpy).
 
 `imate` is required for gp2Scale (the stochastic log-determinant) but is not a declared core dependency; `GP.__init__` raises a pointed message when it is missing. It lives in the `tests` extra.
 
