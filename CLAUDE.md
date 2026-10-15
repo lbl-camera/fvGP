@@ -194,6 +194,8 @@ A preconditioner is never trusted blindly. `calculate_sparse_preconditioner` rej
 
 ### Preconditioner logging
 
+The CG and MINRES lines say how each solve starts: `"CG solve in progress (warm start) ..."` or `"(cold start)"`, judged by whether an `x0` reached the solver — so a `sparse_krylov_warm_start` run shows in the log whether the guess was used, and a drift-dropped one is preceded by `"Warm start dropped: ..."` from `GPkv._validated_warm_start`.
+
 `calculate_sparse_preconditioner` logs `"<type> preconditioner construction in progress ..."` and a compute time carrying `n` and `K+V nnz`, matching the solvers it feeds so a gp2Scale debug log reads as one timeline. `GPkv._get_or_refresh_preconditioner` logs reuse in the same phrasing — without it, a cached preconditioner's missing construction time looks like one that never ran. Application cost is inside the CG/MINRES timings, not broken out.
 
 ### Customization API

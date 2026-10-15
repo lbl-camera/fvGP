@@ -1249,7 +1249,7 @@ def calculate_sparse_minres(KV, vec, x0=None, M=None, args=None):
     args = _normalize_args(args)
     assert sparse.issparse(KV), "KV must be sparse for MINRES"
     st = time.time()
-    logger.debug("MINRES solve in progress ...")
+    logger.debug("MINRES solve in progress ({}) ...", "cold start" if x0 is None else "warm start")
     minres_tol = 1e-5
     if "sparse_minres_tol" in args:
         minres_tol = args["sparse_minres_tol"]
@@ -1325,7 +1325,7 @@ def calculate_sparse_conj_grad(KV, vec, x0=None, M=None, args=None):
     args = _normalize_args(args)
     assert sparse.issparse(KV), "KV must be sparse for CG"
     st = time.time()
-    logger.debug("CG solve in progress ...")
+    logger.debug("CG solve in progress ({}) ...", "cold start" if x0 is None else "warm start")
     cg_tol = 1e-5
     # Backward-compatible tolerance resolution:
     # - sparse_cg_tol is the corrected, explicit CG key

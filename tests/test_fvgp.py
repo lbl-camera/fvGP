@@ -5439,6 +5439,28 @@ def test_cg_falls_back_to_minres_and_is_capped(monkeypatch):
         assert seen == [expected], (args, seen)
 
 
+def test_krylov_solves_log_whether_they_start_warm():
+    """The CG and MINRES log lines say whether a starting guess was used."""
+    from loguru import logger
+    import fvgp.gp_lin_alg as la
+    A = _make_test_spd_sparse(n=20)
+    b = np.random.default_rng(1).random(A.shape[0])
+    messages = []
+    logger.enable("fvgp")
+    sink = logger.add(lambda m: messages.append(m.record["message"]), level="DEBUG")
+    try:
+        x = la.calculate_sparse_conj_grad(A, b)
+        la.calculate_sparse_conj_grad(A, b, x0=x)
+        la.calculate_sparse_minres(A, b)
+        la.calculate_sparse_minres(A, b, x0=x)
+    finally:
+        logger.remove(sink)
+        logger.disable("fvgp")
+    starts = [m for m in messages if "solve in progress" in m]
+    assert starts == ["CG solve in progress (cold start) ...", "CG solve in progress (warm start) ...",
+                      "MINRES solve in progress (cold start) ...", "MINRES solve in progress (warm start) ..."]
+
+
 def test_block_cg_failures_fall_back_to_minres(monkeypatch):
     import fvgp.gp_lin_alg as la
     A = sparse.csr_matrix(_spd(10, seed=6))

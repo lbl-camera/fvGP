@@ -30,6 +30,12 @@ Dependencies
 New features
 ~~~~~~~~~~~~
 
+* The CG and MINRES debug lines say whether the solve started from a guess:
+  ``"CG solve in progress (warm start) ..."`` or ``"(cold start)"``, also for the MINRES
+  fallbacks. With ``sparse_krylov_warm_start=True`` the log thus shows which training
+  solves actually used the previous solution; one dropped because K+V drifted too far is
+  preceded by ``"Warm start dropped: ..."``.
+
 * **Preconditioners are built lazily during training.** Rebuilt for every likelihood
   evaluation, even a good preconditioner leaves CG slower than plain MINRES -- the build
   only pays off once it is reused. In ``sparseCGpre``/``sparseMINRESpre`` mode, training
