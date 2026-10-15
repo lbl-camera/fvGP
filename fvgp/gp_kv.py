@@ -138,6 +138,8 @@ class GPkv:
         self.Preconditioner_KV_shape = None
         self.Preconditioner_reuse_counter = 0
         self.Last_preconditioner_error = None
+        # (fingerprint, settings, shape) of the K+V a build last failed for; see _build_preconditioner
+        self.Preconditioner_failure = None
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
                               "sparseLU", "sparseMINRESpre", "sparseCGpre",
                               "sparseMINRESpre_<type>", "sparseCGpre_<type>",
@@ -432,10 +434,33 @@ class GPkv:
                      self._preconditioner_type_name(), self.Preconditioner_reuse_counter)
         return self.Preconditioner_operator
 
+    def _build_failed_recently(self, KV):
+        """Whether a build already failed for this K+V, or one within the drift threshold of it.
+
+        A failed build is remembered like a successful one is cached: for the same settings
+        and shape, a matrix that has barely moved will break the factorization the same way,
+        and an incomplete factorization of a large K+V can take minutes to fail.
+        """
+        failure = self.Preconditioner_failure
+        return (failure is not None and failure[1] == self._preconditioner_signature()
+                and failure[2] == KV.shape
+                and self._fingerprint_drift(failure[0], self.matrix_fingerprint(KV)) <= self._max_matrix_drift())
+
     def _build_preconditioner(self, KV):
+        if self._build_failed_recently(KV):
+            # phrased like the construction, reuse and skip lines so all of them grep together
+            logger.debug("{} preconditioner skipped (a build failed for this K+V, or one within "
+                         "the drift threshold), solving with MINRES.", self._preconditioner_type_name())
+            error = self.Last_preconditioner_error
+            self._reset_sparse_preconditioner()
+            self.Last_preconditioner_error = error
+            return None
         factor, operator = self._build_sparse_preconditioner_or_none(KV)
         if operator is None:
+            error = self.Last_preconditioner_error
             self._reset_sparse_preconditioner()
+            self.Last_preconditioner_error = error   # the reset would otherwise erase why it failed
+            self.Preconditioner_failure = (self.matrix_fingerprint(KV), self._preconditioner_signature(), KV.shape)
             return None
         self.Preconditioner_factor = factor
         self.Preconditioner_operator = operator
@@ -444,6 +469,7 @@ class GPkv:
         self.Preconditioner_fingerprint = self.matrix_fingerprint(KV)
         self.Preconditioner_reuse_counter = 0
         self.Last_preconditioner_error = None
+        self.Preconditioner_failure = None
         return operator
 
     ##################################################################
@@ -798,6 +824,7 @@ class GPkv:
             Preconditioner_KV_shape=self.Preconditioner_KV_shape,
             Preconditioner_reuse_counter=self.Preconditioner_reuse_counter,
             Last_preconditioner_error=self.Last_preconditioner_error,
+            Preconditioner_failure=self.Preconditioner_failure,
             custom_obj=self.custom_obj,
             allowed_modes=self.allowed_modes,
             last_logdet_variance=self.last_logdet_variance,
@@ -819,6 +846,7 @@ class GPkv:
             ("Preconditioner_KV_shape", None),
             ("Preconditioner_reuse_counter", 0),
             ("Last_preconditioner_error", None),
+            ("Preconditioner_failure", None),
             ("Preconditioner_fingerprint", None),
             ("Warm_start_fingerprint", None),
             ("Settled_steps", 0),

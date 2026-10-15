@@ -246,7 +246,9 @@ class GP:
           hyperparameters settle, and whenever building fails, a training evaluation is
           solved with unpreconditioned MINRES instead. A preconditioner containing NaN or
           inf -- an incomplete factorization can break down without raising -- counts as
-          failed, and any CG solve that fails is redone with unpreconditioned MINRES.
+          failed, and any CG solve that fails is redone with unpreconditioned MINRES. A
+          failed build is not retried while K+V stays within
+          ``sparse_preconditioner_max_matrix_drift`` of the matrix it failed for.
         * ``"sparseCGpre_<type>"`` / ``"sparseMINRESpre_<type>"`` — shortcut that sets
           ``args["sparse_preconditioner_type"]`` to ``<type>`` (e.g. ``"sparseCGpre_amg"``).
 

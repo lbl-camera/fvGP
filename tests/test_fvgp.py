@@ -4382,12 +4382,13 @@ def test_kv_unpickles_older_states_without_preconditioner_slots():
     for attr in ("Preconditioner_factor", "Preconditioner_operator", "Preconditioner_signature",
                  "Preconditioner_KV_shape", "Preconditioner_reuse_counter",
                  "Last_preconditioner_error", "Preconditioner_fingerprint",
-                 "Warm_start_fingerprint", "Settled_steps"):
+                 "Warm_start_fingerprint", "Settled_steps", "Preconditioner_failure"):
         state.pop(attr, None)
     gp.kv.__setstate__(state)
     assert gp.kv.Preconditioner_operator is None
     assert gp.kv.Preconditioner_reuse_counter == 0
     assert gp.kv.Settled_steps == 0
+    assert gp.kv.Preconditioner_failure is None
 
 
 def test_matrix_fingerprint_and_drift_edge_cases():
@@ -5347,6 +5348,59 @@ def test_a_broken_preconditioner_is_never_used(monkeypatch):
         y = gp.kv.solve(gp.y_data - gp.prior.m[:, None])
     assert "minres" in calls and np.all(np.isfinite(y))
     assert any("unpreconditioned MINRES" in str(w.message) and "non-finite" in str(w.message) for w in caught)
+
+
+def test_a_failed_preconditioner_build_is_not_retried_for_the_same_matrix(monkeypatch):
+    """A failed build is remembered like a successful one is cached.
+
+    On Perlmutter, constructing a sparseCGpre_ichol0 GP built IC(0) in set_KV, took three
+    minutes to find it broken, and then built it again for the identical matrix in the
+    solve() that follows. The failure is now remembered while K+V stays within the drift
+    threshold of the matrix it happened for, with the same settings.
+    """
+    import fvgp.gp_kv as kv_module
+    attempts = []
+    real_build = kv_module.calculate_sparse_preconditioner
+    fail = {"on": True}
+
+    def flaky_build(KV, args=None):
+        attempts.append(1)
+        if fail["on"]:
+            raise np.linalg.LinAlgError("ichol0 preconditioner contains non-finite values")
+        return real_build(KV, args=args)
+    monkeypatch.setattr(kv_module, "calculate_sparse_preconditioner", flaky_build)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        gp, hps = _make_test_gp("sparseCGpre")
+        # construction: one attempt (set_KV), not a second one in the solve that follows
+        assert len(attempts) == 1 and gp.kv.Preconditioner_failure is not None
+        assert "non-finite" in gp.kv.Last_preconditioner_error    # the reason survives the reset
+        assert np.all(np.isfinite(gp.kv.KVinvY))                  # solved with MINRES
+        # further solves and a nearly identical matrix: still no new attempt
+        gp.kv.solve(gp.y_data)
+        gp.set_hyperparameters(hps * 1.0001)
+        assert len(attempts) == 1 and "non-finite" in gp.kv.Last_preconditioner_error
+        # a matrix that has really moved gets a new attempt
+        gp.set_hyperparameters(hps * 3.0)
+        assert len(attempts) == 2
+        # so do changed settings; a successful build clears the memory
+        fail["on"] = False
+        gp.args["sparse_preconditioner_drop_tol"] = 1e-6
+        gp.set_hyperparameters(hps * 3.0)
+        assert len(attempts) == 3 and gp.kv.Preconditioner_failure is None
+        assert gp.kv.Preconditioner_operator is not None
+
+        # training: once the chain settles, a failed build is not retried on every evaluation
+        fail["on"] = True
+        attempts.clear()
+        gp.kv._reset_sparse_preconditioner()
+        for scale in (5.0, 5.001, 5.002, 5.003, 5.004, 5.005, 5.006):
+            h = hps * scale
+            K = gp.prior.compute_prior_covariance_matrix(gp.x_data, h)
+            gp.kv.compute_new_KVinvY(gp.kv.addKV(K, gp.likelihood.calculate_V(gp.x_data, h)),
+                                     gp.prior.compute_mean(gp.x_data, h))
+        assert len(attempts) == 1
 
 
 def test_cg_falls_back_to_minres_and_is_capped(monkeypatch):

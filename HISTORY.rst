@@ -392,6 +392,15 @@ New features
 Bug fixes
 ~~~~~~~~~
 
+* **A failed preconditioner build was retried for the same matrix.** Constructing a
+  ``sparseCGpre_ichol0`` gp2Scale GP built IC(0) in ``set_KV``, spent three minutes finding
+  it broken, and then built it again for the identical K+V in the solve that follows; in
+  training, every evaluation after the chain settled would have retried it too. A failed
+  build is now remembered like a successful one is cached: while K+V stays within
+  ``sparse_preconditioner_max_matrix_drift`` of the matrix it failed for, with the same
+  settings, no build is attempted and the solve uses MINRES. The reason for the failure is
+  also kept in ``Last_preconditioner_error`` now, which the cleanup used to erase.
+
 * **A broken preconditioner made CG run on NaN, apparently forever.** An incomplete
   factorization can break down without raising: ``ilupp``'s IC(0) on a smooth covariance
   matrix (here ~470 strongly correlated neighbors per row) in random point order returns a
