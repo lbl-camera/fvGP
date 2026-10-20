@@ -119,10 +119,10 @@ class GPMarginalLikelihood:
         if self._warm_start_enabled():
             self._warm_start_KVinvY = np.asarray(KVinvY, copy=True)
 
-    def compute_new_KVinvY(self, KV, m):
+    def compute_new_KVinvY(self, KV, m, K=None, V=None):
         y_mean_shape = (self.y_data.shape[0], self.y_data.shape[1])
         x0 = self._iterative_initial_guess(y_mean_shape)
-        KVinvY = self.kv.compute_new_KVinvY(KV, m, x0=x0)
+        KVinvY = self.kv.compute_new_KVinvY(KV, m, x0=x0, K=K, V=V)
         self._update_warm_start(KVinvY)
         return KVinvY
 
@@ -239,19 +239,27 @@ class GPMarginalLikelihood:
         """
         if self.gp2Scale: raise Exception("Can't compute neg_log_likelihood_gradient for gp2Scale")
         dK_dH = None
+        # "low_rank": every solve below goes through the Woodbury factorization, O(N^2 r) per
+        # hyperparameter instead of the O(N^3) dense solve, and K + V is never formed
+        low_rank = self.kv.mode == "low_rank"
 
         if hyperparameters is None:
             KVinvY = self.kv.KVinvY
             K = self.K
             V = self.V
-            KV = self.addKV(K, V)
+            if low_rank: factor = self.kv.low_rank_factor
+            else: KV = self.addKV(K, V)
             hyperparameters = self.hyperparameters
         else:
             K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
             V = self.calculate_V(self.x_data, hyperparameters)
             m = self.compute_mean(self.x_data, hyperparameters)
-            KV = self.addKV(K, V)
-            KVinvY = self.compute_new_KVinvY(KV, m)
+            if low_rank:
+                factor = self.kv.low_rank_factorization(K, V)
+                KVinvY = factor.solve(self.y_data - m[:, None]).reshape(self.y_data.shape)
+            else:
+                KV = self.addKV(K, V)
+                KVinvY = self.compute_new_KVinvY(KV, m)
 
         b = KVinvY[:, component]
         a = None
@@ -270,8 +278,11 @@ class GPMarginalLikelihood:
                     "The gradient evaluation dK/dh + dNoise/dh was not successful. "
                     "That normally means the combination of gradient_per_direction and definition "
                     "of the gradient function is wrong.") from e
-            KV = np.array([KV, ] * len(hyperparameters))
-            a = solve(KV, dK_dH, compute_device=self.compute_device)
+            if low_rank:
+                a = np.array([factor.solve(dK_dH[i]) for i in range(len(hyperparameters))])
+            else:
+                KV = np.array([KV, ] * len(hyperparameters))
+                a = solve(KV, dK_dH, compute_device=self.compute_device)
         bbT = np.outer(b, b.T)
         dL_dH = np.zeros((len(hyperparameters)))
         dL_dHm = np.zeros((len(hyperparameters)))
@@ -297,7 +308,7 @@ class GPMarginalLikelihood:
                         "The gradient evaluation dK/dh + dNoise/dh was not successful. "
                         "That normally means the combination of gradient_per_direction and definition of "
                         "the gradient function is wrong.") from e
-                matr = solve(KV, dK_dH, compute_device=self.compute_device)
+                matr = factor.solve(dK_dH) if low_rank else solve(KV, dK_dH, compute_device=self.compute_device)
             if dL_dHm[i] == 0.0:
                 if self.ram_economy is False:
                     mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])

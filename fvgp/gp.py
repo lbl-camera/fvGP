@@ -130,9 +130,11 @@ class GP:
         or a finite-difference approximation
         is used if ``prior_mean_function`` is provided.
     noise_function : Callable, optional
-        The noise function is a callable f(x,hyperparameters, [args]) that returns a
-        vector (1d np.ndarray) of len(x), a matrix of shape (length(x),length(x)) or a sparse matrix
-        of the same shape.
+        The noise function is a callable f(x,hyperparameters, [args]) that returns the noise
+        variances as a vector (1d np.ndarray) of len(x): fvGP models noise as diagonal.
+        Correlated noise belongs in ``kernel_function``. Returning a matrix of shape
+        (len(x), len(x)), dense or sparse, still works but is deprecated (FutureWarning), and
+        ``linalg_mode="low_rank_<r>"`` rejects it.
         The third argument ``args`` is optional.
         The input ``x`` is a numpy array of shape (N x D). The hyperparameter array is the same
         that is communicated to mean and kernel functions.
@@ -144,8 +146,10 @@ class GP:
         at an input position with respect to the hyperparameters.
         It accepts as input an array of positions (of size N x D) and
         hyperparameters (a 1d array of length D+1 for the default kernel).
-        The return value is a 2d np.ndarray of
-        shape (len(hyperparameters) x N) or a 3d np.ndarray of shape (len(hyperparameters) x N x N).
+        The return value is a 2d np.ndarray of shape (len(hyperparameters) x N), the derivatives
+        of the noise variances; with ``gradient_per_direction=True`` a 1d array of length N per
+        direction. The matrix forms (len(hyperparameters) x N x N), or N x N per direction, are
+        deprecated along with matrix-valued noise.
         If None is provided, either
         zeros are returned since the default noise function does not depend on
         hyperparameters, or, if ``noise_function`` is provided but no noise function gradient,
@@ -234,6 +238,16 @@ class GP:
         * ``"sparseCG"`` — sparse conjugate-gradient iterative solver.
         * ``"sparseMINRES"`` — sparse MINRES iterative solver.
         * ``"sparseSolve"`` — direct sparse solve via scipy.
+        * ``"low_rank_<r>"`` — for a kernel of known rank r (finite-feature kernels: linear,
+          polynomial, truncated bases). K is computed as usual (dense, or sparse under gp2Scale)
+          and factored by a rank-r pivoted Cholesky, K = L L^T, at O(N r^2). Solves then use
+          the Woodbury identity and the log-determinant the matrix determinant lemma: both
+          exact and deterministic, so under gp2Scale this replaces the stochastic
+          log-determinant. The likelihood gradient's solves cost O(N^2 r) instead of O(N^3).
+          Requires vector (diagonal), strictly positive noise. If K has a lower rank, the factor
+          stops there and stays exact; if a higher one, a warning reports the trace left out,
+          and the mode approximates K by its rank-r factor. Equivalent to ``"low_rank"`` with
+          ``args["low_rank_rank"] = r``.
         * ``"sparseCGpre"`` — preconditioned conjugate-gradient. The preconditioner type
           is selected by ``args["sparse_preconditioner_type"]`` (default ``"ilu"``;
           also compiled incomplete Cholesky ``"ichol"``/``"ic"``/``"incomplete_cholesky"``,
@@ -328,6 +342,12 @@ class GP:
 
         - "sparse_cg_tol" : float; default = 1e-5
         - "sparse_minres_tol" : float; default = 1e-5
+        - "low_rank_rank" : int — the rank r for ``linalg_mode="low_rank"`` (set by
+          ``"low_rank_<r>"``)
+        - "low_rank_residual_tol" : float; default = 1e-8 — warn when the rank-r factor
+          leaves out more than this fraction of trace(K)
+        - "low_rank_tol" : float; default = 1e-12 — the factorization stops early, exact,
+          once the remaining diagonal is below this fraction of max(diag(K))
         - "sparse_cg_maxiter" : int; default = 5000 for plain CG, 500 with a
           preconditioner (a working one converges in tens of iterations); None for
           scipy's default (10 N). A CG solve that does not converge within it, or produces

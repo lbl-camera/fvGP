@@ -30,6 +30,26 @@ Dependencies
 New features
 ~~~~~~~~~~~~
 
+* **``linalg_mode="low_rank_<r>"``** for kernels of known rank r (finite-feature kernels:
+  linear, polynomial, truncated bases). K is computed as before -- dense, or sparse under
+  gp2Scale -- and factored by a rank-r pivoted Cholesky, K = L Lᵀ, from its diagonal and r
+  columns at O(N r²). Solves use the Woodbury identity, the log-determinant the matrix
+  determinant lemma: both exact and deterministic, so under gp2Scale the stochastic
+  log-determinant is replaced, and its noise with it. The likelihood gradient's solves cost
+  O(N² r) instead of O(N³) per hyperparameter; K + V is never formed. Requires vector,
+  strictly positive noise. A K of lower rank is factored exactly at that rank; a K of
+  higher rank triggers a warning with the trace left out, and the mode then approximates K
+  by its rank-r factor. New ``args``: ``low_rank_rank``, ``low_rank_residual_tol``,
+  ``low_rank_tol``.
+
+Deprecations
+~~~~~~~~~~~~
+
+* **Matrix-valued noise.** A ``noise_function`` returning an N×N matrix (dense or sparse),
+  or a ``noise_function_grad`` returning the matrix forms, now issues a ``FutureWarning``:
+  fvGP models noise as diagonal, and correlated noise belongs in the kernel. It still works
+  everywhere except ``linalg_mode="low_rank_<r>"``, which raises.
+
 * The CG and MINRES debug lines say whether the solve started from a guess:
   ``"CG solve in progress (warm start) ..."`` or ``"(cold start)"``, also for the MINRES
   fallbacks. With ``sparse_krylov_warm_start=True`` the log thus shows which training

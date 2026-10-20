@@ -482,6 +482,20 @@ def resolve_gp2scale_linalg_mode(mode, args=None):
         return mode, args
 
     mode_lower = mode.lower()
+    if mode_lower == "low_rank" or mode_lower.startswith("low_rank_"):
+        suffix = mode_lower[len("low_rank_"):]
+        if suffix:
+            if not suffix.isdigit() or int(suffix) < 1:
+                raise ValueError(f"linalg_mode {mode!r}: the rank after 'low_rank_' must be a positive integer.")
+            explicit = args.get("low_rank_rank")
+            if explicit is not None and int(explicit) != int(suffix):
+                raise ValueError(f"Conflicting low-rank specifications: mode {mode!r} implies rank "
+                                 f"{int(suffix)}, but args['low_rank_rank'] is {explicit}.")
+            args["low_rank_rank"] = int(suffix)
+        if args.get("low_rank_rank") is None:
+            raise ValueError("linalg_mode 'low_rank' needs the rank: use 'low_rank_<r>' or "
+                             "args['low_rank_rank'].")
+        return "low_rank", args
     alias_prefixes = {
         "sparsecgpre_": "sparseCGpre",
         "sparseminrespre_": "sparseMINRESpre",
@@ -503,6 +517,115 @@ def resolve_gp2scale_linalg_mode(mode, args=None):
         return canonical_mode, args
 
     return mode, args
+
+
+class LowRankPlusDiagonal:
+    """K + diag(d) with K = L L^T of rank r, solved and log-determined in O(N r^2).
+
+    With D = diag(d) and C = I_r + L^T D^-1 L (r x r, eigenvalues >= 1):
+
+    * solve: (K + D)^-1 b = D^-1 b - D^-1 L C^-1 L^T D^-1 b   (Woodbury)
+    * log|K + D| = sum(log d) + log|C|                        (matrix determinant lemma)
+
+    Both are exact for K = L L^T; no eigenvalues and no stochastic estimate are needed.
+    """
+
+    def __init__(self, L, d, relative_residual=0.0, chunk=100000):
+        self.L = np.asarray(L, dtype=float)
+        self.d = np.asarray(d, dtype=float)
+        self.relative_residual = float(relative_residual)
+        # C accumulated in row chunks, so no second N x r array (D^-1 L) is ever formed --
+        # at N = 1e6, r = 1000 that is 8 GB; solve() applies D^-1 on the fly instead
+        C = np.eye(self.L.shape[1])
+        for start in range(0, self.L.shape[0], chunk):
+            block = self.L[start:start + chunk]
+            C += block.T @ (block / self.d[start:start + chunk, None])
+        self._C_factor = cho_factor(C, lower=True)
+
+    @property
+    def rank(self):
+        return self.L.shape[1]
+
+    def solve(self, b):
+        if sparse.issparse(b): b = b.toarray()
+        b = np.asarray(b, dtype=float)
+        B = b.reshape(len(b), -1)
+        X = B / self.d[:, None]
+        X = X - (self.L @ cho_solve(self._C_factor, self.L.T @ X)) / self.d[:, None]
+        return X.reshape(b.shape)
+
+    def logdet(self):
+        return float(np.sum(np.log(self.d)) + 2.0 * np.sum(np.log(np.diag(self._C_factor[0]))))
+
+
+def _pivoted_cholesky(K, rank, tol):
+    """At most ``rank`` steps of a diagonally pivoted Cholesky factorization of the PSD ``K``.
+
+    Needs only K's diagonal and one column per step, dense or sparse: O(N rank^2). Stops early
+    once the largest remaining diagonal entry is below ``tol * max(diag(K))`` -- K then has a
+    lower rank and the factor is exact. Returns ``(L, residual_trace)``.
+    """
+    n = K.shape[0]
+    is_sparse = sparse.issparse(K)
+    # K is symmetric, so column j is row j: rows of a CSR matrix -- gp2Scale's format -- need
+    # no conversion (tocsc() copied every nonzero), and rows of a dense array are contiguous
+    Kr = K.tocsr() if is_sparse else np.asarray(K)
+    residual = np.array(K.diagonal(), dtype=float)
+    threshold = tol * max(float(residual.max()), 0.0) if n else 0.0
+    L = np.zeros((n, rank))
+    k = 0
+    while k < rank:
+        j = int(np.argmax(residual))
+        if residual[j] <= threshold or residual[j] <= 0.0:
+            break
+        if is_sparse:
+            column = np.zeros(n)
+            lo, hi = Kr.indptr[j], Kr.indptr[j + 1]
+            column[Kr.indices[lo:hi]] = Kr.data[lo:hi]
+        else:
+            column = np.asarray(Kr[j], dtype=float)
+        L[:, k] = (column - L[:, :k] @ L[j, :k]) / np.sqrt(residual[j])
+        residual = np.maximum(residual - L[:, k] ** 2, 0.0)
+        residual[j] = 0.0
+        k += 1
+    return L[:, :k], float(residual.sum())
+
+
+def calculate_low_rank_factorization(K, V, rank, args=None):
+    """Factor K + V for ``linalg_mode="low_rank_<r>"``: a rank-``rank`` pivoted Cholesky of K.
+
+    ``V`` must be the noise variances as a vector, all positive -- the Woodbury identity needs
+    V^-1, which for a full noise matrix would cost what this mode avoids. If K turns out to have
+    a lower rank, the factor is exact with that lower rank. If it has a higher one, the trace
+    left out after ``rank`` steps measures it: above ``args["low_rank_residual_tol"]`` (default
+    1e-8) times trace(K) a warning says the result is then a rank-``rank`` (Nystrom-type)
+    approximation of K.
+    """
+    args = _normalize_args(args)
+    st = time.time()
+    if sparse.issparse(V) or np.ndim(V) != 1:
+        raise ValueError(
+            "linalg_mode 'low_rank' needs diagonal noise: noise variances (or a noise function "
+            "returning them) as a vector. Correlated noise belongs in the kernel function.")
+    d = np.asarray(V, dtype=float)
+    if not np.all(np.isfinite(d)) or np.any(d <= 0.0):
+        raise ValueError("linalg_mode 'low_rank' needs strictly positive, finite noise variances.")
+    rank = max(1, min(int(rank), K.shape[0]))
+    L, residual = _pivoted_cholesky(K, rank, tol=float(args.get("low_rank_tol", 1e-12)))
+    trace = float(np.sum(K.diagonal()))
+    relative_residual = residual / trace if trace > 0.0 else 0.0
+    if L.shape[1] < rank:
+        logger.debug("low-rank factorization: K has rank {} < {}; the factor is exact.", L.shape[1], rank)
+    if relative_residual > float(args.get("low_rank_residual_tol", 1e-8)):
+        warnings.warn(
+            f"K appears to have a rank larger than {rank}: the rank-{rank} pivoted Cholesky factor "
+            f"leaves out {relative_residual:.2e} of trace(K). linalg_mode 'low_rank' then "
+            f"approximates K by that factor (a Nystrom-type approximation); raise the rank for an "
+            f"exact result.", stacklevel=2)
+    factor = LowRankPlusDiagonal(L, d, relative_residual)
+    logger.debug("low-rank factorization (rank {}) compute time: {} seconds. (n = {})",
+                 factor.rank, time.time() - st, K.shape[0])
+    return factor
 
 
 def _as_symmetric_csr(KV):

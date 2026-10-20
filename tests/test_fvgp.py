@@ -636,6 +636,7 @@ def test_gp2Scale(client):
         ("Inv",             False),
         ("sparseMINRESpre", True),
         ("sparseSolve",     True),
+        ("low_rank_250",    True),   # rank >= N: an exact factorization of the sparse K
     ]
     for mode, gp2s in modes:
         my_gp2S = GP(x_data, y_data, init_hps, gp2Scale=gp2s, gp2Scale_batch_size=100,
@@ -4937,6 +4938,157 @@ def test_default_trainer_is_mcmc_where_local_cannot_run(monkeypatch):
         gp.train(hyperparameter_bounds=bounds)
     assert seen == ["local", "mcmc", "mcmc"]
     assert not any("Method switched" in str(w.message) for w in caught)
+
+
+def _rank5_kernel(x1, x2, h):
+    """A kernel of exact rank 5: polynomial features of degree < 5 in 1-D (module level, so a
+    GP using it can be pickled)."""
+    f1 = np.column_stack([(h[1] * x1[:, 0]) ** p for p in range(5)])
+    f2 = np.column_stack([(h[1] * x2[:, 0]) ** p for p in range(5)])
+    return h[0] * f1 @ f2.T
+
+
+def _rank_gp(mode, n=200, **kwargs):
+    rng = np.random.default_rng(0)
+    x = rng.random((n, 1))
+    y = np.sin(4 * x[:, 0]) + 0.05 * rng.standard_normal(n)
+    kwargs.setdefault("noise_variances", rng.uniform(0.01, 0.03, n))
+    return GP(x, y, np.array([1.3, 0.9]), kernel_function=_rank5_kernel, linalg_mode=mode, **kwargs)
+
+
+def test_low_rank_mode_matches_cholesky_for_an_exact_rank_kernel():
+    """Woodbury solves and the determinant lemma reproduce the dense results exactly."""
+    import pickle
+    hps = np.array([1.3, 0.9])
+    xp = np.random.default_rng(1).random((30, 1))
+    bounds = np.array([[0.1, 5.], [0.1, 3.]])
+    for gradient_per_direction in (False, True):
+        chol = _rank_gp("Chol", gradient_per_direction=gradient_per_direction)
+        low = _rank_gp("low_rank_5", gradient_per_direction=gradient_per_direction)
+        assert low.kv.mode == "low_rank" and low.args["low_rank_rank"] == 5 and low.kv.low_rank_factor.rank == 5
+        pairs = [
+            (chol.log_likelihood(), low.log_likelihood()),
+            (chol.kv.KVinvY, low.kv.KVinvY),
+            (chol.log_likelihood(hyperparameters=hps * 0.8), low.log_likelihood(hyperparameters=hps * 0.8)),
+            (chol.marginal_likelihood.neg_log_likelihood_gradient(),
+             low.marginal_likelihood.neg_log_likelihood_gradient()),
+            (chol.marginal_likelihood.neg_log_likelihood_gradient(hyperparameters=hps * 1.1),
+             low.marginal_likelihood.neg_log_likelihood_gradient(hyperparameters=hps * 1.1)),
+            (chol.posterior_mean(xp)["m(x)"], low.posterior_mean(xp)["m(x)"]),
+            (chol.posterior_mean(xp, hyperparameters=hps * 1.2)["m(x)"],
+             low.posterior_mean(xp, hyperparameters=hps * 1.2)["m(x)"]),
+            (chol.posterior_mean_grad(xp, hyperparameters=hps * 1.2, direction=0)["dm/dx"],
+             low.posterior_mean_grad(xp, hyperparameters=hps * 1.2, direction=0)["dm/dx"]),
+            (chol.posterior_covariance(xp)["S"], low.posterior_covariance(xp)["S"]),
+            (chol.posterior_covariance(xp, variance_only=True)["v(x)"],
+             low.posterior_covariance(xp, variance_only=True)["v(x)"]),
+        ]
+        for a, b in pairs:
+            assert np.allclose(a, b, rtol=1e-7, atol=1e-8)
+    # training reaches the same optimum, an append refactors, a pickle round-trip survives
+    # (the optimum is flat, so L-BFGS-B may stop at slightly different points: compare values)
+    chol.train(hyperparameter_bounds=bounds, n_restarts=1)
+    low.train(hyperparameter_bounds=bounds, n_restarts=1)
+    assert abs(chol.log_likelihood() - low.log_likelihood()) < 1e-4
+    low.set_hyperparameters(chol.hyperparameters)
+    x_new = np.array([[0.25], [0.75]])
+    for gp in (chol, low):
+        gp.update_gp_data(x_new, np.sin(4 * x_new[:, 0]), noise_variances_new=np.array([0.02, 0.02]))
+    assert np.isclose(chol.log_likelihood(), low.log_likelihood(), rtol=1e-9)
+    restored = pickle.loads(pickle.dumps(low))
+    assert np.isclose(restored.log_likelihood(), low.log_likelihood())
+
+
+def test_low_rank_factorization_of_sparse_and_misjudged_ranks():
+    from fvgp.gp_lin_alg import calculate_low_rank_factorization
+    rng = np.random.default_rng(0)
+    Phi = rng.standard_normal((150, 6))
+    K = Phi @ Phi.T
+    d = rng.uniform(0.1, 0.5, 150)
+    exact = np.linalg.slogdet(K + np.diag(d))[1]
+    b = rng.standard_normal((150, 2))
+    # sparse K (the gp2Scale format), and a rank given too large: stops at 6, still exact
+    factor = calculate_low_rank_factorization(sparse.csr_matrix(K), d, 10)
+    assert factor.rank == 6 and factor.relative_residual < 1e-12
+    # scipy sparse arrays too -- gp2Scale's append assembles one -- which have no 1-d slices
+    assert np.isclose(calculate_low_rank_factorization(sparse.csc_array(K), d, 10).logdet(), exact, rtol=1e-12)
+    assert np.isclose(factor.logdet(), exact, rtol=1e-12)
+    assert np.allclose(factor.solve(b), np.linalg.solve(K + np.diag(d), b))
+    assert np.allclose(factor.solve(sparse.csr_matrix(b)), np.linalg.solve(K + np.diag(d), b))
+    # a rank given too small: a warning names the trace left out, the result approximates
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        approx = calculate_low_rank_factorization(K, d, 3)
+    assert approx.rank == 3 and approx.relative_residual > 1e-3
+    assert any("rank larger than 3" in str(w.message) for w in caught)
+    # a zero matrix has rank 0: the factor is just the noise
+    zero = calculate_low_rank_factorization(np.zeros((4, 4)), np.ones(4), 2)
+    assert zero.rank == 0 and np.isclose(zero.logdet(), 0.0)
+    # the noise must be a positive vector
+    for bad in (np.diag(d), sparse.diags(d), -d, np.full(150, np.nan)):
+        try:
+            calculate_low_rank_factorization(K, bad, 6)
+        except ValueError as e:
+            assert "noise" in str(e)
+        else:
+            raise AssertionError("low_rank needs strictly positive vector noise")
+
+
+def test_low_rank_mode_parsing_and_requirements():
+    from fvgp.gp_lin_alg import resolve_gp2scale_linalg_mode as resolve
+    assert resolve("low_rank_7") == ("low_rank", {"low_rank_rank": 7})
+    assert resolve("low_rank", {"low_rank_rank": 4}) == ("low_rank", {"low_rank_rank": 4})
+    assert resolve("LOW_RANK_3", {"low_rank_rank": 3})[1]["low_rank_rank"] == 3
+    for mode, args, message in (("low_rank_7", {"low_rank_rank": 5}, "Conflicting"),
+                                ("low_rank", {}, "needs the rank"),
+                                ("low_rank_x", {}, "positive integer"),
+                                ("low_rank_0", {}, "positive integer")):
+        try:
+            resolve(mode, args)
+        except ValueError as e:
+            assert message in str(e), (mode, str(e))
+        else:
+            raise AssertionError(f"{mode} with {args} must be rejected")
+    # compute_new_KVinvY in low_rank mode needs K and V, not their sum
+    gp = _rank_gp("low_rank_5")
+    try:
+        gp.kv.compute_new_KVinvY(gp.kv.addKV(gp.K, gp.V), gp.prior.m)
+    except ValueError as e:
+        assert "separately" in str(e)
+    else:
+        raise AssertionError("low_rank needs K and V apart")
+
+
+def test_matrix_noise_is_deprecated_and_rejected_by_low_rank():
+    """Noise is diagonal in fvGP; a noise matrix warns everywhere and fails in low_rank."""
+    def matrix_noise(x, h):
+        return np.eye(len(x)) * 0.02
+
+    def matrix_noise_grad(x, h):
+        return np.zeros((len(h), len(x), len(x)))
+
+    def matrix_noise_grad_per_direction(x, h, direction):
+        return np.zeros((len(x), len(x)))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp = _rank_gp("Chol", noise_variances=None, noise_function=matrix_noise,
+                      noise_function_grad=matrix_noise_grad)
+        gp.marginal_likelihood.neg_log_likelihood_gradient()
+        gp = _rank_gp("Chol", noise_variances=None, noise_function=matrix_noise,
+                      noise_function_grad=matrix_noise_grad_per_direction, gradient_per_direction=True)
+        gp.marginal_likelihood.neg_log_likelihood_gradient()
+    sources = {"noise_function returning", "noise_function_grad returning"}
+    seen = {src for src in sources for w in caught
+            if issubclass(w.category, FutureWarning) and src in str(w.message)}
+    assert seen == sources
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _rank_gp("low_rank_5", noise_variances=None, noise_function=matrix_noise)
+    except ValueError as e:
+        assert "diagonal noise" in str(e)
+    else:
+        raise AssertionError("low_rank must reject matrix noise")
 
 
 def test_mcmc_default_break_condition_needs_a_long_chain():

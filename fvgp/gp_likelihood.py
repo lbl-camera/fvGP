@@ -2,6 +2,16 @@ import numpy as np
 import warnings
 from loguru import logger
 import inspect
+from scipy.sparse import issparse
+
+
+def _warn_matrix_noise(source):
+    # FutureWarning rather than DeprecationWarning: the latter is hidden outside __main__,
+    # and the users this concerns call fvGP from scripts and notebooks
+    warnings.warn(
+        f"A {source} returning a noise matrix is deprecated: return the noise variances as a "
+        f"vector (one per data point). Correlated noise belongs in the kernel function. "
+        f"linalg_mode 'low_rank' already requires vector noise.", FutureWarning, stacklevel=3)
 
 
 class GPlikelihood:
@@ -91,12 +101,18 @@ class GPlikelihood:
         if self.v_n_params == 2: noise = self.noise_function(x_data, hyperparameters)
         elif self.v_n_params == 3: noise = self.noise_function(x_data, hyperparameters, self.args)
         else: raise Exception("No valid noise function signature.")
+        if np.ndim(noise) == 2 or issparse(noise): _warn_matrix_noise("noise_function")
         return noise
 
     def calculate_V_grad(self, x, hyperparameters, direction=None):
         logger.debug("calculating noise gradient")
-        if self.ram_economy is True: return self.noise_function_grad(x, hyperparameters, direction)
-        else: return self.noise_function_grad(x, hyperparameters)
+        if self.ram_economy is True:
+            grad = self.noise_function_grad(x, hyperparameters, direction)
+            if np.ndim(grad) == 2: _warn_matrix_noise("noise_function_grad")
+        else:
+            grad = self.noise_function_grad(x, hyperparameters)
+            if np.ndim(grad) == 3: _warn_matrix_noise("noise_function_grad")
+        return grad
 
     ##################################################################################
     def _default_noise_function(self, x, hyperparameters):

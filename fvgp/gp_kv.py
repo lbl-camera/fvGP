@@ -140,8 +140,10 @@ class GPkv:
         self.Last_preconditioner_error = None
         # (fingerprint, settings, shape) of the K+V a build last failed for; see _build_preconditioner
         self.Preconditioner_failure = None
+        # linalg_mode "low_rank": the LowRankPlusDiagonal factorization of the current K + V
+        self.low_rank_factor = None
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
-                              "sparseLU", "sparseMINRESpre", "sparseCGpre",
+                              "sparseLU", "sparseMINRESpre", "sparseCGpre", "low_rank_<r>",
                               "sparseMINRESpre_<type>", "sparseCGpre_<type>",
                               "sparseSolve", "a set of callables"]
         K, V, m = self._get_KVm()
@@ -496,10 +498,15 @@ class GPkv:
                              hyperparameter changes or data overwrite.
         """
         K, V, m = self._get_KVm()
-        KV = self.addKV(K, V)
-        logger.debug("K+V computed")
-        if rank_n_update: self.update_KV(KV)
-        else: self.set_KV(KV)
+        if self.mode == "low_rank":
+            # factors K itself and keeps V as a vector, so K + V is never formed; an append
+            # refactors, at O(N r^2) as cheap as any update would be
+            self.low_rank_factor = self.low_rank_factorization(K, V)
+        else:
+            KV = self.addKV(K, V)
+            logger.debug("K+V computed")
+            if rank_n_update: self.update_KV(KV)
+            else: self.set_KV(KV)
         logger.debug("KV factorization set")
         logger.debug("Solve in progress")
         y_mean = self.y_data - m[:, None]
@@ -592,15 +599,24 @@ class GPkv:
         else:
             raise Exception(f"No Mode. Choose from: {self.allowed_modes}")
 
-    def compute_new_KVinvY(self, KV, m, x0=None):
+    def low_rank_factorization(self, K, V):
+        """The ``"low_rank"`` factorization of K + V; K and the noise vector V kept apart."""
+        return calculate_low_rank_factorization(K, V, self.args["low_rank_rank"], args=self.args)
+
+    def compute_new_KVinvY(self, KV, m, x0=None, K=None, V=None):
         """Recompute KVinvY for a given KV and m without updating state (used during training).
 
         ``x0`` (optional) is forwarded to iterative solvers as a warm-start; passing
         the previous iteration's KVinvY can substantially cut iteration counts when
-        successive hyperparameters are close.
+        successive hyperparameters are close. In ``"low_rank"`` mode pass ``K`` and the noise
+        vector ``V`` instead; ``KV`` may then be None.
         """
-        x0 = self._record_evaluation(KV, x0)
         y_mean = self.y_data - m[:, None]
+        if self.mode == "low_rank":
+            if K is None or V is None:
+                raise ValueError("linalg_mode 'low_rank' needs K and the noise vector V separately.")
+            return self.low_rank_factorization(K, V).solve(y_mean).reshape(y_mean.shape)
+        x0 = self._record_evaluation(KV, x0)
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
         else:
@@ -669,6 +685,10 @@ class GPkv:
 
         ``x0`` (optional) is forwarded to iterative solvers as a warm-start.
         """
+        if self.mode == "low_rank":   # exact and deterministic: Woodbury and the determinant lemma
+            factor = self.low_rank_factorization(K, V)
+            y_mean = self.y_data - m[:, None]
+            return factor.solve(y_mean).reshape(y_mean.shape), factor.logdet()
         KV = self.addKV(K, V)
         x0 = self._record_evaluation(KV, x0)
         y_mean = self.y_data - m[:, None]
@@ -755,6 +775,8 @@ class GPkv:
     def solve(self, b, x0=None):
         # x0 shape normalization (zero-pad / column-broadcast) is handled inside
         # the sparse iterative solvers in gp_lin_alg, so no shaping is needed here.
+        if self.mode == "low_rank":
+            return self.low_rank_factor.solve(b)
         if self.mode == "Chol":
             return calculate_Chol_solve(self.Chol_factor, b, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv":
@@ -789,6 +811,7 @@ class GPkv:
         """
         Compute log|KV| in the current mode without updating state. Used during training for the log-likelihood.
         """
+        if self.mode == "low_rank": return self.low_rank_factor.logdet()
         if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "sparseLU": return calculate_LU_logdet(self.LU_factor, args=self.args)
@@ -825,6 +848,7 @@ class GPkv:
             Preconditioner_reuse_counter=self.Preconditioner_reuse_counter,
             Last_preconditioner_error=self.Last_preconditioner_error,
             Preconditioner_failure=self.Preconditioner_failure,
+            low_rank_factor=self.low_rank_factor,
             custom_obj=self.custom_obj,
             allowed_modes=self.allowed_modes,
             last_logdet_variance=self.last_logdet_variance,
@@ -847,6 +871,7 @@ class GPkv:
             ("Preconditioner_reuse_counter", 0),
             ("Last_preconditioner_error", None),
             ("Preconditioner_failure", None),
+            ("low_rank_factor", None),
             ("Preconditioner_fingerprint", None),
             ("Warm_start_fingerprint", None),
             ("Settled_steps", 0),

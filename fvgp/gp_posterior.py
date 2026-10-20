@@ -36,8 +36,14 @@ class GPposterior:
     def KVsolve(self, v):
         return self.kv.solve(v)
 
-    def compute_new_KVinvY(self, KV, m):
-        return self.kv.compute_new_KVinvY(KV, m)
+    def compute_new_KVinvY(self, KV, m, K=None, V=None):
+        return self.kv.compute_new_KVinvY(KV, m, K=K, V=V)
+
+    def _new_KVinvY(self, K, V, m):
+        """KVinvY for explicit hyperparameters; ``"low_rank"`` keeps K and the noise vector apart."""
+        if self.kv.mode == "low_rank": return self.compute_new_KVinvY(None, m, K=K, V=V)
+        if np.ndim(V) == 1: V = np.diag(V)
+        return self.compute_new_KVinvY(self.addKV(K, V), m)
 
     def compute_prior_covariance_matrix(self, x_data, hyperparameters):
         return self.prior.compute_prior_covariance_matrix(x_data, hyperparameters)
@@ -141,8 +147,7 @@ class GPposterior:
             K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
             V = self.calculate_V(x_data, hyperparameters)
             m = self.compute_mean(x_data, hyperparameters)
-            if np.ndim(V) == 1: V = np.diag(V)
-            KVinvY = self.compute_new_KVinvY(self.addKV(K, V), m)
+            KVinvY = self._new_KVinvY(K, V, m)
         else:
             hyperparameters = self.hyperparameters
 
@@ -187,8 +192,7 @@ class GPposterior:
             K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
             V = self.calculate_V(x_data, hyperparameters)
             m = self.compute_mean(x_data, hyperparameters)
-            if np.ndim(V) == 1: V = np.diag(V)
-            KVinvY = self.compute_new_KVinvY(self.addKV(K, V), m)[:, component]
+            KVinvY = self._new_KVinvY(K, V, m)[:, component]
             assert np.ndim(KVinvY) == 1, "KVinvY must be 1-d after column selection"
         else:
             hyperparameters = self.hyperparameters
