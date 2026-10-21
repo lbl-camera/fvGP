@@ -53,6 +53,12 @@ class GPprior:
             if not self.compute_workers:  # pragma: no cover - needs a worker-less client
                 logger.debug("No workers available")
 
+        if self.kronecker and not callable(kernel):
+            warnings.warn("fvGP(kronecker=True) without a kernel_function: the default kernel is a "
+                          "Matern kernel on the inputs times a Matern kernel on the flattened output "
+                          "index 0 ... n_out-1. It treats the outputs as a 1-d sequence and respects no "
+                          "other output geometry (e.g. image rows x columns); for that, pass a "
+                          "kernel_function returning [K_x, F_1, ..., F_m].", stacklevel=2)
 
         # kernel
         self.k_n_params = 3
@@ -60,10 +66,12 @@ class GPprior:
             self.kernel = kernel
             self.k_n_params = len(inspect.signature(kernel).parameters)
         elif kernel is None:
-            self.kernel = self._default_kernel
+            self.kernel = self._default_kronecker_kernel if self.kronecker else self._default_kernel
         else:  # pragma: no cover - GP/fvGP assert a callable-or-None kernel first
             raise Exception("No valid kernel function specified")
         self.d_kernel_dx = self._d_kernel_dx
+        # Kronecker mode needs it apart: its gradient falls back to finite differences of the factors
+        self.user_kernel_grad = callable(kernel_grad)
         if callable(kernel_grad):
             self._dk_dh = kernel_grad
         elif not callable(kernel):
@@ -139,6 +147,10 @@ class GPprior:
     @property
     def Euclidean(self):
         return self.data.Euclidean
+
+    @property
+    def kronecker(self):
+        return self.data.kronecker
 
     @property
     def compute_device(self):
@@ -241,6 +253,44 @@ class GPprior:
 
     def dm_dh(self, x_data, hyperparameters):
         return self._dm_dh(x_data, hyperparameters)
+
+    def mean_columns(self, m):
+        """A prior mean (or a mean derivative) as one column per output, (len(m), k).
+
+        y_data always has k columns -- one for a single-task GP, one per right-hand side, or
+        one per output in Kronecker mode -- and the mean may give one value per point, shared
+        by all k (1-d), or one per point and column (2-d). This is the one place that decides
+        how the two meet; a read-only broadcast view, so sharing costs no copy.
+        """
+        return np.broadcast_to(m[:, None] if np.ndim(m) == 1 else m, (len(m), self.y_data.shape[1]))
+
+    def kronecker_dk_dh(self, x, hyperparameters, direction=None):
+        """Derivatives of the Kronecker factors [K_x, F_1, ..., F_m]: for one hyperparameter
+        (``direction``), or as one such list per hyperparameter (``direction=None``).
+
+        From the user's ``kernel_function_grad`` if there is one: as for ``dk_dh``, callers ask
+        for one ``direction`` exactly when ``gradient_per_direction`` is set. Otherwise central
+        differences, two kernel calls per hyperparameter. A factor that does not depend on the
+        hyperparameter is None or zero, and the gradient skips it.
+        """
+        if self.user_kernel_grad:
+            derivatives = self.dk_dh(x, x, hyperparameters, direction)
+            for factors in ([derivatives] if self.ram_economy else derivatives):
+                if not isinstance(factors, (list, tuple)) or len(factors) != len(self.K):
+                    raise ValueError(f"In Kronecker mode kernel_function_grad must return, per hyperparameter, "
+                                     f"a list of {len(self.K)} factor derivatives [dK_x, dF_1, ...] (None for a "
+                                     f"factor that does not depend on it).")
+            return derivatives
+        if direction is None:
+            return [self.kronecker_dk_dh(x, hyperparameters, i) for i in range(len(hyperparameters))]
+        hps1 = np.array(hyperparameters)
+        hps2 = np.array(hyperparameters)
+        epsilon = 1e-8
+        hps1[direction] += epsilon
+        hps2[direction] -= epsilon
+        a = self.compute_covariances(x, x, hps1)
+        b = self.compute_covariances(x, x, hps2)
+        return [(np.asarray(F1) - np.asarray(F2)) / (2.0 * epsilon) for F1, F2 in zip(a, b)]
     #################################################################
     #END: FUNCTIONS THAT ALLOW INTERACTING WITH THE CLASS############
     #################################################################
@@ -248,19 +298,51 @@ class GPprior:
     def _compute_prior(self, x_data, hyperparameters):
         m = self.compute_mean(x_data, hyperparameters)
         K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
-        assert np.ndim(m) == 1, "mean function returned non-1-d result: " + str(m)
+        self._check_mean(m, len(x_data))
+        if self.kronecker: return m, self._check_kronecker_prior(K, len(x_data))
         assert np.ndim(K) == 2, "prior covariance K must be 2-d"
         logger.debug("Prior mean and covariance matrix successfully computed.")
         return m, K
 
+    def _check_mean(self, m, n):
+        """The prior mean must be (n,), shared by all columns of y_data, or (n, k), one per column."""
+        k = self.y_data.shape[1]
+        if np.shape(m) in ((n,), (n, k)): return
+        if self.kronecker: columns = f"the {k} outputs (Kronecker mode: the mean function receives the inputs only)"
+        elif k > 1: columns = f"the {k} columns of y_data (right-hand sides)"
+        else: columns = "the single column of y_data"
+        raise ValueError(f"The prior mean function returned an array of shape {np.shape(m)} for {n} points. "
+                         f"Expected ({n},) -- one value per point, shared by {columns} -- or ({n}, {k}), "
+                         f"one value per point and column.")
+
+    def _check_kronecker_prior(self, K, n):
+        """The kernel's factor list in Kronecker mode, validated."""
+        n_out = self.y_data.shape[1]
+        if not isinstance(K, (list, tuple)) or len(K) < 2:
+            raise ValueError("In Kronecker mode the kernel function must return a list "
+                             "[K_x(x1, x2), F_1, ..., F_m]: the input factor, then the output factors.")
+        K = [np.asarray(F) for F in K]
+        if K[0].shape != (n, n):
+            raise ValueError(f"The input factor K_x has shape {K[0].shape}, expected {(n, n)}.")
+        sizes = [F.shape[0] for F in K[1:]]
+        if any(F.shape != (k, k) for F, k in zip(K[1:], sizes)):
+            raise ValueError("Each output factor must be a square matrix over its output axis.")
+        if int(np.prod(sizes)) != n_out:
+            raise ValueError(f"The output factors have sizes {sizes}, whose product {int(np.prod(sizes))} "
+                             f"is not the number of outputs, {n_out}.")
+        return K
+
     def _update_prior(self, x_old, x_new, hyperparameters):
+        # Kronecker: only the K_x factor grows, and recomputing it costs O(n_x^2), less than
+        # the eigendecomposition that follows anyway
+        if self.kronecker: return self._compute_prior(self.x_data, hyperparameters)
         # self.x_data is already the appended dataset here -- GPdata.update runs before
         # augment_state_data -- so use it rather than rebuilding it. np.vstack cannot
         # concatenate the plain lists a non-Euclidean input space is made of.
         if self._default_mean: m = self.compute_mean(self.x_data, hyperparameters)
         else: m = self._update_mean(x_new, hyperparameters)
         K = self._update_prior_covariance_matrix(x_old, x_new, hyperparameters)
-        assert np.ndim(m) == 1, "updated mean must be 1-d"
+        self._check_mean(m, len(self.x_data))
         assert np.ndim(K) == 2, "updated covariance K must be 2-d"
         return m, K
 
@@ -290,13 +372,8 @@ class GPprior:
         return K
 
     def _update_mean(self, x_new, hyperparameters):
-        if np.ndim(self.m) == 1:
-            m = np.append(self.m, self.compute_mean(x_new, hyperparameters))
-        elif np.ndim(self.m) == 2:
-            raise Exception("prior mean has to be a vector")
-        else:
-            raise Exception("Prior mean in wrong format")
-        return m
+        # along the points, for a 1-d mean and a 2-d one (one column per output) alike
+        return np.concatenate([self.m, self.compute_mean(x_new, hyperparameters)])
 
     def _scatter(self, x):
         """Broadcast a point set to the compute workers, under a key of its own.
@@ -399,6 +476,17 @@ class GPprior:
         distance_matrix = np.sqrt(distance_matrix)
         return hps[0] * matern_kernel_diff1(distance_matrix, 1)
 
+    def _default_kronecker_kernel(self, x1, x2, hyperparameters):
+        """The default kernel in Kronecker mode: [default Matern on x, Matern on the flat output index].
+
+        The same D + 2 hyperparameters as the Cartesian fvGP default -- signal variance, one
+        length scale per input dimension, one for the output index -- but separable.
+        """
+        outputs = np.arange(self.y_data.shape[1], dtype=float)
+        length_scale = hyperparameters[len(x1[0]) + 1]
+        return [self._default_kernel(x1, x2, hyperparameters),
+                matern_kernel_diff1(abs(np.subtract.outer(outputs, outputs)) / length_scale, 1)]
+
     def _d_kernel_dx(self, x1, x2, direction, hyperparameters):
         new_points = np.array(x1)
         epsilon = 1e-8
@@ -458,7 +546,8 @@ class GPprior:
         return mean
 
     def _finitediff_dm_dh(self, x, hps):
-        gr = np.empty((len(hps), len(x)))
+        # stacked, so each derivative keeps the mean's own shape: (len(x),) or (len(x), k)
+        gr = []
         for i in range(len(hps)):
             temp_hps1 = np.array(hps)
             temp_hps1[i] = temp_hps1[i] + 1e-6
@@ -466,8 +555,8 @@ class GPprior:
             temp_hps2[i] = temp_hps2[i] - 1e-6
             a = self.compute_mean(x, temp_hps1)
             b = self.compute_mean(x, temp_hps2)
-            gr[i] = (a - b) / 2e-6
-        return gr
+            gr.append((a - b) / 2e-6)
+        return np.array(gr)
 
     @staticmethod
     def _default_dm_dh(x, hps):
@@ -492,9 +581,11 @@ class GPprior:
             m=self.m,
             K=self.K,
             x_data_scatter_future=None,
-            _default_mean=self._default_mean
+            _default_mean=self._default_mean,
+            user_kernel_grad=self.user_kernel_grad
         )
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        if "user_kernel_grad" not in self.__dict__: self.user_kernel_grad = False

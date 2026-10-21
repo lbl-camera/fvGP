@@ -1313,6 +1313,21 @@ def test_train_async_mcmc(client):
     assert my_gp.hyperparameters.shape == (6,)
 
 
+def test_train_async_local(client):
+    """Async multi-start local training: submit, poll, stop."""
+    my_gp = GP(x_data, y_data, init_hyperparameters=np.array([1., 1., 1., 1., 1., 1.]),
+               noise_variances=np.zeros(y_data.shape) + 0.01)
+    bounds = np.array([[0.01, 10.]] * 6)
+    opt_obj = my_gp.train(hyperparameter_bounds=bounds, max_iter=20, n_restarts=2,
+                          dask_client=client, method="local", asynchronous=True)
+    time.sleep(3)
+    latest = opt_obj.get_latest()
+    assert set(latest) == {"x", "f(x)", "start", "n_starts", "iteration", "status"} and latest["n_starts"] == 2
+    my_gp.update_hyperparameters(opt_obj)
+    my_gp.stop_training(opt_obj)
+    assert my_gp.hyperparameters.shape == (6,)
+
+
 def test_train_async_adam(client):
     """Async Adam training: submit, poll, stop."""
     my_gp = GP(x_data, y_data, init_hyperparameters=np.array([1., 1., 1., 1., 1., 1.]),
@@ -3623,6 +3638,51 @@ def test_adam_actor_stop_ends_the_run_early():
     assert actor.get_latest()["iteration"] < 2000000
 
 
+def test_local_actor_runs_every_start_and_reports_the_best():
+    from fvgp.gp_actor import _LocalActor
+    from scipy.optimize import rosen, rosen_der
+    bounds = np.array([[-2., 2.]] * 4)
+    x0 = np.full(4, -1.5)
+    actor = _LocalActor(rosen, rosen_der, None, bounds, x0, 3, "L-BFGS-B", 1e-10, 500, (), False)
+    initial = actor.get_latest()
+    assert initial["status"] == "queued" and initial["f(x)"] is None and initial["n_starts"] == 3
+    assert np.allclose(initial["x"], x0), "x0 must be copied, not aliased"
+    actor.start()
+    _wait_for_actor(actor)
+    latest = actor.get_latest()
+    assert latest["status"] == "finished" and latest["start"] == 3 and latest["iteration"] > 0
+    assert latest["f(x)"] < 1e-8 and np.allclose(latest["x"], 1.0, atol=1e-4)
+
+
+def test_local_actor_stop_ends_the_run_early():
+    from fvgp.gp_actor import _LocalActor
+    from scipy.optimize import rosen, rosen_der
+    bounds = np.array([[-2., 2.]] * 20)
+    actor = _LocalActor(rosen, rosen_der, None, bounds, np.full(20, -1.5), 50, "L-BFGS-B", 0.0, 100000, (), False)
+    actor.start()
+    actor.stop()
+    _wait_for_actor(actor)
+    latest = actor.get_latest()
+    # the start under way ends at its next iteration, and no further one begins
+    assert not actor._running and latest["status"] == "finished" and latest["start"] <= 1
+    assert latest["f(x)"] == rosen(latest["x"])
+
+
+def test_local_optimize_reports_every_iteration_and_keeps_the_best_start(capsys):
+    from fvgp.gp_training import GPtraining
+    from scipy.optimize import rosen, rosen_der
+    bounds = np.array([[-2., 2.]] * 3)
+    seen = []
+    np.random.seed(0)
+    x, f = GPtraining.local_optimize(rosen, rosen_der, None, bounds, np.full(3, -1.5), n_restarts=2,
+                                     tolerance=1e-12, max_iter=1000, info=True,
+                                     callback=lambda x, f, start, iteration: seen.append((start, iteration, f)))
+    assert {start for start, _, _ in seen} == {0, 1} and seen[0][1] == 1
+    assert f == rosen(x) and f <= min(value for _, _, value in seen) + 1e-12
+    printed = capsys.readouterr().out
+    assert "start 2 of 2" in printed and "fvGP local iteration 1:" in printed
+
+
 def test_bo_actor_runs_and_switches_to_the_recommendation():
     """While running, `x` is the best point observed; when finished it becomes the
     noise-aware recommendation and the extra diagnostics appear."""
@@ -4018,23 +4078,56 @@ def test_prior_four_argument_kernel_and_three_argument_mean():
     assert len(gp.prior.m) == 17
 
 
-def test_prior_update_mean_rejects_a_matrix_mean():
-    gp = _tiny_gp()
-    gp.prior.m = np.zeros((5, 2))
-    try:
-        gp.prior._update_mean(np.random.rand(2, 2), gp.hyperparameters)
-    except Exception as e:
-        assert "has to be a vector" in str(e)
-    else:
-        raise AssertionError("a 2-d prior mean must be rejected")
+def _column_mean(x, h):
+    """One prior mean per column of a two-column y_data: different offsets, different slopes."""
+    return np.column_stack([h[3] + x[:, 0], h[4] - x[:, 1]])
 
-    gp.prior.m = 1.0
-    try:
-        gp.prior._update_mean(np.random.rand(2, 2), gp.hyperparameters)
-    except Exception as e:
-        assert "wrong format" in str(e)
-    else:
-        raise AssertionError("a scalar prior mean must be rejected")
+
+def _one_column_mean(c):
+    return lambda x, h: _column_mean(x, h)[:, c]
+
+
+def test_a_prior_mean_per_right_hand_side():
+    """With several right-hand sides the mean may be (N, k): each column is then the single-task
+    GP with its own mean. A 1-d mean is shared by all columns, and any other shape raises."""
+    rng = np.random.default_rng(0)
+    x = rng.random((20, 2))
+    y = np.column_stack([np.sin(3 * x[:, 0]), np.cos(2 * x[:, 1])])
+    h = np.array([1., .5, .5, 0.3, -0.2])
+    noise = np.full(20, 0.01)
+    xp = rng.random((4, 2))
+    both = GP(x, y, h, noise_variances=noise, prior_mean_function=_column_mean)
+    singles = [GP(x, y[:, c], h, noise_variances=noise, prior_mean_function=_one_column_mean(c)) for c in (0, 1)]
+    assert np.isclose(both.log_likelihood(), np.mean([gp.log_likelihood() for gp in singles]))
+    assert np.isclose(both.log_likelihood(h * 1.1), np.mean([gp.log_likelihood(h * 1.1) for gp in singles]))
+    for c, single in enumerate(singles):
+        assert np.allclose(both.posterior_mean(xp)["m(x)"][:, c], single.posterior_mean(xp)["m(x)"])
+        assert np.allclose(both.neg_log_likelihood_gradient(h * 1.1, component=c),
+                           single.neg_log_likelihood_gradient(h * 1.1))
+        assert np.allclose(both.posterior_mean_grad(xp, direction=0, component=c)["dm/dx"],
+                           single.posterior_mean_grad(xp, direction=0)["dm/dx"])
+        assert np.allclose(both.posterior_mean_grad(xp, component=c)["dm/dx"], single.posterior_mean_grad(xp)["dm/dx"])
+    # a 1-d mean is shared: the same as handing every column that mean
+    shared = GP(x, y, h, noise_variances=noise, prior_mean_function=_one_column_mean(0))
+    copied = GP(x, y, h, noise_variances=noise, prior_mean_function=lambda xx, hh: np.tile(
+        _column_mean(xx, hh)[:, :1], (1, 2)))
+    assert np.isclose(shared.log_likelihood(), copied.log_likelihood())
+    # an append grows a 2-d mean along the points
+    x_add = rng.random((3, 2))
+    both.update_gp_data(x_add, rng.random((3, 2)), noise_variances_new=np.full(3, 0.01))
+    assert both.prior.m.shape == (23, 2)
+    fresh = GP(both.x_data, both.y_data, h, noise_variances=both.noise_variances, prior_mean_function=_column_mean)
+    assert np.isclose(both.log_likelihood(), fresh.log_likelihood())
+    # every other shape raises, naming what the mode expects
+    for y_cols, mean, expected in ((y, lambda xx, hh: np.zeros((len(xx), 3)), "the 2 columns of y_data"),
+                                   (y[:, 0], _column_mean, "the single column of y_data"),
+                                   (y, lambda xx, hh: np.zeros(len(xx) + 1), "Expected (20,)")):
+        try:
+            GP(x, y_cols, h, noise_variances=noise, prior_mean_function=mean)
+        except ValueError as e:
+            assert expected in str(e) and "shape" in str(e), str(e)
+        else:
+            raise AssertionError("a mean of the wrong shape must raise")
 
 
 def test_prior_default_mean_rejects_bad_y_shapes():
@@ -4920,8 +5013,8 @@ def test_default_trainer_is_local_with_restarts(monkeypatch):
     assert len(starts) == 1 and np.array_equal(starts[0], first)
 
 
-def test_default_trainer_is_mcmc_where_local_cannot_run(monkeypatch):
-    """Under gp2Scale and for asynchronous training the default stays MCMC, without warning."""
+def test_default_trainer_is_local_except_under_gp2Scale(monkeypatch):
+    """Local, synchronous or asynchronous; under gp2Scale MCMC, without a warning."""
     import fvgp.gp_training as training_module
     seen = []
     monkeypatch.setattr(training_module.GPtraining, "train",
@@ -4936,7 +5029,7 @@ def test_default_trainer_is_mcmc_where_local_cannot_run(monkeypatch):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         gp.train(hyperparameter_bounds=bounds)
-    assert seen == ["local", "mcmc", "mcmc"]
+    assert seen == ["local", "local", "mcmc"]
     assert not any("Method switched" in str(w.message) for w in caught)
 
 
@@ -5089,6 +5182,316 @@ def test_matrix_noise_is_deprecated_and_rejected_by_low_rank():
         assert "diagonal noise" in str(e)
     else:
         raise AssertionError("low_rank must reject matrix noise")
+
+
+_KRON_OUT = (4, 3)   # output factor sizes of the Kronecker test kernels: 12 outputs
+
+
+def _kron_factors(x1, x2, h):
+    """[K_x, F_1, F_2]: an anisotropic squared exponential on x, one per output axis (module
+    level, so a GP using it can be pickled)."""
+    d2 = (((x1[:, None, :] - x2[None, :, :]) / h[1:3]) ** 2).sum(-1)
+    axes = [np.arange(n, dtype=float) for n in _KRON_OUT]
+    return [h[0] * np.exp(-d2)] + [np.exp(-np.subtract.outer(o, o) ** 2 / s ** 2) for o, s in zip(axes, h[3:5])]
+
+
+def _kron_factors_grad_per_direction(x1, x2, h, direction):
+    """The analytic derivatives of _kron_factors for one hyperparameter, None where a factor
+    does not depend on it."""
+    Kx = _kron_factors(x1, x2, h)
+    derivatives = [None] * 3
+    if direction == 0:
+        derivatives[0] = Kx[0] / h[0]
+    elif direction in (1, 2):
+        delta = np.subtract.outer(x1[:, direction - 1], x2[:, direction - 1])
+        derivatives[0] = Kx[0] * 2 * delta ** 2 / h[direction] ** 3
+    elif direction in (3, 4):
+        o = np.arange(_KRON_OUT[direction - 3], dtype=float)
+        derivatives[direction - 2] = Kx[direction - 2] * 2 * np.subtract.outer(o, o) ** 2 / h[direction] ** 3
+    return derivatives
+
+
+def _kron_factors_grad(x1, x2, h):
+    return [_kron_factors_grad_per_direction(x1, x2, h, i) for i in range(len(h))]
+
+
+def _kron_kernel_one_output_factor(x1, x2, h):
+    Kx, F1, F2 = _kron_factors(x1, x2, h)
+    return [Kx, np.kron(F1, F2)]
+
+
+def _kron_cartesian_kernel(x1, x2, h):
+    """The same kernel on the Cartesian fvGP's [x, task] points."""
+    Kx, F1, F2 = _kron_factors(x1[:, :-1], x2[:, :-1], h)
+    F = np.kron(F1, F2)
+    return Kx * F[x1[:, -1].astype(int)][:, x2[:, -1].astype(int)]
+
+
+def _kron_noise(x, h):
+    """One variance per point: the inputs in Kronecker mode, the [x, task] points otherwise."""
+    return np.full(len(x), h[5]) + 0.01 * x[:, 0]
+
+
+def _kron_mean(x, h):
+    return h[6] * x[:, :1] + np.zeros((1, 12))
+
+
+def _kron_cartesian_mean(x, h):
+    return h[6] * x[:, 0]
+
+
+def _kron_data(n=30):
+    rng = np.random.default_rng(1)
+    x = rng.random((n, 2))
+    y = np.sin(3 * x[:, :1]) + 0.1 * np.arange(12)[None, :] + 0.05 * rng.standard_normal((n, 12))
+    noise = 0.01 * (rng.random(n) + 0.5)    # one variance per input, the same for every output
+    return x, y, noise
+
+
+def test_kronecker_mode_matches_the_cartesian_fvgp():
+    """fvGP(kronecker=True) reproduces the Cartesian fvGP with the np.kron kernel exactly."""
+    x, y, noise = _kron_data()
+    xp = np.random.default_rng(2).random((5, 2))
+    h = np.array([1.3, 0.4, 0.6, 1.5, 2.0, 0.02, 0.3])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cart = fvGP(x, y, h, noise_variances=np.tile(noise[:, None], (1, 12)), kernel_function=_kron_cartesian_kernel)
+        cart_fn = fvGP(x, y, h, kernel_function=_kron_cartesian_kernel, noise_function=_kron_noise,
+                       prior_mean_function=_kron_cartesian_mean)
+        cart_fn_econ = fvGP(x, y, h, kernel_function=_kron_cartesian_kernel, noise_function=_kron_noise,
+                            prior_mean_function=_kron_cartesian_mean, gradient_per_direction=True)
+    for kernel in (_kron_factors, _kron_kernel_one_output_factor):
+        kron = fvGP(x, y, h, noise_variances=noise, kernel_function=kernel, kronecker=True)
+        assert kron.kv.mode == "kronecker" and kron.y_data.shape == (30, 12)
+        h2 = h * 1.1
+        assert np.isclose(kron.log_likelihood(), cart.log_likelihood(), rtol=1e-12)
+        assert np.isclose(kron.log_likelihood(h2), cart.log_likelihood(h2), rtol=1e-12)
+        for args in ((), (h2,)):
+            # both finite-difference the kernel, in different ways
+            assert np.allclose(kron.neg_log_likelihood_gradient(*args), cart.neg_log_likelihood_gradient(*args),
+                               rtol=1e-5, atol=1e-4)
+        fd, analytic = kron.test_log_likelihood_gradient(h2)
+        assert np.allclose(fd, analytic, rtol=1e-4, atol=1e-3)
+        for x_out in (None, np.array([0, 5, 11])):
+            for key in ("m(x)", "m(x)_flat"):
+                assert np.allclose(kron.posterior_mean(xp, x_out=x_out)[key],
+                                   cart.posterior_mean(xp, x_out=x_out)[key], atol=1e-12)
+            assert np.allclose(kron.posterior_mean(xp, hyperparameters=h2, x_out=x_out)["m(x)"],
+                               cart.posterior_mean(xp, hyperparameters=h2, x_out=x_out)["m(x)"], atol=1e-12)
+            a, b = kron.posterior_covariance(xp, x_out=x_out), cart.posterior_covariance(xp, x_out=x_out)
+            for key in ("v(x)", "S", "S_flat", "v_flat"):
+                assert np.allclose(a[key], b[key], atol=1e-12)
+            assert np.allclose(kron.posterior_covariance(xp, x_out=x_out, variance_only=True)["v(x)"],
+                               b["v(x)"], atol=1e-12)
+            # measured noise at new inputs: the mean, in both paths
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                a, b = (gp.posterior_covariance(xp, x_out=x_out, add_noise=True) for gp in (kron, cart))
+            assert np.allclose(a["S"], b["S"], atol=1e-12)
+        assert np.isclose(kron.rmse(x, y), cart.rmse(x, y), rtol=1e-12)
+        comp_mean, comp_cov = np.zeros(60), np.eye(60)
+        assert np.isclose(kron.gp_kl_div(xp, comp_mean, comp_cov)["kl-div"],
+                          cart.gp_kl_div(xp, comp_mean, comp_cov)["kl-div"], rtol=1e-9)
+    # a noise function and a mean function, with their finite-difference gradients
+    for gradient_per_direction, reference in ((False, cart_fn), (True, cart_fn_econ)):
+        kron = fvGP(x, y, h, kernel_function=_kron_factors, noise_function=_kron_noise,
+                    prior_mean_function=_kron_mean, gradient_per_direction=gradient_per_direction, kronecker=True)
+        assert np.isclose(kron.log_likelihood(h * 0.9), reference.log_likelihood(h * 0.9), rtol=1e-12)
+        assert np.allclose(kron.neg_log_likelihood_gradient(h * 0.9), reference.neg_log_likelihood_gradient(h * 0.9),
+                           rtol=1e-5, atol=1e-4)
+        assert np.allclose(kron.posterior_mean(xp)["m(x)"], reference.posterior_mean(xp)["m(x)"], atol=1e-12)
+        for variance_only in (False, True):
+            a = kron.posterior_covariance(xp, variance_only=variance_only, add_noise=True)
+            b = reference.posterior_covariance(xp, variance_only=False, add_noise=True)
+            assert np.allclose(a["v(x)"], b["v(x)"], atol=1e-12)
+            if not variance_only: assert np.allclose(a["S"], b["S"], atol=1e-12)
+
+
+def test_kronecker_mode_uses_an_analytic_kernel_gradient():
+    """A kernel_function_grad returning factor derivatives replaces the finite differences."""
+    import pickle
+    x, y, noise = _kron_data()
+    h = np.array([1.3, 0.4, 0.6, 1.5, 2.0])
+    finite_differences = fvGP(x, y, h, noise_variances=noise, kernel_function=_kron_factors, kronecker=True)
+    reference = finite_differences.neg_log_likelihood_gradient(h * 1.1)
+    for gradient_per_direction, grad in ((False, _kron_factors_grad), (True, _kron_factors_grad_per_direction)):
+        gp = fvGP(x, y, h, noise_variances=noise, kernel_function=_kron_factors, kernel_function_grad=grad,
+                  gradient_per_direction=gradient_per_direction, kronecker=True)
+        assert gp.prior.user_kernel_grad
+        assert np.allclose(gp.neg_log_likelihood_gradient(h * 1.1), reference, rtol=1e-5, atol=1e-4)
+        fd, analytic = gp.test_log_likelihood_gradient(h * 1.1)
+        assert np.allclose(fd, analytic, rtol=1e-4, atol=1e-3)
+    gp.train(hyperparameter_bounds=np.array([[0.1, 10.]] * 5), max_iter=20, n_restarts=1)
+    assert pickle.loads(pickle.dumps(gp)).prior.user_kernel_grad
+
+
+def test_kronecker_mode_default_kernel_training_data_and_pickling():
+    import pickle
+    from fvgp.gp_prior import GPprior
+    x, y, noise = _kron_data()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp = fvGP(x, y, kronecker=True)
+    assert any("flattened output" in str(w.message) for w in caught)
+    hps = gp.hyperparameters
+    assert len(hps) == 4    # D + 2, the Cartesian fvGP default's layout
+
+    def cartesian_default(x1, x2, h):
+        """np.kron of the two default factors; the Cartesian default itself is not separable."""
+        o1, o2 = x1[:, -1], x2[:, -1]
+        return (GPprior._default_kernel(x1[:, :-1], x2[:, :-1], h)
+                * matern_kernel_diff1(abs(np.subtract.outer(o1, o2)) / h[3], 1))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cart = fvGP(x, y, hps, kernel_function=cartesian_default)
+    assert np.isclose(gp.log_likelihood(), cart.log_likelihood(), rtol=1e-12)
+    assert np.isclose(gp.log_likelihood(hps * 1.3), cart.log_likelihood(hps * 1.3), rtol=1e-12)
+    bounds = gp._get_default_hyperparameter_bounds()
+    assert np.allclose(bounds[3], [11 / 100, 11 * 10])   # the flat output index runs 0 ... 11
+    # training with every default, and briefly with mcmc
+    before = gp.log_likelihood()
+    gp.train(max_iter=50)
+    assert gp.log_likelihood() > before
+    gp.train(method="mcmc", max_iter=50)
+    # append and replace, each against a fresh GP on the resulting data
+    rng = np.random.default_rng(3)
+    x_new = rng.random((4, 2))
+    noise_new = 0.01 * (rng.random(4) + 0.5)
+    measured = fvGP(x, y, gp.hyperparameters, noise_variances=noise, kronecker=True)
+    for append in (True, False):
+        y_new = rng.random((4, 12))
+        measured.update_gp_data(x_new, y_new, noise_variances_new=noise_new, append=append)
+        fresh = fvGP(measured.x_data, measured.y_data, measured.hyperparameters,
+                     noise_variances=measured.noise_variances, kronecker=True)
+        assert np.isclose(measured.log_likelihood(), fresh.log_likelihood(), rtol=1e-12)
+        assert measured.fvgp_y_data.shape == measured.y_data.shape == ((34 if append else 4), 12)
+    # measured noise at new inputs: the mean, for every output
+    v = measured.posterior_covariance(x[:2], variance_only=True)["v(x)"]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        noisy = measured.posterior_covariance(x[:2], variance_only=True, add_noise=True)["v(x)"]
+    assert np.allclose(noisy - v, noise_new.mean())
+    assert any("heteroscedastic" in str(w.message) for w in caught)
+    restored = pickle.loads(pickle.dumps(gp))
+    assert restored.log_likelihood() == gp.log_likelihood()
+    assert np.array_equal(restored.posterior_mean(x[:3])["m(x)"], gp.posterior_mean(x[:3])["m(x)"])
+
+
+def test_kronecker_mode_rejects_what_it_cannot_do():
+    from fvgp.gp_lin_alg import KroneckerFactorization
+    x, y, noise = _kron_data(10)
+    h = np.array([1.3, 0.4, 0.6, 1.5, 2.0])
+
+    def raises(error, match, f, *a, **k):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                f(*a, **k)
+        except error as e:
+            assert match in str(e), str(e)
+        else:
+            raise AssertionError(f"expected {error.__name__} with {match!r}")
+
+    def kron(**kwargs):
+        kwargs.setdefault("kernel_function", _kron_factors)
+        return fvGP(x, kwargs.pop("y", y), h, kronecker=True, **kwargs)
+    # the noise is one positive variance per input: no matrix, no per-output array
+    raises(ValueError, "vector of variances", kron, noise_function=lambda x, h: np.eye(len(x)) * 0.01)
+    raises(ValueError, "vector of variances", kron, noise_function=lambda x, h: np.full((len(x), 12), 0.01))
+    raises(ValueError, "strictly positive", kron, noise_function=lambda x, h: np.zeros(len(x)))
+    bad_y = y.copy()
+    bad_y[2, 3] = np.nan
+    raises(ValueError, "full grid", kron, y=bad_y)
+    raises(ValueError, "cannot be combined", fvGP, x, y, h, kronecker=True, gp2Scale=True)
+    # malformed kernels and means
+    raises(ValueError, "must return a list", kron, kernel_function=lambda x1, x2, h: _kron_factors(x1, x2, h)[0])
+    raises(ValueError, "input factor", kron, kernel_function=lambda x1, x2, h: [np.eye(3)] + _kron_factors(x1, x2, h)[1:])
+    raises(ValueError, "square", kron, kernel_function=lambda x1, x2, h: _kron_factors(x1, x2, h)[:2] + [np.ones((3, 2))])
+    raises(ValueError, "product 4", kron, kernel_function=lambda x1, x2, h: _kron_factors(x1, x2, h)[:2])
+    raises(ValueError, "Kronecker mode: the mean function receives the inputs only", kron,
+           prior_mean_function=lambda x, h: np.zeros((len(x), 5)))
+    # a 1-d mean is shared by all outputs
+    shared = kron(prior_mean_function=lambda x, h: 0.3 * x[:, 0])
+    copied = kron(prior_mean_function=lambda x, h: np.tile(0.3 * x[:, :1], (1, 12)))
+    assert np.isclose(shared.log_likelihood(), copied.log_likelihood(), rtol=1e-12)
+    assert np.allclose(shared.posterior_mean(x[:3])["m(x)"], copied.posterior_mean(x[:3])["m(x)"])
+    raises(NonPositiveDefiniteError, "not positive semi-definite", KroneckerFactorization,
+           [-np.eye(3), np.eye(2)], [np.ones(3), np.ones(2)])
+    # an option that does not apply warns
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp = kron(linalg_mode="Chol")
+    assert any("linalg_mode='Chol' is ignored" in str(w.message) for w in caught)
+    assert gp.kv.mode == "kronecker"
+    # a kernel gradient must return one factor list per hyperparameter
+    for gradient_per_direction, grad in ((False, lambda x1, x2, h: [None] * 5),
+                                         (True, lambda x1, x2, h, direction: [None, None])):
+        bad = kron(kernel_function_grad=grad, gradient_per_direction=gradient_per_direction)
+        raises(ValueError, "list of 3 factor derivatives", bad.neg_log_likelihood_gradient)
+    xp = x[:2]
+    raises(ValueError, "selects outputs by index", gp.posterior_mean, xp, x_out=np.array([0.5]))
+    raises(ValueError, "selects outputs by index", gp.posterior_covariance, xp, x_out=np.array([12]))
+    for method, arguments in (("posterior_mean_grad", (xp,)), ("posterior_covariance_grad", (xp,)),
+                              ("joint_gp_prior", (xp,)), ("joint_gp_prior_grad", (xp, 0)),
+                              ("gp_entropy", (xp,)), ("gp_entropy_grad", (xp, 0)),
+                              ("gp_mutual_information", (xp,)), ("gp_total_correlation", (xp,)),
+                              ("gp_relative_information_entropy", (xp,))):
+        raises(NotImplementedError, f"{method} is not supported in Kronecker mode", getattr(gp, method), *arguments)
+    # an unstable model warns about negative variances, as the dense path does
+    gp.kv.kronecker_factor.inv_spectrum *= 100.0
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        v = gp.posterior_covariance(xp)["v(x)"]
+    assert any("Negative variances" in str(w.message) for w in caught) and np.all(v >= 0.0)
+
+
+def _kron_word_kernel(x1, x2, h):
+    """[K_x, F] on strings: a squared exponential in word length, and one over 6 outputs."""
+    l1 = np.array([len(w) for w in x1], dtype=float)
+    l2 = np.array([len(w) for w in x2], dtype=float)
+    o = np.arange(6, dtype=float)
+    return [h[0] * np.exp(-np.subtract.outer(l1, l2) ** 2 / h[1]), np.exp(-np.subtract.outer(o, o) ** 2 / h[2])]
+
+
+def _kron_word_cartesian_kernel(x1, x2, h):
+    """The same kernel on the Cartesian fvGP's [word, task] pairs."""
+    Kx, F = _kron_word_kernel([p[0] for p in x1], [p[0] for p in x2], h)
+    return Kx * F[np.array([p[1] for p in x1], dtype=int)][:, np.array([p[1] for p in x2], dtype=int)]
+
+
+def test_kronecker_mode_on_non_euclidean_inputs():
+    """Inputs are opaque objects: the Kronecker paths may only ever take their len()."""
+    import pickle
+    words = ["a", "ab", "abc", "abcd", "b", "bc", "bcd", "abcde", "c", "cd"]
+    rng = np.random.default_rng(0)
+    y = rng.random((8, 6))
+    noise = 0.01 + 0.01 * rng.random(8)
+    h = np.array([1., 2., 3.])
+    kron = fvGP(words[:8], y, h, noise_variances=noise, kernel_function=_kron_word_kernel, kronecker=True)
+    cart = fvGP(words[:8], y, h, noise_variances=np.tile(noise[:, None], (1, 6)),
+                kernel_function=_kron_word_cartesian_kernel)
+    assert kron.index_set_dim == kron.input_set_dim == 1 and not kron.data.Euclidean
+    xp = ["bcd", "cd"]
+    assert np.isclose(kron.log_likelihood(), cart.log_likelihood(), rtol=1e-12)
+    assert np.allclose(kron.neg_log_likelihood_gradient(h * 1.1), cart.neg_log_likelihood_gradient(h * 1.1),
+                       rtol=1e-5, atol=1e-4)
+    assert np.allclose(kron.posterior_mean(xp)["m(x)"], cart.posterior_mean(xp)["m(x)"], atol=1e-12)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")   # heteroscedastic measured noise at new inputs
+        for add_noise in (False, True):
+            assert np.allclose(kron.posterior_covariance(xp, add_noise=add_noise)["S"],
+                               cart.posterior_covariance(xp, add_noise=add_noise)["S"], atol=1e-12)
+    kron.train(hyperparameter_bounds=np.array([[0.1, 10.]] * 3), max_iter=20, n_restarts=1)
+    # list inputs concatenate on append, and are replaced as a whole
+    kron.update_gp_data(words[8:], rng.random((2, 6)), noise_variances_new=np.array([0.01, 0.02]))
+    assert kron.x_data == words and kron.fvgp_x_data == words
+    assert kron.y_data.shape == (10, 6) and kron.noise_variances.shape == kron.fvgp_noise_variances.shape == (10,)
+    fresh = fvGP(words, kron.y_data, kron.hyperparameters, noise_variances=kron.noise_variances,
+                 kernel_function=_kron_word_kernel, kronecker=True)
+    assert np.isclose(kron.log_likelihood(), fresh.log_likelihood(), rtol=1e-12)
+    kron.update_gp_data(words[:3], rng.random((3, 6)), noise_variances_new=np.full(3, 0.01), append=False)
+    assert kron.x_data == words[:3]
+    assert pickle.loads(pickle.dumps(kron)).log_likelihood() == kron.log_likelihood()
 
 
 def test_mcmc_default_break_condition_needs_a_long_chain():

@@ -1,7 +1,78 @@
-"""Async optimizer actors for MCMC and Adam training on a Dask worker."""
+"""Async optimizer actors for local, MCMC, Adam and BO training on a Dask worker."""
 
 import threading
 import numpy as np
+
+
+class _LocalActor:
+    """Runs the multi-start local optimization in a background thread; lives on a Dask worker."""
+
+    def __init__(self, nlml, grad_nlml, hess_nlml, bounds, x0, n_restarts, local_optimizer,
+                 tolerance, max_iter, constraints, info):
+        self._nlml = nlml
+        self._grad_nlml = grad_nlml
+        self._hess_nlml = hess_nlml
+        self._bounds = bounds
+        self._x0 = np.asarray(x0, dtype=float).copy()
+        self._n_restarts = n_restarts
+        self._local_optimizer = local_optimizer
+        self._tolerance = tolerance
+        self._max_iter = max_iter
+        self._constraints = constraints
+        self._info = info
+        self._lock = threading.Lock()
+        self._latest = {"x": self._x0.copy(), "f(x)": None, "start": 0, "n_starts": max(1, int(n_restarts)),
+                        "iteration": 0, "status": "queued"}
+        self._running = False
+        self._thread = None
+
+    def start(self):
+        self._running = True
+
+        def _callback(x, fval, start, iteration):
+            # `x` is the best point evaluated so far, over all starts: a later start begins
+            # wherever it was drawn, usually far worse than what an earlier one reached
+            with self._lock:
+                latest = dict(self._latest)
+                if latest["f(x)"] is None or fval < latest["f(x)"]:
+                    latest["x"] = np.asarray(x).copy()
+                    latest["f(x)"] = fval
+                latest.update({"start": start + 1, "iteration": iteration, "status": "running"})
+                self._latest = latest
+
+        def _run():
+            from .gp_training import GPtraining
+            try:
+                x, fval = GPtraining.local_optimize(
+                    self._nlml,
+                    self._grad_nlml,
+                    self._hess_nlml,
+                    self._bounds,
+                    self._x0,
+                    n_restarts=self._n_restarts,
+                    local_optimizer=self._local_optimizer,
+                    tolerance=self._tolerance,
+                    max_iter=self._max_iter,
+                    constraints=self._constraints,
+                    info=self._info,
+                    callback=_callback,
+                    early_stop=lambda: not self._running,
+                )
+                with self._lock:
+                    self._latest = dict(self._latest, x=np.asarray(x).copy(), status="finished")
+                    self._latest["f(x)"] = fval
+            finally:
+                self._running = False
+
+        self._thread = threading.Thread(target=_run, daemon=True)
+        self._thread.start()
+
+    def get_latest(self):
+        with self._lock:
+            return dict(self._latest)
+
+    def stop(self):
+        self._running = False
 
 
 class _MCMCActor:
@@ -209,7 +280,8 @@ class _BOActor:
 
 class AsyncOptimizer:
     """
-    Proxy returned by ``train(asynchronous=True)`` for ``method='mcmc'`` or ``method='adam'``.
+    Proxy returned by ``train(asynchronous=True)`` for ``method='local'``, ``'mcmc'``, ``'adam'``
+    or ``'bo'``.
 
     Wraps a Dask Actor so the caller works with a plain synchronous interface,
     mirroring the pattern used by the HGDL optimizer.
@@ -230,6 +302,9 @@ class AsyncOptimizer:
         Returns
         -------
         state : dict
+            For local: ``{"x", "f(x)", "start", "n_starts", "iteration", "status"}``, where
+            ``x`` is the best point evaluated so far over all starts and, once
+            ``status == "finished"``, the result.
             For MCMC: the full trace summary dict (same keys as the synchronous result).
             For Adam: ``{"x", "iteration", "nlml", "grad_norm"}``.
             For BO: ``{"x", "iteration", "objective", "n_evaluations", "status"}``, plus

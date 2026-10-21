@@ -168,14 +168,13 @@ class GPMarginalLikelihood:
                     f"Linear algebra failed for hyperparameters {hyperparameters}: {e}") from e
             logger.debug("   KVinvY and logdet computed after {} seconds.", time.time() - st)
 
-        n = len(self.y_data)
-        y_mean = self.y_data - m[:, None]
-        assert np.ndim(y_mean) == 2, "y minus mean must be 2-d"
+        # y_data is 2-d: one column per right-hand side, each a problem of its own sharing K,
+        # whose likelihoods are averaged -- or, in Kronecker mode, one (n_x, n_out) tensor
+        problems = 1 if self.data.kronecker else self.y_data.shape[1]
+        y_mean = self.y_data - self.prior.mean_columns(m)
         assert y_mean.shape == KVinvY.shape, "(y-m).shape != KVinvY.shape in log_likelihood"+str(y_mean.shape)+" ,"+str(KVinvY.shape)
-        if np.ndim(y_mean) == 2: l1 = np.sum(y_mean * KVinvY)/y_mean.shape[1]
-        # y_mean is y_data - m[:, None] and so always 2-d; kept for safety
-        else: l1 = np.sum(y_mean * KVinvY)  # pragma: no cover - defensive
-        L = -0.5 * (l1 + KVlogdet + n * np.log(2.0 * np.pi))
+        n = y_mean.size // problems
+        L = -0.5 * (np.sum(y_mean * KVinvY) / problems + KVlogdet + n * np.log(2.0 * np.pi))
         return L
 
     ##################################################################################
@@ -237,6 +236,7 @@ class GPMarginalLikelihood:
         -------
         Gradient of the negative log marginal likelihood : np.ndarray
         """
+        if self.data.kronecker: return self._kronecker_neg_log_likelihood_gradient(hyperparameters)
         if self.gp2Scale: raise Exception("Can't compute neg_log_likelihood_gradient for gp2Scale")
         dK_dH = None
         # "low_rank": every solve below goes through the Woodbury factorization, O(N^2 r) per
@@ -256,7 +256,7 @@ class GPMarginalLikelihood:
             m = self.compute_mean(self.x_data, hyperparameters)
             if low_rank:
                 factor = self.kv.low_rank_factorization(K, V)
-                KVinvY = factor.solve(self.y_data - m[:, None]).reshape(self.y_data.shape)
+                KVinvY = factor.solve(self.y_data - self.prior.mean_columns(m)).reshape(self.y_data.shape)
             else:
                 KV = self.addKV(K, V)
                 KVinvY = self.compute_new_KVinvY(KV, m)
@@ -289,7 +289,7 @@ class GPMarginalLikelihood:
         dm_dh = self.dm_dh(self.x_data, hyperparameters)
 
         for i in range(len(hyperparameters)):
-            dL_dHm[i] = -dm_dh[i].T @ b
+            dL_dHm[i] = -self.prior.mean_columns(dm_dh[i])[:, component] @ b
             if self.ram_economy is False:
                 matr = a[i]
             else:
@@ -318,6 +318,54 @@ class GPMarginalLikelihood:
             else:
                 dL_dH[i] = 0.0
         return dL_dH + dL_dHm
+
+    def _kronecker_neg_log_likelihood_gradient(self, hyperparameters):
+        """The gradient for fvGP(kronecker=True), without ever forming K or dK/dh.
+
+        By the product rule dK/dh is a sum of Kronecker products, one per factor that depends
+        on h, with that factor replaced by its derivative. Its data-fit term alpha^T dK alpha
+        is a mode product, and its trace term tr((K+V)^-1 dK) needs only the diagonal of the
+        derivative in the whitened eigenbasis. The noise term uses diag((K+V)^-1).
+        """
+        if hyperparameters is None:
+            hyperparameters = self.hyperparameters
+            factors, factor, KVinvY = self.K, self.kv.kronecker_factor, self.kv.KVinvY
+        else:
+            factors = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
+            V = self.calculate_V(self.x_data, hyperparameters)
+            m = self.compute_mean(self.x_data, hyperparameters)
+            factor = self.kv.kronecker_factorization(factors, V)
+            KVinvY = factor.solve(self.y_data - self.prior.mean_columns(m))
+        n_x = len(KVinvY)
+        alpha = KVinvY.reshape(factor.sizes)
+        dm_dh = self.dm_dh(self.x_data, hyperparameters)
+        if not self.ram_economy:
+            noise_der = self.calculate_V_grad(self.x_data, hyperparameters)
+            factor_der = self.prior.kronecker_dk_dh(self.x_data, hyperparameters)
+        diag_inverse = None
+        gradient = np.zeros(len(hyperparameters))
+        for i in range(len(hyperparameters)):
+            gradient[i] = -np.sum(self.prior.mean_columns(dm_dh[i]) * KVinvY)
+            # as in the dense gradient: mean and kernel/noise hyperparameters are disjoint
+            if gradient[i] != 0.0: continue
+            fit, trace = 0.0, 0.0
+            derivatives = self.prior.kronecker_dk_dh(self.x_data, hyperparameters, i) if self.ram_economy \
+                else factor_der[i]
+            for f, dF in enumerate(derivatives):
+                if dF is None or not np.any(dF): continue
+                matrices = list(factors)
+                matrices[f] = dF
+                fit += np.sum(alpha * kronecker_mode_product(alpha, matrices))
+                trace += factor.trace_with(f, dF)
+            dV = self.calculate_V_grad(self.x_data, hyperparameters, direction=i) if self.ram_economy \
+                else noise_der[i]
+            dV = np.reshape(dV, (n_x, 1))   # one derivative per input, the same for every output
+            if np.any(dV):
+                if diag_inverse is None: diag_inverse = factor.diag_inverse().reshape(n_x, -1)
+                fit += np.sum(dV * KVinvY ** 2)
+                trace += np.sum(dV * diag_inverse)
+            gradient[i] = -0.5 * (fit - trace)
+        return gradient
 
     ##################################################################################
     def neg_log_likelihood_hessian(self, hyperparameters=None):

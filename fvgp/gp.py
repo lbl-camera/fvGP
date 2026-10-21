@@ -47,8 +47,8 @@ class GP:
         In this case, both the index set and the input space dim are set to 1.
     y_data : np.ndarray
         The values of the data points. Shape (V) or (V, N). If shape (V,N) the algorithm will run N independent GPs.
-        This is not to be confused with multi-task learning. In this case, all GPs have to have the same prior
-        mean function.
+        This is not to be confused with multi-task learning. In this case, all GPs share the kernel and the
+        noise; the prior mean may be shared or differ per GP (see ``prior_mean_function``).
     init_hyperparameters : np.ndarray, optional
         Vector of hyperparameters used to initiate the GP.
         The default is an array of ones with the right length for the anisotropic Matern
@@ -114,7 +114,9 @@ class GP:
         It accepts as input
         an array of positions (of shape N1 x D) and hyperparameters (a 1d array of length D+1 for the default kernel).
         Optionally, the third argument ``args`` can be defined.
-        The return value is a 1d array of length N1.
+        The return value is a 1d array of length N1. If ``y_data`` has N columns (N independent
+        GPs), it may instead be of shape (N1, N), one mean per GP; a 1d mean is shared by all of
+        them. Any other shape raises.
         If prior_mean_function is not provided, :py:meth:`fvgp.GP._default_mean_function` is used,
         which is the average of the ``y_data``.
         This callable receives the full hyperparameter vector but must only use
@@ -125,7 +127,8 @@ class GP:
         It accepts as input an array of positions (of size N1 x D) and hyperparameters
         (a 1d array of length D+1 for the default kernel).
         The return value is a 2d array of
-        shape (len(hyperparameters) x N1). If None is provided, either
+        shape (len(hyperparameters) x N1), or (len(hyperparameters) x N1 x N) for a mean of shape
+        (N1, N). If None is provided, either
         zeros are returned since the default mean function does not depend on hyperparameters,
         or a finite-difference approximation
         is used if ``prior_mean_function`` is provided.
@@ -467,6 +470,9 @@ class GP:
     V : np.ndarray
         the noise covariance matrix or a vector.
     """
+    # fvGP(kronecker=True) sets this before calling GP.__init__, which hands it to GPdata;
+    # afterwards every component reads data.kronecker
+    _kronecker = False
 
     def __init__(
         self,
@@ -538,7 +544,8 @@ class GP:
                            ram_economy=gradient_per_direction,
                            gp2Scale=gp2Scale,
                            compute_device=compute_device,
-                           dask_client=dask_client)
+                           dask_client=dask_client,
+                           kronecker=self._kronecker)
         ########################################
         # prepare initial hyperparameters and bounds
         if self.data.Euclidean:
@@ -819,7 +826,9 @@ class GP:
         hyperparameter_bounds = np.zeros((self.index_set_dim + 1, 2))
         hyperparameter_bounds[0] = np.array([np.var(self.y_data) / 100., np.var(self.y_data) * 10.])
         for i in range(self.index_set_dim):
-            range_xi = np.max(self.x_data[:, i]) - np.min(self.x_data[:, i])
+            # Kronecker fvGP: the last index dimension is the flat output index, not a column of x_data
+            if self.data.kronecker and i == self.input_set_dim: range_xi = self.y_data.shape[1] - 1
+            else: range_xi = np.max(self.x_data[:, i]) - np.min(self.x_data[:, i])
             hyperparameter_bounds[i + 1] = np.array([range_xi / 100., range_xi * 10.])
         assert isinstance(hyperparameter_bounds, np.ndarray) and np.ndim(hyperparameter_bounds) == 2, \
             "hyperparameter_bounds must be a 2-d np.ndarray"
@@ -896,8 +905,8 @@ class GP:
             The options are ``global``, ``local``, ``hgdl``, ``mcmc``, ``adam``, ``bo``, and a callable.
             The callable gets a :py:class:`fvgp.GP` instance and has to return a 1d np.ndarray of hyperparameters.
             The default, None, is ``local`` -- a gradient-based optimization from ``n_restarts``
-            starting points, keeping the best -- or ``mcmc`` under gp2Scale or with
-            ``asynchronous=True``. Use ``mcmc`` when the uncertainty of the hyperparameters is
+            starting points, keeping the best, also with ``asynchronous=True`` -- or ``mcmc``
+            under gp2Scale. Use ``mcmc`` when the uncertainty of the hyperparameters is
             of interest, not just a point estimate.
             If method = ``mcmc``,
             the attribute :py:attr:`fvgp.GP.mcmc_info` is updated and contains convergence and distribution information
@@ -1056,9 +1065,13 @@ class GP:
             (separately for HGDL and fvgp if needed).
         asynchronous : bool, optional
             When True, submit the training job and return immediately with an optimizer
-            proxy object. Supported for ``method='hgdl'``, ``'mcmc'``, ``'adam'``, and ``'bo'``.
+            proxy object. Supported for ``method='local'``, ``'hgdl'``, ``'mcmc'``, ``'adam'``,
+            and ``'bo'``.
             Call ``get_latest()`` on the returned object to poll intermediate results,
             or call :py:meth:`update_hyperparameters` directly to apply them.
+            ``local`` runs its ``n_restarts`` starts one after another in a background thread
+            on a single worker (``hgdl`` is the variant that spreads local runs over the
+            cluster); the polled state is the best point evaluated so far, over all starts.
             For ``bo`` the polled state is the best hyperparameters found so far, so the GP
             stays usable while the remaining expensive likelihood evaluations continue on a
             worker.
@@ -1086,11 +1099,10 @@ class GP:
         optimized hyperparameters (only fyi, gp is already updated) : np.ndarray
         """
         # The default: local optimization with restarts -- measured, as accurate as MCMC on
-        # held-out data and 2-4x faster -- except under gp2Scale, whose stochastic
-        # log-determinant needs a method that tolerates noise, and for asynchronous training,
-        # which local optimization does not support.
+        # held-out data and 2-4x faster -- synchronous or asynchronous, except under gp2Scale,
+        # whose stochastic log-determinant needs a method that tolerates noise.
         if method is None:
-            method = "mcmc" if (self.gp2Scale or asynchronous) else "local"
+            method = "mcmc" if self.gp2Scale else "local"
 
         #gp2Scale checks
         # This must stay ahead of the method checks below: gp2Scale already owns the Dask
@@ -1110,7 +1122,7 @@ class GP:
             method = 'mcmc'
 
         #async checks
-        _async_methods = {"hgdl", "mcmc", "adam", "bo"}
+        _async_methods = {"local", "hgdl", "mcmc", "adam", "bo"}
         if asynchronous and method not in _async_methods:  # pragma: no cover
             warnings.warn(f"Asynchronous execution is not supported for method=`{method}`. "
                           f"Supported async methods: {sorted(_async_methods)}. `asynchronous` set to False.")
@@ -1249,6 +1261,7 @@ class GP:
                 mcmc_break_condition=mcmc_break_condition,
                 mcmc_seed=mcmc_seed,
                 mcmc_log_scale=mcmc_log_scale,
+                n_restarts=n_restarts,
                 bo_args=bo_args,
                 local_optimizer=local_optimizer,
                 global_optimizer=global_optimizer,

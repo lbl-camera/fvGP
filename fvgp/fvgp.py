@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 from .gp import GP
 
@@ -69,6 +71,8 @@ class fvGP(GP):
         will be set to ``abs(np.mean(y_data)) / 100.0``. If
         noise covariances are required (correlated noise), make use of the ``noise_function``.
         Only provide a noise function OR ``noise_variances``, not both.
+        With ``kronecker=True`` the shape is (V): one variance per input point, the same for
+        every output.
     compute_device : str, optional
         One of ``cpu`` or ``gpu``, determines how linear algebra computations are executed. The default is ``cpu``.
         For ``gpu``, pytorch or cupy has to be installed manually. For advanced options see ``args``.
@@ -99,6 +103,8 @@ class fvGP(GP):
         The output is a matrix, an N1 x N2 numpy array.
         This callable receives the full hyperparameter vector but must only use
         the indices reserved for the kernel (disjoint from mean and noise indices).
+        With ``kronecker=True`` the kernel receives the inputs only and returns a list of
+        factors instead, and so does its gradient; see ``kronecker``.
     kernel_function_grad : Callable, optional
         A function that calculates the derivative of the ``kernel_function`` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
@@ -120,6 +126,8 @@ class fvGP(GP):
         :py:meth:`fvgp.GP._default_mean_function` is used, which is the average of the ``y_data``.
         This callable receives the full hyperparameter vector but must only use
         the indices reserved for the mean function (disjoint from kernel and noise indices).
+        With ``kronecker=True`` it receives the inputs only (N1 x Di) and returns an array of
+        shape (N1, No), one mean per input and output, or of length N1, shared by all outputs.
     prior_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the ``prior_mean_function`` at
         a set of input positions with respect to the hyperparameters.
@@ -130,6 +138,8 @@ class fvGP(GP):
         zeros are returned since the default mean function does not depend on hyperparameters,
         or a finite-difference approximation
         is used if ``prior_mean_function`` is provided.
+        With ``kronecker=True`` the shape is (len(hyperparameters) x N1 x No), or
+        (len(hyperparameters) x N1) for a mean shared by all outputs.
     noise_function : Callable, optional
         The noise function is a callable f(x,hyperparameters, [args]) that returns the noise
         variances as a vector (1d np.ndarray) of len(x): fvGP models noise as diagonal.
@@ -142,6 +152,8 @@ class fvGP(GP):
         Only provide a noise function OR a noise variance vector, not both.
         This callable receives the full hyperparameter vector but must only use
         the indices reserved for the noise function (disjoint from kernel and mean indices).
+        With ``kronecker=True`` it receives the inputs only (N x Di) and returns one variance
+        per input point, the same for every output; Kronecker mode rejects matrix noise.
     noise_function_grad : Callable, optional
         A function that evaluates the gradient of the ``noise_function``
         at an input position with respect to the hyperparameters.
@@ -449,6 +461,42 @@ class fvGP(GP):
 
         All other keys will be stored and are available as part of the object instance and
         in kernel, mean, and noise functions.
+    kronecker : bool, optional
+        Default False. For data on a full grid -- every output observed at every input -- with
+        a separable kernel, K = K_x kron F_1 kron ... kron F_m. K is then never formed: each
+        factor is eigendecomposed on its own, and the likelihood, its gradient and the posterior
+        are exact at O(sum n_f^3) plus O(N sum n_f) per solve, N = V * No. This makes, e.g.,
+        1000 inputs with a 100 x 100 image each (N = 1e7) tractable on one node, where K itself
+        would be full rank and dense.
+
+        * ``x_data`` and ``y_data`` (V, No) are given as always, but no Cartesian product of
+          inputs and outputs is built, and ``y_data`` must not contain NaN.
+        * The noise is one variance per input point, the same for every output, as for a GP
+          with several right-hand sides: ``noise_variances`` has shape (V), and a
+          ``noise_function`` returns a vector of len(x) (its gradient, as usual, one
+          derivative per point). The default is a constant.
+        * ``kernel_function(x1, x2, hyperparameters)`` receives the inputs only (N1 x Di) and
+          returns a list ``[K_x(x1, x2), F_1, ..., F_m]``: the input factor (N1 x N2), then the
+          output factors, each square over its whole output axis, with sizes multiplying to No.
+          Output o is the row-major index over the output axes, as in ``np.kron(F_1, F_2)``. The
+          kernel creates the output geometry itself; for a 100 x 100 image (No = 10000),
+          ``[K_x, K_rows, K_cols]`` with two 100 x 100 factors keeps every eigendecomposition
+          small. Without a kernel the default is the Matern kernel on the inputs times a Matern
+          kernel on the flat output index 0 ... No-1 (with a warning: it respects no other
+          output geometry), D + 2 hyperparameters as for the default Cartesian kernel.
+        * ``prior_mean_function`` receives the inputs only and returns an array of shape
+          (len(x), No), or (len(x)) for a mean shared by all outputs.
+        * ``x_out`` in the posterior selects outputs by index (0 ... No-1).
+        * ``kernel_function_grad`` returns the factors' derivatives, per hyperparameter a list
+          ``[dK_x, dF_1, ..., dF_m]``, with None (or zeros) for a factor that does not depend
+          on it: a list of such lists over all hyperparameters, or with
+          ``gradient_per_direction=True`` ``f(x1, x2, hyperparameters, direction)`` returning
+          one. The likelihood gradient applies the product rule. Without it the factors are
+          differentiated by finite differences, two kernel calls per hyperparameter.
+        * ``linalg_mode`` is ignored, and ``gp2Scale`` cannot be combined with it.
+        * Not supported: ``posterior_mean_grad``, ``posterior_covariance_grad``, the joint
+          priors, and the entropy, mutual information, total correlation and relative
+          information entropy methods.
 
     Attributes
     ----------
@@ -549,7 +597,8 @@ class fvGP(GP):
         gp2Scale_distribution="blockwise",
         linalg_mode=None,
         gradient_per_direction=False,
-        args=None
+        args=None,
+        kronecker=False
     ):
         if isinstance(y_data, np.ndarray):
             if np.ndim(y_data) == 1:
@@ -561,7 +610,17 @@ class fvGP(GP):
         fvgp_x_data = x_data
         fvgp_y_data = y_data
         fvgp_noise_variances = noise_variances
-        x_data, y_data, noise_variances = self._transform_index_set2(x_data, y_data, noise_variances)
+        if kronecker:
+            if gp2Scale:
+                raise ValueError("kronecker=True and gp2Scale=True cannot be combined: Kronecker mode never "
+                                 "forms K, so there is nothing to distribute.")
+            if linalg_mode is not None:
+                warnings.warn(f"kronecker=True brings its own linear algebra; linalg_mode={linalg_mode!r} is ignored.")
+                linalg_mode = None
+            # one (n_x, n_out) tensor: no Cartesian product of inputs and outputs
+            self._kronecker = True
+        else:
+            x_data, y_data, noise_variances = self._transform_index_set2(x_data, y_data, noise_variances)
 
         ####init GP
         super().__init__(
@@ -637,6 +696,7 @@ class fvGP(GP):
             will be set to ``abs(np.mean(y_data)) / 100.0``. If
             noise covariances are required (correlated noise), make use of the ``noise_function``.
             Only provide a noise function OR ``noise_variances``, not both.
+            With ``kronecker=True`` the shape is (V): one variance per input point.
         append : bool, optional
             Indication whether to append to or overwrite the existing dataset. Default = True.
             In the default case, data will be appended.
@@ -652,7 +712,9 @@ class fvGP(GP):
             if noise_variances_new is not None:
                 assert isinstance(noise_variances_new, np.ndarray), \
                     "noise_variances_new must be np.ndarray"
-                fvgp_noise_variances = np.vstack([self.fvgp_noise_variances, noise_variances_new])
+                # Kronecker mode: one variance per point, a vector
+                if self.data.kronecker: fvgp_noise_variances = np.append(self.fvgp_noise_variances, noise_variances_new)
+                else: fvgp_noise_variances = np.vstack([self.fvgp_noise_variances, noise_variances_new])
             else: fvgp_noise_variances = None
 
             if isinstance(x_new, np.ndarray): fvgp_x_data = np.vstack([self.fvgp_x_data, x_new])
@@ -668,6 +730,9 @@ class fvGP(GP):
             fvgp_x_data = x_new
             fvgp_y_data = y_new
         self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances, np.arange(0, self.output_num))
+        if self.data.kronecker:   # GP holds the data as given: no transform
+            super().update_gp_data(x_new, y_new, noise_variances_new, append=append, rank_n_update=rank_n_update)
+            return
 
         ######################################
         #####transform to index set###########

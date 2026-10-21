@@ -5,7 +5,7 @@ from scipy.optimize import differential_evolution
 from hgdl.hgdl import HGDL
 from scipy.optimize import minimize
 from .gp_mcmc import *
-from .gp_actor import _MCMCActor, _AdamActor, _BOActor, AsyncOptimizer
+from .gp_actor import _LocalActor, _MCMCActor, _AdamActor, _BOActor, AsyncOptimizer
 from .gp_bo import bayesian_optimize
 warnings.simplefilter("once", UserWarning)
 
@@ -93,57 +93,18 @@ class GPtraining:
             logger.debug("maximum number of iterations: {}", max_iter)
             logger.debug("termination tolerance: {}", tolerance)
             logger.debug("bounds: {}", hyperparameter_bounds)
-            # `info` has to print, not log: fvgp/__init__.py disables the loguru
-            # logger, so logger.debug is invisible unless the user re-enables it.
-            # The parameter must be named `intermediate_result` -- that is how scipy
-            # decides to hand over an OptimizeResult, which carries the objective
-            # value already computed, so reporting costs no extra evaluations.
-            # A single local run is not reliable: on an 11-hyperparameter GP, 17 of 20 runs
-            # from uniformly drawn starts stopped on a near-flat plateau (large length scales)
-            # with a test error 6-10x too high. So the run is repeated from n_restarts - 1
-            # further starts and the best result kept. They are drawn log-uniformly where the
-            # bounds are positive and span a decade (the MCMC's log-scale rule), uniformly
-            # elsewhere: log-uniform starts cover all scales, and cut those failures to 7 of 20.
-            starts = [np.asarray(init_hyperparameters, dtype=float)]
-            log_scale = resolve_log_scale("auto", hyperparameter_bounds)
-            for _ in range(max(1, int(n_restarts)) - 1):
-                start = np.random.uniform(hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1])
-                if log_scale is not None:
-                    start[log_scale] = np.exp(np.random.uniform(np.log(hyperparameter_bounds[log_scale, 0]),
-                                                                np.log(hyperparameter_bounds[log_scale, 1])))
-                starts.append(start)
-            best = None
-            for k, start in enumerate(starts):
-                progress = None
-                if info:
-                    print(f"fvGP local optimization, start {k + 1} of {len(starts)}")
-                    _local_state = {"i": 0}
-
-                    def progress(intermediate_result):
-                        _local_state["i"] += 1
-                        print(f"fvGP local iteration {_local_state['i']}: "
-                              f"f(x)= {float(intermediate_result.fun)}")
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore")
-                    OptimumEvaluation = minimize(
-                        objective_function,
-                        start,
-                        method=local_optimizer,
-                        jac=objective_function_gradient,
-                        hess=objective_function_hessian,
-                        bounds=hyperparameter_bounds,
-                        tol=tolerance,
-                        callback=progress,
-                        constraints=constraints,
-                        options={"maxiter": max_iter})
-                if OptimumEvaluation["success"]:
-                    logger.debug(f"fvGP local optimization successfully concluded with result: "
-                                 f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
-                else:
-                    logger.debug("fvGP local optimization not successful.")
-                if best is None or OptimumEvaluation["fun"] < best["fun"]:
-                    best = OptimumEvaluation
-            hyperparameters = best["x"]
+            hyperparameters, _ = self.local_optimize(
+                objective_function,
+                objective_function_gradient,
+                objective_function_hessian,
+                hyperparameter_bounds,
+                init_hyperparameters,
+                n_restarts=n_restarts,
+                local_optimizer=local_optimizer,
+                tolerance=tolerance,
+                max_iter=max_iter,
+                constraints=constraints,
+                info=info)
         ############################
         ####hybrid optimization:####
         ############################
@@ -249,20 +210,36 @@ class GPtraining:
               mcmc_break_condition="default",
               mcmc_seed=None,
               mcmc_log_scale="auto",
+              n_restarts=5,
               bo_args=None,
               info=False):
 
         """
         Submit an asynchronous training run and return an optimizer proxy.
 
-        Supports ``method='hgdl'``, ``'mcmc'``, ``'adam'``, and ``'bo'``. The returned
+        Supports ``method='local'``, ``'hgdl'``, ``'mcmc'``, ``'adam'``, and ``'bo'``. The returned
         object can be polled with ``get_latest()`` and stopped with ``stop()``.
         Pass the returned object to ``GP.update_hyperparameters()`` to pull the
         latest result into the GP.
         """
-        assert method in ("hgdl", "mcmc", "adam", "bo"), \
-            "Asynchronous training only supported for hgdl, mcmc, adam, bo; got method=" + str(method)
-        if method == 'hgdl':
+        assert method in ("local", "hgdl", "mcmc", "adam", "bo"), \
+            "Asynchronous training only supported for local, hgdl, mcmc, adam, bo; got method=" + str(method)
+        if method == 'local':
+            opt_obj = self.local_async(
+                objective_function=objective_function,
+                objective_function_gradient=objective_function_gradient,
+                objective_function_hessian=objective_function_hessian,
+                hyperparameter_bounds=hyperparameter_bounds,
+                init_hyperparameters=init_hyperparameters,
+                n_restarts=n_restarts,
+                local_optimizer=local_optimizer,
+                tolerance=tolerance,
+                max_iter=max_iter,
+                constraints=constraints,
+                info=info,
+                dask_client=dask_client,
+            )
+        elif method == 'hgdl':
             opt_obj = self.hgdl_async(
                 objective_function=objective_function,
                 objective_function_gradient=objective_function_gradient,
@@ -346,6 +323,68 @@ class GPtraining:
             info,
             dask_client)
         return opt_obj
+
+    ##################################################################################
+    def local_async(self,
+                    objective_function,
+                    objective_function_gradient,
+                    objective_function_hessian,
+                    hyperparameter_bounds,
+                    init_hyperparameters,
+                    n_restarts=5,
+                    local_optimizer="L-BFGS-B",
+                    tolerance=0.0001,
+                    max_iter=120,
+                    constraints=(),
+                    info=False,
+                    dask_client=None):
+        """
+        Submit an asynchronous multi-start local optimization to a Dask worker and return an
+        :py:class:`AsyncOptimizer` proxy.
+
+        The same run as synchronous ``method='local'`` (see :py:meth:`local_optimize`), in
+        a background thread on one worker. Polling returns the best hyperparameters
+        evaluated so far, over all starts. Unlike ``hgdl``, which distributes its local
+        runs over the cluster, this occupies a single worker.
+
+        Parameters
+        ----------
+        objective_function : callable
+            Negative log marginal likelihood ``f(hps) -> float``, MINIMIZED.
+        objective_function_gradient, objective_function_hessian : callable
+            Its gradient and Hessian, as for :py:func:`scipy.optimize.minimize`.
+        hyperparameter_bounds : np.ndarray
+            Bounds of shape (N, 2).
+        init_hyperparameters : np.ndarray
+            The first starting point, shape (N,).
+        n_restarts, local_optimizer, tolerance, max_iter, constraints, info :
+            As for :py:meth:`fvgp.GP.train`.
+        dask_client : distributed.Client
+            Dask client used to host the actor on a worker.
+
+        Returns
+        -------
+        opt_obj : AsyncOptimizer
+            Proxy with ``get_latest()`` and ``stop()`` methods.
+        """
+        actor_future = dask_client.submit(
+            _LocalActor,
+            objective_function,
+            objective_function_gradient,
+            objective_function_hessian,
+            hyperparameter_bounds,
+            init_hyperparameters,
+            n_restarts,
+            local_optimizer,
+            tolerance,
+            max_iter,
+            constraints,
+            info,
+            actor=True,
+        )
+        actor = actor_future.result()
+        actor.start()
+        return AsyncOptimizer(actor)
 
     ##################################################################################
     def mcmc_async(self,
@@ -628,6 +667,85 @@ class GPtraining:
         opt_obj.optimize(dask_client=dask_client, x0=np.array(starting_hps).reshape(1, -1))
         logger.debug("optimize() called")
         return opt_obj
+
+    @staticmethod
+    def local_optimize(objective_function,
+                       objective_function_gradient,
+                       objective_function_hessian,
+                       hyperparameter_bounds,
+                       init_hyperparameters,
+                       n_restarts=5,
+                       local_optimizer="L-BFGS-B",
+                       tolerance=0.0001,
+                       max_iter=120,
+                       constraints=(),
+                       info=False,
+                       callback=None,
+                       early_stop=None):
+        """Local optimization from ``n_restarts`` starting points, keeping the best: ``method='local'``.
+
+        Shared by the synchronous run and the asynchronous actor. ``callback(x, f, start,
+        iteration)`` is called after every iteration; ``early_stop()`` returning True ends
+        the run there, through scipy's ``StopIteration`` (optimizers that do not honor it
+        stop before the next start instead). Returns the best ``(x, f(x))``.
+        """
+        # A single local run is not reliable: on an 11-hyperparameter GP, 17 of 20 runs
+        # from uniformly drawn starts stopped on a near-flat plateau (large length scales)
+        # with a test error 6-10x too high. So the run is repeated from n_restarts - 1
+        # further starts and the best result kept. They are drawn log-uniformly where the
+        # bounds are positive and span a decade (the MCMC's log-scale rule), uniformly
+        # elsewhere: log-uniform starts cover all scales, and cut those failures to 7 of 20.
+        starts = [np.asarray(init_hyperparameters, dtype=float)]
+        log_scale = resolve_log_scale("auto", hyperparameter_bounds)
+        for _ in range(max(1, int(n_restarts)) - 1):
+            start = np.random.uniform(hyperparameter_bounds[:, 0], hyperparameter_bounds[:, 1])
+            if log_scale is not None:
+                start[log_scale] = np.exp(np.random.uniform(np.log(hyperparameter_bounds[log_scale, 0]),
+                                                            np.log(hyperparameter_bounds[log_scale, 1])))
+            starts.append(start)
+        best = None
+        for k, start in enumerate(starts):
+            # the first start always runs, so there is a result however early the stop
+            if k > 0 and early_stop is not None and early_stop(): break
+            progress = None
+            if info or callback is not None or early_stop is not None:
+                if info: print(f"fvGP local optimization, start {k + 1} of {len(starts)}")
+                _local_state = {"i": 0}
+
+                # `info` has to print, not log: fvgp/__init__.py disables the loguru
+                # logger, so logger.debug is invisible unless the user re-enables it.
+                # The parameter must be named `intermediate_result` -- that is how scipy
+                # decides to hand over an OptimizeResult, which carries the objective
+                # value already computed, so reporting costs no extra evaluations.
+                def progress(intermediate_result):
+                    _local_state["i"] += 1
+                    if info:
+                        print(f"fvGP local iteration {_local_state['i']}: "
+                              f"f(x)= {float(intermediate_result.fun)}")
+                    if callback is not None:
+                        callback(intermediate_result.x, float(intermediate_result.fun), k, _local_state["i"])
+                    if early_stop is not None and early_stop(): raise StopIteration
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                OptimumEvaluation = minimize(
+                    objective_function,
+                    start,
+                    method=local_optimizer,
+                    jac=objective_function_gradient,
+                    hess=objective_function_hessian,
+                    bounds=hyperparameter_bounds,
+                    tol=tolerance,
+                    callback=progress,
+                    constraints=constraints,
+                    options={"maxiter": max_iter})
+            if OptimumEvaluation["success"]:
+                logger.debug(f"fvGP local optimization successfully concluded with result: "
+                             f"{OptimumEvaluation['fun']} at {OptimumEvaluation['x']}")
+            else:
+                logger.debug("fvGP local optimization not successful.")
+            if best is None or OptimumEvaluation["fun"] < best["fun"]:
+                best = OptimumEvaluation
+        return best["x"], float(best["fun"])
 
     @staticmethod
     def adam_optimize(

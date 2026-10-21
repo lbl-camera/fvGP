@@ -42,6 +42,38 @@ New features
   by its rank-r factor. New ``args``: ``low_rank_rank``, ``low_rank_residual_tol``,
   ``low_rank_tol``.
 
+* **``fvGP(..., kronecker=True)``** for multi-task data on a full grid with a separable
+  kernel, K = K_x ⊗ F_1 ⊗ … ⊗ F_m: e.g. 1000 inputs with a 100×100 image each, N = 10⁷,
+  where K is full rank and could not even be stored sparse. K is never formed. Each factor
+  is eigendecomposed on its own (K_x after whitening by the noise), so the log-likelihood, its
+  gradient and the posterior mean, variance and covariance are exact, at O(Σ n_f³) plus
+  O(N Σ n_f) per solve. The ``kernel_function`` receives the inputs only and returns
+  ``[K_x(x1, x2), F_1, …, F_m]``; the output factors may split the outputs into their
+  natural axes (image rows ⊗ columns), which keeps every eigendecomposition small. The
+  default kernel is the Matérn kernel on the inputs times a Matérn kernel on the flat
+  output index, with a warning that it respects no other output geometry. The noise is one
+  variance per input point, the same for every output, as for a GP with several right-hand
+  sides (``noise_variances`` of shape (V), a ``noise_function`` returning a vector); missing
+  outputs (NaN), gp2Scale, and the gradient and information-theoretic posterior methods
+  other than ``gp_kl_div`` are not supported. A ``kernel_function_grad`` returns the
+  factors' derivatives, ``[dK_x, dF_1, …]`` per hyperparameter; without one they are
+  finite differences.
+
+* **Asynchronous local training**, ``train(method='local', asynchronous=True)``, like the
+  asynchronous ``mcmc``, ``adam`` and ``bo``: the multi-start local optimization runs in a
+  background thread on one Dask worker, and ``get_latest()`` / ``update_hyperparameters``
+  return the best point evaluated so far over all starts. ``stop()`` ends the current start
+  at its next iteration. It shares ``GPtraining.local_optimize`` with the synchronous run, so
+  starts and restarts are identical. ``hgdl`` remains the variant that spreads local runs
+  over the cluster. It is also the new default for ``train(asynchronous=True)``, which
+  used to run ``mcmc``; pass ``method='mcmc'`` to keep that.
+
+* **A prior mean per right-hand side.** For a ``GP`` with 2-d ``y_data`` (N independent GPs
+  sharing kernel and noise), ``prior_mean_function`` may return shape (N1, N), one mean per
+  GP; a 1-d mean is still shared by all. The same holds in Kronecker mode, per output. A mean
+  of any other shape now raises a ``ValueError`` saying what the mode expects, where it used
+  to fail inside the linear algebra or be rejected only on append.
+
 Deprecations
 ~~~~~~~~~~~~
 
@@ -74,7 +106,7 @@ Deprecations
 * **The default trainer is now local optimization with restarts.** ``train()`` without a
   ``method`` runs ``local`` (L-BFGS-B) from ``n_restarts=5`` starting points -- the current
   hyperparameters and four random draws within the bounds -- and keeps the best. Under
-  gp2Scale and with ``asynchronous=True`` the default remains ``mcmc``. On GPs with 2, 9 and
+  gp2Scale the default remains ``mcmc``. On GPs with 2, 9 and
   11 hyperparameters, with analytic and with finite-difference gradients, this predicted
   held-out data exactly as well as MCMC (test RMSE 0.0555-0.0563 for every method), 2-4x
   faster. The restarts are what make it reliable: a single local run stopped on a flat

@@ -3,6 +3,7 @@ import warnings
 from loguru import logger
 from scipy.sparse import issparse
 from .gp_lin_alg import *
+from .gp_lin_alg import _outer
 
 
 class GPposterior:
@@ -41,7 +42,7 @@ class GPposterior:
 
     def _new_KVinvY(self, K, V, m):
         """KVinvY for explicit hyperparameters; ``"low_rank"`` keeps K and the noise vector apart."""
-        if self.kv.mode == "low_rank": return self.compute_new_KVinvY(None, m, K=K, V=V)
+        if self.kv.mode in ("low_rank", "kronecker"): return self.compute_new_KVinvY(None, m, K=K, V=V)
         if np.ndim(V) == 1: V = np.diag(V)
         return self.compute_new_KVinvY(self.addKV(K, V), m)
 
@@ -102,6 +103,14 @@ class GPposterior:
     def gp2Scale(self):
         return self.data.gp2Scale
 
+    @property
+    def kronecker(self):
+        return self.data.kronecker
+
+    def _reject_kronecker(self, method):
+        if self.kronecker:
+            raise NotImplementedError(f"{method} is not supported in Kronecker mode (fvGP(kronecker=True)).")
+
     @staticmethod
     def _dense(matrix):
         """A dense view of a covariance block that may have arrived sparse from gp2Scale."""
@@ -142,6 +151,7 @@ class GPposterior:
     ##########################################################
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
+        if self.kronecker: return self._kronecker_posterior_mean(x_pred, hyperparameters, x_out)
         x_data, KVinvY = self.x_data.copy(), self.KVinvY.copy()
         if hyperparameters is not None:
             K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
@@ -161,7 +171,7 @@ class GPposterior:
         k = self.cross_covariance(x_pred, hyperparameters)
         A = np.asarray(k.T @ KVinvY)
         prior_mean = self.compute_mean(x_pred, hyperparameters)
-        posterior_mean = prior_mean[:, None] + A
+        posterior_mean = self.prior.mean_columns(prior_mean) + A
         if isinstance(x_out, np.ndarray): posterior_mean_re = posterior_mean.reshape(len(x_orig), len(x_out), order='F')
         else: posterior_mean_re = posterior_mean
 
@@ -186,6 +196,7 @@ class GPposterior:
                     "x_pred": x_pred}
 
     def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None, component=0):
+        self._reject_kronecker("posterior_mean_grad")
         x_data, KVinvY = self.x_data.copy(), self.KVinvY.copy()[:, component]
 
         if hyperparameters is not None:
@@ -207,7 +218,7 @@ class GPposterior:
         if direction is not None:
             x1 = np.array(x_pred)
             x1[:, direction] = x1[:, direction] + eps
-            mean_der = (self.compute_mean(x1, hyperparameters) - f) / eps
+            mean_der = self.prior.mean_columns((self.compute_mean(x1, hyperparameters) - f) / eps)[:, component]
             k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
             posterior_mean_grad = mean_der + (k_g @ KVinvY)
             if isinstance(x_out, np.ndarray):
@@ -217,7 +228,7 @@ class GPposterior:
             for direction in range(len(x_orig[0])):
                 x1 = np.array(x_pred)
                 x1[:, direction] = x1[:, direction] + eps
-                mean_der = (self.compute_mean(x1, hyperparameters) - f) / eps
+                mean_der = self.prior.mean_columns((self.compute_mean(x1, hyperparameters) - f) / eps)[:, component]
                 k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
                 posterior_mean_grad[:, direction] = mean_der + (k_g @ KVinvY)
             direction = "ALL"
@@ -230,6 +241,7 @@ class GPposterior:
 
     ###########################################################################
     def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
+        if self.kronecker: return self._kronecker_posterior_covariance(x_pred, x_out, variance_only, add_noise)
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
@@ -290,7 +302,93 @@ class GPposterior:
                 "S_flat": S,
                 "v_flat": v}
 
+    def _kronecker_outputs(self, x_out):
+        """x_out as integer output indices, the only output coordinates Kronecker mode has."""
+        n_out = self.y_data.shape[1]
+        if x_out is None: return np.arange(n_out)
+        indices = np.asarray(x_out)
+        if (np.ndim(indices) != 1 or not np.all(np.mod(indices, 1) == 0)
+                or np.any(indices < 0) or np.any(indices >= n_out)):
+            raise ValueError(f"In Kronecker mode x_out selects outputs by index: a 1-d array of integers "
+                             f"in 0 ... {n_out - 1}.")
+        return indices.astype(int)
+
+    def _kronecker_posterior_mean(self, x_pred, hyperparameters, x_out):
+        """Mode products of the tensor (K+V)^-1 (y - m) with [K_x(x_pred, X), F_1, ..., F_m]."""
+        KVinvY = self.KVinvY
+        if hyperparameters is not None:
+            K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
+            V = self.calculate_V(self.x_data, hyperparameters)
+            m = self.compute_mean(self.x_data, hyperparameters)
+            KVinvY = self._new_KVinvY(K, V, m)
+        else:
+            hyperparameters = self.hyperparameters
+        x_out = self._kronecker_outputs(x_out)
+        self._perform_input_checks(x_pred, None)
+        k = self.cross_covariance(x_pred, hyperparameters)
+        alpha = KVinvY.reshape((len(self.x_data),) + tuple(len(F) for F in k[1:]))
+        A = kronecker_mode_product(alpha, [np.asarray(k[0]).T] + list(k[1:])).reshape(len(x_pred), -1)
+        prior_mean = self.compute_mean(x_pred, hyperparameters)
+        posterior_mean = (self.prior.mean_columns(prior_mean) + A)[:, x_out]
+        return {"x": x_pred,
+                "m(x)": posterior_mean,
+                "m(x)_flat": posterior_mean.ravel(order='F'),
+                "x_pred": x_pred}
+
+    def _kronecker_posterior_covariance(self, x_pred, x_out, variance_only, add_noise):
+        """Posterior (co)variances at every (x_pred, output) pair, without forming K.
+
+        Every k(x, o) is a Kronecker product of per-axis columns, so its projection into the
+        whitened eigenbasis of K + V is too, and k^T (K+V)^-1 k is one contraction of the
+        inverse spectrum: O(N) per pair, all pairs at once by mode products. The full
+        covariance builds those projections explicitly, (N x pairs).
+        """
+        hps = self.hyperparameters
+        factor = self.kv.kronecker_factor
+        x_out = self._kronecker_outputs(x_out)
+        self._perform_input_checks(x_pred, None)
+        n_pred = len(x_pred)
+        k = self.cross_covariance(x_pred, hps)
+        kk = self.compute_covariances(x_pred, x_pred, hps)
+        P = [factor.project(f, M) for f, M in enumerate(k)]
+        reduction = kronecker_mode_product(factor.inv_spectrum, [(p ** 2).T for p in P]).reshape(n_pred, -1)
+        prior = _outer([np.diag(F) for F in kk]).reshape(n_pred, -1)
+        v = (prior - reduction)[:, x_out]
+        S = None
+        if not variance_only:
+            # pair (point j, output t) at j + n_pred * t, task-major like the Cartesian fvGP
+            points = np.tile(np.arange(n_pred), len(x_out))
+            outputs = np.unravel_index(np.repeat(x_out, n_pred), [len(F) for F in kk[1:]])
+            B = P[0][:, points]
+            S = np.asarray(kk[0])[np.ix_(points, points)]
+            for p, F, o in zip(P[1:], kk[1:], outputs):
+                B = (B[:, None, :] * p[:, o][None, :, :]).reshape(-1, len(points))
+                S = S * np.asarray(F)[np.ix_(o, o)]
+            S = S - (B * factor.inv_spectrum.reshape(-1, 1)).T @ B
+            v = np.diag(S).reshape(len(x_out), n_pred).T
+        if np.any(v < -0.0001):
+            warnings.warn(
+                "Negative variances encountered. That normally means that the model is unstable. "
+                "Rethink the kernel definition, add more noise to the data, "
+                "or double check the hyperparameter optimization bounds. This will not "
+                "terminate the algorithm, but expect anomalies.")
+        v = np.maximum(v, 0.0)
+        if S is not None: np.fill_diagonal(S, v.ravel(order='F'))
+        if add_noise:
+            # one variance per input, the same for every output
+            noise = np.tile(np.reshape(self.noise_function(x_pred, hps), (n_pred, 1)), (1, len(x_out)))
+            v = v + noise
+            if S is not None: S = S + np.diag(noise.ravel(order='F'))
+        S_re = None if S is None else S.reshape(n_pred, len(x_out), n_pred, len(x_out), order='F').transpose(0, 2, 1, 3)
+        return {"x": x_pred,
+                "x_pred": x_pred,
+                "v(x)": v,
+                "S": S_re,
+                "S_flat": S,
+                "v_flat": v.ravel(order='F')}
+
     def posterior_covariance_grad(self, x_pred, x_out=None, direction=None):
+        self._reject_kronecker("posterior_covariance_grad")
         x_data = self.x_data.copy()
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
@@ -335,6 +433,7 @@ class GPposterior:
 
     ###########################################################################
     def joint_gp_prior(self, x_pred, x_out=None):
+        self._reject_kronecker("joint_gp_prior")
         x_data, K, prior_mean_vec = (self.x_data.copy(),
                                      self._dense_K() + (np.identity(len(self.x_data)) * 1e-9),
                                      self.m.copy())
@@ -357,6 +456,7 @@ class GPposterior:
 
     ###########################################################################
     def joint_gp_prior_grad(self, x_pred, direction, x_out=None):
+        self._reject_kronecker("joint_gp_prior_grad")
         x_data, K, prior_mean_vec = (self.x_data.copy(),
                                      self._dense_K() + (np.identity(len(self.x_data)) * 1e-9),
                                      self.m.copy())
@@ -410,6 +510,7 @@ class GPposterior:
         ------
         Entropy : float
         """
+        self._reject_kronecker("gp_entropy")
 
         priors = self.joint_gp_prior(x_pred, x_out=x_out)
         S = priors["S"]
@@ -419,6 +520,7 @@ class GPposterior:
 
     ###########################################################################
     def gp_entropy_grad(self, x_pred, direction, x_out=None):
+        self._reject_kronecker("gp_entropy_grad")
         priors1 = self.joint_gp_prior(x_pred, x_out=x_out)
         priors2 = self.joint_gp_prior_grad(x_pred, direction, x_out=x_out)
         S1 = priors1["S"]
@@ -465,6 +567,7 @@ class GPposterior:
 
     ###########################################################################
     def gp_mutual_information(self, x_pred, x_out=None, add_noise=False):
+        self._reject_kronecker("gp_mutual_information")
         x_data, K = self.x_data.copy(), self._dense_K() + (np.identity(len(self.x_data)) * 1e-9)
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
@@ -481,6 +584,7 @@ class GPposterior:
 
     ###########################################################################
     def gp_total_correlation(self, x_pred, x_out=None, add_noise=False):
+        self._reject_kronecker("gp_total_correlation")
         x_data, K = self.x_data.copy(), self._dense_K() + (np.identity(len(self.x_data)) * 1e-9)
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
@@ -500,6 +604,7 @@ class GPposterior:
 
     ###########################################################################
     def gp_relative_information_entropy(self, x_pred, x_out=None, add_noise=False):
+        self._reject_kronecker("gp_relative_information_entropy")
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()

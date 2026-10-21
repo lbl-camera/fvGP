@@ -628,6 +628,125 @@ def calculate_low_rank_factorization(K, V, rank, args=None):
     return factor
 
 
+def kronecker_mode_product(T, matrices):
+    """Multiply axis f of the tensor ``T`` by ``matrices[f]``; ``None`` leaves that axis alone.
+
+    For a tensor of shape (n_0, ..., n_m) raveled row-major, this is
+    (M_0 kron M_1 kron ... kron M_m) @ T.ravel() -- the 2-d case is vec(M_0 T M_1^T) -- at
+    size(T) * sum(rows(M_f)) flops instead of size(T)^2. Rectangular matrices change that
+    axis's length, which is how the posterior evaluates at new inputs.
+    """
+    for axis, M in enumerate(matrices):
+        if M is None: continue
+        T = np.moveaxis(np.tensordot(M, T, axes=(1, axis)), 0, axis)
+    return T
+
+
+def _outer(vectors):
+    """The tensor v_0 x v_1 x ... x v_m: the diagonal of a Kronecker product of diagonals."""
+    T = np.asarray(vectors[0], dtype=float)
+    for v in vectors[1:]: T = np.multiply.outer(T, v)
+    return T
+
+
+class KroneckerFactorization:
+    """K + V for K = F_0 kron F_1 kron ... kron F_m and noise V = D_0 kron ... kron D_m, never formed.
+
+    F_0 is the input factor K_x, F_1 ... F_m the output factors, and D_f = diag(d_f). Each
+    factor is *whitened*, F~_f = D_f^-1/2 F_f D_f^-1/2, and eigendecomposed, F~_f = Q_f L_f Q_f^T.
+    Whitening is what makes non-constant noise exact: by the mixed-product property
+    K + V = D^1/2 (kron F~_f + I) D^1/2, and the bracket has the eigenvectors kron Q_f and the
+    eigenvalues lambda + 1, lambda running over all products of the factors' eigenvalues. So
+
+    * solve: (K + V)^-1 y = D^-1/2 Q (Lambda + 1)^-1 Q^T D^-1/2 y, by mode products
+    * log|K + V| = sum log(lambda + 1) + log|D|
+
+    exactly, in O(sum n_f^3) for the eigendecompositions and O(N sum n_f) per solve.
+    fvGP's noise is one variance per input, the same for every output, D = D_x kron I: only
+    K_x is whitened (the output factors' d_f are ones). The class takes any per-axis noise.
+    """
+
+    def __init__(self, factors, noise_factors):
+        self.sizes = tuple(len(F) for F in factors)
+        self.noise_factors = [np.asarray(d, dtype=float) for d in noise_factors]
+        self.eigenvalues, self.eigenvectors = [], []
+        for f, F in enumerate(factors):
+            lam, Q = np.linalg.eigh(self._whiten(f, F))
+            # a PSD factor's eigenvalues come back down to about -1e-16 * max; anything
+            # clearly negative means the kernel factor is not a covariance at all
+            if lam[0] < -1e-8 * max(abs(lam[-1]), 1.0):
+                raise NonPositiveDefiniteError(
+                    f"Kronecker factor {f} (0 = inputs) is not positive semi-definite: smallest "
+                    f"eigenvalue {lam[0]:.3e}, largest {lam[-1]:.3e}. Each matrix the kernel "
+                    f"returns must be a covariance matrix.")
+            self.eigenvalues.append(np.maximum(lam, 0.0))
+            self.eigenvectors.append(Q)
+        # (Lambda + 1)^-1 as a tensor: every solve, the trace terms and the posterior variance use it
+        self.inv_spectrum = 1.0 / (_outer(self.eigenvalues) + 1.0)
+
+    def _whiten(self, f, M):
+        s = 1.0 / np.sqrt(self.noise_factors[f])
+        return s[:, None] * np.asarray(M, dtype=float) * s[None, :]
+
+    def _scale(self, T, power):
+        """T times D^power, applied one axis at a time."""
+        for axis, d in enumerate(self.noise_factors):
+            shape = [1] * len(self.sizes)
+            shape[axis] = -1
+            T = T * (d ** power).reshape(shape)
+        return T
+
+    def solve(self, b):
+        b = np.asarray(b, dtype=float)
+        T = self._scale(b.reshape(self.sizes), -0.5)
+        T = kronecker_mode_product(T, [Q.T for Q in self.eigenvectors]) * self.inv_spectrum
+        T = kronecker_mode_product(T, self.eigenvectors)
+        return self._scale(T, -0.5).reshape(b.shape)
+
+    def logdet(self):
+        n = int(np.prod(self.sizes))
+        noise = sum(n / len(d) * np.sum(np.log(d)) for d in self.noise_factors)
+        return float(-np.sum(np.log(self.inv_spectrum)) + noise)
+
+    def diag_inverse(self):
+        """diag((K + V)^-1) as a tensor, for the noise terms of the likelihood gradient."""
+        T = kronecker_mode_product(self.inv_spectrum, [Q ** 2 for Q in self.eigenvectors])
+        return self._scale(T, -1.0)
+
+    def project(self, f, M):
+        """Q_f^T D_f^-1/2 M: the columns of M (rows along axis f) in factor f's whitened eigenbasis."""
+        return self.eigenvectors[f].T @ (np.asarray(M, dtype=float) / np.sqrt(self.noise_factors[f])[:, None])
+
+    def trace_with(self, f, dF):
+        """tr((K + V)^-1 (F_0 kron ... dF ... kron F_m)), the trace term of one factor's derivative.
+
+        In the whitened eigenbasis every other factor is its diagonal of eigenvalues, so only
+        the diagonal of factor f's projected derivative is needed: O(n_f^3 + N).
+        """
+        Q = self.eigenvectors[f]
+        vectors = list(self.eigenvalues)
+        vectors[f] = np.einsum("ij,ij->j", Q, self._whiten(f, dF) @ Q)
+        return float(np.sum(self.inv_spectrum * _outer(vectors)))
+
+
+def calculate_kronecker_factorization(factors, V):
+    """Factor K + V for ``fvGP(kronecker=True)``: ``factors`` = [K_x, F_1, ..., F_m] and ``V``
+    the noise variances, one per input, the same for every output."""
+    st = time.time()
+    sizes = [len(F) for F in factors]
+    if sparse.issparse(V) or np.ndim(V) != 1 or len(V) != sizes[0]:
+        raise ValueError(
+            "Kronecker mode needs the noise as a vector of variances, one per input point and the "
+            "same for every output. Correlated noise belongs in the kernel function.")
+    d = np.asarray(V, dtype=float)
+    if not np.all(np.isfinite(d)) or np.any(d <= 0.0):
+        raise ValueError("Kronecker mode needs strictly positive, finite noise variances.")
+    factor = KroneckerFactorization(factors, [d] + [np.ones(n) for n in sizes[1:]])
+    logger.debug("Kronecker factorization compute time: {} seconds. (factor sizes {})",
+                 time.time() - st, tuple(sizes))
+    return factor
+
+
 def _as_symmetric_csr(KV):
     assert sparse.issparse(KV)
     A = KV.tocsr().astype(np.float64)

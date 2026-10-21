@@ -142,13 +142,17 @@ class GPkv:
         self.Preconditioner_failure = None
         # linalg_mode "low_rank": the LowRankPlusDiagonal factorization of the current K + V
         self.low_rank_factor = None
+        # fvGP(kronecker=True): the KroneckerFactorization of the current K + V
+        self.kronecker_factor = None
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
                               "sparseLU", "sparseMINRESpre", "sparseCGpre", "low_rank_<r>",
                               "sparseMINRESpre_<type>", "sparseCGpre_<type>",
                               "sparseSolve", "a set of callables"]
         K, V, m = self._get_KVm()
 
-        if self.gp2Scale: self.mode = self._set_gp2Scale_mode(K)
+        # set by fvGP(kronecker=True), never by linalg_mode: K is then a list of factors
+        if self.data.kronecker: self.mode = "kronecker"
+        elif self.gp2Scale: self.mode = self._set_gp2Scale_mode(K)
         elif linalg_mode is not None: self.mode = linalg_mode
         else: self.mode = "Chol"
         self._refresh(rank_n_update=False)
@@ -498,7 +502,10 @@ class GPkv:
                              hyperparameter changes or data overwrite.
         """
         K, V, m = self._get_KVm()
-        if self.mode == "low_rank":
+        if self.mode == "kronecker":
+            # K is the list of factors and V one noise variance per input; K is never expanded
+            self.kronecker_factor = self.kronecker_factorization(K, V)
+        elif self.mode == "low_rank":
             # factors K itself and keeps V as a vector, so K + V is never formed; an append
             # refactors, at O(N r^2) as cheap as any update would be
             self.low_rank_factor = self.low_rank_factorization(K, V)
@@ -509,7 +516,7 @@ class GPkv:
             else: self.set_KV(KV)
         logger.debug("KV factorization set")
         logger.debug("Solve in progress")
-        y_mean = self.y_data - m[:, None]
+        y_mean = self.y_data - self.prior.mean_columns(m)
         x0 = self.KVinvY if rank_n_update else None
         self.KVinvY = self.solve(y_mean, x0=x0).reshape(y_mean.shape)
         self.logdet_KV = self.logdet()
@@ -603,15 +610,22 @@ class GPkv:
         """The ``"low_rank"`` factorization of K + V; K and the noise vector V kept apart."""
         return calculate_low_rank_factorization(K, V, self.args["low_rank_rank"], args=self.args)
 
+    def kronecker_factorization(self, K, V):
+        """The ``"kronecker"`` factorization of K + V; K the list of factors, V the noise vector (one per input)."""
+        return calculate_kronecker_factorization(K, V)
+
     def compute_new_KVinvY(self, KV, m, x0=None, K=None, V=None):
         """Recompute KVinvY for a given KV and m without updating state (used during training).
 
         ``x0`` (optional) is forwarded to iterative solvers as a warm-start; passing
         the previous iteration's KVinvY can substantially cut iteration counts when
         successive hyperparameters are close. In ``"low_rank"`` mode pass ``K`` and the noise
-        vector ``V`` instead; ``KV`` may then be None.
+        vector ``V`` instead; ``KV`` may then be None. Kronecker mode likewise takes the factor
+        list ``K`` and the noise ``V``.
         """
-        y_mean = self.y_data - m[:, None]
+        if self.mode == "kronecker":
+            return self.kronecker_factorization(K, V).solve(self.y_data - self.prior.mean_columns(m))
+        y_mean = self.y_data - self.prior.mean_columns(m)
         if self.mode == "low_rank":
             if K is None or V is None:
                 raise ValueError("linalg_mode 'low_rank' needs K and the noise vector V separately.")
@@ -685,13 +699,16 @@ class GPkv:
 
         ``x0`` (optional) is forwarded to iterative solvers as a warm-start.
         """
+        if self.mode == "kronecker":   # exact and deterministic: the factors' eigendecompositions
+            factor = self.kronecker_factorization(K, V)
+            return factor.solve(self.y_data - self.prior.mean_columns(m)), factor.logdet()
         if self.mode == "low_rank":   # exact and deterministic: Woodbury and the determinant lemma
             factor = self.low_rank_factorization(K, V)
-            y_mean = self.y_data - m[:, None]
+            y_mean = self.y_data - self.prior.mean_columns(m)
             return factor.solve(y_mean).reshape(y_mean.shape), factor.logdet()
         KV = self.addKV(K, V)
         x0 = self._record_evaluation(KV, x0)
-        y_mean = self.y_data - m[:, None]
+        y_mean = self.y_data - self.prior.mean_columns(m)
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
         else:
@@ -775,6 +792,8 @@ class GPkv:
     def solve(self, b, x0=None):
         # x0 shape normalization (zero-pad / column-broadcast) is handled inside
         # the sparse iterative solvers in gp_lin_alg, so no shaping is needed here.
+        if self.mode == "kronecker":
+            return self.kronecker_factor.solve(b)
         if self.mode == "low_rank":
             return self.low_rank_factor.solve(b)
         if self.mode == "Chol":
@@ -811,6 +830,7 @@ class GPkv:
         """
         Compute log|KV| in the current mode without updating state. Used during training for the log-likelihood.
         """
+        if self.mode == "kronecker": return self.kronecker_factor.logdet()
         if self.mode == "low_rank": return self.low_rank_factor.logdet()
         if self.mode == "Chol": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
         elif self.mode == "CholInv": return calculate_Chol_logdet(self.Chol_factor, compute_device=self.compute_device, args=self.args)
@@ -849,6 +869,7 @@ class GPkv:
             Last_preconditioner_error=self.Last_preconditioner_error,
             Preconditioner_failure=self.Preconditioner_failure,
             low_rank_factor=self.low_rank_factor,
+            kronecker_factor=self.kronecker_factor,
             custom_obj=self.custom_obj,
             allowed_modes=self.allowed_modes,
             last_logdet_variance=self.last_logdet_variance,
@@ -872,6 +893,7 @@ class GPkv:
             ("Last_preconditioner_error", None),
             ("Preconditioner_failure", None),
             ("low_rank_factor", None),
+            ("kronecker_factor", None),
             ("Preconditioner_fingerprint", None),
             ("Warm_start_fingerprint", None),
             ("Settled_steps", 0),

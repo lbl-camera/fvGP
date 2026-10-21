@@ -9,13 +9,18 @@ class GPdata:
                  ram_economy=False,
                  gp2Scale=False,
                  compute_device="cpu",
-                 dask_client=None):
+                 dask_client=None,
+                 kronecker=False):
 
 
+        # fvGP(kronecker=True): y_data is one (n_x, n_out) tensor on a full grid, not n_out
+        # right-hand sides; the noise is one variance per input, as for several right-hand sides
+        self.kronecker = kronecker
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list), \
             "x_data must be np.ndarray or list"
         assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2), \
             "y_data must be a 1-d or 2-d np.ndarray"
+        if kronecker: assert np.ndim(y_data) == 2, "In Kronecker mode y_data must be 2-d, (n_x, n_out)"
         assert ((isinstance(noise_variances, np.ndarray) and np.ndim(noise_variances) == 1)
                 or noise_variances is None), "noise_variances must be a 1-d np.ndarray or None"
         assert len(x_data) == len(y_data), "x_data and y_data have different lengths."
@@ -28,6 +33,8 @@ class GPdata:
             assert np.ndim(x_data) == 2, "Euclidean x_data must be 2-d (n_points × input_dim)"
             self.index_set_dim = len(x_data[0])
             self.input_set_dim = len(x_data[0])
+            # the flat output index is one more index dimension, as in the Cartesian fvGP
+            if kronecker: self.index_set_dim += 1
             self.Euclidean = True
         if isinstance(x_data, list):
             self.index_set_dim = 1
@@ -72,6 +79,8 @@ class GPdata:
             "x_data_new must be np.ndarray or list"
         assert isinstance(y_data_new, np.ndarray), \
             f"y_data_new must be np.ndarray, got {type(y_data_new)}"
+        if self.kronecker: assert np.ndim(y_data_new) == 2 and y_data_new.shape[1] == self.y_data.shape[1], \
+            "In Kronecker mode y_data_new must be 2-d with one column per output"
         assert ((isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1)
                 or noise_variances_new is None), "noise_variances_new must be a 1-d np.ndarray or None"
         if self.Euclidean: assert isinstance(x_data_new, np.ndarray) and np.ndim(x_data_new) == 2, \
@@ -118,6 +127,9 @@ class GPdata:
 
 
     def _check_for_nan(self):
+        if self.kronecker and np.isnan(np.sum(self.y_data)):
+            raise ValueError("Kronecker mode needs every output at every input (a full grid), but y_data "
+                             "contains NaN. Use fvGP(kronecker=False) for missing outputs.")
         if self.Euclidean:
             if np.isnan(np.sum(self.x_data) + np.sum(self.y_data)): raise Exception("NaNs encountered in dataset.")
 
@@ -146,10 +158,12 @@ class GPdata:
             compute_device=self.compute_device,
             dask_client=None,
             compute_workers=self.compute_workers,
+            kronecker=self.kronecker,
             )
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        if "kronecker" not in self.__dict__: self.kronecker = False
 
 
