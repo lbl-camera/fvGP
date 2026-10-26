@@ -220,7 +220,7 @@ class GPMarginalLikelihood:
         return -self.log_likelihood(hyperparameters=hyperparameters)
 
     ##################################################################################
-    def neg_log_likelihood_gradient(self, hyperparameters=None, component=0):
+    def neg_log_likelihood_gradient(self, hyperparameters=None, component=None):
         """
         Function that computes the gradient of the marginal log-likelihood.
 
@@ -230,7 +230,9 @@ class GPMarginalLikelihood:
             Vector of hyperparameters of shape (N).
             If not provided, the covariance will not be recomputed.
         component : int, optional
-            In case many GPs are computed in parallel, this specifies which one is considered.
+            In case many GPs are computed in parallel (2-d ``y_data``), the one whose
+            likelihood is differentiated. The default, None, differentiates the likelihood
+            itself, the average over all of them.
 
         Returns
         -------
@@ -261,7 +263,9 @@ class GPMarginalLikelihood:
                 KV = self.addKV(K, V)
                 KVinvY = self.compute_new_KVinvY(KV, m)
 
-        b = KVinvY[:, component]
+        # The likelihood averages its columns (independent right-hand sides sharing K), so its
+        # gradient averages theirs; `component` selects one. The trace term is the same for all.
+        B = KVinvY if component is None else KVinvY[:, [component]]
         a = None
         if self.ram_economy is False:
             try:
@@ -283,13 +287,14 @@ class GPMarginalLikelihood:
             else:
                 KV = np.array([KV, ] * len(hyperparameters))
                 a = solve(KV, dK_dH, compute_device=self.compute_device)
-        bbT = np.outer(b, b.T)
+        bbT = B @ B.T / B.shape[1]
         dL_dH = np.zeros((len(hyperparameters)))
         dL_dHm = np.zeros((len(hyperparameters)))
         dm_dh = self.dm_dh(self.x_data, hyperparameters)
 
         for i in range(len(hyperparameters)):
-            dL_dHm[i] = -self.prior.mean_columns(dm_dh[i])[:, component] @ b
+            dm = self.prior.mean_columns(dm_dh[i])
+            dL_dHm[i] = -np.sum((dm if component is None else dm[:, [component]]) * B) / B.shape[1]
             if self.ram_economy is False:
                 matr = a[i]
             else:
@@ -320,12 +325,14 @@ class GPMarginalLikelihood:
         return dL_dH + dL_dHm
 
     def _kronecker_neg_log_likelihood_gradient(self, hyperparameters):
-        """The gradient for fvGP(kronecker=True), without ever forming K or dK/dh.
+        """The gradient for fvGP(multi_task_mode='kronecker'), without ever forming K or dK/dh.
 
         By the product rule dK/dh is a sum of Kronecker products, one per factor that depends
-        on h, with that factor replaced by its derivative. Its data-fit term alpha^T dK alpha
-        is a mode product, and its trace term tr((K+V)^-1 dK) needs only the diagonal of the
-        derivative in the whitened eigenbasis. The noise term uses diag((K+V)^-1).
+        on h, with that factor replaced by its derivative. So the kernel part of dL/dh is
+        sum_f <G_f, dF_f/dh>, where G_f = dL/dF_f is computed once for all hyperparameters
+        (:py:meth:`fvgp.gp_lin_alg.KroneckerFactorization.factor_gradients`) and the
+        contraction is left to the prior (:py:meth:`fvgp.gp_prior.GPprior.kronecker_hyperparameter_gradient`).
+        The noise term uses diag((K+V)^-1).
         """
         if hyperparameters is None:
             hyperparameters = self.hyperparameters
@@ -337,34 +344,23 @@ class GPMarginalLikelihood:
             factor = self.kv.kronecker_factorization(factors, V)
             KVinvY = factor.solve(self.y_data - self.prior.mean_columns(m))
         n_x = len(KVinvY)
-        alpha = KVinvY.reshape(factor.sizes)
+        kernel_gradient = self.prior.kronecker_hyperparameter_gradient(
+            self.x_data, hyperparameters, factor.factor_gradients(factors, KVinvY))
         dm_dh = self.dm_dh(self.x_data, hyperparameters)
-        if not self.ram_economy:
-            noise_der = self.calculate_V_grad(self.x_data, hyperparameters)
-            factor_der = self.prior.kronecker_dk_dh(self.x_data, hyperparameters)
+        if not self.ram_economy: noise_der = self.calculate_V_grad(self.x_data, hyperparameters)
         diag_inverse = None
         gradient = np.zeros(len(hyperparameters))
         for i in range(len(hyperparameters)):
             gradient[i] = -np.sum(self.prior.mean_columns(dm_dh[i]) * KVinvY)
             # as in the dense gradient: mean and kernel/noise hyperparameters are disjoint
             if gradient[i] != 0.0: continue
-            fit, trace = 0.0, 0.0
-            derivatives = self.prior.kronecker_dk_dh(self.x_data, hyperparameters, i) if self.ram_economy \
-                else factor_der[i]
-            for f, dF in enumerate(derivatives):
-                if dF is None or not np.any(dF): continue
-                matrices = list(factors)
-                matrices[f] = dF
-                fit += np.sum(alpha * kronecker_mode_product(alpha, matrices))
-                trace += factor.trace_with(f, dF)
+            gradient[i] = -kernel_gradient[i]
             dV = self.calculate_V_grad(self.x_data, hyperparameters, direction=i) if self.ram_economy \
                 else noise_der[i]
             dV = np.reshape(dV, (n_x, 1))   # one derivative per input, the same for every output
             if np.any(dV):
                 if diag_inverse is None: diag_inverse = factor.diag_inverse().reshape(n_x, -1)
-                fit += np.sum(dV * KVinvY ** 2)
-                trace += np.sum(dV * diag_inverse)
-            gradient[i] = -0.5 * (fit - trace)
+                gradient[i] -= 0.5 * (np.sum(dV * KVinvY ** 2) - np.sum(dV * diag_inverse))
         return gradient
 
     ##################################################################################

@@ -107,9 +107,13 @@ class GPposterior:
     def kronecker(self):
         return self.data.kronecker
 
+    @property
+    def independent(self):
+        return self.data.multi_task == "independent"
+
     def _reject_kronecker(self, method):
         if self.kronecker:
-            raise NotImplementedError(f"{method} is not supported in Kronecker mode (fvGP(kronecker=True)).")
+            raise NotImplementedError(f"{method} is not supported in Kronecker mode (fvGP(multi_task_mode='kronecker')).")
 
     @staticmethod
     def _dense(matrix):
@@ -152,6 +156,12 @@ class GPposterior:
 
     def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
         if self.kronecker: return self._kronecker_posterior_mean(x_pred, hyperparameters, x_out)
+        if self.independent:
+            return self._select_outputs(self._posterior_mean(x_pred, hyperparameters, None), x_out,
+                                        ("m(x)", "m(x)_flat"))
+        return self._posterior_mean(x_pred, hyperparameters, x_out)
+
+    def _posterior_mean(self, x_pred, hyperparameters, x_out):
         x_data, KVinvY = self.x_data.copy(), self.KVinvY.copy()
         if hyperparameters is not None:
             K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
@@ -242,6 +252,19 @@ class GPposterior:
     ###########################################################################
     def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
         if self.kronecker: return self._kronecker_posterior_covariance(x_pred, x_out, variance_only, add_noise)
+        if self.independent:
+            # the tasks share one GP: S, over the inputs, is the same for all of them
+            return self._select_outputs(self._posterior_covariance(x_pred, None, variance_only, add_noise), x_out,
+                                        ("v(x)", "v_flat"))
+        return self._posterior_covariance(x_pred, x_out, variance_only, add_noise)
+
+    def _select_outputs(self, result, x_out, keys):
+        """Keep the columns ``x_out`` (all by default) of the per-task entries of a posterior result."""
+        columns = self._output_indices(x_out)
+        for key in keys: result[key] = result[key][:, columns]
+        return result
+
+    def _posterior_covariance(self, x_pred, x_out, variance_only, add_noise):
         if x_out is None: x_out = self.x_out
         self._perform_input_checks(x_pred, x_out)
         x_orig = x_pred.copy()
@@ -302,15 +325,16 @@ class GPposterior:
                 "S_flat": S,
                 "v_flat": v}
 
-    def _kronecker_outputs(self, x_out):
-        """x_out as integer output indices, the only output coordinates Kronecker mode has."""
+    def _output_indices(self, x_out):
+        """x_out as integer output indices, the only output coordinates the Kronecker and
+        independent modes have."""
         n_out = self.y_data.shape[1]
         if x_out is None: return np.arange(n_out)
         indices = np.asarray(x_out)
         if (np.ndim(indices) != 1 or not np.all(np.mod(indices, 1) == 0)
                 or np.any(indices < 0) or np.any(indices >= n_out)):
-            raise ValueError(f"In Kronecker mode x_out selects outputs by index: a 1-d array of integers "
-                             f"in 0 ... {n_out - 1}.")
+            raise ValueError(f"With multi_task_mode={self.data.multi_task!r} x_out selects outputs by index: "
+                             f"a 1-d array of integers in 0 ... {n_out - 1}.")
         return indices.astype(int)
 
     def _kronecker_posterior_mean(self, x_pred, hyperparameters, x_out):
@@ -323,7 +347,7 @@ class GPposterior:
             KVinvY = self._new_KVinvY(K, V, m)
         else:
             hyperparameters = self.hyperparameters
-        x_out = self._kronecker_outputs(x_out)
+        x_out = self._output_indices(x_out)
         self._perform_input_checks(x_pred, None)
         k = self.cross_covariance(x_pred, hyperparameters)
         alpha = KVinvY.reshape((len(self.x_data),) + tuple(len(F) for F in k[1:]))
@@ -345,7 +369,7 @@ class GPposterior:
         """
         hps = self.hyperparameters
         factor = self.kv.kronecker_factor
-        x_out = self._kronecker_outputs(x_out)
+        x_out = self._output_indices(x_out)
         self._perform_input_checks(x_pred, None)
         n_pred = len(x_pred)
         k = self.cross_covariance(x_pred, hps)

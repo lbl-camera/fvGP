@@ -954,3 +954,100 @@ def sle_kernel(x1, x2, hps, args):
     # RBF on embeddings
     D_mat = cdist(phi_x1, phi_x2, metric='euclidean')
     return hps[0] * np.exp(-D_mat ** 2 / hps[3])
+
+
+#: The largest number of outputs for which fvGP(multi_task_mode='kronecker') defaults to the
+#: coregionalization kernel; above it B (n_out x n_out) and its n_out * (rank + 1)
+#: hyperparameters cost more than they are worth. Override with
+#: args["kronecker_coregionalization_max_outputs"].
+COREGIONALIZATION_MAX_OUTPUTS = 500
+
+
+class CoregionalizationKernel:
+    """The intrinsic coregionalization model (ICM) for ``fvGP(multi_task_mode='kronecker')``: K = K_x kron B.
+
+    K_x is the anisotropic Matern kernel (first-order differentiable, unit variance) on the
+    inputs, and B = W W^T + diag(kappa) the coregionalization matrix of the outputs, with
+    W of shape (n_out, rank): ``rank`` latent processes shared by all outputs, and one
+    independent process per output. B carries the whole scale -- a signal variance on K_x
+    would only duplicate it. The hyperparameters are
+
+        [l_1, ..., l_D, W (row-major, n_out * rank), kappa_1, ..., kappa_n_out]
+
+    The default kernel of ``fvGP(multi_task_mode='kronecker')`` up to ``COREGIONALIZATION_MAX_OUTPUTS``
+    outputs, and usable explicitly as ``kernel_function`` (e.g. with another rank). Its
+    likelihood gradient is exact and nearly free: :py:meth:`chain_rule` maps the gradient of
+    the likelihood with respect to K_x and B to the hyperparameters directly.
+    """
+
+    def __init__(self, n_out, rank=1):
+        self.n_out = int(n_out)
+        self.rank = int(rank)
+
+    def n_hyperparameters(self, input_dim):
+        return input_dim + self.n_out * (self.rank + 1)
+
+    def _split(self, hyperparameters, input_dim):
+        n, r = self.n_out, self.rank
+        return (hyperparameters[:input_dim],
+                np.reshape(hyperparameters[input_dim:input_dim + n * r], (n, r)),
+                hyperparameters[input_dim + n * r:input_dim + n * (r + 1)])
+
+    def __call__(self, x1, x2, hyperparameters):
+        lengths, W, kappa = self._split(hyperparameters, x1.shape[1])
+        K_x = matern_kernel_diff1(get_anisotropic_distance_matrix(x1, x2, lengths), 1)
+        return [K_x, W @ W.T + np.diag(kappa)]
+
+    def chain_rule(self, x, hyperparameters, factor_gradients):
+        """dL/dh for every hyperparameter, given G_x = dL/dK_x and G_B = dL/dB.
+
+        Exact: d<G_B, W W^T>/dW = (G_B + G_B^T) W and d<G_B, diag(kappa)>/dkappa = diag(G_B);
+        for a length scale, the analytic Matern derivative. O(D n_x^2 + n_out^2 rank).
+        Indices outside this kernel's range (mean or noise hyperparameters) get zero.
+        """
+        G_x, G_B = factor_gradients
+        D, n, r = x.shape[1], self.n_out, self.rank
+        lengths, W, _ = self._split(hyperparameters, D)
+        gradient = np.zeros(len(hyperparameters))
+        distance = get_anisotropic_distance_matrix(x, x, lengths)
+        nonzero = distance != 0.0
+        for i in range(D):
+            ddistance = np.zeros(distance.shape)
+            ddistance[nonzero] = (-np.subtract.outer(x[:, i], x[:, i])[nonzero] ** 2
+                                  / (lengths[i] ** 3 * distance[nonzero]))
+            gradient[i] = np.sum(G_x * matern_kernel_diff1_grad(distance, ddistance))
+        gradient[D:D + n * r] = ((G_B + G_B.T) @ W).ravel()
+        gradient[D + n * r:D + n * (r + 1)] = np.diag(G_B)
+        return gradient
+
+    @staticmethod
+    def _output_variances(y):
+        variances = np.var(y, axis=0)
+        fallback = float(np.var(y)) or 1.0
+        return np.where(variances > 0.0, variances, fallback)
+
+    def default_hyperparameters(self, x, y):
+        """Length scales at the input ranges; B with each output's variance on its diagonal.
+
+        W must not start at zero, where dB/dW vanishes and the optimizer could never leave.
+        Its columns are cosines of increasing frequency over the outputs (a DCT basis), so
+        that for rank > 1 they start distinct; identical columns would stay identical.
+        """
+        ranges = np.ptp(x, axis=0)
+        variances = self._output_variances(y)
+        o = np.arange(self.n_out)
+        basis = np.column_stack([np.ones(self.n_out)] +
+                                [np.sqrt(2.0) * np.cos(np.pi * c * (o + 0.5) / self.n_out)
+                                 for c in range(1, self.rank)])
+        W = np.sqrt(0.9 * variances / self.rank)[:, None] * basis
+        return np.concatenate([np.where(ranges > 0.0, ranges, 1.0), W.ravel(), 0.1 * variances])
+
+    def default_bounds(self, x, y):
+        """Length scales within [range/100, 10 range]; |W| up to sqrt(10 var); kappa in [var/1000, 10 var]."""
+        ranges = np.ptp(x, axis=0)
+        ranges = np.where(ranges > 0.0, ranges, 1.0)
+        variances = self._output_variances(y)
+        w = np.repeat(np.sqrt(10.0 * variances), self.rank)
+        return np.vstack([np.column_stack([ranges / 100.0, ranges * 10.0]),
+                          np.column_stack([-w, w]),
+                          np.column_stack([variances / 1000.0, variances * 10.0])])

@@ -142,7 +142,7 @@ class GPkv:
         self.Preconditioner_failure = None
         # linalg_mode "low_rank": the LowRankPlusDiagonal factorization of the current K + V
         self.low_rank_factor = None
-        # fvGP(kronecker=True): the KroneckerFactorization of the current K + V
+        # fvGP(multi_task_mode='kronecker'): the KroneckerFactorization of the current K + V
         self.kronecker_factor = None
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
                               "sparseLU", "sparseMINRESpre", "sparseCGpre", "low_rank_<r>",
@@ -150,7 +150,7 @@ class GPkv:
                               "sparseSolve", "a set of callables"]
         K, V, m = self._get_KVm()
 
-        # set by fvGP(kronecker=True), never by linalg_mode: K is then a list of factors
+        # set by fvGP(multi_task_mode='kronecker'), never by linalg_mode: K is then a list of factors
         if self.data.kronecker: self.mode = "kronecker"
         elif self.gp2Scale: self.mode = self._set_gp2Scale_mode(K)
         elif linalg_mode is not None: self.mode = linalg_mode

@@ -4087,6 +4087,81 @@ def _one_column_mean(c):
     return lambda x, h: _column_mean(x, h)[:, c]
 
 
+def test_fvgp_independent_mode_is_a_gp_with_several_right_hand_sides():
+    """multi_task_mode='independent' is GP's 2-d y_data behind fvGP's interface: same likelihood,
+    gradient and posterior; x_out selects outputs; data updates keep the layout."""
+    import pickle
+    rng = np.random.default_rng(0)
+    x = rng.random((25, 2))
+    y = np.column_stack([np.sin(4 * x[:, 0]), 3 * np.cos(3 * x[:, 1]), x[:, 0] * x[:, 1]])
+    noise = np.full(25, 0.01)
+    xp = rng.random((4, 2))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ind = fvGP(x, y, noise_variances=noise, multi_task_mode="independent")
+        gp = GP(x, y, ind.hyperparameters, noise_variances=noise)
+    assert ind.data.multi_task == "independent" and ind.y_data.shape == (25, 3)
+    assert ind.input_set_dim == ind.index_set_dim == 2 and len(ind.hyperparameters) == 3
+    assert np.allclose(ind.prior.m, y.mean(axis=0))
+    h = ind.hyperparameters * 1.1
+    assert np.isclose(ind.log_likelihood(h), gp.log_likelihood(h))
+    assert np.allclose(ind.neg_log_likelihood_gradient(h), gp.neg_log_likelihood_gradient(h))
+    assert np.allclose(ind.posterior_mean(xp)["m(x)"], gp.posterior_mean(xp)["m(x)"])
+    assert np.allclose(ind.posterior_mean(xp, x_out=np.array([2, 0]))["m(x)"],
+                       gp.posterior_mean(xp)["m(x)"][:, [2, 0]])
+    a, b = ind.posterior_covariance(xp, x_out=np.array([1])), gp.posterior_covariance(xp)
+    assert a["v(x)"].shape == (4, 1) and np.allclose(a["v(x)"], b["v(x)"][:, [1]]) and np.allclose(a["S"], b["S"])
+    try:
+        ind.posterior_mean(xp, x_out=np.array([3]))
+    except ValueError as e:
+        assert "multi_task_mode='independent' x_out selects outputs by index" in str(e)
+    else:
+        raise AssertionError("an output index out of range must raise")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ind.train(max_iter=20, n_restarts=1)
+    # append and replace keep the (V, No) layout and the noise vector
+    x_new, y_new = rng.random((3, 2)), rng.random((3, 3))
+    ind.update_gp_data(x_new, y_new, noise_variances_new=np.full(3, 0.02))
+    assert ind.y_data.shape == ind.fvgp_y_data.shape == (28, 3) and ind.noise_variances.shape == (28,)
+    assert ind.fvgp_noise_variances.shape == (28,) and ind.data.x_out is None
+    fresh = fvGP(ind.x_data, ind.y_data, ind.hyperparameters, noise_variances=ind.noise_variances,
+                 multi_task_mode="independent")
+    assert np.isclose(ind.log_likelihood(), fresh.log_likelihood())
+    ind.update_gp_data(x_new, y_new, noise_variances_new=np.full(3, 0.02), append=False)
+    assert ind.y_data.shape == (3, 3)
+    assert pickle.loads(pickle.dumps(ind)).log_likelihood() == ind.log_likelihood()
+    # no missing outputs, and only the three modes
+    bad = y.copy()
+    bad[0, 1] = np.nan
+    for kwargs, message in (({"y_data": bad, "multi_task_mode": "independent"}, "full grid"),
+                            ({"y_data": y, "multi_task_mode": "separate"}, "must be 'cartesian'")):
+        try:
+            fvGP(x, init_hyperparameters=np.ones(3), noise_variances=noise, **kwargs)
+        except ValueError as e:
+            assert message in str(e)
+        else:
+            raise AssertionError(f"expected a ValueError with {message!r}")
+
+
+def test_the_gradient_of_several_gps_is_the_gradient_of_their_likelihood():
+    """The likelihood averages its columns; the default gradient used to be column 0's alone,
+    so local, hgdl and adam training of several GPs at once followed the wrong gradient."""
+    rng = np.random.default_rng(0)
+    x = rng.random((30, 2))
+    y = np.column_stack([np.sin(4 * x[:, 0]), 3 * np.cos(3 * x[:, 1])])
+    h = np.array([1.3, 0.4, 0.6, 0.3, -0.2])
+    for gradient_per_direction in (False, True):
+        gp = GP(x, y, h, noise_variances=np.full(30, 0.01), prior_mean_function=_column_mean,
+                gradient_per_direction=gradient_per_direction)
+        analytic = -gp.neg_log_likelihood_gradient(h * 1.1)
+        steps = np.eye(len(h)) * 1e-6
+        fd = np.array([(gp.log_likelihood(h * 1.1 + e) - gp.log_likelihood(h * 1.1 - e)) / 2e-6 for e in steps])
+        assert np.allclose(analytic, fd, rtol=1e-5, atol=1e-5)
+        per_column = [gp.neg_log_likelihood_gradient(h * 1.1, component=c) for c in (0, 1)]
+        assert np.allclose(-analytic, np.mean(per_column, axis=0))
+
+
 def test_a_prior_mean_per_right_hand_side():
     """With several right-hand sides the mean may be (N, k): each column is then the single-task
     GP with its own mean. A 1-d mean is shared by all columns, and any other shape raises."""
@@ -4096,6 +4171,11 @@ def test_a_prior_mean_per_right_hand_side():
     h = np.array([1., .5, .5, 0.3, -0.2])
     noise = np.full(20, 0.01)
     xp = rng.random((4, 2))
+    # the default mean: each column's own average, so each column is the single-task GP's default
+    default = GP(x, y, h[:3], noise_variances=noise)
+    assert default.prior.m.shape == (20, 2) and np.allclose(default.prior.m, y.mean(axis=0))
+    assert np.isclose(default.log_likelihood(),
+                      np.mean([GP(x, y[:, c], h[:3], noise_variances=noise).log_likelihood() for c in (0, 1)]))
     both = GP(x, y, h, noise_variances=noise, prior_mean_function=_column_mean)
     singles = [GP(x, y[:, c], h, noise_variances=noise, prior_mean_function=_one_column_mean(c)) for c in (0, 1)]
     assert np.isclose(both.log_likelihood(), np.mean([gp.log_likelihood() for gp in singles]))
@@ -5240,6 +5320,27 @@ def _kron_cartesian_mean(x, h):
     return h[6] * x[:, 0]
 
 
+def test_cartesian_fvgp_default_mean_is_each_tasks_average():
+    """The usual fvGP's default mean gives every (point, task) pair its task's average -- the
+    same model as the per-output default of Kronecker mode and of several GPs at once."""
+    rng = np.random.default_rng(0)
+    x = rng.random((10, 2))
+    y = np.column_stack([rng.random(10) + 100.0, rng.random(10), np.full(10, np.nan)])
+    y[3, 1] = np.nan
+    gp = fvGP(x, y, np.ones(4), noise_variances=np.full((10, 3), 0.01))
+    expected = {0: np.mean(y[:, 0]), 1: np.nanmean(y[:, 1])}
+    assert gp.prior.m.shape == (19,)
+    assert np.allclose(gp.prior.m, [expected[int(t)] for t in gp.x_data[:, -1]])
+    # a task without observations falls back to the overall average
+    overall = np.nanmean(y)
+    assert np.allclose(gp.prior._task_means(np.array([[0.5, 0.5, 2.0]])), overall)
+    assert np.allclose(gp.posterior_mean(x[:2], x_out=np.array([2]))["m(x)"], overall, atol=0.5)
+    # an append recomputes the averages over all data
+    y_new = np.array([[110.0, 1.0, np.nan]])
+    gp.update_gp_data(rng.random((1, 2)), y_new, noise_variances_new=np.full((1, 3), 0.01))
+    assert np.isclose(gp.prior.m[0], np.mean(np.append(y[:, 0], 110.0)))
+
+
 def _kron_data(n=30):
     rng = np.random.default_rng(1)
     x = rng.random((n, 2))
@@ -5249,7 +5350,7 @@ def _kron_data(n=30):
 
 
 def test_kronecker_mode_matches_the_cartesian_fvgp():
-    """fvGP(kronecker=True) reproduces the Cartesian fvGP with the np.kron kernel exactly."""
+    """fvGP(multi_task_mode="kronecker") reproduces the Cartesian fvGP with the np.kron kernel exactly."""
     x, y, noise = _kron_data()
     xp = np.random.default_rng(2).random((5, 2))
     h = np.array([1.3, 0.4, 0.6, 1.5, 2.0, 0.02, 0.3])
@@ -5261,8 +5362,10 @@ def test_kronecker_mode_matches_the_cartesian_fvgp():
         cart_fn_econ = fvGP(x, y, h, kernel_function=_kron_cartesian_kernel, noise_function=_kron_noise,
                             prior_mean_function=_kron_cartesian_mean, gradient_per_direction=True)
     for kernel in (_kron_factors, _kron_kernel_one_output_factor):
-        kron = fvGP(x, y, h, noise_variances=noise, kernel_function=kernel, kronecker=True)
+        kron = fvGP(x, y, h, noise_variances=noise, kernel_function=kernel, multi_task_mode="kronecker")
         assert kron.kv.mode == "kronecker" and kron.y_data.shape == (30, 12)
+        # the default mean: each output's average, one column per output
+        assert kron.prior.m.shape == (30, 12) and np.allclose(kron.prior.m, y.mean(axis=0))
         h2 = h * 1.1
         assert np.isclose(kron.log_likelihood(), cart.log_likelihood(), rtol=1e-12)
         assert np.isclose(kron.log_likelihood(h2), cart.log_likelihood(h2), rtol=1e-12)
@@ -5295,7 +5398,7 @@ def test_kronecker_mode_matches_the_cartesian_fvgp():
     # a noise function and a mean function, with their finite-difference gradients
     for gradient_per_direction, reference in ((False, cart_fn), (True, cart_fn_econ)):
         kron = fvGP(x, y, h, kernel_function=_kron_factors, noise_function=_kron_noise,
-                    prior_mean_function=_kron_mean, gradient_per_direction=gradient_per_direction, kronecker=True)
+                    prior_mean_function=_kron_mean, gradient_per_direction=gradient_per_direction, multi_task_mode="kronecker")
         assert np.isclose(kron.log_likelihood(h * 0.9), reference.log_likelihood(h * 0.9), rtol=1e-12)
         assert np.allclose(kron.neg_log_likelihood_gradient(h * 0.9), reference.neg_log_likelihood_gradient(h * 0.9),
                            rtol=1e-5, atol=1e-4)
@@ -5312,11 +5415,11 @@ def test_kronecker_mode_uses_an_analytic_kernel_gradient():
     import pickle
     x, y, noise = _kron_data()
     h = np.array([1.3, 0.4, 0.6, 1.5, 2.0])
-    finite_differences = fvGP(x, y, h, noise_variances=noise, kernel_function=_kron_factors, kronecker=True)
+    finite_differences = fvGP(x, y, h, noise_variances=noise, kernel_function=_kron_factors, multi_task_mode="kronecker")
     reference = finite_differences.neg_log_likelihood_gradient(h * 1.1)
     for gradient_per_direction, grad in ((False, _kron_factors_grad), (True, _kron_factors_grad_per_direction)):
         gp = fvGP(x, y, h, noise_variances=noise, kernel_function=_kron_factors, kernel_function_grad=grad,
-                  gradient_per_direction=gradient_per_direction, kronecker=True)
+                  gradient_per_direction=gradient_per_direction, multi_task_mode="kronecker")
         assert gp.prior.user_kernel_grad
         assert np.allclose(gp.neg_log_likelihood_gradient(h * 1.1), reference, rtol=1e-5, atol=1e-4)
         fd, analytic = gp.test_log_likelihood_gradient(h * 1.1)
@@ -5325,14 +5428,17 @@ def test_kronecker_mode_uses_an_analytic_kernel_gradient():
     assert pickle.loads(pickle.dumps(gp)).prior.user_kernel_grad
 
 
-def test_kronecker_mode_default_kernel_training_data_and_pickling():
+def test_kronecker_mode_flat_default_kernel_training_data_and_pickling():
+    """Above the output threshold the default is the flat Matern; also data updates and pickling."""
     import pickle
     from fvgp.gp_prior import GPprior
     x, y, noise = _kron_data()
+    flat = {"kronecker_coregionalization_max_outputs": 1}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        gp = fvGP(x, y, kronecker=True)
-    assert any("flattened output" in str(w.message) for w in caught)
+        gp = fvGP(x, y, multi_task_mode="kronecker", args=flat)
+    assert any("flattened output" in str(w.message) and "more than args['kronecker_coregionalization_max_outputs']"
+               in str(w.message) for w in caught)
     hps = gp.hyperparameters
     assert len(hps) == 4    # D + 2, the Cartesian fvGP default's layout
 
@@ -5357,12 +5463,12 @@ def test_kronecker_mode_default_kernel_training_data_and_pickling():
     rng = np.random.default_rng(3)
     x_new = rng.random((4, 2))
     noise_new = 0.01 * (rng.random(4) + 0.5)
-    measured = fvGP(x, y, gp.hyperparameters, noise_variances=noise, kronecker=True)
+    measured = fvGP(x, y, gp.hyperparameters, noise_variances=noise, multi_task_mode="kronecker", args=flat)
     for append in (True, False):
         y_new = rng.random((4, 12))
         measured.update_gp_data(x_new, y_new, noise_variances_new=noise_new, append=append)
         fresh = fvGP(measured.x_data, measured.y_data, measured.hyperparameters,
-                     noise_variances=measured.noise_variances, kronecker=True)
+                     noise_variances=measured.noise_variances, multi_task_mode="kronecker", args=flat)
         assert np.isclose(measured.log_likelihood(), fresh.log_likelihood(), rtol=1e-12)
         assert measured.fvgp_y_data.shape == measured.y_data.shape == ((34 if append else 4), 12)
     # measured noise at new inputs: the mean, for every output
@@ -5375,6 +5481,72 @@ def test_kronecker_mode_default_kernel_training_data_and_pickling():
     restored = pickle.loads(pickle.dumps(gp))
     assert restored.log_likelihood() == gp.log_likelihood()
     assert np.array_equal(restored.posterior_mean(x[:3])["m(x)"], gp.posterior_mean(x[:3])["m(x)"])
+
+
+def _icm_noise(x, h):
+    return np.full(len(x), h[-1])
+
+
+def test_kronecker_mode_default_coregionalization_kernel():
+    """Up to the output threshold the default is the ICM K_x kron (W W^T + diag(kappa)), with an
+    exact gradient, data-driven defaults and bounds, and a configurable rank."""
+    import pickle
+    from fvgp.kernels import CoregionalizationKernel
+    x, y, noise = _kron_data()
+    xp = np.random.default_rng(2).random((4, 2))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        gp = fvGP(x, y, multi_task_mode="kronecker", noise_variances=noise)
+    assert not any("flattened output" in str(w.message) for w in caught)
+    kernel = gp.prior.kernel
+    assert isinstance(kernel, CoregionalizationKernel) and kernel.rank == 1
+    assert len(gp.hyperparameters) == kernel.n_hyperparameters(2) == 2 + 2 * 12
+    # the same model as the Cartesian fvGP with that kernel written out on [x, task] points
+    def cartesian(x1, x2, h):
+        K_x, B = kernel(x1[:, :-1], x2[:, :-1], h)
+        return K_x * B[x1[:, -1].astype(int)][:, x2[:, -1].astype(int)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cart = fvGP(x, y, gp.hyperparameters, noise_variances=np.tile(noise[:, None], (1, 12)),
+                    kernel_function=cartesian)
+    assert np.isclose(gp.log_likelihood(), cart.log_likelihood(), rtol=1e-12)
+    assert np.allclose(gp.posterior_mean(xp)["m(x)"], cart.posterior_mean(xp)["m(x)"], atol=1e-12)
+    assert np.allclose(gp.posterior_covariance(xp)["S"], cart.posterior_covariance(xp)["S"], atol=1e-12)
+    # the gradient is exact (central differences agree to their own error), for rank 1 and 2,
+    # also next to a noise hyperparameter beyond the kernel's range
+    rng = np.random.default_rng(5)
+    for rank in (1, 2):
+        args = {"kronecker_coregionalization_rank": rank}
+        start = fvGP(x, y, multi_task_mode="kronecker", noise_variances=noise, args=args).hyperparameters
+        h = np.append(start * rng.uniform(0.7, 1.3, len(start)), 0.015)
+        icm = fvGP(x, y, h, noise_function=_icm_noise, multi_task_mode="kronecker", args=args)
+        assert icm.prior.kernel.rank == rank
+        analytic = -icm.neg_log_likelihood_gradient(h)
+        steps = np.eye(len(h)) * 1e-5 * np.maximum(abs(h), 1e-2)
+        fd = np.array([(icm.log_likelihood(h + e) - icm.log_likelihood(h - e)) / (2 * e[i])
+                       for i, e in enumerate(steps)])
+        assert np.allclose(analytic, fd, rtol=1e-5, atol=1e-5)
+    # defaults lie within the default bounds, and training with every default improves them
+    bounds = gp._get_default_hyperparameter_bounds()
+    assert bounds.shape == (26, 2) and np.all((bounds[:, 0] <= gp.hyperparameters) & (gp.hyperparameters <= bounds[:, 1]))
+    assert np.all(bounds[2:14, 0] < 0.0)     # W is signed
+    before = gp.log_likelihood()
+    gp.train(max_iter=50, n_restarts=2)
+    assert gp.log_likelihood() > before
+    assert pickle.loads(pickle.dumps(gp)).log_likelihood() == gp.log_likelihood()
+    # passed explicitly, with its own defaults
+    explicit = CoregionalizationKernel(12, rank=3)
+    gp3 = fvGP(x, y, explicit.default_hyperparameters(x, y), kernel_function=explicit, multi_task_mode="kronecker",
+               noise_variances=noise)
+    assert gp3._get_default_hyperparameter_bounds().shape == (2 + 4 * 12, 2)
+    assert np.isfinite(gp3.log_likelihood())
+    # too few hyperparameters for the default's layout
+    try:
+        fvGP(x, y, np.ones(4), multi_task_mode="kronecker", noise_variances=noise)
+    except ValueError as e:
+        assert "needs 26 hyperparameters" in str(e)
+    else:
+        raise AssertionError("too few hyperparameters for the coregionalization default must raise")
 
 
 def test_kronecker_mode_rejects_what_it_cannot_do():
@@ -5394,7 +5566,7 @@ def test_kronecker_mode_rejects_what_it_cannot_do():
 
     def kron(**kwargs):
         kwargs.setdefault("kernel_function", _kron_factors)
-        return fvGP(x, kwargs.pop("y", y), h, kronecker=True, **kwargs)
+        return fvGP(x, kwargs.pop("y", y), h, multi_task_mode="kronecker", **kwargs)
     # the noise is one positive variance per input: no matrix, no per-output array
     raises(ValueError, "vector of variances", kron, noise_function=lambda x, h: np.eye(len(x)) * 0.01)
     raises(ValueError, "vector of variances", kron, noise_function=lambda x, h: np.full((len(x), 12), 0.01))
@@ -5402,7 +5574,7 @@ def test_kronecker_mode_rejects_what_it_cannot_do():
     bad_y = y.copy()
     bad_y[2, 3] = np.nan
     raises(ValueError, "full grid", kron, y=bad_y)
-    raises(ValueError, "cannot be combined", fvGP, x, y, h, kronecker=True, gp2Scale=True)
+    raises(ValueError, "cannot be combined", fvGP, x, y, h, multi_task_mode="kronecker", gp2Scale=True)
     # malformed kernels and means
     raises(ValueError, "must return a list", kron, kernel_function=lambda x1, x2, h: _kron_factors(x1, x2, h)[0])
     raises(ValueError, "input factor", kron, kernel_function=lambda x1, x2, h: [np.eye(3)] + _kron_factors(x1, x2, h)[1:])
@@ -5467,7 +5639,7 @@ def test_kronecker_mode_on_non_euclidean_inputs():
     y = rng.random((8, 6))
     noise = 0.01 + 0.01 * rng.random(8)
     h = np.array([1., 2., 3.])
-    kron = fvGP(words[:8], y, h, noise_variances=noise, kernel_function=_kron_word_kernel, kronecker=True)
+    kron = fvGP(words[:8], y, h, noise_variances=noise, kernel_function=_kron_word_kernel, multi_task_mode="kronecker")
     cart = fvGP(words[:8], y, h, noise_variances=np.tile(noise[:, None], (1, 6)),
                 kernel_function=_kron_word_cartesian_kernel)
     assert kron.index_set_dim == kron.input_set_dim == 1 and not kron.data.Euclidean
@@ -5487,7 +5659,7 @@ def test_kronecker_mode_on_non_euclidean_inputs():
     assert kron.x_data == words and kron.fvgp_x_data == words
     assert kron.y_data.shape == (10, 6) and kron.noise_variances.shape == kron.fvgp_noise_variances.shape == (10,)
     fresh = fvGP(words, kron.y_data, kron.hyperparameters, noise_variances=kron.noise_variances,
-                 kernel_function=_kron_word_kernel, kronecker=True)
+                 kernel_function=_kron_word_kernel, multi_task_mode="kronecker")
     assert np.isclose(kron.log_likelihood(), fresh.log_likelihood(), rtol=1e-12)
     kron.update_gp_data(words[:3], rng.random((3, 6)), noise_variances_new=np.full(3, 0.01), append=False)
     assert kron.x_data == words[:3]

@@ -2,6 +2,7 @@ import warnings
 
 import numpy as np
 from .gp import GP
+from .kernels import CoregionalizationKernel, COREGIONALIZATION_MAX_OUTPUTS
 
 
 class fvGP(GP):
@@ -20,7 +21,13 @@ class fvGP(GP):
     N ... arbitrary integers (N1, N2,...)
 
 
-    The main logic of fvGP is that any multi-task GP is just a single-task GP
+    fvGP has three multi-task modes, chosen with ``multi_task_mode`` (see there):
+    ``'cartesian'`` (the default) for full multi-task learning with any kernel and missing
+    outputs, ``'kronecker'`` for data on a full grid with a separable kernel, scaling to
+    millions of input-output pairs, and ``'independent'`` for tasks that share one GP's
+    hyperparameters but are otherwise unrelated.
+
+    The main logic of the default mode is that any multi-task GP is just a single-task GP
     over a Cartesian product space of input and output space, as long as the kernel
     is flexible enough, so prepare to work on your kernel. This is the best
     way to give the user optimal control and power. At various instances, for example
@@ -55,7 +62,9 @@ class fvGP(GP):
         The default is an array of ones with the right length for the anisotropic Matern
         kernel with automatic relevance determination (ARD). The task direction is
         simply considered a separate dimension. If ``gp2Scale`` is
-        enabled, the default kernel changes to the anisotropic Wendland kernel.
+        enabled, the default kernel changes to the anisotropic Wendland kernel. With
+        ``multi_task_mode='kronecker'`` and the default coregionalization kernel, the default is
+        :py:meth:`fvgp.kernels.CoregionalizationKernel.default_hyperparameters`, drawn from the data.
         The full hyperparameter vector is passed to the kernel, mean, and noise callables,
         but the index ranges used by each callable are **disjoint and user-defined**.
         Each callable must only read the indices reserved for it. The gradient
@@ -71,7 +80,7 @@ class fvGP(GP):
         will be set to ``abs(np.mean(y_data)) / 100.0``. If
         noise covariances are required (correlated noise), make use of the ``noise_function``.
         Only provide a noise function OR ``noise_variances``, not both.
-        With ``kronecker=True`` the shape is (V): one variance per input point, the same for
+        With ``multi_task_mode`` ``'kronecker'`` or ``'independent'`` the shape is (V): one variance per input point, the same for
         every output.
     compute_device : str, optional
         One of ``cpu`` or ``gpu``, determines how linear algebra computations are executed. The default is ``cpu``.
@@ -103,8 +112,8 @@ class fvGP(GP):
         The output is a matrix, an N1 x N2 numpy array.
         This callable receives the full hyperparameter vector but must only use
         the indices reserved for the kernel (disjoint from mean and noise indices).
-        With ``kronecker=True`` the kernel receives the inputs only and returns a list of
-        factors instead, and so does its gradient; see ``kronecker``.
+        With ``multi_task_mode='kronecker'`` the kernel receives the inputs only and returns a list of
+        factors instead, and so does its gradient; see ``multi_task_mode``.
     kernel_function_grad : Callable, optional
         A function that calculates the derivative of the ``kernel_function`` with respect to the hyperparameters.
         If provided, it will be used for local training (optimization) and can speed up the calculations.
@@ -123,11 +132,14 @@ class fvGP(GP):
         hyperparameters (a 1d array of length Di+2 for the default kernel).
         Optionally, the third argument ``args`` can be defined.
         The return value is a 1d array of length N1. If None is provided,
-        :py:meth:`fvgp.GP._default_mean_function` is used, which is the average of the ``y_data``.
+        :py:meth:`fvgp.GP._default_mean_function` is used, which is each task's average of
+        ``y_data``: every (point, task) pair gets the average of its task (the overall average
+        for a task without observations); with ``multi_task_mode`` ``'kronecker'`` or ``'independent'``, shape (N1, No).
         This callable receives the full hyperparameter vector but must only use
         the indices reserved for the mean function (disjoint from kernel and noise indices).
-        With ``kronecker=True`` it receives the inputs only (N1 x Di) and returns an array of
-        shape (N1, No), one mean per input and output, or of length N1, shared by all outputs.
+        With ``multi_task_mode`` ``'kronecker'`` or ``'independent'`` it receives the inputs only (N1 x Di) and returns an
+        array of shape (N1, No), one mean per input and output, or of length N1, shared by all
+        outputs.
     prior_mean_function_grad : Callable, optional
         A function that evaluates the gradient of the ``prior_mean_function`` at
         a set of input positions with respect to the hyperparameters.
@@ -138,7 +150,7 @@ class fvGP(GP):
         zeros are returned since the default mean function does not depend on hyperparameters,
         or a finite-difference approximation
         is used if ``prior_mean_function`` is provided.
-        With ``kronecker=True`` the shape is (len(hyperparameters) x N1 x No), or
+        With ``multi_task_mode`` ``'kronecker'`` or ``'independent'`` the shape is (len(hyperparameters) x N1 x No), or
         (len(hyperparameters) x N1) for a mean shared by all outputs.
     noise_function : Callable, optional
         The noise function is a callable f(x,hyperparameters, [args]) that returns the noise
@@ -152,8 +164,8 @@ class fvGP(GP):
         Only provide a noise function OR a noise variance vector, not both.
         This callable receives the full hyperparameter vector but must only use
         the indices reserved for the noise function (disjoint from kernel and mean indices).
-        With ``kronecker=True`` it receives the inputs only (N x Di) and returns one variance
-        per input point, the same for every output; Kronecker mode rejects matrix noise.
+        With ``multi_task_mode`` ``'kronecker'`` or ``'independent'`` it receives the inputs only (N x Di) and returns one
+        variance per input point, the same for every output; Kronecker mode rejects matrix noise.
     noise_function_grad : Callable, optional
         A function that evaluates the gradient of the ``noise_function``
         at an input position with respect to the hyperparameters.
@@ -459,11 +471,38 @@ class fvGP(GP):
         - "GPU_device" : str; e.g. "cuda:1" or "mps"
         - "GPU_device_index" : int — explicit CUDA device index
 
+        Kronecker mode (``multi_task_mode='kronecker'``):
+
+        - "kronecker_coregionalization_rank" : int; default = 1 — the rank of the default
+          coregionalization kernel
+        - "kronecker_coregionalization_max_outputs" : int; default = 500 — up to this many
+          outputs the default kernel is the coregionalization kernel, above it the flat Matern
+
         All other keys will be stored and are available as part of the object instance and
         in kernel, mean, and noise functions.
-    kronecker : bool, optional
-        Default False. For data on a full grid -- every output observed at every input -- with
-        a separable kernel, K = K_x kron F_1 kron ... kron F_m. K is then never formed: each
+    multi_task_mode : str, optional
+        How the outputs are modeled. One of:
+
+        ``'cartesian'`` (default) -- full multi-task learning. Every (input, output) pair
+        becomes one point of a single-task GP over the Cartesian product of input and output
+        space, and the kernel, mean and noise functions see those points, with the output
+        index as the last coordinate (see the class description). Any kernel, and missing
+        outputs (NaN in ``y_data``), are allowed; the cost is that of a GP over V * No points.
+
+        ``'independent'`` -- No GPs that share kernel, noise and hyperparameters but are
+        otherwise unrelated: the outputs are No right-hand sides of one GP over the inputs,
+        so only one V x V covariance is factored. ``y_data`` (V, No) is used as given, with no
+        NaN, and the kernel, mean and noise functions receive the inputs only. The noise is one
+        variance per input point, the same for every output (``noise_variances`` of shape
+        (V)). The default mean is each output's average; a ``prior_mean_function`` may return
+        (len(x),), shared, or (len(x), No), one mean per output. The likelihood is the average
+        of the outputs' likelihoods, and so is its gradient. ``x_out`` in the posterior
+        selects outputs by index; all outputs share one posterior covariance over the inputs
+        (``"S"``), and there is none between outputs. The same as :py:class:`fvgp.GP` given a
+        2-d ``y_data``.
+
+        ``'kronecker'`` -- for data on a full grid -- every output observed at every input --
+        with a separable kernel, K = K_x kron F_1 kron ... kron F_m. K is then never formed: each
         factor is eigendecomposed on its own, and the likelihood, its gradient and the posterior
         are exact at O(sum n_f^3) plus O(N sum n_f) per solve, N = V * No. This makes, e.g.,
         1000 inputs with a 100 x 100 image each (N = 1e7) tractable on one node, where K itself
@@ -481,9 +520,21 @@ class fvGP(GP):
           Output o is the row-major index over the output axes, as in ``np.kron(F_1, F_2)``. The
           kernel creates the output geometry itself; for a 100 x 100 image (No = 10000),
           ``[K_x, K_rows, K_cols]`` with two 100 x 100 factors keeps every eigendecomposition
-          small. Without a kernel the default is the Matern kernel on the inputs times a Matern
-          kernel on the flat output index 0 ... No-1 (with a warning: it respects no other
-          output geometry), D + 2 hyperparameters as for the default Cartesian kernel.
+          small.
+        * Without a kernel, the default is the coregionalization kernel
+          :py:class:`fvgp.kernels.CoregionalizationKernel`, K_x kron B with B = W W^T + diag(kappa):
+          a Matern kernel on the inputs (unit variance), and a learned covariance between the
+          outputs, through ``rank`` latent processes shared by all outputs (W, No x rank) and
+          one independent process per output (kappa). Its D + No * (rank + 1) hyperparameters
+          are ``[length scales, W (row-major), kappa]``; their defaults and bounds come from the
+          data, and its likelihood gradient is exact. ``args["kronecker_coregionalization_rank"]``
+          sets the rank (default 1). Measured with 500 inputs, a likelihood evaluation plus
+          its gradient takes 0.1 s at No = 100 and 1.2 s at No = 1000.
+        * Above ``args["kronecker_coregionalization_max_outputs"]`` outputs (default 500),
+          where B and the No * (rank + 1) hyperparameters cost more than they are worth, the
+          default is instead a Matern kernel on the inputs times a Matern kernel on the flat
+          output index 0 ... No-1, D + 2 hyperparameters, with a warning: it respects no
+          output geometry but a 1-d sequence.
         * ``prior_mean_function`` receives the inputs only and returns an array of shape
           (len(x), No), or (len(x)) for a mean shared by all outputs.
         * ``x_out`` in the posterior selects outputs by index (0 ... No-1).
@@ -598,8 +649,11 @@ class fvGP(GP):
         linalg_mode=None,
         gradient_per_direction=False,
         args=None,
-        kronecker=False
+        multi_task_mode="cartesian"
     ):
+        if multi_task_mode not in ("cartesian", "kronecker", "independent"):
+            raise ValueError(f"multi_task_mode must be 'cartesian', 'kronecker' or 'independent', "
+                             f"got {multi_task_mode!r}.")
         if isinstance(y_data, np.ndarray):
             if np.ndim(y_data) == 1:
                 raise ValueError("The output number is 1, you can use the GP class for single-task GPs")
@@ -610,17 +664,31 @@ class fvGP(GP):
         fvgp_x_data = x_data
         fvgp_y_data = y_data
         fvgp_noise_variances = noise_variances
-        if kronecker:
+        if multi_task_mode == "kronecker":
             if gp2Scale:
-                raise ValueError("kronecker=True and gp2Scale=True cannot be combined: Kronecker mode never "
-                                 "forms K, so there is nothing to distribute.")
+                raise ValueError("multi_task_mode='kronecker' and gp2Scale=True cannot be combined: Kronecker "
+                                 "mode never forms K, so there is nothing to distribute.")
             if linalg_mode is not None:
-                warnings.warn(f"kronecker=True brings its own linear algebra; linalg_mode={linalg_mode!r} is ignored.")
+                warnings.warn(f"multi_task_mode='kronecker' brings its own linear algebra; "
+                              f"linalg_mode={linalg_mode!r} is ignored.")
                 linalg_mode = None
-            # one (n_x, n_out) tensor: no Cartesian product of inputs and outputs
-            self._kronecker = True
-        else:
+            if kernel_function is None and isinstance(x_data, np.ndarray):
+                kernel_function = self._default_coregionalization_kernel(args)
+                if kernel_function is not None and init_hyperparameters is None and \
+                        prior_mean_function is None and noise_function is None:
+                    init_hyperparameters = kernel_function.default_hyperparameters(x_data, y_data)
+                if kernel_function is not None and init_hyperparameters is not None and \
+                        len(init_hyperparameters) < kernel_function.n_hyperparameters(x_data.shape[1]):
+                    raise ValueError(
+                        f"The default Kronecker kernel, the coregionalization kernel of rank "
+                        f"{kernel_function.rank}, needs {kernel_function.n_hyperparameters(x_data.shape[1])} "
+                        f"hyperparameters: [length scales (D), W (n_out * rank, row-major), kappa (n_out)], "
+                        f"then any of the mean and noise functions. Got {len(init_hyperparameters)}.")
+        if multi_task_mode == "cartesian":
             x_data, y_data, noise_variances = self._transform_index_set2(x_data, y_data, noise_variances)
+        # kronecker: one (n_x, n_out) tensor; independent: n_out right-hand sides sharing one GP.
+        # Neither builds a Cartesian product of inputs and outputs.
+        self._multi_task = multi_task_mode
 
         ####init GP
         super().__init__(
@@ -643,7 +711,26 @@ class fvGP(GP):
             gradient_per_direction=gradient_per_direction,
             args=args)
 
-        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances, np.arange(0, self.output_num))
+        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances, self._x_out())
+
+    def _x_out(self):
+        # independent tasks have no task coordinate: the posterior selects columns instead
+        return None if self.data.multi_task == "independent" else np.arange(0, self.output_num)
+
+    def _default_coregionalization_kernel(self, args):
+        """The Kronecker default kernel up to the output threshold; None above it (the flat Matern)."""
+        args = args or {}
+        if self.output_num > args.get("kronecker_coregionalization_max_outputs", COREGIONALIZATION_MAX_OUTPUTS):
+            return None
+        return CoregionalizationKernel(self.output_num, rank=args.get("kronecker_coregionalization_rank", 1))
+
+    def _get_default_hyperparameter_bounds(self):
+        # the coregionalization kernel knows its own layout; everything else as for GP
+        kernel = self.prior.kernel
+        if isinstance(kernel, CoregionalizationKernel) and \
+                len(self.hyperparameters) == kernel.n_hyperparameters(self.input_set_dim):
+            return kernel.default_bounds(self.x_data, self.y_data)
+        return super()._get_default_hyperparameter_bounds()
 
     @property
     def fvgp_x_data(self):
@@ -696,7 +783,7 @@ class fvGP(GP):
             will be set to ``abs(np.mean(y_data)) / 100.0``. If
             noise covariances are required (correlated noise), make use of the ``noise_function``.
             Only provide a noise function OR ``noise_variances``, not both.
-            With ``kronecker=True`` the shape is (V): one variance per input point.
+            With ``multi_task_mode`` ``'kronecker'`` or ``'independent'`` the shape is (V): one variance per input point.
         append : bool, optional
             Indication whether to append to or overwrite the existing dataset. Default = True.
             In the default case, data will be appended.
@@ -712,8 +799,9 @@ class fvGP(GP):
             if noise_variances_new is not None:
                 assert isinstance(noise_variances_new, np.ndarray), \
                     "noise_variances_new must be np.ndarray"
-                # Kronecker mode: one variance per point, a vector
-                if self.data.kronecker: fvgp_noise_variances = np.append(self.fvgp_noise_variances, noise_variances_new)
+                # Kronecker and independent modes: one variance per input, a vector
+                if self.data.multi_task != "cartesian":
+                    fvgp_noise_variances = np.append(self.fvgp_noise_variances, noise_variances_new)
                 else: fvgp_noise_variances = np.vstack([self.fvgp_noise_variances, noise_variances_new])
             else: fvgp_noise_variances = None
 
@@ -729,8 +817,8 @@ class fvGP(GP):
             fvgp_noise_variances = noise_variances_new
             fvgp_x_data = x_new
             fvgp_y_data = y_new
-        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances, np.arange(0, self.output_num))
-        if self.data.kronecker:   # GP holds the data as given: no transform
+        self.data.set_fvgp_data(fvgp_x_data, fvgp_y_data, fvgp_noise_variances, self._x_out())
+        if self.data.multi_task != "cartesian":   # GP holds the data as given: no transform
             super().update_gp_data(x_new, y_new, noise_variances_new, append=append, rank_n_update=rank_n_update)
             return
 
@@ -780,7 +868,8 @@ class fvGP(GP):
     ################################################################################################
     def __getstate__(self):
         state = dict(
-            output_num=self.output_num
+            output_num=self.output_num,
+            _multi_task=self._multi_task
             )
         state.update(super().__getstate__())
         return state

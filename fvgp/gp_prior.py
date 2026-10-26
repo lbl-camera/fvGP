@@ -54,11 +54,16 @@ class GPprior:
                 logger.debug("No workers available")
 
         if self.kronecker and not callable(kernel):
-            warnings.warn("fvGP(kronecker=True) without a kernel_function: the default kernel is a "
-                          "Matern kernel on the inputs times a Matern kernel on the flattened output "
-                          "index 0 ... n_out-1. It treats the outputs as a 1-d sequence and respects no "
-                          "other output geometry (e.g. image rows x columns); for that, pass a "
-                          "kernel_function returning [K_x, F_1, ..., F_m].", stacklevel=2)
+            # fvGP passes the coregionalization kernel up to the output threshold, so this is above it
+            warnings.warn(f"fvGP(multi_task_mode='kronecker') without a kernel_function and with {self.y_data.shape[1]} "
+                          f"outputs, more than args['kronecker_coregionalization_max_outputs'] "
+                          f"({self.args.get('kronecker_coregionalization_max_outputs', COREGIONALIZATION_MAX_OUTPUTS)}), "
+                          "for which the coregionalization default would need an n_out x n_out factor and "
+                          "n_out * (rank + 1) hyperparameters. The default kernel is instead a Matern kernel "
+                          "on the inputs times a Matern kernel on the flattened output index 0 ... n_out-1. "
+                          "It treats the outputs as a 1-d sequence and respects no other output geometry "
+                          "(e.g. image rows x columns); for that, pass a kernel_function returning "
+                          "[K_x, F_1, ..., F_m].", stacklevel=2)
 
         # kernel
         self.k_n_params = 3
@@ -264,14 +269,31 @@ class GPprior:
         """
         return np.broadcast_to(m[:, None] if np.ndim(m) == 1 else m, (len(m), self.y_data.shape[1]))
 
+    def kronecker_hyperparameter_gradient(self, x, hyperparameters, factor_gradients):
+        """The kernel part of dL/dh for every hyperparameter, from G_f = dL/dF_f.
+
+        A kernel with a ``chain_rule(x, hyperparameters, factor_gradients)`` method -- the
+        :py:class:`fvgp.kernels.CoregionalizationKernel` -- maps the G_f itself, exactly and
+        without forming any factor derivative. Otherwise each hyperparameter's factor
+        derivatives (:py:meth:`kronecker_dk_dh`) are contracted with the G_f, O(sum n_f^2) each:
+        one at a time, unless the user's gradient returns them all at once.
+        """
+        if not self.user_kernel_grad and hasattr(self.kernel, "chain_rule"):
+            return np.asarray(self.kernel.chain_rule(x, hyperparameters, factor_gradients), dtype=float)
+        if self.user_kernel_grad and not self.ram_economy: derivatives = self.kronecker_dk_dh(x, hyperparameters)
+        else: derivatives = (self.kronecker_dk_dh(x, hyperparameters, i) for i in range(len(hyperparameters)))
+        return np.array([sum(np.sum(G * dF) for G, dF in zip(factor_gradients, d) if dF is not None)
+                         for d in derivatives], dtype=float)
+
     def kronecker_dk_dh(self, x, hyperparameters, direction=None):
-        """Derivatives of the Kronecker factors [K_x, F_1, ..., F_m]: for one hyperparameter
-        (``direction``), or as one such list per hyperparameter (``direction=None``).
+        """Derivatives of the Kronecker factors [K_x, F_1, ..., F_m] for one hyperparameter
+        (``direction``), or, from a user gradient without ``gradient_per_direction``, as one
+        such list per hyperparameter (``direction=None``).
 
         From the user's ``kernel_function_grad`` if there is one: as for ``dk_dh``, callers ask
         for one ``direction`` exactly when ``gradient_per_direction`` is set. Otherwise central
         differences, two kernel calls per hyperparameter. A factor that does not depend on the
-        hyperparameter is None or zero, and the gradient skips it.
+        hyperparameter is None or zero.
         """
         if self.user_kernel_grad:
             derivatives = self.dk_dh(x, x, hyperparameters, direction)
@@ -281,8 +303,6 @@ class GPprior:
                                      f"a list of {len(self.K)} factor derivatives [dK_x, dF_1, ...] (None for a "
                                      f"factor that does not depend on it).")
             return derivatives
-        if direction is None:
-            return [self.kronecker_dk_dh(x, hyperparameters, i) for i in range(len(hyperparameters))]
         hps1 = np.array(hyperparameters)
         hps2 = np.array(hyperparameters)
         epsilon = 1e-8
@@ -535,15 +555,39 @@ class GPprior:
         return derivative
 
     def _default_mean_function(self, x, hyperparameters):
-        """evaluates the gp mean function at the data points """
+        """The average of y_data per task: per column -- per GP, or per output in Kronecker
+        mode -- when y_data has several, as (len(x), k); for the Cartesian fvGP's (point, task)
+        pairs, each point gets its task's average; otherwise a 1-d constant."""
         if np.ndim(self.y_data) == 1:
             raise Exception("y_data wrong format")
+        elif np.ndim(self.y_data) == 2 and self.y_data.shape[1] > 1:
+            mean = np.tile(np.mean(self.y_data, axis=0), (len(x), 1))
+        elif np.ndim(self.y_data) == 2 and self.data.multi_task == "cartesian":
+            mean = self._task_means(x)
         elif np.ndim(self.y_data) == 2:
             mean = np.zeros((len(x)))
             mean[:] = np.mean(self.y_data)
         else:
             raise Exception("Wrong dim in default mean function")
         return mean
+
+    @staticmethod
+    def _task_index(x):
+        """The task of each Cartesian fvGP point: its last coordinate, or the second element of a
+        non-Euclidean [point, task] pair -- read per point, never by asking numpy about x."""
+        if isinstance(x, np.ndarray): return x[:, -1].astype(int)
+        return np.array([p[1] for p in x], dtype=int)
+
+    def _task_means(self, x):
+        """Each point's task average of y_data; a task without observations (all NaN in the
+        data fvGP was given) gets the overall average."""
+        tasks, y = self._task_index(self.x_data), self.y_data[:, 0]
+        wanted = self._task_index(x)
+        n_tasks = max(tasks.max(), wanted.max(initial=0)) + 1
+        counts = np.bincount(tasks, minlength=n_tasks)
+        sums = np.bincount(tasks, weights=y, minlength=n_tasks)
+        means = np.where(counts > 0, sums / np.maximum(counts, 1), np.mean(y))
+        return means[wanted]
 
     def _finitediff_dm_dh(self, x, hps):
         # stacked, so each derivative keeps the mean's own shape: (len(x),) or (len(x), k)

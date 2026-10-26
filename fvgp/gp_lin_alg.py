@@ -717,20 +717,40 @@ class KroneckerFactorization:
         """Q_f^T D_f^-1/2 M: the columns of M (rows along axis f) in factor f's whitened eigenbasis."""
         return self.eigenvectors[f].T @ (np.asarray(M, dtype=float) / np.sqrt(self.noise_factors[f])[:, None])
 
-    def trace_with(self, f, dF):
-        """tr((K + V)^-1 (F_0 kron ... dF ... kron F_m)), the trace term of one factor's derivative.
+    def trace_matrix(self, f):
+        """T_f with tr((K + V)^-1 (F_0 kron ... dF ... kron F_m)) = <T_f, dF> for any dF of factor f.
 
-        In the whitened eigenbasis every other factor is its diagonal of eigenvalues, so only
-        the diagonal of factor f's projected derivative is needed: O(n_f^3 + N).
+        In the whitened eigenbasis every other factor is its diagonal of eigenvalues, so the
+        trace only weights the eigenvectors of factor f: T_f = D_f^-1/2 Q_f diag(c) Q_f^T D_f^-1/2,
+        with c the inverse spectrum summed against the other factors' eigenvalues. O(N + n_f^3).
         """
+        others = [None if g == f else lam[None, :] for g, lam in enumerate(self.eigenvalues)]
+        c = kronecker_mode_product(self.inv_spectrum, others).ravel()
         Q = self.eigenvectors[f]
-        vectors = list(self.eigenvalues)
-        vectors[f] = np.einsum("ij,ij->j", Q, self._whiten(f, dF) @ Q)
-        return float(np.sum(self.inv_spectrum * _outer(vectors)))
+        return self._whiten(f, (Q * c) @ Q.T)
+
+    def factor_gradients(self, factors, KVinvY):
+        """dL/dF_f for every factor: the gradient of the log marginal likelihood with respect
+        to each factor matrix, at alpha = (K + V)^-1 (y - m) given as ``KVinvY``.
+
+        dL = 1/2 alpha^T dK alpha - 1/2 tr((K + V)^-1 dK), and for dK = F_0 kron .. dF_f .. kron F_m
+        both terms are inner products with dF_f: the data term with alpha contracted against
+        all other factors (M_f), the trace term with :py:meth:`trace_matrix`. So
+        G_f = (M_f - T_f) / 2, and any hyperparameter's derivative is sum_f <G_f, dF_f/dh>:
+        O(sum n_f^2) per hyperparameter instead of O(N sum n_f).
+        """
+        alpha = np.asarray(KVinvY, dtype=float).reshape(self.sizes)
+        gradients = []
+        for f in range(len(self.sizes)):
+            others = [g for g in range(len(self.sizes)) if g != f]
+            T = kronecker_mode_product(alpha, [None if g == f else F for g, F in enumerate(factors)])
+            M = np.tensordot(alpha, T, axes=(others, others))
+            gradients.append(0.5 * (M - self.trace_matrix(f)))
+        return gradients
 
 
 def calculate_kronecker_factorization(factors, V):
-    """Factor K + V for ``fvGP(kronecker=True)``: ``factors`` = [K_x, F_1, ..., F_m] and ``V``
+    """Factor K + V for ``fvGP(multi_task_mode='kronecker')``: ``factors`` = [K_x, F_1, ..., F_m] and ``V``
     the noise variances, one per input, the same for every output."""
     st = time.time()
     sizes = [len(F) for F in factors]

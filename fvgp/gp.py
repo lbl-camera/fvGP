@@ -118,7 +118,8 @@ class GP:
         GPs), it may instead be of shape (N1, N), one mean per GP; a 1d mean is shared by all of
         them. Any other shape raises.
         If prior_mean_function is not provided, :py:meth:`fvgp.GP._default_mean_function` is used,
-        which is the average of the ``y_data``.
+        which is the average of the ``y_data`` -- per GP, shape (N1, N), when ``y_data`` has N
+        columns.
         This callable receives the full hyperparameter vector but must only use
         the indices reserved for the mean function (disjoint from kernel and noise indices).
     prior_mean_function_grad : Callable, optional
@@ -470,9 +471,10 @@ class GP:
     V : np.ndarray
         the noise covariance matrix or a vector.
     """
-    # fvGP(kronecker=True) sets this before calling GP.__init__, which hands it to GPdata;
-    # afterwards every component reads data.kronecker
-    _kronecker = False
+    # fvGP sets this before calling GP.__init__ -- "cartesian" for its usual transform,
+    # "kronecker" for fvGP(multi_task_mode='kronecker') -- and GP.__init__ hands it to GPdata; afterwards
+    # every component reads data.multi_task / data.kronecker
+    _multi_task = None
 
     def __init__(
         self,
@@ -545,7 +547,7 @@ class GP:
                            gp2Scale=gp2Scale,
                            compute_device=compute_device,
                            dask_client=dask_client,
-                           kronecker=self._kronecker)
+                           multi_task=self._multi_task)
         ########################################
         # prepare initial hyperparameters and bounds
         if self.data.Euclidean:
@@ -1459,7 +1461,7 @@ class GP:
             assert np.ndim(hyperparameters) == 1, "wrong format in hyperparameters"
         return self.marginal_likelihood.log_likelihood(hyperparameters=hyperparameters)
 
-    def neg_log_likelihood_gradient(self, hyperparameters=None, component=0):
+    def neg_log_likelihood_gradient(self, hyperparameters=None, component=None):
         """
         Function that computes the gradient of the marginal log-likelihood.
 
@@ -1469,7 +1471,9 @@ class GP:
             Vector of hyperparameters of shape (N).
             If not provided, the covariance will not be recomputed.
         component : int, optional
-            In case many GPs are computed in parallel, this specifies which one is considered.
+            In case many GPs are computed in parallel (2-d ``y_data``), the one whose
+            likelihood is differentiated. The default, None, differentiates the likelihood
+            itself, the average over all of them.
 
         Returns
         -------

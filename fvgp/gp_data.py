@@ -10,12 +10,15 @@ class GPdata:
                  gp2Scale=False,
                  compute_device="cpu",
                  dask_client=None,
-                 kronecker=False):
+                 multi_task=None):
 
 
-        # fvGP(kronecker=True): y_data is one (n_x, n_out) tensor on a full grid, not n_out
-        # right-hand sides; the noise is one variance per input, as for several right-hand sides
-        self.kronecker = kronecker
+        # set by fvGP's multi_task_mode: "cartesian" for its usual transform to (point, task)
+        # pairs; "kronecker", where y_data is one (n_x, n_out) tensor on a full grid, not n_out
+        # right-hand sides, and the noise one variance per input; "independent", where y_data
+        # is n_out right-hand sides of one GP, as for a GP given 2-d y_data
+        self.multi_task = multi_task
+        self.kronecker = kronecker = multi_task == "kronecker"
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list), \
             "x_data must be np.ndarray or list"
         assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2), \
@@ -72,7 +75,8 @@ class GPdata:
         self.x_out = x_out
         assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list), "wrong format in x_out"
         if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1, "wrong dim in x_out, has to be 1-d"
-        if self.Euclidean: self.input_set_dim = self.index_set_dim - 1
+        # only the Cartesian transform appends a task column to x_data
+        if self.Euclidean and self.multi_task == "cartesian": self.input_set_dim = self.index_set_dim - 1
 
     def update(self, x_data_new, y_data_new, noise_variances_new=None, append=True):
         assert isinstance(x_data_new, np.ndarray) or isinstance(x_data_new, list), \
@@ -127,9 +131,9 @@ class GPdata:
 
 
     def _check_for_nan(self):
-        if self.kronecker and np.isnan(np.sum(self.y_data)):
-            raise ValueError("Kronecker mode needs every output at every input (a full grid), but y_data "
-                             "contains NaN. Use fvGP(kronecker=False) for missing outputs.")
+        if self.multi_task in ("kronecker", "independent") and np.isnan(np.sum(self.y_data)):
+            raise ValueError(f"multi_task_mode={self.multi_task!r} needs every output at every input (a full "
+                             f"grid), but y_data contains NaN. Use multi_task_mode='cartesian' for missing outputs.")
         if self.Euclidean:
             if np.isnan(np.sum(self.x_data) + np.sum(self.y_data)): raise Exception("NaNs encountered in dataset.")
 
@@ -159,11 +163,13 @@ class GPdata:
             dask_client=None,
             compute_workers=self.compute_workers,
             kronecker=self.kronecker,
+            multi_task=self.multi_task,
             )
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
         if "kronecker" not in self.__dict__: self.kronecker = False
+        if "multi_task" not in self.__dict__: self.multi_task = "kronecker" if self.kronecker else None
 
 

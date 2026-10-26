@@ -42,7 +42,14 @@ New features
   by its rank-r factor. New ``args``: ``low_rank_rank``, ``low_rank_residual_tol``,
   ``low_rank_tol``.
 
-* **``fvGP(..., kronecker=True)``** for multi-task data on a full grid with a separable
+* **One choice of multi-task mode: ``fvGP(..., multi_task_mode=...)``.** ``'cartesian'`` (the
+  default) is fvGP's full multi-task learning over the input-output product space, as
+  before; ``'independent'`` is several GPs sharing one set of hyperparameters (what ``GP``
+  does with 2-d ``y_data``, which keeps working), now reachable from fvGP with ``x_out``
+  selecting outputs; ``'kronecker'`` is the new mode below. All three take ``y_data`` as
+  (V, No).
+
+* **``fvGP(..., multi_task_mode='kronecker')``** for multi-task data on a full grid with a separable
   kernel, K = K_x ⊗ F_1 ⊗ … ⊗ F_m: e.g. 1000 inputs with a 100×100 image each, N = 10⁷,
   where K is full rank and could not even be stored sparse. K is never formed. Each factor
   is eigendecomposed on its own (K_x after whitening by the noise), so the log-likelihood, its
@@ -50,8 +57,15 @@ New features
   O(N Σ n_f) per solve. The ``kernel_function`` receives the inputs only and returns
   ``[K_x(x1, x2), F_1, …, F_m]``; the output factors may split the outputs into their
   natural axes (image rows ⊗ columns), which keeps every eigendecomposition small. The
-  default kernel is the Matérn kernel on the inputs times a Matérn kernel on the flat
-  output index, with a warning that it respects no other output geometry. The noise is one
+  default kernel is the intrinsic coregionalization model,
+  ``fvgp.kernels.CoregionalizationKernel``: a Matérn kernel on the inputs times a learned
+  output covariance B = W Wᵀ + diag(κ), with D + No·(rank + 1) hyperparameters, defaults
+  and bounds taken from the data, and an exact gradient. ``args`` set its rank
+  (``kronecker_coregionalization_rank``, default 1) and the number of outputs up to which it
+  is used (``kronecker_coregionalization_max_outputs``, default 500); above that the default
+  is a Matérn kernel on the flat output index, with a warning. The likelihood gradient
+  computes dL/dF for every factor once and contracts it with each hyperparameter's factor
+  derivatives, so each hyperparameter costs O(Σ n_f²) rather than O(N Σ n_f). The noise is one
   variance per input point, the same for every output, as for a GP with several right-hand
   sides (``noise_variances`` of shape (V), a ``noise_function`` returning a vector); missing
   outputs (NaN), gp2Scale, and the gradient and information-theoretic posterior methods
@@ -72,7 +86,11 @@ New features
   sharing kernel and noise), ``prior_mean_function`` may return shape (N1, N), one mean per
   GP; a 1-d mean is still shared by all. The same holds in Kronecker mode, per output. A mean
   of any other shape now raises a ``ValueError`` saying what the mode expects, where it used
-  to fail inside the linear algebra or be rejected only on append.
+  to fail inside the linear algebra or be rejected only on append. The **default** mean is
+  now each task's own average of ``y_data``, where it was one average over everything: per
+  column for several GPs and in Kronecker mode, and for the usual (Cartesian) fvGP per task
+  -- every (point, task) pair gets its task's average, so outputs on different scales no
+  longer share one offset. A single-task GP is unchanged.
 
 Deprecations
 ~~~~~~~~~~~~
@@ -449,6 +467,13 @@ Deprecations
 
 Bug fixes
 ~~~~~~~~~
+
+* **The gradient of several GPs at once was the gradient of the first alone.** With 2-d
+  ``y_data`` the log marginal likelihood is the average over the columns, but
+  ``neg_log_likelihood_gradient`` differentiated only column 0 (its ``component=0``
+  default), so ``local``, ``hgdl`` and ``adam`` training followed the wrong gradient --
+  on a two-column example, -7.45 where the likelihood's slope was -1.13. The default is now
+  ``component=None``, the average over all columns; an integer still selects one.
 
 * **A failed preconditioner build was retried for the same matrix.** Constructing a
   ``sparseCGpre_ichol0`` gp2Scale GP built IC(0) in ``set_KV``, spent three minutes finding
