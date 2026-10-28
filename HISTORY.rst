@@ -5,7 +5,7 @@ History
 This changelog was restarted; for releases before the first entry below, see the
 git history and the release tags.
 
-4.11.0 (unreleased)
+4.11.0 (2026-10-28)
 -------------------
 
 Deprecations
