@@ -5314,6 +5314,21 @@ def test_mcmc_log_scale_samples_the_same_posterior():
         assert res["MAP"] == pytest.approx(max(loglik(x, None) for x in res["x"]))
 
 
+def test_a_training_callable_gets_the_gp():
+    """train(method=f) calls f with the GP, as documented (4.11.0 handed it the internal trainer)."""
+    x = np.linspace(0., 1., 12).reshape(-1, 1)
+    gp = GP(x, np.sin(5. * x[:, 0]), np.ones(2), noise_variances=np.full(12, 1e-3))
+    seen = []
+
+    def trainer(g):
+        seen.append(g)
+        return np.array([0.9, 0.3])
+
+    hps = gp.train(hyperparameter_bounds=np.array([[0.1, 10.], [0.01, 1.]]), method=trainer,
+                   accept_only_if_improved=False)
+    assert seen == [gp] and np.array_equal(hps, [0.9, 0.3]) and np.array_equal(gp.hyperparameters, hps)
+
+
 def test_default_trainer_is_local_with_restarts(monkeypatch):
     """train() without a method: local optimization from n_restarts starts, keeping the best."""
     import fvgp.gp_training as training_module

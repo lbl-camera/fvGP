@@ -5,6 +5,15 @@ History
 This changelog was restarted; for releases before the first entry below, see the
 git history and the release tags.
 
+4.11.1 (2026-10-28)
+-------------------
+
+Bug fixes
+~~~~~~~~~
+
+* ``train(method=f)`` called ``f`` with fvGP's internal trainer instead of the ``GP``, as the
+  docstring says; it now gets the ``GP``.
+
 4.11.0 (2026-10-28)
 -------------------
 

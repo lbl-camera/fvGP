@@ -1428,7 +1428,8 @@ class GP:
                 objective_function_hessian=objective_function_hessian,
                 hyperparameter_bounds=hyperparameter_bounds,
                 init_hyperparameters=init_hyperparameters,
-                method=method,
+                # a training callable gets the GP, as documented, not the trainer
+                method=(lambda trainer: method(self)) if callable(method) else method,
                 pop_size=pop_size,
                 tolerance=tolerance,
                 max_iter=max_iter,
