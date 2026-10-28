@@ -67,4 +67,19 @@ gpCAM pins `fvgp ~= 4.10` and is unaffected until then.
    with the previous gpCAM may still not load, because its class bases change. Say so in
    gpCAM's HISTORY.
 
-7. **Run gpCAM's tests and example notebooks** against fvGP 4.11.
+7. **The posterior result contract** (fvGP 4.11, `GP` class docstring, Notes). Every
+   posterior/information result has the same keys and shapes in every mode: single-task
+   without an output axis, multi-task (V, n), (V, V, n, n), flat arrays task-major. What gpCAM
+   reads (`m(x)`, `v(x)`, `S_flat`, `dm/dx`, `RIE`, `total correlation`) keeps its shape for
+   single-task and Cartesian GPs, so nothing breaks; but:
+   - `S_flat` is now the joint over the requested pairs in **every** mode (block-diagonal for
+     independent outputs), so `_cross_cov` in `surrogate_model.py` (l. 528 ff.) and the
+     defensive `reshape(len(x), len(x_out))` in the multi-task acquisition functions work for
+     all three modes without per-mode branches.
+   - `variance_only=True` returns `S = S_flat = None` everywhere; gpCAM only reads `v(x)`
+     there, so fine.
+   - The `x_pred` key is gone; `x_out` is new in every result. gpCAM reads neither.
+   - `gp_entropy(_grad)` return dicts; `posterior_mean_grad`'s `component` is deprecated.
+     gpCAM uses neither.
+
+8. **Run gpCAM's tests and example notebooks** against fvGP 4.11.

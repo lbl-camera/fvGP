@@ -15,6 +15,10 @@ Deprecations
   multi-task GPs itself. ``fvGP(x, y, ...)`` is ``GP(x, y, ..., multi_task_mode="cartesian")``,
   and fvGP passes any other ``multi_task_mode`` on unchanged.
 
+* ``posterior_mean_grad``'s ``component`` (``FutureWarning``, removed in 5.0.0): the gradient
+  now covers every requested output. For independent outputs ``component=c`` means
+  ``x_out=[c]``; elsewhere it is ignored.
+
 Changes
 ~~~~~~~
 
@@ -45,6 +49,42 @@ Changes
   constructor argument since 4.9; objects pickled with 4.10 still load. The Cartesian
   transform moved from fvGP into ``GPdata``, and the class attribute ``GP._multi_task``
   through which fvGP passed its mode is gone.
+
+* **One posterior result contract.** Every posterior and information method returns the
+  same keys with the same shapes in every ``multi_task_mode``, documented once in the
+  ``GP`` class docstring (Notes). The shape follows ``y_data``: a single-task result has no
+  output axis; a multi-task result has (V, n) means and variances, a (V, V, n, n)
+  covariance and task-major flat arrays (pair (i, t) at i + V * t), for n requested
+  outputs. ``'independent'`` outputs now give exactly the results of a ``'cartesian'`` GP
+  whose kernel is zero between outputs. Changed:
+
+  * ``'independent'`` (``GP`` with 2-d ``y_data``): ``m(x)_flat`` and ``v_flat`` are flat
+    (V * n), were (V, n); ``S`` is (V, V, n, n) and ``S_flat`` (V * n, V * n),
+    block-diagonal in the outputs, were the shared (V, V); ``posterior_mean_grad`` returns
+    every requested output, was output 0 only; entropy, mutual information and total
+    correlation cover every requested output, were one.
+  * ``variance_only=True`` returns ``S = S_flat = None`` in every mode and never forms S
+    (it formed it anyway outside the explicit-inverse and Kronecker modes).
+  * Every result carries ``x_out``, the outputs used (None for a single-task GP, where
+    passing ``x_out`` now raises ``ValueError``); ``x`` is always ``x_pred`` as given. The
+    ``x_pred`` key is gone (for ``'cartesian'`` it held the internal product points), and
+    ``joint_gp_prior(_grad)`` no longer return those under ``x``.
+  * ``gp_entropy`` and ``gp_entropy_grad`` return dicts (``entropy``, ``dH/dx``), were
+    floats. Gradient results carry ``direction`` as passed (None, was ``"ALL"``), and
+    ``posterior_covariance_grad`` always has ``dS/dx`` (None without a direction).
+  * In Kronecker mode ``gp_relative_information_entropy(_set)`` now work.
+
+Bug fixes
+~~~~~~~~~
+
+* ``posterior_covariance_grad``'s ``dS/dx`` was wrong off the diagonal in every mode: the
+  derivative of k^T (K+V)^-1 k was taken as 2 M instead of M + M^T. ``dv/dx`` was right.
+* Multi-task gradients were scrambled by direct ``order='F'`` reshapes: ``dS/dx``
+  (diag(dS/dx) did not match ``dv/dx``), and ``dm/dx``/``dv/dx`` for all directions.
+* A single prediction point gave ``m(x)`` of shape () (``np.squeeze``); it is (1).
+* ``'independent'``: the gradients and information methods crashed with an ``x_out``;
+  ``gp_relative_information_entropy(_set)``, ``gp_kl_div`` and ``posterior_probability``
+  crashed always.
 
 Unreleased
 ----------

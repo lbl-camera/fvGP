@@ -518,8 +518,8 @@ class GP:
         (V)). The default mean is each output's average; a ``prior_mean_function`` may return
         (len(x),), shared, or (len(x), No), one mean per output. The likelihood is the average
         of the outputs' likelihoods, and so is its gradient. ``x_out`` in the posterior
-        selects outputs by index; all outputs share one posterior covariance over the inputs
-        (``"S"``), and there is none between outputs.
+        selects outputs by index; the outputs share one posterior covariance over the inputs
+        and are uncorrelated, so ``"S"`` is block-diagonal in them (see Notes).
 
         ``'cartesian'`` -- full multi-task learning. Every (input, output) pair
         becomes one point of a single-task GP over the Cartesian product of input and output
@@ -572,8 +572,7 @@ class GP:
           differentiated by finite differences, two kernel calls per hyperparameter.
         * ``linalg_mode`` is ignored, and ``gp2Scale`` cannot be combined with it.
         * Not supported: ``posterior_mean_grad``, ``posterior_covariance_grad``, the joint
-          priors, and the entropy, mutual information, total correlation and relative
-          information entropy methods.
+          priors, and the entropy, mutual information and total correlation methods.
 
 
     Attributes
@@ -596,6 +595,32 @@ class GP:
         Current prior mean vector.
     V : np.ndarray
         the noise covariance matrix or a vector.
+
+    Notes
+    -----
+    **Posterior results.** The posterior and information methods return dicts whose keys
+    and shapes are the same in every ``multi_task_mode``. V is the number of prediction
+    points, n the number of requested outputs (``x_out``, all by default) and D the input
+    dimension. The shape follows ``y_data``: a single-task result has no output axis, a
+    multi-task result has one.
+
+    * ``x``: ``x_pred`` as given. ``x_out``: the requested outputs -- output indices for
+      ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'`` -- or
+      None for a single-task GP, for which passing ``x_out`` raises.
+    * ``m(x)``, ``v(x)``: (V), or (V, n), the value for x_i and output t at ``[i, t]``.
+    * ``m(x)_flat``, ``v_flat``: (V), or (V * n), **task-major**: pair (i, t) at i + V * t.
+    * ``S``: (V, V), or (V, V, n, n) with ``S[i, j, t, u]`` = Cov(f(x_i, t), f(x_j, u)).
+      ``S_flat``: (V, V), or (V * n, V * n), task-major. Both are None with
+      ``variance_only=True``, which never forms S.
+    * ``dm/dx``, ``dv/dx``: (V, D), or (V, D, n); with a ``direction``, (V), or (V, n).
+      ``dS/dx``: shaped like ``S`` with a ``direction``, else None. ``direction``: as passed.
+    * The information methods return their quantity with ``x`` and ``x_out``, over the
+      requested (point, output) pairs. Their ``comp_mean`` and ``comp_cov`` take the flat
+      layout of ``m(x)_flat`` and ``S_flat``.
+
+    ``'independent'`` outputs give exactly the results of a ``'cartesian'`` GP whose kernel
+    is zero between different outputs: ``S`` is block-diagonal in the outputs, and the
+    entropy, mutual information and total correlation add up over them.
     """
 
     def __init__(
@@ -745,7 +770,7 @@ class GP:
                                        )
 
         ##########################################
-        #######prepare KV object [tier 3]#########
+        #######prepare KV object [tier 4]#########
         ##########################################
         self.kv = GPkv(
             self.data,
@@ -754,7 +779,7 @@ class GP:
             linalg_mode=linalg_mode,
         )
         ##########################################
-        #######prepare marg. likelih. [tier 4]####
+        #######prepare marg. likelihood [tier 4]##
         ##########################################
         self.marginal_likelihood = GPMarginalLikelihood(
             self.data,
@@ -1707,17 +1732,18 @@ class GP:
             a constraint during training. The default is None which means the initialized or trained hyperparameters
             are used.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
 
         Returns
         -------
-        Solution points and function values : dict
+        Solution : dict
+            With keys ``x``, ``x_out``, ``m(x)``, ``m(x)_flat``; shapes in the class Notes.
         """
         return self.posterior.posterior_mean(x_pred, hyperparameters=hyperparameters, x_out=x_out)
 
-    def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None, component=0):
+    def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None, component=None):
         """
         This function calculates the gradient of the posterior mean for a set of input points.
 
@@ -1732,18 +1758,19 @@ class GP:
             a constraint during training. The default is None which means the initialized or trained hyperparameters
             are used.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
         direction : int, optional
             Direction of derivative, If None (default) the whole gradient will be computed.
         component : int, optional
-            In case ``y_data`` is multi-modal and no fvgp.GPOptimizer is used --- this means y_data.shape[1] independent
-            GPs are being executed --- this indicates which GP's gradient is evaluated. The default is 0.
+            Deprecated, removed in 5.0.0: the gradient covers every requested output; for
+            ``'independent'`` outputs ``component`` means ``x_out=[component]``.
 
         Returns
         -------
         Solution : dict
+            With keys ``x``, ``x_out``, ``direction``, ``dm/dx``; shapes in the class Notes.
         """
         return self.posterior.posterior_mean_grad(x_pred, hyperparameters=hyperparameters,
                                                   x_out=x_out, direction=direction, component=component)
@@ -1759,13 +1786,12 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
         variance_only : bool, optional
-            If True the computation of the posterior covariance matrix is avoided which can save compute time.
-            In that case the return will only provide the variance at the input points.
-            Default = False. This is only relevant if the inverse of the covariance matrix is stored (linalg_mode == 'CholInv' or linalg_mode == 'Inv').
+            If True only the posterior variances are computed, never the covariance matrix, and
+            ``S`` and ``S_flat`` are None. Default = False.
         add_noise : bool, optional
             If True the noise variances will be added to the posterior variances. Default = False.
             With a ``noise_function`` that is its value at ``x_pred``. With measured ``noise_variances``
@@ -1775,16 +1801,10 @@ class GP:
         Returns
         -------
         Solution : dict
-            With keys `x`, `x_pred`, `v(x)`, `S`, `S_flat`, `v_flat`.
-            For a single-task GP (`x_out is None`), `v(x)` is the (V) vector of posterior
-            variances and `S` the (V x V) posterior covariance matrix.
-            For a multi-task GP, the GP lives on the product of input and output space and
-            the flat product-space index is **task-major**, k = point + V * task. `v_flat`
-            (V*No) and `S_flat` (V*No x V*No) are in that flat indexing; `v(x)` (V x No) and
-            `S` (V x V x No x No) are reshaped views of them, such that
-            `v(x)[i, t]` is the variance of f(x_i, task_t) and
-            `S[i, j, t, u]` is Cov(f(x_i, task_t), f(x_j, task_u)).
-            `S` and `S_flat` are None when `variance_only=True`.
+            With keys ``x``, ``x_out``, ``v(x)``, ``S``, ``S_flat``, ``v_flat``; shapes in the
+            class Notes. For a multi-task GP ``v(x)[i, t]`` is the variance of f(x_i, t) and
+            ``S[i, j, t, u]`` is Cov(f(x_i, t), f(x_j, u)); the flat arrays are task-major,
+            pair (i, t) at i + V * t.
         """
         return self.posterior.posterior_covariance(x_pred, x_out=x_out, variance_only=variance_only,
                                                    add_noise=add_noise)
@@ -1799,15 +1819,17 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
         direction : int, optional
             Direction of derivative, If None (default) the whole gradient will be computed.
 
         Returns
         -------
         Solution : dict
+            With keys ``x``, ``x_out``, ``direction``, ``dv/dx``, ``dS/dx`` (None without a
+            ``direction``); shapes in the class Notes.
         """
         return self.posterior.posterior_covariance_grad(x_pred, x_out=x_out, direction=direction)
 
@@ -1822,15 +1844,17 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
 
         Returns
         -------
         Solution : dict
+            With keys ``x``, ``x_out``, ``K``, ``k``, ``kappa``, ``prior mean``, ``S``: the
+            joint prior of the data and the requested (point, output) pairs, data first, both
+            task-major.
         """
-
         return self.posterior.joint_gp_prior(x_pred, x_out=x_out)
 
     ###########################################################################
@@ -1846,13 +1870,15 @@ class GP:
         direction : int
             Direction of derivative.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
 
         Returns
         -------
         Solution : dict
+            With keys ``x``, ``x_out``, ``K``, ``dk/dx``, ``d kappa/dx``, ``d prior mean/x``,
+            ``dS/dx``, laid out as in :py:meth:`joint_gp_prior`.
         """
         return self.posterior.joint_gp_prior_grad(x_pred, direction, x_out=x_out)
 
@@ -1866,17 +1892,15 @@ class GP:
         x_pred : np.ndarray  or list
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
-            Output coordinates in case of multi-task GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
 
         Returns
         -------
-        Entropy : float
+        Solution : dict
+            With keys ``x``, ``x_out``, ``entropy`` (float).
         """
         return self.posterior.gp_entropy(x_pred, x_out=x_out)
 
@@ -1893,13 +1917,14 @@ class GP:
         direction : int
             Direction of the derivative.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
 
         Returns
         -------
-        Entropy gradient in given direction : float
+        Solution : dict
+            With keys ``x``, ``x_out``, ``direction``, ``dH/dx`` (float).
         """
         return self.posterior.gp_entropy_grad(x_pred, direction, x_out=x_out)
 
@@ -1915,17 +1940,19 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         comp_mean : np.ndarray
-            Comparison mean vector for KL divergence. len(comp_mean) = len(x_pred)
+            Comparison mean vector for KL divergence, in the layout of ``m(x)_flat``: (V), or (V * n).
         comp_cov : np.ndarray
-            Comparison covariance matrix for KL divergence. shape(comp_cov) = (len(x_pred),len(x_pred))
+            Comparison covariance matrix for KL divergence, in the layout of ``S_flat``.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
 
         Returns
         -------
         Solution : dict
+            With keys ``x``, ``x_out``, ``gp posterior mean``, ``gp posterior covariance``,
+            ``given mean``, ``given covariance``, ``kl-div``.
         """
         return self.posterior.gp_kl_div(x_pred, comp_mean, comp_cov, x_out=x_out)
 
@@ -1944,15 +1971,16 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
         add_noise : bool, optional
             If True the noise variances will be added to the prior over the prediction points. Default = False.
 
         Returns
         -------
         Solution : dict
+            With keys ``x``, ``x_out``, ``mutual information``.
         """
         return self.posterior.gp_mutual_information(x_pred, x_out=x_out, add_noise=add_noise)
 
@@ -1973,16 +2001,17 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
         add_noise : bool, optional
             If True the noise variances will be added to the prior over the prediction points. Default = False.
 
         Returns
         -------
         Solution : dict
-            Total correlation between prediction points, as a collective.
+            With keys ``x``, ``x_out``, ``total correlation``: the total correlation between
+            prediction points, as a collective.
         """
         return self.posterior.gp_total_correlation(x_pred, x_out=x_out, add_noise=add_noise)
 
@@ -2000,16 +2029,17 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
         add_noise : bool, optional
             If True the noise variances will be added to the posterior covariance. Default = False.
 
         Returns
         -------
         Solution : dict
-            Relative information entropy of prediction points, as a collective.
+            With keys ``x``, ``x_out``, ``RIE``: the relative information entropy of the
+            prediction points, as a collective.
         """
         return self.posterior.gp_relative_information_entropy(x_pred, x_out=x_out, add_noise=add_noise)
 
@@ -2029,16 +2059,17 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
         add_noise : bool, optional
             If True the noise variances will be added to the posterior covariance. Default = False.
 
         Returns
         -------
         Solution : dict
-            Relative information entropy of prediction points, but not as a collective.
+            With keys ``x``, ``x_out``, ``RIE`` (V): the relative information entropy of each
+            prediction point, not as a collective.
         """
         return self.posterior.gp_relative_information_entropy_set(x_pred, x_out=x_out, add_noise=add_noise)
 
@@ -2054,18 +2085,19 @@ class GP:
             A numpy array of shape (V x D), interpreted as  an array of input point positions, or a list for
             GPs on non-Euclidean input spaces.
         comp_mean: np.ndarray
-            A vector of mean values, same length as x_pred.
+            A vector of mean values, in the layout of ``m(x)_flat``: (V), or (V * n).
         comp_cov: np.ndarray
-            Covariance matrix, in R^{len(x_pred) x len(x_pred)}
+            Covariance matrix, in the layout of ``S_flat``.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N),
-            where N is the number evaluation points in the output direction.
-            Usually this is np.ndarray([0,1,2,...]).
+            The requested outputs of a multi-task GP, all by default: output indices for
+            ``'independent'`` and ``'kronecker'``, output coordinates for ``'cartesian'``.
+            Must be None for a single-task GP.
 
         Returns
         -------
         Solution : dict
-            The probability of a probabilistic quantity of interest, given the GP posterior at a given point.
+            With keys ``x``, ``x_out``, ``mu``, ``covariance``, ``probability``: the probability
+            of a probabilistic quantity of interest, given the GP posterior at the given points.
         """
         return self.posterior.posterior_probability(x_pred, comp_mean, comp_cov, x_out=x_out)
 

@@ -2402,7 +2402,10 @@ def test_random_logdet_reports_its_own_variance():
     A = ((A + A.T) * 0.5 + sparse.identity(n) * 5.0).tocsr()
 
     sigmas = {}
-    for t in (10, 80):
+    # Each sigma is estimated from its own probes; at 10 probes that estimate is chi^2(9)-noisy.
+    # Probe counts 64x apart (expected ratio 8) make the comparison below fail with probability
+    # ~1e-7; at 10 vs 80 (ratio sqrt(8)) it failed ~1% of runs, with every imate version.
+    for t in (10, 640):
         info = {}
         args = {"random_logdet_min_num_samples": t, "random_logdet_max_num_samples": t,
                 "random_logdet_error_rtol": 1e-12}
@@ -2412,7 +2415,7 @@ def test_random_logdet_reports_its_own_variance():
         assert info["variance"] is not None and info["variance"] > 0.0
         sigmas[t] = np.sqrt(info["variance"])
     # more probes must mean a tighter estimate
-    assert sigmas[80] < sigmas[10]
+    assert sigmas[640] < sigmas[10]
     # the return type is unchanged when no sink is passed (existing callers keep working)
     assert np.isscalar(calculate_random_logdet(A, "cpu", args={}))
 
@@ -4135,7 +4138,8 @@ def test_independent_mode_is_several_single_task_gps_sharing_hyperparameters():
     assert np.allclose(ind.posterior_mean(xp)["m(x)"], means)
     assert np.allclose(ind.posterior_mean(xp, x_out=np.array([2, 0]))["m(x)"], means[:, [2, 0]])
     a, b = ind.posterior_covariance(xp, x_out=np.array([1])), singles[1].posterior_covariance(xp)
-    assert a["v(x)"].shape == (4, 1) and np.allclose(a["v(x)"][:, 0], b["v(x)"]) and np.allclose(a["S"], b["S"])
+    assert a["v(x)"].shape == (4, 1) and np.allclose(a["v(x)"][:, 0], b["v(x)"])
+    assert a["S"].shape == (4, 4, 1, 1) and np.allclose(a["S"][:, :, 0, 0], b["S"])
     try:
         ind.posterior_mean(xp, x_out=np.array([3]))
     except ValueError as e:
@@ -4166,6 +4170,200 @@ def test_independent_mode_is_several_single_task_gps_sharing_hyperparameters():
             assert message in str(e)
         else:
             raise AssertionError(f"expected a ValueError with {message!r}")
+
+
+def _input_kernel(x1, x2, h):
+    """An anisotropic squared exponential on the inputs."""
+    return h[0] * np.exp(-(((x1[:, None, :] - x2[None, :, :]) / h[1:3]) ** 2).sum(-1))
+
+
+def _delta_cartesian_kernel(x1, x2, h):
+    """_input_kernel on the Cartesian [x, task] points, zero between different tasks."""
+    return _input_kernel(x1[:, :-1], x2[:, :-1], h) * (x1[:, -1][:, None] == x2[:, -1][None, :])
+
+
+def test_independent_outputs_are_a_cartesian_gp_with_a_delta_kernel():
+    """The posterior contract's defining identity: every posterior and information result of
+    independent outputs is the Cartesian GP's whose kernel is zero between different outputs."""
+    rng = np.random.default_rng(3)
+    x = rng.random((15, 2))
+    y = np.column_stack([np.sin(3 * x[:, 0]), np.cos(2 * x[:, 1]), x[:, 0] * x[:, 1]])
+    noise = 0.01 * (rng.random(15) + 0.5)
+    h = np.array([1.2, 0.5, 0.7])
+    xp = rng.random((4, 2))
+    ind = GP(x, y, h, noise_variances=noise, kernel_function=_input_kernel)
+    cart = GP(x, y, h, noise_variances=np.tile(noise[:, None], (1, 3)), kernel_function=_delta_cartesian_kernel,
+              multi_task_mode="cartesian")
+    # the independent likelihood averages the outputs', the Cartesian one adds them up
+    assert np.isclose(3 * ind.log_likelihood(), cart.log_likelihood(), rtol=1e-12)
+
+    def same(a, b, keys):
+        for key in keys:
+            if b[key] is None: assert a[key] is None, key
+            else: assert np.allclose(a[key], b[key], rtol=1e-8, atol=1e-10), key
+
+    for x_out in (None, np.array([2, 0])):
+        n = 3 if x_out is None else len(x_out)
+        same(ind.posterior_mean(xp, x_out=x_out), cart.posterior_mean(xp, x_out=x_out), ("m(x)", "m(x)_flat"))
+        same(ind.posterior_mean(xp, h * 1.1, x_out=x_out), cart.posterior_mean(xp, h * 1.1, x_out=x_out), ("m(x)",))
+        for variance_only in (False, True):
+            for add_noise in (False, True):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    a, b = (gp.posterior_covariance(xp, x_out=x_out, variance_only=variance_only, add_noise=add_noise)
+                            for gp in (ind, cart))
+                same(a, b, ("v(x)", "S", "S_flat", "v_flat"))
+        for direction in (None, 1):
+            same(ind.posterior_mean_grad(xp, x_out=x_out, direction=direction),
+                 cart.posterior_mean_grad(xp, x_out=x_out, direction=direction), ("dm/dx",))
+            same(ind.posterior_covariance_grad(xp, x_out=x_out, direction=direction),
+                 cart.posterior_covariance_grad(xp, x_out=x_out, direction=direction), ("dv/dx", "dS/dx"))
+        same(ind.joint_gp_prior(xp, x_out=x_out), cart.joint_gp_prior(xp, x_out=x_out),
+             ("K", "k", "kappa", "prior mean", "S"))
+        same(ind.joint_gp_prior_grad(xp, 1, x_out=x_out), cart.joint_gp_prior_grad(xp, 1, x_out=x_out),
+             ("K", "dk/dx", "d kappa/dx", "d prior mean/x", "dS/dx"))
+        comp_mean, comp_cov = rng.random(4 * n), np.eye(4 * n)
+        for method, arguments, key in (("gp_entropy", (xp,), "entropy"), ("gp_entropy_grad", (xp, 1), "dH/dx"),
+                                       ("gp_mutual_information", (xp,), "mutual information"),
+                                       ("gp_total_correlation", (xp,), "total correlation"),
+                                       ("gp_relative_information_entropy", (xp,), "RIE"),
+                                       ("gp_relative_information_entropy_set", (xp,), "RIE"),
+                                       ("gp_kl_div", (xp, comp_mean, comp_cov), "kl-div"),
+                                       ("posterior_probability", (xp, comp_mean, comp_cov), "probability")):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                a, b = (getattr(gp, method)(*arguments, x_out=x_out) for gp in (ind, cart))
+            assert np.allclose(a[key], b[key], rtol=1e-6), method
+
+
+def _word_kernel(x1, x2, h):
+    lengths1, lengths2 = np.array([len(w) for w in x1], float), np.array([len(w) for w in x2], float)
+    return h[0] * np.exp(-np.subtract.outer(lengths1, lengths2) ** 2 / h[1])
+
+
+def _word_task_kernel(x1, x2, h):
+    """_word_kernel times a squared exponential in the task, on Cartesian [word, task] pairs."""
+    tasks1, tasks2 = np.array([p[1] for p in x1], float), np.array([p[1] for p in x2], float)
+    return _word_kernel([p[0] for p in x1], [p[0] for p in x2], h) * np.exp(-np.subtract.outer(tasks1, tasks2) ** 2)
+
+
+def test_posterior_results_follow_one_contract_in_every_mode():
+    """Every posterior and information method returns the same keys with the documented shapes
+    in every mode: no output axis for a single-task GP, one for a multi-task GP."""
+    rng = np.random.default_rng(4)
+    x, y, xp = rng.random((12, 2)), rng.random((12, 3)), rng.random((4, 2))
+    V, D, subset = 4, 2, np.array([2, 0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        gps = {"single (V)": GP(x, y[:, 0], np.ones(3)), "single (V, 1)": GP(x, y[:, :1], np.ones(3)),
+               "independent": GP(x, y, np.ones(3)), "cartesian": GP(x, y, np.ones(4), multi_task_mode="cartesian"),
+               "kronecker": GP(x, y, multi_task_mode="kronecker")}
+    for name, gp in gps.items():
+        for x_out in ((None,) if gp.output_num == 1 else (None, subset)):
+            n = None if gp.output_num == 1 else (3 if x_out is None else 2)
+
+            def shape(single, multi):
+                return single if n is None else multi
+
+            m = gp.posterior_mean(xp, x_out=x_out)
+            assert set(m) == {"x", "x_out", "m(x)", "m(x)_flat"} and m["x"] is xp, name
+            assert m["m(x)"].shape == shape((V,), (V, n)) and m["m(x)_flat"].shape == shape((V,), (V * (n or 1),)), name
+            assert np.array_equal(m["m(x)_flat"], m["m(x)"].ravel(order='F')), name
+            assert (m["x_out"] is None) if n is None else (len(m["x_out"]) == n), name
+            assert gp.posterior_mean(xp[:1], x_out=x_out)["m(x)"].shape == shape((1,), (1, n)), name
+            for variance_only in (False, True):
+                for add_noise in (False, True):
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore")
+                        c = gp.posterior_covariance(xp, x_out=x_out, variance_only=variance_only, add_noise=add_noise)
+                    assert set(c) == {"x", "x_out", "v(x)", "S", "S_flat", "v_flat"}, name
+                    assert c["v(x)"].shape == shape((V,), (V, n)) and c["v_flat"].shape == shape((V,), (V * (n or 1),)), name
+                    assert np.array_equal(c["v_flat"], c["v(x)"].ravel(order='F')), name
+                    if variance_only:
+                        assert c["S"] is None and c["S_flat"] is None, name
+                        continue
+                    assert c["S"].shape == shape((V, V), (V, V, n, n)), name
+                    assert c["S_flat"].shape == shape((V, V), (V * (n or 1), V * (n or 1))), name
+                    assert np.allclose(np.diag(c["S_flat"]), c["v_flat"]), name
+                    if n is not None:
+                        # S[i, j, t, u] is S_flat at the task-major indices i + V t, j + V u
+                        assert np.allclose(np.einsum('iitt->it', c["S"]), c["v(x)"]), name
+                        assert np.isclose(c["S"][1, 3, 1, 0], c["S_flat"][1 + V, 3]), name
+            if name == "kronecker":
+                continue
+            for direction in (None, 1):
+                g = gp.posterior_mean_grad(xp, x_out=x_out, direction=direction)
+                assert set(g) == {"x", "x_out", "direction", "dm/dx"} and g["direction"] == direction, name
+                assert g["dm/dx"].shape == (shape((V, D), (V, D, n)) if direction is None else shape((V,), (V, n))), name
+                g = gp.posterior_covariance_grad(xp, x_out=x_out, direction=direction)
+                assert set(g) == {"x", "x_out", "direction", "dv/dx", "dS/dx"}, name
+                assert g["dv/dx"].shape == (shape((V, D), (V, D, n)) if direction is None else shape((V,), (V, n))), name
+                assert (g["dS/dx"] is None) if direction is None else (g["dS/dx"].shape == shape((V, V), (V, V, n, n)))
+            for method, arguments, key in (("gp_entropy", (xp,), "entropy"), ("gp_entropy_grad", (xp, 0), "dH/dx"),
+                                           ("gp_mutual_information", (xp,), "mutual information"),
+                                           ("gp_total_correlation", (xp,), "total correlation"),
+                                           ("gp_relative_information_entropy", (xp,), "RIE"),
+                                           ("joint_gp_prior", (xp,), "S")):
+                result = getattr(gp, method)(*arguments, x_out=x_out)
+                assert result["x"] is xp and key in result, (name, method)
+    # x_out belongs to multi-task GPs
+    with pytest.raises(ValueError, match="this GP has a single output"):
+        gps["single (V)"].posterior_mean(xp, x_out=np.array([0]))
+    with pytest.raises(ValueError, match="1-d array of output coordinates"):
+        gps["cartesian"].posterior_mean(xp, x_out=np.zeros((2, 2)))
+    # non-Euclidean inputs, single-task and Cartesian
+    words = ["hello", "world", "this", "is", "fvgp", "gaussian"]
+    y_words = rng.random((6, 2))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        single = GP(words, y_words[:, 0], np.ones(2), kernel_function=_word_kernel)
+        pairs = GP(words, y_words, np.ones(2), kernel_function=_word_task_kernel, multi_task_mode="cartesian")
+    x_words = ["hi", "words", "process"]
+    for gp, n in ((single, None), (pairs, 2)):
+        m, c = gp.posterior_mean(x_words), gp.posterior_covariance(x_words)
+        assert m["x"] is x_words and m["m(x)"].shape == ((3,) if n is None else (3, n))
+        assert c["S"].shape == ((3, 3) if n is None else (3, 3, n, n))
+
+
+def test_posterior_gradients_agree_with_the_posterior():
+    """dm/dx and dv/dx for all directions are the per-direction results, diag(dS/dx) is dv/dx,
+    and all of them are finite differences of m(x) and S -- in the multi-task layout too."""
+    rng = np.random.default_rng(5)
+    x, y, xp = rng.random((15, 2)), rng.random((15, 3)), rng.random((4, 2))
+    h = np.array([1.0, 0.4, 0.5])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        gps = (GP(x, y[:, 0], h), GP(x, y, h), GP(x, y, np.append(h, 2.0), multi_task_mode="cartesian"))
+    eps = 1e-6
+    for gp in gps:
+        mean_all, covariance_all = gp.posterior_mean_grad(xp)["dm/dx"], gp.posterior_covariance_grad(xp)["dv/dx"]
+        for d in range(2):
+            shifted = xp.copy()
+            shifted[:, d] += eps
+            dm = gp.posterior_mean_grad(xp, direction=d)["dm/dx"]
+            assert np.allclose(mean_all[:, d], dm)
+            assert np.allclose(dm, (gp.posterior_mean(shifted)["m(x)"] - gp.posterior_mean(xp)["m(x)"]) / eps, atol=1e-4)
+            g = gp.posterior_covariance_grad(xp, direction=d)
+            fd = (gp.posterior_covariance(shifted)["S"] - gp.posterior_covariance(xp)["S"]) / eps
+            assert np.allclose(g["dS/dx"], fd, atol=1e-4)
+            assert np.allclose(covariance_all[:, d], g["dv/dx"])
+            diagonal = np.diag(g["dS/dx"]) if gp.output_num == 1 else np.einsum('iitt->it', g["dS/dx"])
+            assert np.allclose(diagonal, g["dv/dx"])
+
+
+def test_posterior_mean_grad_component_is_deprecated():
+    rng = np.random.default_rng(6)
+    x, y, xp = rng.random((10, 2)), rng.random((10, 3)), rng.random((3, 2))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        independent, single = GP(x, y, np.ones(3)), GP(x, y[:, 0], np.ones(3))
+    with pytest.warns(FutureWarning, match="component is deprecated"):
+        selected = independent.posterior_mean_grad(xp, direction=0, component=2)
+    assert np.allclose(selected["dm/dx"], independent.posterior_mean_grad(xp, direction=0, x_out=[2])["dm/dx"])
+    assert np.array_equal(selected["x_out"], [2])
+    with pytest.warns(FutureWarning, match="component is deprecated"):
+        ignored = single.posterior_mean_grad(xp, direction=0, component=0)
+    assert np.allclose(ignored["dm/dx"], single.posterior_mean_grad(xp, direction=0)["dm/dx"])
 
 
 def test_data_shapes_are_checked_per_multi_task_mode():
@@ -4243,9 +4441,9 @@ def test_a_prior_mean_per_right_hand_side():
         assert np.allclose(both.posterior_mean(xp)["m(x)"][:, c], single.posterior_mean(xp)["m(x)"])
         assert np.allclose(both.neg_log_likelihood_gradient(h * 1.1, component=c),
                            single.neg_log_likelihood_gradient(h * 1.1))
-        assert np.allclose(both.posterior_mean_grad(xp, direction=0, component=c)["dm/dx"],
+        assert np.allclose(both.posterior_mean_grad(xp, direction=0)["dm/dx"][:, c],
                            single.posterior_mean_grad(xp, direction=0)["dm/dx"])
-        assert np.allclose(both.posterior_mean_grad(xp, component=c)["dm/dx"], single.posterior_mean_grad(xp)["dm/dx"])
+        assert np.allclose(both.posterior_mean_grad(xp)["dm/dx"][:, :, c], single.posterior_mean_grad(xp)["dm/dx"])
     # a 1-d mean is shared: the same as handing every column that mean
     shared = GP(x, y, h, noise_variances=noise, prior_mean_function=_one_column_mean(0))
     copied = GP(x, y, h, noise_variances=noise, prior_mean_function=lambda xx, hh: np.tile(
@@ -4676,11 +4874,13 @@ def test_multi_task_posterior_reshape_paths():
 
 
 def test_posterior_variance_tiling_for_multi_column_y():
-    """Without x_out but with several output columns, the variance is tiled per column."""
+    """Independent outputs share their variances: one copy per output, flat and per column."""
     gp = _tiny_gp()
-    gp.data.y_data = np.tile(gp.y_data, (1, 2))
-    result = gp.posterior_covariance(np.random.rand(5, 2))
-    assert result["v(x)"].shape == (5, 2)
+    both = GP(gp.x_data, np.tile(gp.y_data, (1, 2)), gp.hyperparameters)
+    x_pred = np.random.rand(5, 2)
+    single, result = gp.posterior_covariance(x_pred), both.posterior_covariance(x_pred)
+    assert result["v(x)"].shape == (5, 2) and result["v_flat"].shape == (10,)
+    assert np.allclose(result["v(x)"], single["v(x)"][:, None]) and np.allclose(result["v_flat"], np.tile(single["v(x)"], 2))
 
 
 def test_posterior_warns_and_clips_negative_variances():
@@ -5450,10 +5650,18 @@ def test_kronecker_mode_matches_the_cartesian_fvgp():
                 warnings.simplefilter("ignore")
                 a, b = (gp.posterior_covariance(xp, x_out=x_out, add_noise=True) for gp in (kron, cart))
             assert np.allclose(a["S"], b["S"], atol=1e-12)
+            # the information methods that need only the contract's flat arrays work here too
+            n = 12 if x_out is None else len(x_out)
+            comp_mean, comp_cov = np.linspace(0, 1, 5 * n), np.eye(5 * n)
+            for method, arguments, key in (("gp_kl_div", (xp, comp_mean, comp_cov), "kl-div"),
+                                           ("posterior_probability", (xp, comp_mean, comp_cov), "probability"),
+                                           ("gp_relative_information_entropy", (xp,), "RIE"),
+                                           ("gp_relative_information_entropy_set", (xp,), "RIE")):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    a, b = (getattr(gp, method)(*arguments, x_out=x_out) for gp in (kron, cart))
+                assert np.allclose(a[key], b[key], rtol=1e-8), method
         assert np.isclose(kron.rmse(x, y), cart.rmse(x, y), rtol=1e-12)
-        comp_mean, comp_cov = np.zeros(60), np.eye(60)
-        assert np.isclose(kron.gp_kl_div(xp, comp_mean, comp_cov)["kl-div"],
-                          cart.gp_kl_div(xp, comp_mean, comp_cov)["kl-div"], rtol=1e-9)
     # a noise function and a mean function, with their finite-difference gradients
     for gradient_per_direction, reference in ((False, cart_fn), (True, cart_fn_econ)):
         kron = GP(x, y, h, kernel_function=_kron_factors, noise_function=_kron_noise,
@@ -5665,8 +5873,7 @@ def test_kronecker_mode_rejects_what_it_cannot_do():
     for method, arguments in (("posterior_mean_grad", (xp,)), ("posterior_covariance_grad", (xp,)),
                               ("joint_gp_prior", (xp,)), ("joint_gp_prior_grad", (xp, 0)),
                               ("gp_entropy", (xp,)), ("gp_entropy_grad", (xp, 0)),
-                              ("gp_mutual_information", (xp,)), ("gp_total_correlation", (xp,)),
-                              ("gp_relative_information_entropy", (xp,))):
+                              ("gp_mutual_information", (xp,)), ("gp_total_correlation", (xp,))):
         raises(NotImplementedError, f"{method} is not supported in Kronecker mode", getattr(gp, method), *arguments)
     # an unstable model warns about negative variances, as the dense path does
     gp.kv.kronecker_factor.inv_spectrum *= 100.0
@@ -6723,12 +6930,12 @@ def test_marginal_likelihood_unpickles_onto_a_bare_instance():
 
 
 def test_posterior_mean_returns_a_matrix_for_multi_column_solutions():
-    """Several right-hand sides and no x_out: the mean keeps its columns."""
+    """Several right-hand sides and no x_out: the mean keeps its columns, the flat mean is task-major."""
     gp = _tiny_gp()
-    gp.kv.KVinvY = np.tile(gp.kv.KVinvY, (1, 2))
-    result = gp.posterior_mean(np.random.rand(4, 2))
-    assert result["m(x)"].shape == (4, 2)
-    assert result["m(x)_flat"].shape == (4, 2)
+    both = GP(gp.x_data, np.column_stack([gp.y_data, 2.0 * gp.y_data]), gp.hyperparameters)
+    result = both.posterior_mean(np.random.rand(4, 2))
+    assert result["m(x)"].shape == (4, 2) and result["m(x)_flat"].shape == (8,)
+    assert np.array_equal(result["m(x)_flat"], result["m(x)"].ravel(order='F'))
 
 
 def test_variance_only_multi_task_posterior_has_no_covariance_matrix():

@@ -171,134 +171,161 @@ class GPposterior:
             solved = self.KVsolve(self._dense(k[:, start:end]))
             product[:, start:end] = np.asarray(k.T @ solved)
         return product
-    ##########################################################
 
-    def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
-        if self.kronecker: return self._kronecker_posterior_mean(x_pred, hyperparameters, x_out)
-        if self.independent:
-            return self._select_outputs(self._posterior_mean(x_pred, hyperparameters, None), x_out,
-                                        ("m(x)", "m(x)_flat"))
-        return self._posterior_mean(x_pred, hyperparameters, x_out)
-
-    def _posterior_mean(self, x_pred, hyperparameters, x_out):
-        x_data, KVinvY = self.x_data.copy(), self.KVinvY.copy()
-        if hyperparameters is not None:
-            K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
-            V = self.calculate_V(x_data, hyperparameters)
-            m = self.compute_mean(x_data, hyperparameters)
-            KVinvY = self._new_KVinvY(K, V, m)
-        else:
-            hyperparameters = self.hyperparameters
-
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        x_orig = x_pred.copy()
-        if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
-
-        # Sparse under gp2Scale, and it stays sparse: the product with KVinvY is the whole
-        # use of k here, so the posterior mean never materializes an (N x n_pred) array.
-        k = self.cross_covariance(x_pred, hyperparameters)
-        A = np.asarray(k.T @ KVinvY)
-        prior_mean = self.compute_mean(x_pred, hyperparameters)
-        posterior_mean = self.mean_columns(prior_mean) + A
-        if isinstance(x_out, np.ndarray): posterior_mean_re = posterior_mean.reshape(len(x_orig), len(x_out), order='F')
-        else: posterior_mean_re = posterior_mean
-
-        if KVinvY.shape[1] == 1 and not isinstance(x_out, np.ndarray):
-            return {"x": x_orig,
-                    "m(x)": np.squeeze(posterior_mean_re),
-                    "m(x)_flat": np.squeeze(posterior_mean),
-                    "x_pred": x_pred}
-        elif KVinvY.shape[1] == 1 and isinstance(x_out, np.ndarray):
-            return {"x": x_orig,
-                    "m(x)": posterior_mean_re,
-                    "m(x)_flat": np.squeeze(posterior_mean),
-                    "x_pred": x_pred}
-        # unreachable: the order='F' reshape above already fails for a multi-column
-        # KVinvY combined with x_out, since the flat product space has one column
-        elif KVinvY.shape[1] > 1 and isinstance(x_out, np.ndarray):  # pragma: no cover - defensive
-            raise Exception("KVinvY.shape[1] > 1 and isinstance(x_out, np.ndarray)=True")
-        else:
-            return {"x": x_orig,
-                    "m(x)": posterior_mean_re,
-                    "m(x)_flat": posterior_mean,
-                    "x_pred": x_pred}
-
-    def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None, component=0):
-        self._reject_kronecker("posterior_mean_grad")
-        x_data, KVinvY = self.x_data.copy(), self.KVinvY.copy()[:, component]
-
-        if hyperparameters is not None:
-            K = self.compute_prior_covariance_matrix(x_data, hyperparameters)
-            V = self.calculate_V(x_data, hyperparameters)
-            m = self.compute_mean(x_data, hyperparameters)
-            KVinvY = self._new_KVinvY(K, V, m)[:, component]
-            assert np.ndim(KVinvY) == 1, "KVinvY must be 1-d after column selection"
-        else:
-            hyperparameters = self.hyperparameters
-
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        x_orig = x_pred.copy()
-        if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
-
-        f = self.compute_mean(x_pred, hyperparameters)
-        eps = 1e-6
-        if direction is not None:
-            x1 = np.array(x_pred)
-            x1[:, direction] = x1[:, direction] + eps
-            mean_der = self.mean_columns((self.compute_mean(x1, hyperparameters) - f) / eps)[:, component]
-            k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
-            posterior_mean_grad = mean_der + (k_g @ KVinvY)
-            if isinstance(x_out, np.ndarray):
-                posterior_mean_grad = posterior_mean_grad.reshape(len(x_orig), len(x_out), order='F')
-        else:
-            posterior_mean_grad = np.zeros((len(x_pred), x_orig.shape[1]))
-            for direction in range(len(x_orig[0])):
-                x1 = np.array(x_pred)
-                x1[:, direction] = x1[:, direction] + eps
-                mean_der = self.mean_columns((self.compute_mean(x1, hyperparameters) - f) / eps)[:, component]
-                k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
-                posterior_mean_grad[:, direction] = mean_der + (k_g @ KVinvY)
-            direction = "ALL"
-            if isinstance(x_out, np.ndarray):
-                posterior_mean_grad = posterior_mean_grad.reshape(len(x_orig), len(x_orig[0]), len(x_out), order='F')
-
-        return {"x": x_orig,
-                "direction": direction,
-                "dm/dx": posterior_mean_grad}
-
-    ###########################################################################
-    def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
-        if self.kronecker: return self._kronecker_posterior_covariance(x_pred, x_out, variance_only, add_noise)
-        if self.independent:
-            # the tasks share one GP: S, over the inputs, is the same for all of them
-            return self._select_outputs(self._posterior_covariance(x_pred, None, variance_only, add_noise), x_out,
-                                        ("v(x)", "v_flat"))
-        return self._posterior_covariance(x_pred, x_out, variance_only, add_noise)
-
-    def _select_outputs(self, result, x_out, keys):
-        """Keep the columns ``x_out`` (all by default) of the per-task entries of a posterior result."""
-        columns = self._output_indices(x_out)
-        for key in keys: result[key] = result[key][:, columns]
-        return result
-
-    def _posterior_covariance(self, x_pred, x_out, variance_only, add_noise):
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        x_orig = x_pred.copy()
-        if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
-
-        k = self.cross_covariance(x_pred, self.hyperparameters)
-        kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters)
-
-        if self.KVinv is not None and variance_only and self.y_data.shape[1] == 1:
+    def _cross_solve_diagonal(self, k, chunk_size=None):
+        """``diag(k.T @ KV^-1 @ k)`` in the chunks of :py:meth:`_cross_solve_product`, without
+        forming the (n_pred x n_pred) product."""
+        if self.KVinv is not None:
             # The explicit-inverse modes are dense in N anyway, so densifying k costs
             # nothing here, and the einsum gets the variances without ever forming S.
             k_dense = self._dense(k)
+            return np.einsum('ij,jk,ki->i', k_dense.T, self.KVinv, k_dense, optimize=True)
+        n_pred = k.shape[1]
+        if chunk_size is None: chunk_size = n_pred if not self.gp2Scale else self.batch_size
+        chunk_size = max(1, min(int(chunk_size), n_pred))
+        diagonal = np.empty(n_pred)
+        for start in range(0, n_pred, chunk_size):
+            end = min(start + chunk_size, n_pred)
+            k_chunk = self._dense(k[:, start:end])
+            diagonal[start:end] = np.einsum('ij,ij->j', k_chunk, np.asarray(self.KVsolve(k_chunk)))
+        return diagonal
+
+    ##########################################################
+    # The posterior result contract. Every mode computes flat, task-major arrays -- the pair
+    # (point j, output t) at j + V * t -- and the helpers below build every returned dict from
+    # them; they are the one place result shapes are decided. A single-task result has no
+    # output axis; a multi-task result has it, the same in every mode.
+    def _outputs(self, x_out):
+        """The requested outputs: None for a single-task GP; output indices for independent and
+        Kronecker outputs; output coordinates, all of ``self.x_out`` by default, for Cartesian ones."""
+        if self.multi_task is None:
+            if x_out is not None:
+                raise ValueError("x_out selects the outputs of a multi-task GP; this GP has a single output.")
+            return None
+        if self.multi_task != "cartesian": return self._output_indices(x_out)
+        if x_out is None: return self.x_out
+        x_out = np.asarray(x_out)
+        if np.ndim(x_out) != 1: raise ValueError("x_out must be a 1-d array of output coordinates.")
+        return x_out
+
+    def _index_points(self, x_pred, x_out):
+        """The points the kernel sees: in Cartesian mode the (point, output) pairs, task-major."""
+        if self.multi_task == "cartesian": return self.cartesian_product(x_pred, x_out)
+        return x_pred
+
+    def _per_output(self, values, x_out):
+        """A (points, columns) array raveled task-major: the requested columns when the outputs
+        are columns (independent, Kronecker), the single column otherwise."""
+        if self.multi_task in ("independent", "kronecker"): values = np.asarray(values)[:, x_out]
+        return np.asarray(values).ravel(order='F')
+
+    def _shared_by_outputs(self, x_out, shared, pairs=False):
+        """What independent outputs share, once per requested output, task-major: stacked, or
+        block-diagonal for a quantity over pairs. Unchanged in every other mode."""
+        if shared is None or not self.independent: return shared
+        if pairs: return np.kron(np.identity(len(x_out)), shared)
+        return np.tile(shared, (len(x_out),) + (1,) * (np.ndim(shared) - 1))
+
+    def _independent_count(self, x_out):
+        """How many times a quantity of one independent output adds up over the requested ones."""
+        return len(x_out) if self.independent else 1
+
+    @staticmethod
+    def _by_output(flat, n_pred, x_out, pairs=False):
+        """The structured view of a flat, task-major array: (V n) -> (V, n), (V n, D) -> (V, D, n),
+        and with ``pairs`` (V n, V n) -> (V, V, n, n). Unchanged for a single-task GP."""
+        if x_out is None or flat is None: return flat
+        n = len(x_out)
+        # The flat index is task-major, so the order='F' split gives (point, output) axes; a
+        # direct reshape to the documented layout would interleave the point and output axes.
+        if pairs: return flat.reshape(n_pred, n, n_pred, n, order='F').transpose(0, 2, 1, 3)
+        if np.ndim(flat) == 1: return flat.reshape(n_pred, n, order='F')
+        return flat.reshape(n_pred, n, flat.shape[1], order='F').transpose(0, 2, 1)
+
+    def _mean_result(self, x_pred, x_out, m):
+        return {"x": x_pred,
+                "x_out": x_out,
+                "m(x)": self._by_output(m, len(x_pred), x_out),
+                "m(x)_flat": m}
+
+    def _covariance_result(self, x_pred, x_out, v, S):
+        return {"x": x_pred,
+                "x_out": x_out,
+                "v(x)": self._by_output(v, len(x_pred), x_out),
+                "S": self._by_output(S, len(x_pred), x_out, pairs=True),
+                "S_flat": S,
+                "v_flat": v}
+
+    def _gradient_result(self, x_pred, x_out, direction, gradients):
+        result = {"x": x_pred, "x_out": x_out, "direction": direction}
+        for key, value in gradients.items():
+            result[key] = self._by_output(value, len(x_pred), x_out, pairs=(key == "dS/dx"))
+        return result
+
+    def _KVinvY_and_hyperparameters(self, hyperparameters):
+        """(K+V)^-1 (y - m) for the given hyperparameters, the stored one by default."""
+        if hyperparameters is None: return self.KVinvY, self.hyperparameters
+        K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
+        V = self.calculate_V(self.x_data, hyperparameters)
+        m = self.compute_mean(self.x_data, hyperparameters)
+        return self._new_KVinvY(K, V, m), hyperparameters
+
+    ##########################################################
+    def posterior_mean(self, x_pred, hyperparameters=None, x_out=None):
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        KVinvY, hyperparameters = self._KVinvY_and_hyperparameters(hyperparameters)
+        if self.kronecker: m = self._kronecker_posterior_mean(x_pred, hyperparameters, KVinvY)
+        else:
+            x_in = self._index_points(x_pred, x_out)
+            # Sparse under gp2Scale, and it stays sparse: the product with KVinvY is the whole
+            # use of k here, so the posterior mean never materializes an (N x n_pred) array.
+            k = self.cross_covariance(x_in, hyperparameters)
+            m = self.mean_columns(self.compute_mean(x_in, hyperparameters)) + np.asarray(k.T @ KVinvY)
+        return self._mean_result(x_pred, x_out, self._per_output(m, x_out))
+
+    def posterior_mean_grad(self, x_pred, hyperparameters=None, x_out=None, direction=None, component=None):
+        self._reject_kronecker("posterior_mean_grad")
+        if component is not None:
+            warnings.warn("component is deprecated and will be removed in fvgp 5.0.0: the gradient covers "
+                          "every requested output; select one with x_out=[component].", FutureWarning, stacklevel=3)
+            if self.independent: x_out = [component]
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        KVinvY, hyperparameters = self._KVinvY_and_hyperparameters(hyperparameters)
+        x_in = self._index_points(x_pred, x_out)
+        f = self.compute_mean(x_in, hyperparameters)
+        eps = 1e-6
+
+        def mean_gradient(d):
+            x1 = np.array(x_in)
+            x1[:, d] = x1[:, d] + eps
+            mean_der = self.mean_columns((self.compute_mean(x1, hyperparameters) - f) / eps)
+            k_g = self.d_kernel_dx(x_in, self.x_data, d, hyperparameters)
+            return self._per_output(mean_der + k_g @ KVinvY, x_out)
+
+        if direction is not None: dm = mean_gradient(direction)
+        else: dm = np.stack([mean_gradient(d) for d in range(self.input_set_dim)], axis=1)
+        return self._gradient_result(x_pred, x_out, direction, {"dm/dx": dm})
+
+    ###########################################################################
+    def posterior_covariance(self, x_pred, x_out=None, variance_only=False, add_noise=False):
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        if self.kronecker: v, S = self._kronecker_posterior_covariance(x_pred, x_out, variance_only, add_noise)
+        else:
+            # independent outputs share one GP: v and S over the inputs, the same for all of them
+            v, S = self._posterior_covariance(self._index_points(x_pred, x_out), variance_only, add_noise)
+            v, S = self._shared_by_outputs(x_out, v), self._shared_by_outputs(x_out, S, pairs=True)
+        return self._covariance_result(x_pred, x_out, v, S)
+
+    def _posterior_covariance(self, x_in, variance_only, add_noise):
+        """Posterior variances, and unless ``variance_only`` the covariance, at the index points ``x_in``."""
+        k = self.cross_covariance(x_in, self.hyperparameters)
+        kk = self.compute_covariances(x_in, x_in, self.hyperparameters)
+        if variance_only:
             S = None
-            v = np.diag(kk) - np.einsum('ij,jk,ki->i', k_dense.T,
-                                        self.KVinv, k_dense, optimize=True)
+            v = np.diag(kk) - self._cross_solve_diagonal(k)
         else:
             S = kk - self._cross_solve_product(k)
             v = np.array(np.diag(S))
@@ -313,36 +340,9 @@ class GPposterior:
         # leaves the diagonal slightly below zero); downstream sqrt would NaN.
         if np.any(v < 0.0):
             v[v < 0.0] = 0.0
-            if not variance_only: np.fill_diagonal(S, v)
-
-        if add_noise: v, S = self.add_noise(x_pred, v, S)
-
-        if isinstance(x_out, np.ndarray):
-            v_re = v.reshape(len(x_orig), len(x_out), order='F')
-            if S is not None:
-                # The flat product-space index is task-major (k = point + Npts*task),
-                # matching cartesian_product and the order='F' reshape of v above. A
-                # direct reshape to (Npts, Npts, No, No) would therefore interleave the
-                # point and task axes and silently scramble S. Reshape to the layout the
-                # flat index actually has -- (point, task, point, task) -- and then move
-                # the axes into the documented (Npts, Npts, No, No) arrangement, so that
-                # S_re[i, j, t, u] == Cov(f(x_i, task_t), f(x_j, task_u)).
-                S_re = S.reshape(len(x_orig), len(x_out), len(x_orig), len(x_out),
-                                 order='F').transpose(0, 2, 1, 3)
-            else: S_re = None
-        else:
-            v_re = v
-            S_re = S
-            if self.y_data.shape[1] > 1:
-                v = np.tile(v[:, None], (1, self.y_data.shape[1]))
-                v_re = np.tile(v_re[:, None], (1, self.y_data.shape[1]))
-
-        return {"x": x_orig,
-                "x_pred": x_pred,
-                "v(x)": v_re,
-                "S": S_re,
-                "S_flat": S,
-                "v_flat": v}
+            if S is not None: np.fill_diagonal(S, v)
+        if add_noise: v, S = self.add_noise(x_in, v, S)
+        return v, S
 
     def _output_indices(self, x_out):
         """x_out as integer output indices, the only output coordinates the Kronecker and
@@ -356,27 +356,27 @@ class GPposterior:
                              f"a 1-d array of integers in 0 ... {n_out - 1}.")
         return indices.astype(int)
 
-    def _kronecker_posterior_mean(self, x_pred, hyperparameters, x_out):
-        """Mode products of the tensor (K+V)^-1 (y - m) with [K_x(x_pred, X), F_1, ..., F_m]."""
-        KVinvY = self.KVinvY
-        if hyperparameters is not None:
-            K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
-            V = self.calculate_V(self.x_data, hyperparameters)
-            m = self.compute_mean(self.x_data, hyperparameters)
-            KVinvY = self._new_KVinvY(K, V, m)
-        else:
-            hyperparameters = self.hyperparameters
-        x_out = self._output_indices(x_out)
-        self._perform_input_checks(x_pred, None)
+    def _kronecker_posterior_mean(self, x_pred, hyperparameters, KVinvY):
+        """Mode products of the tensor (K+V)^-1 (y - m) with [K_x(x_pred, X), F_1, ..., F_m],
+        for every output: (n_pred, n_out)."""
         k = self.cross_covariance(x_pred, hyperparameters)
         alpha = KVinvY.reshape((len(self.x_data),) + tuple(len(F) for F in k[1:]))
         A = kronecker_mode_product(alpha, [np.asarray(k[0]).T] + list(k[1:])).reshape(len(x_pred), -1)
-        prior_mean = self.compute_mean(x_pred, hyperparameters)
-        posterior_mean = (self.mean_columns(prior_mean) + A)[:, x_out]
-        return {"x": x_pred,
-                "m(x)": posterior_mean,
-                "m(x)_flat": posterior_mean.ravel(order='F'),
-                "x_pred": x_pred}
+        return self.mean_columns(self.compute_mean(x_pred, hyperparameters)) + A
+
+    @staticmethod
+    def _kronecker_pairs(n_pred, x_out, factors):
+        """The point and per-factor output indices of the requested (point, output) pairs, task-major."""
+        points = np.tile(np.arange(n_pred), len(x_out))
+        outputs = np.unravel_index(np.repeat(x_out, n_pred), [len(F) for F in factors[1:]])
+        return points, outputs
+
+    @staticmethod
+    def _kronecker_pair_covariance(factors, points, outputs):
+        """The prior covariance between pairs: the product of the factors' entries."""
+        S = np.asarray(factors[0])[np.ix_(points, points)]
+        for F, o in zip(factors[1:], outputs): S = S * np.asarray(F)[np.ix_(o, o)]
+        return S
 
     def _kronecker_posterior_covariance(self, x_pred, x_out, variance_only, add_noise):
         """Posterior (co)variances at every (x_pred, output) pair, without forming K.
@@ -388,8 +388,6 @@ class GPposterior:
         """
         hps = self.hyperparameters
         factor = self.kronecker_factor
-        x_out = self._output_indices(x_out)
-        self._perform_input_checks(x_pred, None)
         n_pred = len(x_pred)
         k = self.cross_covariance(x_pred, hps)
         kk = self.compute_covariances(x_pred, x_pred, hps)
@@ -399,15 +397,11 @@ class GPposterior:
         v = (prior - reduction)[:, x_out]
         S = None
         if not variance_only:
-            # pair (point j, output t) at j + n_pred * t, task-major like the Cartesian mode
-            points = np.tile(np.arange(n_pred), len(x_out))
-            outputs = np.unravel_index(np.repeat(x_out, n_pred), [len(F) for F in kk[1:]])
+            points, outputs = self._kronecker_pairs(n_pred, x_out, kk)
             B = P[0][:, points]
-            S = np.asarray(kk[0])[np.ix_(points, points)]
-            for p, F, o in zip(P[1:], kk[1:], outputs):
+            for p, o in zip(P[1:], outputs):
                 B = (B[:, None, :] * p[:, o][None, :, :]).reshape(-1, len(points))
-                S = S * np.asarray(F)[np.ix_(o, o)]
-            S = S - (B * factor.inv_spectrum.reshape(-1, 1)).T @ B
+            S = self._kronecker_pair_covariance(kk, points, outputs) - (B * factor.inv_spectrum.reshape(-1, 1)).T @ B
             v = np.diag(S).reshape(len(x_out), n_pred).T
         if np.any(v < -0.0001):
             warnings.warn(
@@ -422,111 +416,101 @@ class GPposterior:
             noise = np.tile(np.reshape(self.noise_function(x_pred, hps), (n_pred, 1)), (1, len(x_out)))
             v = v + noise
             if S is not None: S = S + np.diag(noise.ravel(order='F'))
-        S_re = None if S is None else S.reshape(n_pred, len(x_out), n_pred, len(x_out), order='F').transpose(0, 2, 1, 3)
-        return {"x": x_pred,
-                "x_pred": x_pred,
-                "v(x)": v,
-                "S": S_re,
-                "S_flat": S,
-                "v_flat": v.ravel(order='F')}
+        return v.ravel(order='F'), S
 
     def posterior_covariance_grad(self, x_pred, x_out=None, direction=None):
         self._reject_kronecker("posterior_covariance_grad")
-        x_data = self.x_data.copy()
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        x_orig = x_pred.copy()
-        if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        x_in = self._index_points(x_pred, x_out)
+        hps = self.hyperparameters
+        kk = self.compute_covariances(x_in, x_in, hps)
+        k_covariance_prod = self.KVsolve(self.compute_covariances(self.x_data, x_in, hps))
+        eps = 1e-6
 
-        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
-        k_covariance_prod = self.KVsolve(k)
+        def covariance_gradient(d):
+            k_g = self.d_kernel_dx(x_in, self.x_data, d, hps).T
+            x1 = np.array(x_in)
+            x1[:, d] = x1[:, d] + eps
+            kk_g = (self.compute_covariances(x1, x1, hps) - kk) / eps
+            # d(k^T KV^-1 k) = M + M^T: 2 M would be right on the diagonal only
+            M = k_g.T @ k_covariance_prod
+            return kk_g - (M + M.T)
+
         if direction is not None:
-            k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
-            x1 = np.array(x_pred)
-            x2 = np.array(x_pred)
-            eps = 1e-6
-            x1[:, direction] = x1[:, direction] + eps
-            kk_g = (self.compute_covariances(x1, x1, self.hyperparameters) -
-                    self.compute_covariances(x2, x2, self.hyperparameters)) / eps
-            dSdx = kk_g - (2.0 * k_g.T @ k_covariance_prod)
-            a = np.diag(dSdx)
-            if isinstance(x_out, np.ndarray):
-                a = a.reshape(len(x_orig), len(x_out), order='F')
-                dSdx = dSdx.reshape(len(x_orig), len(x_orig), len(x_out), len(x_out), order='F')
-            return {"x": x_orig,
-                    "dv/dx": a,
-                    "dS/dx": dSdx}
+            dS = covariance_gradient(direction)
+            dv = np.array(np.diag(dS))
         else:
-            grad_v = np.zeros((len(x_pred), len(x_orig[0])))
-            for direction in range(len(x_orig[0])):
-                k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
-                x1 = np.array(x_pred)
-                x2 = np.array(x_pred)
-                eps = 1e-6
-                x1[:, direction] = x1[:, direction] + eps
-                kk_g = (self.compute_covariances(x1, x1, self.hyperparameters) -
-                        self.compute_covariances(x2, x2, self.hyperparameters)) / eps
-                grad_v[:, direction] = np.diag(kk_g - (2.0 * k_g.T @ k_covariance_prod))
-
-            if isinstance(x_out, np.ndarray):
-                grad_v = grad_v.reshape(len(x_orig), len(x_orig[0]), len(x_out), order='F')
-
-            return {"x": x_orig,
-                    "dv/dx": grad_v}
+            dS = None
+            dv = np.stack([np.diag(covariance_gradient(d)) for d in range(self.input_set_dim)], axis=1)
+        dv, dS = self._shared_by_outputs(x_out, dv), self._shared_by_outputs(x_out, dS, pairs=True)
+        return self._gradient_result(x_pred, x_out, direction, {"dv/dx": dv, "dS/dx": dS})
 
     ###########################################################################
+    def _joint_prior_covariances(self, x_pred, x_out):
+        """K (dense, jittered), k and kk of the joint prior of the data and the requested pairs;
+        for independent outputs the blocks of one output, which all of them share."""
+        x_in = self._index_points(x_pred, x_out)
+        K = self._dense_K() + np.identity(len(self.x_data)) * 1e-9
+        k = self.compute_covariances(self.x_data, x_in, self.hyperparameters)
+        kk = self.compute_covariances(x_in, x_in, self.hyperparameters)
+        return K, k, kk
+
+    def _joint_prior_gradients(self, x_pred, x_out, direction):
+        """dk/dx and d kk/dx of the joint prior, and the mean's derivative at the requested pairs,
+        by central differences; for independent outputs those of one output (the mean's per output)."""
+        x_in = self._index_points(x_pred, x_out)
+        hps = self.hyperparameters
+        k_g = self.d_kernel_dx(x_in, self.x_data, direction, hps).T
+        x1 = np.array(x_in)
+        x2 = np.array(x_in)
+        eps = 1e-6
+        x1[:, direction] = x1[:, direction] + eps
+        x2[:, direction] = x2[:, direction] - eps
+        kk_g = (self.compute_covariances(x1, x1, hps) - self.compute_covariances(x2, x2, hps)) / (2.0 * eps)
+        mean_der = self.mean_columns((self.compute_mean(x1, hps) - self.compute_mean(x2, hps)) / (2.0 * eps))
+        return k_g, kk_g, self._per_output(mean_der, x_out)
+
+    def _independent_joint(self, x_out, K, k, kk):
+        """The joint over every output's data and the requested outputs' predictions, for
+        independent outputs sharing K: block-diagonal, data then predictions, both task-major."""
+        n_out = self.y_data.shape[1]
+        feeds = np.identity(n_out)[:, x_out]  # data of output t meets prediction u only if t == x_out[u]
+        return np.kron(np.identity(n_out), K), np.kron(feeds, k), np.kron(np.identity(len(x_out)), kk)
+
     def joint_gp_prior(self, x_pred, x_out=None):
         self._reject_kronecker("joint_gp_prior")
-        x_data, K, prior_mean_vec = (self.x_data.copy(),
-                                     self._dense_K() + (np.identity(len(self.x_data)) * 1e-9),
-                                     self.m.copy())
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
-
-        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
-        kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters)
-        post_mean = self.compute_mean(x_pred, self.hyperparameters)
-        joint_gp_prior_mean = np.append(prior_mean_vec, post_mean)
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        K, k, kk = self._joint_prior_covariances(x_pred, x_out)
+        data_mean = self.mean_columns(self.m).ravel(order='F')
+        x_in = self._index_points(x_pred, x_out)
+        prediction_mean = self._per_output(self.mean_columns(self.compute_mean(x_in, self.hyperparameters)), x_out)
+        if self.independent: K, k, kk = self._independent_joint(x_out, K, k, kk)
         joint_gp_prior_cov = np.block([[K, k], [k.T, kk]])
-
         return {"x": x_pred,
+                "x_out": x_out,
                 "K": K,
                 "k": k,
                 "kappa": kk,
-                "prior mean": joint_gp_prior_mean,
+                "prior mean": np.append(data_mean, prediction_mean),
                 "S": joint_gp_prior_cov + np.identity(len(joint_gp_prior_cov)) * 1e-9}
 
     ###########################################################################
     def joint_gp_prior_grad(self, x_pred, direction, x_out=None):
         self._reject_kronecker("joint_gp_prior_grad")
-        x_data, K, prior_mean_vec = (self.x_data.copy(),
-                                     self._dense_K() + (np.identity(len(self.x_data)) * 1e-9),
-                                     self.m.copy())
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
-
-        k_g = self.d_kernel_dx(x_pred, x_data, direction, self.hyperparameters).T
-        x1 = np.array(x_pred)
-        x2 = np.array(x_pred)
-        eps = 1e-6
-        x1[:, direction] = x1[:, direction] + eps
-        x2[:, direction] = x2[:, direction] - eps
-        kk_g = (self.compute_covariances(x1, x1, self.hyperparameters) -
-                self.compute_covariances(x2, x2, self.hyperparameters)) / (2.0 * eps)
-
-        mean_der = ((self.compute_mean(x1, self.hyperparameters) -
-                     self.compute_mean(x2, self.hyperparameters)) /
-                    (2.0 * eps))
-        full_gp_prior_mean_grad = np.append(np.zeros(prior_mean_vec.shape), mean_der)
-        prior_cov_grad = np.zeros(K.shape)
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        K = self._dense_K() + np.identity(len(self.x_data)) * 1e-9
+        k_g, kk_g, mean_der = self._joint_prior_gradients(x_pred, x_out, direction)
+        if self.independent: K, k_g, kk_g = self._independent_joint(x_out, K, k_g, kk_g)
         return {"x": x_pred,
+                "x_out": x_out,
                 "K": K,
                 "dk/dx": k_g,
                 "d kappa/dx": kk_g,
-                "d prior mean/x": full_gp_prior_mean_grad,
-                "dS/dx": np.block([[prior_cov_grad, k_g], [k_g.T, kk_g]])}
+                "d prior mean/x": np.append(np.zeros(len(K)), mean_der),
+                "dS/dx": np.block([[np.zeros(K.shape), k_g], [k_g.T, kk_g]])}
 
     ###########################################################################
     @staticmethod
@@ -545,30 +529,39 @@ class GPposterior:
         x_pred : np.ndarray
             A numpy array of shape (V x D), interpreted as  an array of input point positions.
         x_out : np.ndarray, optional
-            Output coordinates in case of multi-task GP use; a numpy array of size (N x L),
-            where N is the number of output points,
-            and L is the dimensionality of the output space.
+            The requested outputs of a multi-task GP.
 
         Return
         ------
-        Entropy : float
+        Entropy : dict
         """
         self._reject_kronecker("gp_entropy")
-
-        priors = self.joint_gp_prior(x_pred, x_out=x_out)
-        S = priors["S"]
-        dim = len(S[0])
-        ldet = calculate_logdet(S)
-        return (float(dim) / 2.0) + ((float(dim) / 2.0) * np.log(2.0 * np.pi)) + (0.5 * ldet)
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        K, k, kk = self._joint_prior_covariances(x_pred, x_out)
+        S = np.block([[K, k], [k.T, kk]])
+        S = S + np.identity(len(S)) * 1e-9
+        entropy = self.entropy(S)
+        if self.independent:
+            # independent blocks add up: each requested output its data and predictions,
+            # every other output its data alone
+            unrequested = self.y_data.shape[1] - len(x_out)
+            entropy = len(x_out) * entropy + unrequested * self.entropy(S[:len(K), :len(K)])
+        return {"x": x_pred, "x_out": x_out, "entropy": entropy}
 
     ###########################################################################
     def gp_entropy_grad(self, x_pred, direction, x_out=None):
         self._reject_kronecker("gp_entropy_grad")
-        priors1 = self.joint_gp_prior(x_pred, x_out=x_out)
-        priors2 = self.joint_gp_prior_grad(x_pred, direction, x_out=x_out)
-        S1 = priors1["S"]
-        S2 = priors2["dS/dx"]
-        return 0.5 * np.trace(calculate_inv(S1) @ S2)
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        K, k, kk = self._joint_prior_covariances(x_pred, x_out)
+        S1 = np.block([[K, k], [k.T, kk]])
+        S1 = S1 + np.identity(len(S1)) * 1e-9
+        k_g, kk_g, _ = self._joint_prior_gradients(x_pred, x_out, direction)
+        S2 = np.block([[np.zeros(K.shape), k_g], [k_g.T, kk_g]])
+        # independent outputs: the data blocks of the unrequested ones do not move
+        gradient = self._independent_count(x_out) * 0.5 * np.trace(calculate_inv(S1) @ S2)
+        return {"x": x_pred, "x_out": x_out, "direction": direction, "dH/dx": gradient}
 
     ###########################################################################
     @staticmethod
@@ -590,14 +583,13 @@ class GPposterior:
 
     ###########################################################################
     def gp_kl_div(self, x_pred, comp_mean, comp_cov, x_out=None):
-        if x_out is None: x_out = self.x_out
-
-        res = self.posterior_mean(x_pred, x_out=x_out)
-        gp_mean = res["m(x)_flat"]
+        x_out = self._outputs(x_out)
+        gp_mean = self.posterior_mean(x_pred, x_out=x_out)["m(x)_flat"]
         gp_cov = self.posterior_covariance(x_pred, x_out=x_out)["S_flat"]
         gp_cov = gp_cov + np.identity(len(gp_cov)) * 1e-9
         comp_cov = comp_cov + np.identity(len(comp_cov)) * 1e-9
         return {"x": x_pred,
+                "x_out": x_out,
                 "gp posterior mean": gp_mean,
                 "gp posterior covariance": gp_cov,
                 "given mean": comp_mean,
@@ -608,80 +600,75 @@ class GPposterior:
     def mutual_information(self, joint, m1, m2):
         return self.entropy(m1) + self.entropy(m2) - self.entropy(joint)
 
+    def _noisy_joint_prior(self, x_pred, x_out, add_noise):
+        """K, kk and the joint covariance of the data and the requested pairs, kk jittered and with
+        the noise if ``add_noise``; for independent outputs those of one output."""
+        K, k, kk = self._joint_prior_covariances(x_pred, x_out)
+        kk = kk + np.identity(len(kk)) * 1e-9
+        if add_noise: v, kk = self.add_noise(self._index_points(x_pred, x_out), np.diag(kk), kk)
+        return K, kk, np.block([[K, k], [k.T, kk]])
+
     ###########################################################################
     def gp_mutual_information(self, x_pred, x_out=None, add_noise=False):
         self._reject_kronecker("gp_mutual_information")
-        x_data, K = self.x_data.copy(), self._dense_K() + (np.identity(len(self.x_data)) * 1e-9)
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        x_orig = x_pred.copy()
-        if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
-
-        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
-        kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
-        if add_noise: v, kk = self.add_noise(x_pred, np.diag(kk), kk)
-
-        joint_covariance = np.block([[K, k], [k.T, kk]])
-        return {"x": x_orig,
-                "mutual information": self.mutual_information(joint_covariance, kk, K)}
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        K, kk, joint_covariance = self._noisy_joint_prior(x_pred, x_out, add_noise)
+        # independent outputs: each requested one shares information with its own data only
+        return {"x": x_pred,
+                "x_out": x_out,
+                "mutual information":
+                    self._independent_count(x_out) * self.mutual_information(joint_covariance, kk, K)}
 
     ###########################################################################
     def gp_total_correlation(self, x_pred, x_out=None, add_noise=False):
         self._reject_kronecker("gp_total_correlation")
-        x_data, K = self.x_data.copy(), self._dense_K() + (np.identity(len(self.x_data)) * 1e-9)
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        x_orig = x_pred.copy()
-        if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
-
-        k = self.compute_covariances(x_data, x_pred, self.hyperparameters)
-        kk = self.compute_covariances(x_pred, x_pred, self.hyperparameters) + (np.identity(len(x_pred)) * 1e-9)
-        if add_noise: v, kk = self.add_noise(x_pred, np.diag(kk), kk)
-        joint_covariance = np.block([[K, k], [k.T, kk]])
-
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        K, kk, joint_covariance = self._noisy_joint_prior(x_pred, x_out, add_noise)
+        k = joint_covariance[:len(K), len(K):]
         prod_covariance = np.block([[K, k * 0.], [k.T * 0., kk * np.identity(len(kk))]])
-
-        return {"x": x_orig,
-                "total correlation": self.kl_div(np.zeros((len(joint_covariance))), np.zeros((len(joint_covariance))),
-                                                 joint_covariance, prod_covariance)}
+        zeros = np.zeros((len(joint_covariance)))
+        return {"x": x_pred,
+                "x_out": x_out,
+                "total correlation":
+                    self._independent_count(x_out) * self.kl_div(zeros, zeros, joint_covariance, prod_covariance)}
 
     ###########################################################################
+    def _prior_at(self, x_pred, x_out):
+        """The prior mean and covariance at the requested (point, output) pairs, flat."""
+        hps = self.hyperparameters
+        x_in = self._index_points(x_pred, x_out)
+        mean = self._per_output(self.mean_columns(self.compute_mean(x_in, hps)), x_out)
+        kk = self.compute_covariances(x_in, x_in, hps)
+        if self.kronecker: kk = self._kronecker_pair_covariance(kk, *self._kronecker_pairs(len(x_pred), x_out, kk))
+        return mean, self._shared_by_outputs(x_out, kk, pairs=True)
+
     def gp_relative_information_entropy(self, x_pred, x_out=None, add_noise=False):
-        self._reject_kronecker("gp_relative_information_entropy")
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        x_orig = x_pred.copy()
-        if isinstance(x_out, np.ndarray): x_pred_aux = self.cartesian_product(x_pred, x_out)
-        else: x_pred_aux = x_pred
-        kk = self.compute_covariances(x_pred_aux, x_pred_aux, self.hyperparameters) + (np.identity(len(x_pred_aux)) * 1e-9)
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
+        prio_mean, kk = self._prior_at(x_pred, x_out)
+        kk = kk + (np.identity(len(kk)) * 1e-9)
         post_cov = self.posterior_covariance(x_pred, x_out=x_out, add_noise=add_noise)["S_flat"]
         post_cov = post_cov + (np.identity(len(post_cov)) * 1e-9)
-        hyperparameters = self.hyperparameters
         post_mean = self.posterior_mean(x_pred, x_out=x_out)["m(x)_flat"]
-        prio_mean = self.compute_mean(x_pred_aux, hyperparameters)
-        return {"x": x_orig,
+        return {"x": x_pred,
+                "x_out": x_out,
                 "RIE": self.kl_div(prio_mean, post_mean, kk, post_cov)}
 
     ###########################################################################
     def gp_relative_information_entropy_set(self, x_pred, x_out=None, add_noise=False):
-        if x_out is None: x_out = self.x_out
-        #self._perform_input_checks(x_pred, x_out)
-        x_orig = x_pred.copy()
-        #if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
-        RIE = np.zeros((len(x_pred)))
-        for i in range(len(x_pred)):
-            RIE[i] = self.gp_relative_information_entropy(
-                x_pred[i].reshape(1, len(x_pred[i])), x_out=x_out, add_noise=add_noise)["RIE"]
-
-        return {"x": x_orig,
+        x_out = self._outputs(x_out)
+        RIE = np.array([self.gp_relative_information_entropy(x_pred[i:i + 1], x_out=x_out, add_noise=add_noise)["RIE"]
+                        for i in range(len(x_pred))])
+        return {"x": x_pred,
+                "x_out": x_out,
                 "RIE": RIE}
 
     ###########################################################################
     def posterior_probability(self, x_pred, comp_mean, comp_cov, x_out=None):
-        if x_out is None: x_out = self.x_out
-        self._perform_input_checks(x_pred, x_out)
-        #if isinstance(x_out, np.ndarray): x_pred = self.cartesian_product(x_pred, x_out)
-
+        x_out = self._outputs(x_out)
+        self._perform_input_checks(x_pred)
         gp_mean = self.posterior_mean(x_pred, x_out=x_out)["m(x)_flat"]
         gp_cov = self.posterior_covariance(x_pred, x_out=x_out, add_noise=True)["S_flat"]
         gp_cov_inv = calculate_inv(gp_cov)
@@ -696,7 +683,9 @@ class GPposterior:
                     @ cov @ (gp_cov_inv @ gp_mean + comp_cov_inv @ comp_mean))
                    - (gp_mean.T @ gp_cov_inv @ gp_mean + comp_mean.T @ comp_cov_inv @ comp_mean)).squeeze()
         ln_p = (C + 0.5 * logdet1) - (np.log((2.0 * np.pi) ** (dim / 2.0)) + (0.5 * (logdet2 + logdet3)))
-        return {"mu": mu,
+        return {"x": x_pred,
+                "x_out": x_out,
+                "mu": mu,
                 "covariance": cov,
                 "probability":
                     np.exp(ln_p)
@@ -720,14 +709,11 @@ class GPposterior:
     def _int_gauss(S):
         return ((2.0 * np.pi) ** (len(S) / 2.0)) * np.sqrt(np.linalg.det(S))
 
-    def _perform_input_checks(self, x_pred, x_out):
+    def _perform_input_checks(self, x_pred):
         assert isinstance(x_pred, np.ndarray) or isinstance(x_pred, list), "wrong format in x_pred"
         if isinstance(x_pred, np.ndarray):
             assert np.ndim(x_pred) == 2, "wrong dim in x_pred, has to be 2-d"
             assert x_pred.shape[1] == self.input_set_dim, "wrong number of columns in x_pred"
-
-        assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list), "wrong format in x_out"
-        if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1, "wrong dim in x_out, has to be 1-d"
 
     @staticmethod
     def cartesian_product(x, y):
