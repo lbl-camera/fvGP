@@ -5,6 +5,47 @@ History
 This changelog was restarted; for releases before the first entry below, see the
 git history and the release tags.
 
+4.11.0 (unreleased)
+-------------------
+
+Deprecations
+~~~~~~~~~~~~
+
+* **``fvGP`` is deprecated** (``FutureWarning``) and will be removed in 5.0.0: ``GP`` does
+  multi-task GPs itself. ``fvGP(x, y, ...)`` is ``GP(x, y, ..., multi_task_mode="cartesian")``,
+  and fvGP passes any other ``multi_task_mode`` on unchanged.
+
+Changes
+~~~~~~~
+
+* **One class for single- and multi-task GPs.** The shape of ``y_data`` decides: (V) or
+  (V, 1) is a single-task GP in every mode, (V, No) with No > 1 a multi-task GP modeled as
+  the new ``GP`` argument ``multi_task_mode`` says. Its default, ``'independent'``, is what
+  ``GP`` already did with 2-d ``y_data``, so existing ``GP`` code is unaffected;
+  ``'cartesian'`` and ``'kronecker'`` work as they did in fvGP. New read-only properties:
+  ``GP.output_num`` and ``GP.multi_task_mode`` (None for a single-task GP).
+
+* **One data representation per mode.** ``x_data``, ``y_data`` and ``noise_variances`` are
+  stored as the GP computes on them: (V * No, D + 1), (V * No, 1), (V * No) for
+  ``'cartesian'``, missing outputs dropped; as given otherwise, with ``y_data`` always 2-d.
+  fvGP's second copy of the data before the transform, ``fvgp_x_data``, ``fvgp_y_data`` and
+  ``fvgp_noise_variances``, is gone; nothing in fvGP read it. ``update_gp_data`` takes new
+  data in the constructor's format and transforms it where the mode requires.
+
+* **Data shapes are checked per mode,** at construction and on update, with a
+  ``ValueError`` naming the expected shape: ``noise_variances`` is (V, No) for
+  ``'cartesian'`` and (V) otherwise, and new ``y_data`` must have as many columns as
+  ``y_data``.
+
+* **What changes for code using fvGP directly:** a ``y_data`` with one column is now a
+  single-task GP (it was a one-task Cartesian GP, with a task column in ``x_data``), a 1-d
+  ``y_data`` no longer raises, and the ``fvgp_*`` properties no longer exist.
+
+* Internally ``ram_economy`` is now ``gradient_per_direction`` throughout, the name of the
+  constructor argument since 4.9; objects pickled with 4.10 still load. The Cartesian
+  transform moved from fvGP into ``GPdata``, and the class attribute ``GP._multi_task``
+  through which fvGP passed its mode is gone.
+
 Unreleased
 ----------
 

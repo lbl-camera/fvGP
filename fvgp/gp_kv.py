@@ -117,8 +117,8 @@ class GPkv:
         # args["sparse_preconditioner_type"]="amg".  Writes resolved args back
         # to data.args so downstream calls see the canonical key.
         if isinstance(linalg_mode, str):
-            linalg_mode, resolved_args = resolve_gp2scale_linalg_mode(linalg_mode, self.data.args)
-            self.data.args = resolved_args
+            linalg_mode, resolved_args = resolve_gp2scale_linalg_mode(linalg_mode, self.args)
+            self.args = resolved_args
 
         self.linalg_mode = linalg_mode  ###there should only be one mode
         self.KVinv = None
@@ -142,7 +142,7 @@ class GPkv:
         self.Preconditioner_failure = None
         # linalg_mode "low_rank": the LowRankPlusDiagonal factorization of the current K + V
         self.low_rank_factor = None
-        # fvGP(multi_task_mode='kronecker'): the KroneckerFactorization of the current K + V
+        # GP(multi_task_mode='kronecker'): the KroneckerFactorization of the current K + V
         self.kronecker_factor = None
         self.allowed_modes = ["Chol", "CholInv", "Inv", "sparseMINRES", "sparseCG",
                               "sparseLU", "sparseMINRESpre", "sparseCGpre", "low_rank_<r>",
@@ -150,8 +150,8 @@ class GPkv:
                               "sparseSolve", "a set of callables"]
         K, V, m = self._get_KVm()
 
-        # set by fvGP(multi_task_mode='kronecker'), never by linalg_mode: K is then a list of factors
-        if self.data.kronecker: self.mode = "kronecker"
+        # set by GP(multi_task_mode='kronecker'), never by linalg_mode: K is then a list of factors
+        if self.kronecker: self.mode = "kronecker"
         elif self.gp2Scale: self.mode = self._set_gp2Scale_mode(K)
         elif linalg_mode is not None: self.mode = linalg_mode
         else: self.mode = "Chol"
@@ -160,6 +160,10 @@ class GPkv:
     @property
     def args(self):
         return self.data.args
+
+    @args.setter
+    def args(self, value):
+        self.data.args = value
     
     @property
     def x_data(self):
@@ -188,6 +192,13 @@ class GPkv:
     @property
     def gp2Scale(self):
         return self.data.gp2Scale
+
+    @property
+    def kronecker(self):
+        return self.data.kronecker
+
+    def mean_columns(self, m):
+        return self.prior.mean_columns(m)
     
     ##################################################################
     def _set_gp2Scale_mode(self, KV):
@@ -516,7 +527,7 @@ class GPkv:
             else: self.set_KV(KV)
         logger.debug("KV factorization set")
         logger.debug("Solve in progress")
-        y_mean = self.y_data - self.prior.mean_columns(m)
+        y_mean = self.y_data - self.mean_columns(m)
         x0 = self.KVinvY if rank_n_update else None
         self.KVinvY = self.solve(y_mean, x0=x0).reshape(y_mean.shape)
         self.logdet_KV = self.logdet()
@@ -624,8 +635,8 @@ class GPkv:
         list ``K`` and the noise ``V``.
         """
         if self.mode == "kronecker":
-            return self.kronecker_factorization(K, V).solve(self.y_data - self.prior.mean_columns(m))
-        y_mean = self.y_data - self.prior.mean_columns(m)
+            return self.kronecker_factorization(K, V).solve(self.y_data - self.mean_columns(m))
+        y_mean = self.y_data - self.mean_columns(m)
         if self.mode == "low_rank":
             if K is None or V is None:
                 raise ValueError("linalg_mode 'low_rank' needs K and the noise vector V separately.")
@@ -701,14 +712,14 @@ class GPkv:
         """
         if self.mode == "kronecker":   # exact and deterministic: the factors' eigendecompositions
             factor = self.kronecker_factorization(K, V)
-            return factor.solve(self.y_data - self.prior.mean_columns(m)), factor.logdet()
+            return factor.solve(self.y_data - self.mean_columns(m)), factor.logdet()
         if self.mode == "low_rank":   # exact and deterministic: Woodbury and the determinant lemma
             factor = self.low_rank_factorization(K, V)
-            y_mean = self.y_data - self.prior.mean_columns(m)
+            y_mean = self.y_data - self.mean_columns(m)
             return factor.solve(y_mean).reshape(y_mean.shape), factor.logdet()
         KV = self.addKV(K, V)
         x0 = self._record_evaluation(KV, x0)
-        y_mean = self.y_data - self.prior.mean_columns(m)
+        y_mean = self.y_data - self.mean_columns(m)
         if self.gp2Scale:
             mode = self._set_gp2Scale_mode(KV)
         else:

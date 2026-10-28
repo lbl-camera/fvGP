@@ -38,9 +38,9 @@ Capabilities relevant to the gpNOVA framing:
 
 ### 3.1 Breaking: must be in 5.0.0 (deprecate in 4.x first where possible)
 
-1. **One class instead of `GP` and `fvGP`?** The key decision; most others follow from it. `GP` and `fvGP` now differ mainly by `multi_task_mode`, and plain `GP` already handles 2-d `y_data` (the "independent" mode). A single class, with single-task as the one-output case, would remove a whole layer of the docs and of user confusion. The alternative is to keep two classes with clearer roles.
+1. **One class instead of `GP` and `fvGP`. Decided 2026-10-27, implemented for 4.11.0.** `GP` takes `multi_task_mode` (default `"independent"`, so `GP(x, y_2d)` is unchanged); the shape of `y_data` decides single- vs. multi-task; one data representation per mode, the `fvgp_*` copies removed. `fvGP` is a deprecated wrapper (`FutureWarning`) to delete in 5.0.0. gpCAM's side: [gpCAMupdate.md](gpCAMupdate.md).
 2. **Remove matrix-valued noise.** A noise function or gradient returning a matrix has been deprecated (FutureWarning) since 4.10. Correlated noise belongs in the kernel; the low-rank and Kronecker modes already require vector noise.
-3. **Make the multi-task setting an explicit argument.** fvGP currently passes its mode to `GP.__init__` through the class attribute `GP._multi_task`, a hidden hook. Related clean-up: the internal name `ram_economy` should become `gradient_per_direction` everywhere, as the public argument already is.
+3. **Make the multi-task setting an explicit argument. Done in 4.11.0** with item 1: `GP(..., multi_task_mode=...)`, the `GP._multi_task` hook removed, and `ram_economy` renamed `gradient_per_direction` internally (old pickles mapped).
 4. **A consistent posterior result contract.** The returned dicts are uneven: `"m(x)_flat"` is 2-d for several GPs but flat elsewhere, and `"m(x)"`, `"v(x)"`, `"S"` and `"S_flat"` mean slightly different things per mode (e.g. one shared `S` for independent outputs, a block covariance for Cartesian ones). A small result object, or a strict, documented shape contract, is hard to introduce without breaking.
 5. **Typed options instead of the `args` dict.** `args` has grown to dozens of string keys (preconditioners, imate, low rank, Kronecker, GPU). A misspelled key is silently ignored. Typed option groups would catch that.
 6. **The extension modules** `ggmp.py` and `deep_kernel_network.py` are excluded from the tests and from coverage. Drop them, move them to a separate package, or bring them under test.
@@ -77,7 +77,7 @@ Capabilities relevant to the gpNOVA framing:
 
 1. gpCAM sync to fvGP 4.10 (§4).
 2. Fix the ADAM bounds bug (§3.2.1).
-3. Decide the class structure (§3.1.1); it shapes 3.1.3–3.1.5.
+3. ~~Decide the class structure (§3.1.1)~~ — done: one class, in 4.11.0.
 4. Release 4.x versions carrying the deprecations for everything in §3.1.
 5. Non-breaking features as wanted, matrix-free low rank first (§3.2).
 6. Release fvGP 5.0.0: the deprecated pieces removed, the final API.

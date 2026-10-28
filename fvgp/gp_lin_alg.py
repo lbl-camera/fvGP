@@ -750,7 +750,7 @@ class KroneckerFactorization:
 
 
 def calculate_kronecker_factorization(factors, V):
-    """Factor K + V for ``fvGP(multi_task_mode='kronecker')``: ``factors`` = [K_x, F_1, ..., F_m] and ``V``
+    """Factor K + V for ``GP(multi_task_mode='kronecker')``: ``factors`` = [K_x, F_1, ..., F_m] and ``V``
     the noise variances, one per input, the same for every output."""
     st = time.time()
     sizes = [len(F) for F in factors]

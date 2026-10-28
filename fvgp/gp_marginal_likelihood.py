@@ -49,8 +49,8 @@ class GPMarginalLikelihood:
         return self.likelihood.V
 
     @property
-    def ram_economy(self):
-        return self.data.ram_economy
+    def gradient_per_direction(self):
+        return self.data.gradient_per_direction
 
     @property
     def gp2Scale(self):
@@ -63,6 +63,30 @@ class GPMarginalLikelihood:
     @property
     def hyperparameters(self):
         return self.trainer.hyperparameters
+
+    @property
+    def kronecker(self):
+        return self.data.kronecker
+
+    @property
+    def KVinvY(self):
+        return self.kv.KVinvY
+
+    @property
+    def logdet_KV(self):
+        return self.kv.logdet_KV
+
+    @property
+    def kv_mode(self):
+        return self.kv.mode
+
+    @property
+    def low_rank_factor(self):
+        return self.kv.low_rank_factor
+
+    @property
+    def kronecker_factor(self):
+        return self.kv.kronecker_factor
     
     def _get_KVm(self):
         return self.K, self.V, self.m
@@ -85,9 +109,21 @@ class GPMarginalLikelihood:
 
     def calculate_V_grad(self, x, hyperparameters, direction=None):
         return self.likelihood.calculate_V_grad(x, hyperparameters, direction=direction)
+
+    def mean_columns(self, m):
+        return self.prior.mean_columns(m)
+
+    def kronecker_hyperparameter_gradient(self, x, hyperparameters, factor_gradients):
+        return self.prior.kronecker_hyperparameter_gradient(x, hyperparameters, factor_gradients)
     ###################################################################
     def addKV(self, K, V):
         return self.kv.addKV(K, V)
+
+    def low_rank_factorization(self, K, V):
+        return self.kv.low_rank_factorization(K, V)
+
+    def kronecker_factorization(self, factors, V):
+        return self.kv.kronecker_factorization(factors, V)
 
     def _warm_start_enabled(self):
         return bool(self.args.get("sparse_krylov_warm_start", False))
@@ -96,12 +132,12 @@ class GPMarginalLikelihood:
         """Return a warm-start ``x0`` from the cached training KVinvY if shapes match.
 
         Source priority: ``self._warm_start_KVinvY`` (previous training iteration's
-        solution) when available, else ``self.kv.KVinvY`` (the committed solution).
+        solution) when available, else ``self.KVinvY`` (the committed solution).
         Returns ``None`` when warm-start is disabled or no compatible cache exists.
         """
         if not self._warm_start_enabled():
             return None
-        for candidate in (self._warm_start_KVinvY, self.kv.KVinvY):
+        for candidate in (self._warm_start_KVinvY, self.KVinvY):
             if candidate is None:
                 continue
             guess = np.asarray(candidate)
@@ -151,8 +187,8 @@ class GPMarginalLikelihood:
         logger.debug("log marginal likelihood is being evaluated")
         if hyperparameters is None:
             K, V, m = self._get_KVm()
-            KVinvY = self.kv.KVinvY
-            KVlogdet = self.kv.logdet_KV
+            KVinvY = self.KVinvY
+            KVlogdet = self.logdet_KV
         else:
             st = time.time()
             K = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
@@ -170,8 +206,8 @@ class GPMarginalLikelihood:
 
         # y_data is 2-d: one column per right-hand side, each a problem of its own sharing K,
         # whose likelihoods are averaged -- or, in Kronecker mode, one (n_x, n_out) tensor
-        problems = 1 if self.data.kronecker else self.y_data.shape[1]
-        y_mean = self.y_data - self.prior.mean_columns(m)
+        problems = 1 if self.kronecker else self.y_data.shape[1]
+        y_mean = self.y_data - self.mean_columns(m)
         assert y_mean.shape == KVinvY.shape, "(y-m).shape != KVinvY.shape in log_likelihood"+str(y_mean.shape)+" ,"+str(KVinvY.shape)
         n = y_mean.size // problems
         L = -0.5 * (np.sum(y_mean * KVinvY) / problems + KVlogdet + n * np.log(2.0 * np.pi))
@@ -238,18 +274,18 @@ class GPMarginalLikelihood:
         -------
         Gradient of the negative log marginal likelihood : np.ndarray
         """
-        if self.data.kronecker: return self._kronecker_neg_log_likelihood_gradient(hyperparameters)
+        if self.kronecker: return self._kronecker_neg_log_likelihood_gradient(hyperparameters)
         if self.gp2Scale: raise Exception("Can't compute neg_log_likelihood_gradient for gp2Scale")
         dK_dH = None
         # "low_rank": every solve below goes through the Woodbury factorization, O(N^2 r) per
         # hyperparameter instead of the O(N^3) dense solve, and K + V is never formed
-        low_rank = self.kv.mode == "low_rank"
+        low_rank = self.kv_mode == "low_rank"
 
         if hyperparameters is None:
-            KVinvY = self.kv.KVinvY
+            KVinvY = self.KVinvY
             K = self.K
             V = self.V
-            if low_rank: factor = self.kv.low_rank_factor
+            if low_rank: factor = self.low_rank_factor
             else: KV = self.addKV(K, V)
             hyperparameters = self.hyperparameters
         else:
@@ -257,8 +293,8 @@ class GPMarginalLikelihood:
             V = self.calculate_V(self.x_data, hyperparameters)
             m = self.compute_mean(self.x_data, hyperparameters)
             if low_rank:
-                factor = self.kv.low_rank_factorization(K, V)
-                KVinvY = factor.solve(self.y_data - self.prior.mean_columns(m)).reshape(self.y_data.shape)
+                factor = self.low_rank_factorization(K, V)
+                KVinvY = factor.solve(self.y_data - self.mean_columns(m)).reshape(self.y_data.shape)
             else:
                 KV = self.addKV(K, V)
                 KVinvY = self.compute_new_KVinvY(KV, m)
@@ -267,7 +303,7 @@ class GPMarginalLikelihood:
         # gradient averages theirs; `component` selects one. The trace term is the same for all.
         B = KVinvY if component is None else KVinvY[:, [component]]
         a = None
-        if self.ram_economy is False:
+        if self.gradient_per_direction is False:
             try:
                 noise_der = self.calculate_V_grad(self.x_data, hyperparameters)
                 assert np.ndim(noise_der) == 2 or np.ndim(noise_der) == 3, \
@@ -293,9 +329,9 @@ class GPMarginalLikelihood:
         dm_dh = self.dm_dh(self.x_data, hyperparameters)
 
         for i in range(len(hyperparameters)):
-            dm = self.prior.mean_columns(dm_dh[i])
+            dm = self.mean_columns(dm_dh[i])
             dL_dHm[i] = -np.sum((dm if component is None else dm[:, [component]]) * B) / B.shape[1]
-            if self.ram_economy is False:
+            if self.gradient_per_direction is False:
                 matr = a[i]
             else:
                 try:
@@ -315,7 +351,7 @@ class GPMarginalLikelihood:
                         "the gradient function is wrong.") from e
                 matr = factor.solve(dK_dH) if low_rank else solve(KV, dK_dH, compute_device=self.compute_device)
             if dL_dHm[i] == 0.0:
-                if self.ram_economy is False:
+                if self.gradient_per_direction is False:
                     mtrace = np.einsum('ij,ji->', bbT, dK_dH[i])
                 else:
                     mtrace = np.einsum('ij,ji->', bbT, dK_dH)
@@ -325,7 +361,7 @@ class GPMarginalLikelihood:
         return dL_dH + dL_dHm
 
     def _kronecker_neg_log_likelihood_gradient(self, hyperparameters):
-        """The gradient for fvGP(multi_task_mode='kronecker'), without ever forming K or dK/dh.
+        """The gradient for GP(multi_task_mode='kronecker'), without ever forming K or dK/dh.
 
         By the product rule dK/dh is a sum of Kronecker products, one per factor that depends
         on h, with that factor replaced by its derivative. So the kernel part of dL/dh is
@@ -336,26 +372,26 @@ class GPMarginalLikelihood:
         """
         if hyperparameters is None:
             hyperparameters = self.hyperparameters
-            factors, factor, KVinvY = self.K, self.kv.kronecker_factor, self.kv.KVinvY
+            factors, factor, KVinvY = self.K, self.kronecker_factor, self.KVinvY
         else:
             factors = self.compute_prior_covariance_matrix(self.x_data, hyperparameters)
             V = self.calculate_V(self.x_data, hyperparameters)
             m = self.compute_mean(self.x_data, hyperparameters)
-            factor = self.kv.kronecker_factorization(factors, V)
-            KVinvY = factor.solve(self.y_data - self.prior.mean_columns(m))
+            factor = self.kronecker_factorization(factors, V)
+            KVinvY = factor.solve(self.y_data - self.mean_columns(m))
         n_x = len(KVinvY)
-        kernel_gradient = self.prior.kronecker_hyperparameter_gradient(
+        kernel_gradient = self.kronecker_hyperparameter_gradient(
             self.x_data, hyperparameters, factor.factor_gradients(factors, KVinvY))
         dm_dh = self.dm_dh(self.x_data, hyperparameters)
-        if not self.ram_economy: noise_der = self.calculate_V_grad(self.x_data, hyperparameters)
+        if not self.gradient_per_direction: noise_der = self.calculate_V_grad(self.x_data, hyperparameters)
         diag_inverse = None
         gradient = np.zeros(len(hyperparameters))
         for i in range(len(hyperparameters)):
-            gradient[i] = -np.sum(self.prior.mean_columns(dm_dh[i]) * KVinvY)
+            gradient[i] = -np.sum(self.mean_columns(dm_dh[i]) * KVinvY)
             # as in the dense gradient: mean and kernel/noise hyperparameters are disjoint
             if gradient[i] != 0.0: continue
             gradient[i] = -kernel_gradient[i]
-            dV = self.calculate_V_grad(self.x_data, hyperparameters, direction=i) if self.ram_economy \
+            dV = self.calculate_V_grad(self.x_data, hyperparameters, direction=i) if self.gradient_per_direction \
                 else noise_der[i]
             dV = np.reshape(dV, (n_x, 1))   # one derivative per input, the same for every output
             if np.any(dV):

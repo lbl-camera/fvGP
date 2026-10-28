@@ -54,8 +54,8 @@ class GPprior:
                 logger.debug("No workers available")
 
         if self.kronecker and not callable(kernel):
-            # fvGP passes the coregionalization kernel up to the output threshold, so this is above it
-            warnings.warn(f"fvGP(multi_task_mode='kronecker') without a kernel_function and with {self.y_data.shape[1]} "
+            # GP passes the coregionalization kernel up to the output threshold, so this is above it
+            warnings.warn(f"GP(multi_task_mode='kronecker') without a kernel_function and with {self.y_data.shape[1]} "
                           f"outputs, more than args['kronecker_coregionalization_max_outputs'] "
                           f"({self.args.get('kronecker_coregionalization_max_outputs', COREGIONALIZATION_MAX_OUTPUTS)}), "
                           "for which the coregionalization default would need an n_out x n_out factor and "
@@ -81,9 +81,9 @@ class GPprior:
             self._dk_dh = kernel_grad
         elif not callable(kernel):
             self._dk_dh = self._default_kernel_analytical_gradient
-            self.ram_economy = False
+            self.gradient_per_direction = False
         else:
-            if self.ram_economy is True:
+            if self.gradient_per_direction is True:
                 self._dk_dh = self._kernel_derivative
             else:
                 self._dk_dh = self._kernel_gradient
@@ -138,12 +138,12 @@ class GPprior:
         return self.data.y_data
 
     @property
-    def ram_economy(self):
-        return self.data.ram_economy
+    def gradient_per_direction(self):
+        return self.data.gradient_per_direction
 
-    @ram_economy.setter
-    def ram_economy(self, value):
-        self.data.ram_economy = value
+    @gradient_per_direction.setter
+    def gradient_per_direction(self, value):
+        self.data.gradient_per_direction = value
 
     @property
     def gp2Scale(self):
@@ -156,6 +156,10 @@ class GPprior:
     @property
     def kronecker(self):
         return self.data.kronecker
+
+    @property
+    def multi_task(self):
+        return self.data.multi_task
 
     @property
     def compute_device(self):
@@ -251,7 +255,7 @@ class GPprior:
         return m
 
     def dk_dh(self, x1, x2, hyperparameters, direction=None):
-        if self.ram_economy:
+        if self.gradient_per_direction:
             return self._dk_dh(x1, x2, hyperparameters, direction)
         else:
             return self._dk_dh(x1, x2, hyperparameters)
@@ -280,7 +284,7 @@ class GPprior:
         """
         if not self.user_kernel_grad and hasattr(self.kernel, "chain_rule"):
             return np.asarray(self.kernel.chain_rule(x, hyperparameters, factor_gradients), dtype=float)
-        if self.user_kernel_grad and not self.ram_economy: derivatives = self.kronecker_dk_dh(x, hyperparameters)
+        if self.user_kernel_grad and not self.gradient_per_direction: derivatives = self.kronecker_dk_dh(x, hyperparameters)
         else: derivatives = (self.kronecker_dk_dh(x, hyperparameters, i) for i in range(len(hyperparameters)))
         return np.array([sum(np.sum(G * dF) for G, dF in zip(factor_gradients, d) if dF is not None)
                          for d in derivatives], dtype=float)
@@ -297,7 +301,7 @@ class GPprior:
         """
         if self.user_kernel_grad:
             derivatives = self.dk_dh(x, x, hyperparameters, direction)
-            for factors in ([derivatives] if self.ram_economy else derivatives):
+            for factors in ([derivatives] if self.gradient_per_direction else derivatives):
                 if not isinstance(factors, (list, tuple)) or len(factors) != len(self.K):
                     raise ValueError(f"In Kronecker mode kernel_function_grad must return, per hyperparameter, "
                                      f"a list of {len(self.K)} factor derivatives [dK_x, dF_1, ...] (None for a "
@@ -499,7 +503,7 @@ class GPprior:
     def _default_kronecker_kernel(self, x1, x2, hyperparameters):
         """The default kernel in Kronecker mode: [default Matern on x, Matern on the flat output index].
 
-        The same D + 2 hyperparameters as the Cartesian fvGP default -- signal variance, one
+        The same D + 2 hyperparameters as the Cartesian mode's default -- signal variance, one
         length scale per input dimension, one for the output index -- but separable.
         """
         outputs = np.arange(self.y_data.shape[1], dtype=float)
@@ -556,13 +560,13 @@ class GPprior:
 
     def _default_mean_function(self, x, hyperparameters):
         """The average of y_data per task: per column -- per GP, or per output in Kronecker
-        mode -- when y_data has several, as (len(x), k); for the Cartesian fvGP's (point, task)
+        mode -- when y_data has several, as (len(x), k); for the Cartesian mode's (point, task)
         pairs, each point gets its task's average; otherwise a 1-d constant."""
         if np.ndim(self.y_data) == 1:
             raise Exception("y_data wrong format")
         elif np.ndim(self.y_data) == 2 and self.y_data.shape[1] > 1:
             mean = np.tile(np.mean(self.y_data, axis=0), (len(x), 1))
-        elif np.ndim(self.y_data) == 2 and self.data.multi_task == "cartesian":
+        elif np.ndim(self.y_data) == 2 and self.multi_task == "cartesian":
             mean = self._task_means(x)
         elif np.ndim(self.y_data) == 2:
             mean = np.zeros((len(x)))
@@ -573,14 +577,14 @@ class GPprior:
 
     @staticmethod
     def _task_index(x):
-        """The task of each Cartesian fvGP point: its last coordinate, or the second element of a
+        """The task of each Cartesian point: its last coordinate, or the second element of a
         non-Euclidean [point, task] pair -- read per point, never by asking numpy about x."""
         if isinstance(x, np.ndarray): return x[:, -1].astype(int)
         return np.array([p[1] for p in x], dtype=int)
 
     def _task_means(self, x):
         """Each point's task average of y_data; a task without observations (all NaN in the
-        data fvGP was given) gets the overall average."""
+        data given) gets the overall average."""
         tasks, y = self._task_index(self.x_data), self.y_data[:, 0]
         wanted = self._task_index(x)
         n_tasks = max(tasks.max(), wanted.max(initial=0)) + 1

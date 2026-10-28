@@ -31,6 +31,9 @@ class GPposterior:
     def compute_mean(self, x, hps):
         return self.prior.compute_mean(x, hps)
 
+    def mean_columns(self, m):
+        return self.prior.mean_columns(m)
+
     def d_kernel_dx(self, x_pred, x_data, direction, hyperparameters):
         return self.prior.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
 
@@ -42,7 +45,7 @@ class GPposterior:
 
     def _new_KVinvY(self, K, V, m):
         """KVinvY for explicit hyperparameters; ``"low_rank"`` keeps K and the noise vector apart."""
-        if self.kv.mode in ("low_rank", "kronecker"): return self.compute_new_KVinvY(None, m, K=K, V=V)
+        if self.kv_mode in ("low_rank", "kronecker"): return self.compute_new_KVinvY(None, m, K=K, V=V)
         if np.ndim(V) == 1: V = np.diag(V)
         return self.compute_new_KVinvY(self.addKV(K, V), m)
 
@@ -88,6 +91,14 @@ class GPposterior:
         return self.kv.KVinv
 
     @property
+    def kv_mode(self):
+        return self.kv.mode
+
+    @property
+    def kronecker_factor(self):
+        return self.kv.kronecker_factor
+
+    @property
     def input_set_dim(self):
         return self.data.input_set_dim
 
@@ -104,16 +115,24 @@ class GPposterior:
         return self.data.gp2Scale
 
     @property
+    def batch_size(self):
+        return self.prior.batch_size
+
+    @property
     def kronecker(self):
         return self.data.kronecker
 
     @property
+    def multi_task(self):
+        return self.data.multi_task
+
+    @property
     def independent(self):
-        return self.data.multi_task == "independent"
+        return self.multi_task == "independent"
 
     def _reject_kronecker(self, method):
         if self.kronecker:
-            raise NotImplementedError(f"{method} is not supported in Kronecker mode (fvGP(multi_task_mode='kronecker')).")
+            raise NotImplementedError(f"{method} is not supported in Kronecker mode (GP(multi_task_mode='kronecker')).")
 
     @staticmethod
     def _dense(matrix):
@@ -144,7 +163,7 @@ class GPposterior:
         gp2Scale; only the chunk handed to the solver is densified.
         """
         n_pred = k.shape[1]
-        if chunk_size is None: chunk_size = n_pred if not self.gp2Scale else self.prior.batch_size
+        if chunk_size is None: chunk_size = n_pred if not self.gp2Scale else self.batch_size
         chunk_size = max(1, min(int(chunk_size), n_pred))
         product = np.empty((n_pred, n_pred))
         for start in range(0, n_pred, chunk_size):
@@ -181,7 +200,7 @@ class GPposterior:
         k = self.cross_covariance(x_pred, hyperparameters)
         A = np.asarray(k.T @ KVinvY)
         prior_mean = self.compute_mean(x_pred, hyperparameters)
-        posterior_mean = self.prior.mean_columns(prior_mean) + A
+        posterior_mean = self.mean_columns(prior_mean) + A
         if isinstance(x_out, np.ndarray): posterior_mean_re = posterior_mean.reshape(len(x_orig), len(x_out), order='F')
         else: posterior_mean_re = posterior_mean
 
@@ -228,7 +247,7 @@ class GPposterior:
         if direction is not None:
             x1 = np.array(x_pred)
             x1[:, direction] = x1[:, direction] + eps
-            mean_der = self.prior.mean_columns((self.compute_mean(x1, hyperparameters) - f) / eps)[:, component]
+            mean_der = self.mean_columns((self.compute_mean(x1, hyperparameters) - f) / eps)[:, component]
             k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
             posterior_mean_grad = mean_der + (k_g @ KVinvY)
             if isinstance(x_out, np.ndarray):
@@ -238,7 +257,7 @@ class GPposterior:
             for direction in range(len(x_orig[0])):
                 x1 = np.array(x_pred)
                 x1[:, direction] = x1[:, direction] + eps
-                mean_der = self.prior.mean_columns((self.compute_mean(x1, hyperparameters) - f) / eps)[:, component]
+                mean_der = self.mean_columns((self.compute_mean(x1, hyperparameters) - f) / eps)[:, component]
                 k_g = self.d_kernel_dx(x_pred, x_data, direction, hyperparameters)
                 posterior_mean_grad[:, direction] = mean_der + (k_g @ KVinvY)
             direction = "ALL"
@@ -333,7 +352,7 @@ class GPposterior:
         indices = np.asarray(x_out)
         if (np.ndim(indices) != 1 or not np.all(np.mod(indices, 1) == 0)
                 or np.any(indices < 0) or np.any(indices >= n_out)):
-            raise ValueError(f"With multi_task_mode={self.data.multi_task!r} x_out selects outputs by index: "
+            raise ValueError(f"With multi_task_mode={self.multi_task!r} x_out selects outputs by index: "
                              f"a 1-d array of integers in 0 ... {n_out - 1}.")
         return indices.astype(int)
 
@@ -353,7 +372,7 @@ class GPposterior:
         alpha = KVinvY.reshape((len(self.x_data),) + tuple(len(F) for F in k[1:]))
         A = kronecker_mode_product(alpha, [np.asarray(k[0]).T] + list(k[1:])).reshape(len(x_pred), -1)
         prior_mean = self.compute_mean(x_pred, hyperparameters)
-        posterior_mean = (self.prior.mean_columns(prior_mean) + A)[:, x_out]
+        posterior_mean = (self.mean_columns(prior_mean) + A)[:, x_out]
         return {"x": x_pred,
                 "m(x)": posterior_mean,
                 "m(x)_flat": posterior_mean.ravel(order='F'),
@@ -368,7 +387,7 @@ class GPposterior:
         covariance builds those projections explicitly, (N x pairs).
         """
         hps = self.hyperparameters
-        factor = self.kv.kronecker_factor
+        factor = self.kronecker_factor
         x_out = self._output_indices(x_out)
         self._perform_input_checks(x_pred, None)
         n_pred = len(x_pred)
@@ -380,7 +399,7 @@ class GPposterior:
         v = (prior - reduction)[:, x_out]
         S = None
         if not variance_only:
-            # pair (point j, output t) at j + n_pred * t, task-major like the Cartesian fvGP
+            # pair (point j, output t) at j + n_pred * t, task-major like the Cartesian mode
             points = np.tile(np.arange(n_pred), len(x_out))
             outputs = np.unravel_index(np.repeat(x_out, n_pred), [len(F) for F in kk[1:]])
             B = P[0][:, points]

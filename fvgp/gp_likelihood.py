@@ -50,12 +50,12 @@ class GPlikelihood:
         if callable(noise_function_grad):
             self.noise_function_grad = noise_function_grad
         elif callable(noise_function):
-            if self.ram_economy is True:
+            if self.gradient_per_direction is True:
                 self.noise_function_grad = self._finitediff_dnoise_dh_econ
             else:
                 self.noise_function_grad = self._finitediff_dnoise_dh
         else:
-            if self.ram_economy is True:
+            if self.gradient_per_direction is True:
                 self.noise_function_grad = self._default_dnoise_dh_econ
             else:
                 self.noise_function_grad = self._default_dnoise_dh
@@ -83,8 +83,8 @@ class GPlikelihood:
         return self.data.noise_variances
 
     @property
-    def ram_economy(self):
-        return self.data.ram_economy
+    def gradient_per_direction(self):
+        return self.data.gradient_per_direction
 
     @property
     def gp2Scale(self):
@@ -106,7 +106,7 @@ class GPlikelihood:
 
     def calculate_V_grad(self, x, hyperparameters, direction=None):
         logger.debug("calculating noise gradient")
-        if self.ram_economy is True:
+        if self.gradient_per_direction is True:
             grad = self.noise_function_grad(x, hyperparameters, direction)
             if np.ndim(grad) == 2: _warn_matrix_noise("noise_function_grad")
         else:

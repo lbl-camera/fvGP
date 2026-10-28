@@ -956,7 +956,7 @@ def sle_kernel(x1, x2, hps, args):
     return hps[0] * np.exp(-D_mat ** 2 / hps[3])
 
 
-#: The largest number of outputs for which fvGP(multi_task_mode='kronecker') defaults to the
+#: The largest number of outputs for which GP(multi_task_mode='kronecker') defaults to the
 #: coregionalization kernel; above it B (n_out x n_out) and its n_out * (rank + 1)
 #: hyperparameters cost more than they are worth. Override with
 #: args["kronecker_coregionalization_max_outputs"].
@@ -964,7 +964,7 @@ COREGIONALIZATION_MAX_OUTPUTS = 500
 
 
 class CoregionalizationKernel:
-    """The intrinsic coregionalization model (ICM) for ``fvGP(multi_task_mode='kronecker')``: K = K_x kron B.
+    """The intrinsic coregionalization model (ICM) for ``GP(multi_task_mode='kronecker')``: K = K_x kron B.
 
     K_x is the anisotropic Matern kernel (first-order differentiable, unit variance) on the
     inputs, and B = W W^T + diag(kappa) the coregionalization matrix of the outputs, with
@@ -974,7 +974,7 @@ class CoregionalizationKernel:
 
         [l_1, ..., l_D, W (row-major, n_out * rank), kappa_1, ..., kappa_n_out]
 
-    The default kernel of ``fvGP(multi_task_mode='kronecker')`` up to ``COREGIONALIZATION_MAX_OUTPUTS``
+    The default kernel of ``GP(multi_task_mode='kronecker')`` up to ``COREGIONALIZATION_MAX_OUTPUTS``
     outputs, and usable explicitly as ``kernel_function`` (e.g. with another rank). Its
     likelihood gradient is exact and nearly free: :py:meth:`chain_rule` maps the gradient of
     the likelihood with respect to K_x and B to the hyperparameters directly.

@@ -2,47 +2,55 @@ import numpy as np
 import warnings
 
 
+MULTI_TASK_MODES = ("independent", "cartesian", "kronecker")
+
+
 class GPdata:
     def __init__(self, x_data, y_data,
                  args=None,
                  noise_variances=None,
-                 ram_economy=False,
+                 gradient_per_direction=False,
                  gp2Scale=False,
                  compute_device="cpu",
                  dask_client=None,
-                 multi_task=None):
+                 multi_task_mode="independent"):
 
-
-        # set by fvGP's multi_task_mode: "cartesian" for its usual transform to (point, task)
-        # pairs; "kronecker", where y_data is one (n_x, n_out) tensor on a full grid, not n_out
-        # right-hand sides, and the noise one variance per input; "independent", where y_data
-        # is n_out right-hand sides of one GP, as for a GP given 2-d y_data
-        self.multi_task = multi_task
-        self.kronecker = kronecker = multi_task == "kronecker"
+        if multi_task_mode not in MULTI_TASK_MODES:
+            raise ValueError(f"multi_task_mode must be 'independent', 'cartesian' or 'kronecker', "
+                             f"got {multi_task_mode!r}.")
         assert isinstance(x_data, np.ndarray) or isinstance(x_data, list), \
             "x_data must be np.ndarray or list"
         assert isinstance(y_data, np.ndarray) and (np.ndim(y_data) == 1 or np.ndim(y_data) == 2), \
             "y_data must be a 1-d or 2-d np.ndarray"
-        if kronecker: assert np.ndim(y_data) == 2, "In Kronecker mode y_data must be 2-d, (n_x, n_out)"
-        assert ((isinstance(noise_variances, np.ndarray) and np.ndim(noise_variances) == 1)
-                or noise_variances is None), "noise_variances must be a 1-d np.ndarray or None"
         assert len(x_data) == len(y_data), "x_data and y_data have different lengths."
-        if isinstance(noise_variances, np.ndarray): assert len(noise_variances) == len(y_data), \
-            "noise_variances and y_data have different lengths"
         if np.ndim(y_data) == 1: y_data = y_data.reshape(len(y_data), 1)
+
+        # The shape of y_data decides: one column is a single-task GP, several are a multi-task
+        # GP in multi_task_mode -- "independent", several right-hand sides sharing one K;
+        # "cartesian", a single-task GP over (point, task) pairs; "kronecker", one (n_x, n_out)
+        # tensor on a full grid. None for a single-task GP.
+        self.output_num = y_data.shape[1]
+        self.multi_task = multi_task = multi_task_mode if self.output_num > 1 else None
+        self.kronecker = multi_task == "kronecker"
+        self._check_noise_variances(noise_variances, y_data)
 
         # analyze data
         if isinstance(x_data, np.ndarray):
             assert np.ndim(x_data) == 2, "Euclidean x_data must be 2-d (n_points × input_dim)"
-            self.index_set_dim = len(x_data[0])
             self.input_set_dim = len(x_data[0])
-            # the flat output index is one more index dimension, as in the Cartesian fvGP
-            if kronecker: self.index_set_dim += 1
             self.Euclidean = True
         if isinstance(x_data, list):
-            self.index_set_dim = 1
             self.input_set_dim = 1
             self.Euclidean = False
+        # the output index is one more index dimension: a coordinate of the Cartesian points,
+        # and the flat output index of the Kronecker default kernel
+        self.index_set_dim = self.input_set_dim
+        if self.Euclidean and multi_task in ("cartesian", "kronecker"): self.index_set_dim += 1
+        # the Cartesian posterior predicts at (x_pred, task) pairs; the other modes select columns
+        self.x_out = np.arange(self.output_num) if multi_task == "cartesian" else None
+        if multi_task == "cartesian":
+            x_data, y_data, noise_variances = self._cartesian_transform(x_data, y_data, noise_variances)
+            y_data = y_data.reshape(len(y_data), 1)
 
         self.x_data = x_data
         self.y_data = y_data
@@ -55,12 +63,8 @@ class GPdata:
         self.noise_variances_old = None
         self.point_number = len(self.x_data)
         self._check_for_nan()
-        self.fvgp_x_data = None
-        self.fvgp_y_data = None
-        self.fvgp_noise_variances = None
-        self.x_out = None
         self.args = args
-        self.ram_economy = ram_economy
+        self.gradient_per_direction = gradient_per_direction
         self.gp2Scale = gp2Scale
         self.compute_device = compute_device
         self.dask_client = dask_client
@@ -68,31 +72,32 @@ class GPdata:
         if gp2Scale and dask_client is not None:
             self.compute_workers = list(dask_client.scheduler_info()["workers"].keys())
 
-    def set_fvgp_data(self, fvgp_x_data, fvgp_y_data, fvgp_noise_variances, x_out):
-        self.fvgp_x_data = fvgp_x_data
-        self.fvgp_y_data = fvgp_y_data
-        self.fvgp_noise_variances = fvgp_noise_variances
-        self.x_out = x_out
-        assert isinstance(x_out, np.ndarray) or x_out is None or isinstance(x_out, list), "wrong format in x_out"
-        if isinstance(x_out, np.ndarray): assert np.ndim(x_out) == 1, "wrong dim in x_out, has to be 1-d"
-        # only the Cartesian transform appends a task column to x_data
-        if self.Euclidean and self.multi_task == "cartesian": self.input_set_dim = self.index_set_dim - 1
+    def _check_noise_variances(self, noise_variances, y_data):
+        """Measured noise is one variance per observation: (N, Ni), like y_data, in the Cartesian
+        mode (np.nan where y_data is), else one per input point, (N), shared by all outputs."""
+        if noise_variances is None: return
+        shape = y_data.shape if self.multi_task == "cartesian" else (len(y_data),)
+        if not isinstance(noise_variances, np.ndarray) or noise_variances.shape != shape:
+            got = noise_variances.shape if isinstance(noise_variances, np.ndarray) else type(noise_variances)
+            raise ValueError(f"noise_variances must be a np.ndarray of shape {shape} "
+                             f"(multi_task_mode={self.multi_task!r}), got {got}.")
 
     def update(self, x_data_new, y_data_new, noise_variances_new=None, append=True):
+        """New data arrive in the format of the constructor's (x, (V, Ni) outputs, noise per
+        mode); a Cartesian chunk is transformed to (point, task) pairs before it is stored."""
         assert isinstance(x_data_new, np.ndarray) or isinstance(x_data_new, list), \
             "x_data_new must be np.ndarray or list"
-        assert isinstance(y_data_new, np.ndarray), \
-            f"y_data_new must be np.ndarray, got {type(y_data_new)}"
-        if self.kronecker: assert np.ndim(y_data_new) == 2 and y_data_new.shape[1] == self.y_data.shape[1], \
-            "In Kronecker mode y_data_new must be 2-d with one column per output"
-        assert ((isinstance(noise_variances_new, np.ndarray) and np.ndim(noise_variances_new) == 1)
-                or noise_variances_new is None), "noise_variances_new must be a 1-d np.ndarray or None"
+        assert isinstance(y_data_new, np.ndarray) and (np.ndim(y_data_new) == 1 or np.ndim(y_data_new) == 2), \
+            "y_data_new must be a 1-d or 2-d np.ndarray"
+        if np.ndim(y_data_new) == 1: y_data_new = y_data_new.reshape(len(y_data_new), 1)
+        if y_data_new.shape[1] != self.output_num:
+            raise ValueError(f"y_data_new must have {self.output_num} column(s), one per output as in y_data, "
+                             f"got {y_data_new.shape[1]}.")
+        self._check_noise_variances(noise_variances_new, y_data_new)
         if self.Euclidean: assert isinstance(x_data_new, np.ndarray) and np.ndim(x_data_new) == 2, \
             "Euclidean x_data_new must be a 2-d np.ndarray"
         # A non-Euclidean point is an arbitrary object, so there is no dimensionality to
         # check: __init__ accepts any list here and sets index_set_dim to 1 regardless.
-        # Both documented forms are lists of objects -- a flat one for a single task, and
-        # the [point, task] pairs that the fvGP transform builds for several tasks.
         else: assert isinstance(x_data_new, list), "non-Euclidean x_data_new must be a list"
 
         if self.noise_variances is not None and noise_variances_new is None:
@@ -101,7 +106,10 @@ class GPdata:
         if self.noise_variances is None and noise_variances_new is not None:
             raise Exception("You did not initialize noise and but included noise in the update."
                             "Please reinitialize in this case.")
-        if np.ndim(y_data_new) == 1: y_data_new = y_data_new.reshape(len(y_data_new), 1)
+        if self.multi_task == "cartesian":
+            x_data_new, y_data_new, noise_variances_new = \
+                self._cartesian_transform(x_data_new, y_data_new, noise_variances_new)
+            y_data_new = y_data_new.reshape(len(y_data_new), 1)
 
         if append is False:
             self.x_data = x_data_new
@@ -128,7 +136,44 @@ class GPdata:
         self.point_number = len(self.x_data)
         self._check_for_nan()
 
+    def _cartesian_transform(self, x_data, y_data, noise_variances):
+        """Every observed (point, task) pair becomes one point [x, task] (a Euclidean x gets the
+        task index appended, a non-Euclidean point is paired with it), task-major; NaN outputs
+        are skipped."""
+        assert isinstance(x_data, np.ndarray) or isinstance(x_data, list), \
+            "x_data must be np.ndarray or list"
+        assert isinstance(y_data, np.ndarray), "y_data must be np.ndarray"
+        assert len(x_data) == len(y_data), "x_data and y_data have different lengths"
+        if noise_variances is not None: assert len(noise_variances) == len(y_data), \
+            "noise_variances and y_data have different lengths"
+        new_x_data = []
+        new_y_data = []
+        output_indices = np.arange(0, self.output_num)
+        if noise_variances is not None: new_variances = []
+        else: new_variances = None
+        for i in range(self.output_num):
+            for j in range(len(x_data)):
+                if noise_variances is not None: assert len(noise_variances[j]) == self.output_num, \
+                    f"noise_variances row {j} length must equal output_num={self.output_num}"
+                assert len(y_data[j]) == self.output_num, \
+                    f"y_data row {j} length must equal output_num={self.output_num}"
+                if np.isnan(y_data[j, i]): continue
+                if isinstance(x_data, np.ndarray): new_x_data.append(np.append(x_data[j], output_indices[i]))
+                else: new_x_data.append([x_data[j], output_indices[i]])
+                new_y_data.append(y_data[j, i])
+                if new_variances is not None:
+                    new_variances.append(noise_variances[j, i])
+        if isinstance(x_data, np.ndarray): new_x_data = np.asarray(new_x_data)
+        new_y_data = np.asarray(new_y_data)
+        if new_variances is not None: new_variances = np.asarray(new_variances)
 
+        assert isinstance(new_x_data, list) or isinstance(new_x_data, np.ndarray), \
+            "transformed x_data must be list or np.ndarray"
+        assert isinstance(new_y_data, np.ndarray) and np.ndim(new_y_data) == 1, \
+            "transformed y_data must be a 1-d np.ndarray"
+        if new_variances is not None: assert isinstance(new_variances, np.ndarray) and np.ndim(new_variances) == 1, \
+            "transformed noise_variances must be a 1-d np.ndarray"
+        return new_x_data, new_y_data, new_variances
 
     def _check_for_nan(self):
         if self.multi_task in ("kronecker", "independent") and np.isnan(np.sum(self.y_data)):
@@ -151,13 +196,11 @@ class GPdata:
             y_old=self.y_old,
             noise_variances_old=self.noise_variances_old,
             point_number=self.point_number,
-            fvgp_x_data=self.fvgp_x_data,
-            fvgp_y_data=self.fvgp_y_data,
-            fvgp_noise_variances=self.fvgp_noise_variances,
+            output_num=self.output_num,
             x_out=self.x_out,
             input_set_dim=self.input_set_dim,
             args=self.args,
-            ram_economy=self.ram_economy,
+            gradient_per_direction=self.gradient_per_direction,
             gp2Scale=self.gp2Scale,
             compute_device=self.compute_device,
             dask_client=None,
@@ -168,8 +211,14 @@ class GPdata:
         return state
 
     def __setstate__(self, state):
+        # pickled before 4.11: the old name of gradient_per_direction, and fvGP's copies of the
+        # data before its transform, which nothing reads any more
+        if "ram_economy" in state: state["gradient_per_direction"] = state.pop("ram_economy")
+        for key in ("fvgp_x_data", "fvgp_y_data", "fvgp_noise_variances"): state.pop(key, None)
         self.__dict__.update(state)
         if "kronecker" not in self.__dict__: self.kronecker = False
         if "multi_task" not in self.__dict__: self.multi_task = "kronecker" if self.kronecker else None
+        if "output_num" not in self.__dict__:
+            self.output_num = len(self.x_out) if self.x_out is not None else self.y_data.shape[1]
 
 
