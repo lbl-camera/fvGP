@@ -1,7 +1,12 @@
 # gpCAM update for fvGP 4.11.x
 
-**Status:** To do, started 2026-10-27. gpCAM gets a new release for fvGP 4.11; the current
-gpCAM pins `fvgp ~= 4.10` and is unaffected until then.
+**Status:** Done in gpCAM 8.7.0 (2026-10-28, unreleased), which pins `fvgp ~= 4.11.0`:
+`fvGPOptimizer` is a deprecated `GPOptimizer(multi_task_mode="cartesian")`, `get_data()`
+returns the stored form in every mode, and the EI incumbent is the best task-summed
+posterior mean. Not done, by decision: old multi-task pickles. fvGP 4.11.0's
+`GPdata.__setstate__` restores a pre-4.10 Cartesian fvGP, or a 4.10 GP with 2-d `y_data`,
+as single-task; gpCAM's HISTORY says to rebuild such optimizers from data. The list below
+is what was planned.
 
 **What changes in fvGP 4.11:** `GP` absorbs `fvGP`. The shape of `y_data` decides: (N,) or
 (N, 1) is a scalar GP, (N, Ni) with Ni > 1 is multi-task, modeled by
