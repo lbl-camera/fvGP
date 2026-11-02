@@ -3661,9 +3661,15 @@ def test_local_actor_stop_ends_the_run_early():
     from fvgp.gp_actor import _LocalActor
     from scipy.optimize import rosen, rosen_der
     bounds = np.array([[-2., 2.]] * 20)
-    actor = _LocalActor(rosen, rosen_der, None, bounds, np.full(20, -1.5), 50, "L-BFGS-B", 0.0, 100000, (), False)
+
+    def stop_during_the_first_start(x):
+        # from inside the run: a stop() from this thread may land after the first start, under load
+        actor.stop()
+        return rosen(x)
+
+    actor = _LocalActor(stop_during_the_first_start, rosen_der, None, bounds, np.full(20, -1.5), 50, "L-BFGS-B", 0.0,
+                        100000, (), False)
     actor.start()
-    actor.stop()
     _wait_for_actor(actor)
     latest = actor.get_latest()
     # the start under way ends at its next iteration, and no further one begins
